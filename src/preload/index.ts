@@ -60,25 +60,43 @@ try {
 function resolveNativeCaptureSupport(
   fallbackEntry: CaptureBackendSupportEntry,
 ): CaptureBackendSupportEntry {
-  if (process.platform !== 'darwin') {
-    return fallbackEntry
-  }
+  if (process.platform === 'darwin') {
+    const macosCapture = nativeAddonModule?.macosCapture
+    if (!macosCapture) {
+      return {
+        kind: 'native-macos',
+        available: false,
+        reason: 'Native capture module is not available in this build.',
+      }
+    }
 
-  const macosCapture = nativeAddonModule?.macosCapture
-  if (!macosCapture) {
+    const support = macosCapture.getSupport()
     return {
       kind: 'native-macos',
-      available: false,
-      reason: 'Native capture module is not available in this build.',
+      available: support.available,
+      reason: support.reason,
     }
   }
 
-  const support = macosCapture.getSupport()
-  return {
-    kind: 'native-macos',
-    available: support.available,
-    reason: support.reason,
+  if (process.platform === 'win32') {
+    const windowsCapture = nativeAddonModule?.windowsCapture
+    if (!windowsCapture) {
+      return {
+        kind: 'native-windows',
+        available: false,
+        reason: 'Native capture module is not available in this build.',
+      }
+    }
+
+    const support = windowsCapture.getSupport()
+    return {
+      kind: 'native-windows',
+      available: support.available,
+      reason: support.reason,
+    }
   }
+
+  return fallbackEntry
 }
 
 const visualizerAPI = nativeAddonModule
@@ -92,6 +110,7 @@ const visualizerAPI = nativeAddonModule
 const nativeCaptureAPI = nativeAddonModule
   ? {
       macosCapture: nativeAddonModule.macosCapture,
+      windowsCapture: nativeAddonModule.windowsCapture,
     }
   : null
 

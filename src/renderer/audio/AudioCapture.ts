@@ -13,7 +13,11 @@ import type {
   CaptureMode,
   CaptureSourceDescriptor,
 } from '../../types/capture'
-import type { NativeMacOSCaptureDrainResult, NativeMacOSCaptureStartResult } from '../../types/nativeCapture'
+import type {
+  NativeCaptureDrainResult,
+  NativeCaptureStartResult,
+  NativeSystemCaptureAPI,
+} from '../../types/nativeCapture'
 
 export type { CaptureMode } from '../../types/capture'
 
@@ -338,8 +342,8 @@ class ElectronDeviceCaptureBackend implements CaptureBackend {
   }
 }
 
-class NativeMacOSCaptureBackend implements CaptureBackend {
-  readonly kind = 'native-macos' as const
+abstract class NativePolledCaptureBackend implements CaptureBackend {
+  abstract readonly kind: CaptureBackendKind
 
   private readonly chunkListeners = new Set<(chunk: CaptureChunk) => void>()
   private pollTimer: number | null = null
@@ -354,14 +358,14 @@ class NativeMacOSCaptureBackend implements CaptureBackend {
   }
 
   async start(request?: CaptureBackendStartRequest): Promise<void> {
-    const nativeCapture = window.nativeCaptureAPI?.macosCapture
+    const nativeCapture = this.getNativeCaptureModule()
     if (!nativeCapture) {
-      throw new Error('Native macOS capture module is not available in this build.')
+      throw new Error(`${this.getBackendLabel()} capture module is not available in this build.`)
     }
 
     const support = nativeCapture.getSupport()
     if (!support.available) {
-      throw new Error(support.reason ?? 'Native macOS capture is unavailable.')
+      throw new Error(support.reason ?? `${this.getBackendLabel()} capture is unavailable.`)
     }
 
     const nativeNow = nativeCapture.nowMilliseconds()
@@ -371,7 +375,7 @@ class NativeMacOSCaptureBackend implements CaptureBackend {
       request?.deviceId && request.deviceId !== DEFAULT_SYSTEM_SOURCE_ID
         ? request.deviceId
         : undefined,
-    ) as NativeMacOSCaptureStartResult
+    ) as NativeCaptureStartResult
 
     this.sampleRate = Math.max(1, Math.floor(startResult.sampleRate) || 48000)
     this.channelCount = Math.max(1, Math.floor(startResult.channelCount) || 2)
@@ -382,12 +386,12 @@ class NativeMacOSCaptureBackend implements CaptureBackend {
 
   async stop(): Promise<void> {
     this.stopPolling()
-    window.nativeCaptureAPI?.macosCapture.stop()
+    this.getNativeCaptureModule()?.stop()
     this.active = false
   }
 
   async listSources(): Promise<CaptureSourceDescriptor[]> {
-    const nativeCapture = window.nativeCaptureAPI?.macosCapture
+    const nativeCapture = this.getNativeCaptureModule()
     if (!nativeCapture) {
       return [getDefaultSystemSourceDescriptor()]
     }
@@ -437,7 +441,7 @@ class NativeMacOSCaptureBackend implements CaptureBackend {
       if (!this.active) return
 
       try {
-        const result = window.nativeCaptureAPI?.macosCapture.drain(32) as NativeMacOSCaptureDrainResult | undefined
+        const result = this.getNativeCaptureModule()?.drain(32) as NativeCaptureDrainResult | undefined
         if (result) {
           for (const chunk of result.chunks) {
             const routedChunk: CaptureChunk = {
@@ -454,7 +458,7 @@ class NativeMacOSCaptureBackend implements CaptureBackend {
           }
         }
       } catch (error) {
-        console.error('Native macOS capture poll failed:', error)
+        console.error(`${this.getBackendLabel()} capture poll failed:`, error)
         this.active = false
         this.stopPolling()
         return
@@ -471,6 +475,33 @@ class NativeMacOSCaptureBackend implements CaptureBackend {
       window.clearTimeout(this.pollTimer)
       this.pollTimer = null
     }
+  }
+
+  protected abstract getNativeCaptureModule(): NativeSystemCaptureAPI | null
+  protected abstract getBackendLabel(): string
+}
+
+class NativeMacOSCaptureBackend extends NativePolledCaptureBackend {
+  readonly kind = 'native-macos' as const
+
+  protected getNativeCaptureModule(): NativeSystemCaptureAPI | null {
+    return window.nativeCaptureAPI?.macosCapture ?? null
+  }
+
+  protected getBackendLabel(): string {
+    return 'Native macOS'
+  }
+}
+
+class NativeWindowsCaptureBackend extends NativePolledCaptureBackend {
+  readonly kind = 'native-windows' as const
+
+  protected getNativeCaptureModule(): NativeSystemCaptureAPI | null {
+    return window.nativeCaptureAPI?.windowsCapture ?? null
+  }
+
+  protected getBackendLabel(): string {
+    return 'Native Windows'
   }
 }
 
@@ -731,9 +762,23 @@ class AudioCapture {
   }
 
   private createNativeBackend(supportEntry: CaptureBackendSupportEntry): CaptureBackend {
-    const backend = supportEntry.kind === 'native-macos' && supportEntry.available
-      ? new NativeMacOSCaptureBackend(supportEntry)
-      : new NativeUnavailableCaptureBackend(supportEntry)
+    let backend: CaptureBackend
+
+    switch (supportEntry.kind) {
+      case 'native-macos':
+        backend = supportEntry.available
+          ? new NativeMacOSCaptureBackend(supportEntry)
+          : new NativeUnavailableCaptureBackend(supportEntry)
+        break
+      case 'native-windows':
+        backend = supportEntry.available
+          ? new NativeWindowsCaptureBackend(supportEntry)
+          : new NativeUnavailableCaptureBackend(supportEntry)
+        break
+      default:
+        backend = new NativeUnavailableCaptureBackend(supportEntry)
+        break
+    }
 
     backend.subscribe((chunk) => this.handleChunk(backend.kind, chunk))
     return backend

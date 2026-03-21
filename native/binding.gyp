@@ -20,7 +20,8 @@
       "conditions": [
         ["OS=='mac'", {
           "sources": [
-            "src/macos_capture.mm"
+            "src/macos_capture.mm",
+            "src/windows_capture_stub.cpp"
           ],
           "xcode_settings": {
             "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
@@ -36,7 +37,17 @@
         }],
         ["OS=='win'", {
           "sources": [
-            "src/macos_capture_stub.cpp"
+            "src/macos_capture_stub.cpp",
+            "src/windows_capture.cpp"
+          ],
+          "defines": [
+            "WIN32_LEAN_AND_MEAN",
+            "NOMINMAX"
+          ],
+          "libraries": [
+            "ole32.lib",
+            "avrt.lib",
+            "uuid.lib"
           ],
           "msvs_settings": {
             "VCCLCompilerTool": {
@@ -47,7 +58,8 @@
         }],
         ["OS=='linux'", {
           "sources": [
-            "src/macos_capture_stub.cpp"
+            "src/macos_capture_stub.cpp",
+            "src/windows_capture_stub.cpp"
           ],
           "cflags_cc": ["-std=c++17", "-O3", "-ffast-math", "-fPIC"]
         }]

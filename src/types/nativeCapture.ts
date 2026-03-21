@@ -1,9 +1,9 @@
-export interface NativeMacOSCaptureSupport {
+export interface NativeCaptureSupport {
   available: boolean
   reason: string | null
 }
 
-export interface NativeMacOSCaptureSource {
+export interface NativeCaptureSource {
   id: string
   label: string
   kind: 'system'
@@ -12,14 +12,14 @@ export interface NativeMacOSCaptureSource {
   channelCount: number
 }
 
-export interface NativeMacOSCaptureStartResult {
+export interface NativeCaptureStartResult {
   sampleRate: number
   channelCount: number
   deviceId: string
   deviceLabel: string
 }
 
-export interface NativeMacOSCapturedChunk {
+export interface NativeCapturedChunk {
   left: Float32Array
   right: Float32Array
   channelCount: number
@@ -27,21 +27,36 @@ export interface NativeMacOSCapturedChunk {
   sequence: number
 }
 
-export interface NativeMacOSCaptureDrainResult {
-  chunks: NativeMacOSCapturedChunk[]
+export interface NativeCaptureDrainResult {
+  chunks: NativeCapturedChunk[]
   overwriteCount: number
   queueDepth: number
 }
 
-export interface NativeMacOSCaptureAPI {
-  getSupport: () => NativeMacOSCaptureSupport
-  listOutputDevices: () => NativeMacOSCaptureSource[]
-  start: (deviceId?: string) => NativeMacOSCaptureStartResult
+export interface NativeSystemCaptureAPI {
+  getSupport: () => NativeCaptureSupport
+  listOutputDevices: () => NativeCaptureSource[]
+  start: (deviceId?: string) => NativeCaptureStartResult
   stop: () => void
-  drain: (maxChunks?: number) => NativeMacOSCaptureDrainResult
+  drain: (maxChunks?: number) => NativeCaptureDrainResult
   nowMilliseconds: () => number
 }
 
+export type NativeMacOSCaptureSupport = NativeCaptureSupport
+export type NativeMacOSCaptureSource = NativeCaptureSource
+export type NativeMacOSCaptureStartResult = NativeCaptureStartResult
+export type NativeMacOSCapturedChunk = NativeCapturedChunk
+export type NativeMacOSCaptureDrainResult = NativeCaptureDrainResult
+export type NativeMacOSCaptureAPI = NativeSystemCaptureAPI
+
+export type NativeWindowsCaptureSupport = NativeCaptureSupport
+export type NativeWindowsCaptureSource = NativeCaptureSource
+export type NativeWindowsCaptureStartResult = NativeCaptureStartResult
+export type NativeWindowsCapturedChunk = NativeCapturedChunk
+export type NativeWindowsCaptureDrainResult = NativeCaptureDrainResult
+export type NativeWindowsCaptureAPI = NativeSystemCaptureAPI
+
 export interface NativeCaptureAPI {
   macosCapture: NativeMacOSCaptureAPI
+  windowsCapture: NativeWindowsCaptureAPI
 }
