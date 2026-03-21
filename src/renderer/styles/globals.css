@@ -520,6 +520,12 @@ select {
   line-height: 1.4;
 }
 
+.settings-info-text {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .settings-theme-swatches {
   display: flex;
   flex-wrap: wrap;

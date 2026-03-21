@@ -1,5 +1,6 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, session } from 'electron'
 import { join } from 'path'
+import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 
 let mainWindow: BrowserWindow | null = null
 let currentSettingsHeight = 0
@@ -45,6 +46,47 @@ function createWindow(): void {
   }
 }
 
+function getNativeCaptureSupportEntry(): CaptureBackendSupportEntry {
+  if (process.platform === 'darwin') {
+    return {
+      kind: 'native-macos',
+      available: false,
+      reason: 'Native macOS system audio capture is not implemented in this build.',
+    }
+  }
+
+  if (process.platform === 'win32') {
+    return {
+      kind: 'native-windows',
+      available: false,
+      reason: 'Native Windows WASAPI loopback capture is not implemented in this build.',
+    }
+  }
+
+  return {
+    kind: 'native-linux',
+    available: false,
+    reason: 'Native Linux monitor capture is not implemented in this build.',
+  }
+}
+
+function getCaptureBackendSupport(): CaptureBackendSupport {
+  return {
+    policyOptions: ['auto', 'native', 'electron'],
+    nativeBackend: getNativeCaptureSupportEntry(),
+    electronSystem: {
+      kind: 'electron-system',
+      available: true,
+      reason: null,
+    },
+    electronDevice: {
+      kind: 'electron-device',
+      available: true,
+      reason: null,
+    },
+  }
+}
+
 // Auto-grant media (microphone) permission for audio capture
 function setupPermissions(): void {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
@@ -80,6 +122,10 @@ function setupIPC(): void {
   ipcMain.handle('audio:get-desktop-sources', async () => {
     const sources = await desktopCapturer.getSources({ types: ['screen'] })
     return sources.map((s) => ({ id: s.id, name: s.name }))
+  })
+
+  ipcMain.handle('capture:get-backend-support', () => {
+    return getCaptureBackendSupport()
   })
 
   ipcMain.on('window:expand-settings', (_event, panelHeight: number) => {

@@ -65,6 +65,7 @@ export class VUMeter {
   private dataSource: VUMeterDataSource
   private animationId: number | null = null
   private isRunning = false
+  private unsubscribeSessionChange: (() => void) | null = null
 
   // Meter state
   private rmsL = METER_MIN_DB
@@ -84,6 +85,9 @@ export class VUMeter {
     const { dataSource, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultVUMeterDataSource
+    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+      this.resetMeters()
+    })
   }
 
   private resetMeters(): void {
@@ -606,5 +610,9 @@ export class VUMeter {
 
   dispose(): void {
     this.stop()
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+      this.unsubscribeSessionChange = null
+    }
   }
 }

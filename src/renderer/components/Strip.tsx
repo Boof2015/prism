@@ -4,6 +4,7 @@ import { useThemeStore } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
 import ScopeModule from './ScopeModule'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
+import { audioRouter } from '../audio/AudioRouter'
 
 export default function Strip(): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -15,7 +16,11 @@ export default function Strip(): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null)
   const scopeRefs = useRef<Partial<Record<ScopeKind, HTMLDivElement | null>>>({})
   const [handleOffsets, setHandleOffsets] = useState<number[]>([])
-  const visibleScopes = scopeOrder.filter((k) => !hiddenScopes.has(k))
+  const visibleScopes = useMemo(
+    () => scopeOrder.filter((k) => !hiddenScopes.has(k)),
+    [hiddenScopes, scopeOrder],
+  )
+  const visibleScopeKey = useMemo(() => visibleScopes.join('|'), [visibleScopes])
   const gridTemplateColumns = useMemo(() => {
     return buildAnalyzerGridTemplateColumns(visibleScopes, widthWeights)
   }, [visibleScopes, widthWeights])
@@ -39,6 +44,23 @@ export default function Strip(): JSX.Element {
 
     setHandleOffsets(nextOffsets)
   }, [visibleScopes])
+
+  useEffect(() => {
+    const visibleScopeSet = new Set(visibleScopes)
+    audioRouter.setVisualizerConsumerDemand('docked-strip', {
+      spectrum: visibleScopeSet.has('spectrum'),
+      oscilloscope: visibleScopeSet.has('oscilloscope'),
+      vectorscope: visibleScopeSet.has('vectorscope'),
+      spectrogram: visibleScopeSet.has('spectrogram'),
+      vumeter: visibleScopeSet.has('vumeter'),
+      lufsmeter: visibleScopeSet.has('lufsmeter'),
+      waveform: visibleScopeSet.has('waveform'),
+    })
+
+    return () => {
+      audioRouter.clearVisualizerConsumerDemand('docked-strip')
+    }
+  }, [visibleScopeKey, visibleScopes])
 
   useEffect(() => {
     const strip = stripRef.current

@@ -19,7 +19,10 @@ export default function App(): JSX.Element {
 
   // Auto-capture on launch
   useEffect(() => {
-    useAudioStore.getState().startCapture()
+    const { isCapturing, captureStatus, startCapture } = useAudioStore.getState()
+    if (!isCapturing && captureStatus !== 'connecting') {
+      void startCapture()
+    }
   }, [])
 
   useEffect(() => {
