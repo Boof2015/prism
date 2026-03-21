@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDesktopSources: () => ipcRenderer.invoke('audio:get-desktop-sources') as Promise<{ id: string; name: string }[]>,
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
+  setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),
   onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, isOnTop: boolean): void => callback(isOnTop)
     ipcRenderer.on('window:always-on-top-changed', handler)

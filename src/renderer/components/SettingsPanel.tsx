@@ -1,10 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { useAudioStore } from '../stores/audioStore'
 import { useSettingsStore, type ScopeSettings } from '../stores/settingsStore'
 import { useThemeStore, PRESETS, PRESET_IDS } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
-
-const PANEL_HEIGHT = 200
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   spectrum: 'Spectrum',
@@ -16,42 +14,467 @@ const SCOPE_LABELS: Record<ScopeKind, string> = {
   waveform: 'Waveform',
 }
 
-const labelStyle: React.CSSProperties = {
-  fontSize: '9px',
-  fontFamily: "'JetBrains Mono', monospace",
-  color: 'rgba(255, 255, 255, 0.45)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-  marginBottom: '4px',
+function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): string {
+  switch (mode) {
+    case 'lissajous':
+      return 'Lissajous'
+    case 'polar-unipolar':
+      return 'Polar Uni'
+    case 'polar-bipolar':
+      return 'Polar Bi'
+    case 'linear-unipolar':
+      return 'Linear Uni'
+    case 'linear-bipolar':
+      return 'Linear Bi'
+  }
 }
 
-const selectStyle: React.CSSProperties = {
-  backgroundColor: '#0a0a0a',
-  color: 'rgba(255, 255, 255, 0.8)',
-  border: '1px solid rgba(255, 255, 255, 0.1)',
-  borderRadius: '3px',
-  padding: '4px 6px',
-  fontSize: '11px',
-  fontFamily: 'Inter, sans-serif',
-  outline: 'none',
-  width: '100%',
+function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]): string {
+  switch (kind) {
+    case 'spectrum': {
+      const scopeSettings = settings as ScopeSettings['spectrum']
+      return `${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
+    }
+    case 'oscilloscope': {
+      const scopeSettings = settings as ScopeSettings['oscilloscope']
+      const mode = scopeSettings.pitchLock ? 'Pitch Lock' : 'Free Run'
+      return scopeSettings.underfillEnabled ? `${mode} · Fill` : mode
+    }
+    case 'vectorscope': {
+      const scopeSettings = settings as ScopeSettings['vectorscope']
+      return scopeSettings.multiband
+        ? `${vectorscopeModeLabel(scopeSettings.mode)} · RGB`
+        : vectorscopeModeLabel(scopeSettings.mode)
+    }
+    case 'spectrogram': {
+      const scopeSettings = settings as ScopeSettings['spectrogram']
+      return `${scopeSettings.scaleMode.toUpperCase()} · ${scopeSettings.clarityMode}`
+    }
+    case 'vumeter': {
+      const scopeSettings = settings as ScopeSettings['vumeter']
+      return `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.orientation.toUpperCase()}`
+    }
+    case 'lufsmeter':
+      return 'Bar Meter'
+    case 'waveform': {
+      const scopeSettings = settings as ScopeSettings['waveform']
+      return scopeSettings.multiband
+        ? `${scopeSettings.gainDb > 0 ? '+' : ''}${scopeSettings.gainDb} dB · RGB`
+        : `${scopeSettings.gainDb > 0 ? '+' : ''}${scopeSettings.gainDb} dB`
+    }
+  }
 }
 
-const checkboxRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '6px',
-  fontSize: '11px',
-  color: 'rgba(255, 255, 255, 0.7)',
-  fontFamily: 'Inter, sans-serif',
-  cursor: 'pointer',
+function ToggleChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className={`settings-chip ${active ? 'is-active' : ''}`.trim()}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  )
+}
+
+function SelectControl({
+  label,
+  value,
+  children,
+  onChange,
+}: {
+  label: string
+  value: string | number
+  children: ReactNode
+  onChange: (value: string) => void
+}): JSX.Element {
+  return (
+    <label className="settings-control">
+      <span className="settings-control__label">{label}</span>
+      <select
+        className="settings-control__select"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {children}
+      </select>
+    </label>
+  )
+}
+
+function RangeControl({
+  label,
+  value,
+  valueLabel,
+  min,
+  max,
+  step,
+  fullWidth = true,
+  disabled = false,
+  onChange,
+}: {
+  label: string
+  value: number
+  valueLabel: string
+  min: number
+  max: number
+  step: number
+  fullWidth?: boolean
+  disabled?: boolean
+  onChange: (value: number) => void
+}): JSX.Element {
+  return (
+    <label className={`settings-control ${fullWidth ? 'settings-control--full' : ''} ${disabled ? 'is-disabled' : ''}`.trim()}>
+      <span className="settings-control__label">
+        {label}
+        <span className="settings-control__value">{valueLabel}</span>
+      </span>
+      <input
+        className="settings-control__range"
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  )
+}
+
+function ScopeSettingsCard({
+  kind,
+  settings,
+  onUpdate,
+}: {
+  kind: ScopeKind
+  settings: ScopeSettings
+  onUpdate: <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>) => void
+}): JSX.Element {
+  const scopeSettings = settings[kind]
+
+  return (
+    <section className="settings-card">
+      <div className="settings-card__header">
+        <div className="settings-card__title">{SCOPE_LABELS[kind]}</div>
+        <div className="settings-card__summary">{scopeSummary(kind, scopeSettings)}</div>
+      </div>
+
+      <div className="settings-card__controls">
+        {kind === 'spectrum' && (() => {
+          const current = scopeSettings as ScopeSettings['spectrum']
+          return (
+            <>
+              <SelectControl
+                label="FFT Size"
+                value={current.fftSize}
+                onChange={(value) => onUpdate('spectrum', { fftSize: Number(value) })}
+              >
+                {[1024, 2048, 4096, 8192, 16384].map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </SelectControl>
+
+              <div className="settings-chip-row settings-control--full">
+                <ToggleChip
+                  label="Fill"
+                  active={current.fillGradient}
+                  onClick={() => onUpdate('spectrum', { fillGradient: !current.fillGradient })}
+                />
+                <ToggleChip
+                  label="Heatmap"
+                  active={current.heatmap}
+                  onClick={() => onUpdate('spectrum', { heatmap: !current.heatmap })}
+                />
+                <ToggleChip
+                  label="Grid"
+                  active={current.showGrid}
+                  onClick={() => onUpdate('spectrum', { showGrid: !current.showGrid })}
+                />
+              </div>
+
+              <RangeControl
+                label="Tilt"
+                value={current.tiltDbPerOctave}
+                valueLabel={`${current.tiltDbPerOctave.toFixed(1)} dB/oct`}
+                min={0}
+                max={6}
+                step={0.5}
+                fullWidth={false}
+                onChange={(value) => onUpdate('spectrum', { tiltDbPerOctave: value })}
+              />
+
+              <RangeControl
+                label="Heat Tilt"
+                value={current.heatmapTiltDbPerOctave}
+                valueLabel={`${current.heatmapTiltDbPerOctave.toFixed(1)} dB/oct`}
+                min={0}
+                max={6}
+                step={0.5}
+                fullWidth={false}
+                disabled={!current.heatmap}
+                onChange={(value) => onUpdate('spectrum', { heatmapTiltDbPerOctave: value })}
+              />
+
+              <RangeControl
+                label="Smoothing"
+                value={current.smoothing}
+                valueLabel={current.smoothing.toFixed(2)}
+                min={0}
+                max={0.99}
+                step={0.01}
+                fullWidth={false}
+                onChange={(value) => onUpdate('spectrum', { smoothing: value })}
+              />
+            </>
+          )
+        })()}
+
+        {kind === 'oscilloscope' && (() => {
+          const current = scopeSettings as ScopeSettings['oscilloscope']
+          return (
+            <>
+              <div className="settings-chip-row settings-control--full">
+                <ToggleChip
+                  label="Pitch Lock"
+                  active={current.pitchLock}
+                  onClick={() => onUpdate('oscilloscope', { pitchLock: !current.pitchLock })}
+                />
+                <ToggleChip
+                  label="Underfill"
+                  active={current.underfillEnabled}
+                  onClick={() => onUpdate('oscilloscope', { underfillEnabled: !current.underfillEnabled })}
+                />
+                <ToggleChip
+                  label="Grid"
+                  active={current.showGrid}
+                  onClick={() => onUpdate('oscilloscope', { showGrid: !current.showGrid })}
+                />
+              </div>
+
+              <RangeControl
+                label="Line Width"
+                value={current.lineWidth}
+                valueLabel={`${current.lineWidth.toFixed(1)} px`}
+                min={0.5}
+                max={4}
+                step={0.5}
+                fullWidth={false}
+                onChange={(value) => onUpdate('oscilloscope', { lineWidth: value })}
+              />
+            </>
+          )
+        })()}
+
+        {kind === 'vectorscope' && (() => {
+          const current = scopeSettings as ScopeSettings['vectorscope']
+          return (
+            <>
+              <SelectControl
+                label="Mode"
+                value={current.mode}
+                onChange={(value) => onUpdate('vectorscope', { mode: value as ScopeSettings['vectorscope']['mode'] })}
+              >
+                <option value="lissajous">Lissajous</option>
+                <option value="polar-unipolar">Polar (Uni)</option>
+                <option value="polar-bipolar">Polar (Bi)</option>
+                <option value="linear-unipolar">Linear (Uni)</option>
+                <option value="linear-bipolar">Linear (Bi)</option>
+              </SelectControl>
+
+              <div className="settings-chip-row settings-control--full">
+                <ToggleChip
+                  label="RGB"
+                  active={current.multiband}
+                  onClick={() => onUpdate('vectorscope', { multiband: !current.multiband })}
+                />
+                <ToggleChip
+                  label="Grid"
+                  active={current.showGrid}
+                  onClick={() => onUpdate('vectorscope', { showGrid: !current.showGrid })}
+                />
+              </div>
+
+              <RangeControl
+                label="Persistence"
+                value={current.persistence}
+                valueLabel={current.persistence.toFixed(2)}
+                min={0}
+                max={0.5}
+                step={0.01}
+                fullWidth={false}
+                onChange={(value) => onUpdate('vectorscope', { persistence: value })}
+              />
+
+              <RangeControl
+                label="Line Width"
+                value={current.lineWidth}
+                valueLabel={`${current.lineWidth.toFixed(1)} px`}
+                min={0.5}
+                max={4}
+                step={0.5}
+                fullWidth={false}
+                onChange={(value) => onUpdate('vectorscope', { lineWidth: value })}
+              />
+            </>
+          )
+        })()}
+
+        {kind === 'spectrogram' && (() => {
+          const current = scopeSettings as ScopeSettings['spectrogram']
+          return (
+            <>
+              <SelectControl
+                label="FFT Size"
+                value={current.fftSize}
+                onChange={(value) => onUpdate('spectrogram', { fftSize: Number(value) })}
+              >
+                {[512, 1024, 2048, 4096].map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </SelectControl>
+
+              <SelectControl
+                label="Scale"
+                value={current.scaleMode}
+                onChange={(value) => onUpdate('spectrogram', { scaleMode: value as ScopeSettings['spectrogram']['scaleMode'] })}
+              >
+                <option value="log">Log</option>
+                <option value="mel">Mel</option>
+                <option value="linear">Linear</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Clarity"
+                value={current.clarityMode}
+                onChange={(value) => onUpdate('spectrogram', { clarityMode: value as ScopeSettings['spectrogram']['clarityMode'] })}
+              >
+                <option value="classic">Classic</option>
+                <option value="sharp">Sharp</option>
+                <option value="sharper">Sharper</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Color"
+                value={current.colorScheme}
+                onChange={(value) => onUpdate('spectrogram', { colorScheme: value as ScopeSettings['spectrogram']['colorScheme'] })}
+              >
+                <option value="heat">Heat</option>
+                <option value="mono">Mono</option>
+              </SelectControl>
+
+              <RangeControl
+                label="Speed"
+                value={current.scrollSpeed}
+                valueLabel={`x${current.scrollSpeed.toFixed(0)}`}
+                min={1}
+                max={8}
+                step={1}
+                fullWidth={false}
+                onChange={(value) => onUpdate('spectrogram', { scrollSpeed: value })}
+              />
+            </>
+          )
+        })()}
+
+        {kind === 'vumeter' && (() => {
+          const current = scopeSettings as ScopeSettings['vumeter']
+          return (
+            <>
+              <SelectControl
+                label="Mode"
+                value={current.mode}
+                onChange={(value) => onUpdate('vumeter', { mode: value as ScopeSettings['vumeter']['mode'] })}
+              >
+                <option value="bar">Bar</option>
+                <option value="needle">Needle</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Orientation"
+                value={current.orientation}
+                onChange={(value) => onUpdate('vumeter', { orientation: value as ScopeSettings['vumeter']['orientation'] })}
+              >
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical">Vertical</option>
+              </SelectControl>
+            </>
+          )
+        })()}
+
+        {kind === 'lufsmeter' && (() => {
+          const current = scopeSettings as ScopeSettings['lufsmeter']
+          return (
+            <SelectControl
+              label="Mode"
+              value={current.mode}
+              onChange={(value) => onUpdate('lufsmeter', { mode: value as ScopeSettings['lufsmeter']['mode'] })}
+            >
+              <option value="bar">Bar</option>
+            </SelectControl>
+          )
+        })()}
+
+        {kind === 'waveform' && (() => {
+          const current = scopeSettings as ScopeSettings['waveform']
+          return (
+            <>
+              <div className="settings-chip-row settings-control--full">
+                <ToggleChip
+                  label="Multiband"
+                  active={current.multiband}
+                  onClick={() => onUpdate('waveform', { multiband: !current.multiband })}
+                />
+              </div>
+
+              <RangeControl
+                label="Gain"
+                value={current.gainDb}
+                valueLabel={`${current.gainDb > 0 ? '+' : ''}${current.gainDb.toFixed(0)} dB`}
+                min={-12}
+                max={12}
+                step={1}
+                fullWidth={false}
+                onChange={(value) => onUpdate('waveform', { gainDb: value })}
+              />
+
+              <RangeControl
+                label="Speed"
+                value={current.scrollSpeed}
+                valueLabel={`x${current.scrollSpeed.toFixed(0)}`}
+                min={1}
+                max={8}
+                step={1}
+                fullWidth={false}
+                onChange={(value) => onUpdate('waveform', { scrollSpeed: value })}
+              />
+            </>
+          )
+        })()}
+      </div>
+    </section>
+  )
 }
 
 interface SettingsPanelProps {
   onClose: () => void
+  onHeightChange?: (height: number) => void
 }
 
-export default function SettingsPanel({ onClose }: SettingsPanelProps): JSX.Element {
+export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanelProps): JSX.Element {
   const {
     devices,
     selectedDeviceId,
@@ -66,386 +489,153 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps): JSX.Elem
   } = useAudioStore()
   const { scopeSettings, updateScopeSettings, hiddenScopes, scopeOrder } = useSettingsStore()
   const { presetId, accent, setPreset, setCustomAccent, customAccent } = useThemeStore()
+  const panelRef = useRef<HTMLDivElement | null>(null)
 
-  const visibleScopes = scopeOrder.filter((k) => !hiddenScopes.has(k))
+  const visibleScopes = scopeOrder.filter((kind) => !hiddenScopes.has(kind))
 
   useEffect(() => {
-    refreshDevices()
-  }, [])
+    void refreshDevices()
+  }, [refreshDevices])
+
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel || !onHeightChange) return
+
+    const reportHeight = (): void => {
+      const nextHeight = Math.ceil(panel.getBoundingClientRect().height)
+      onHeightChange(nextHeight)
+    }
+
+    reportHeight()
+
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => reportHeight())
+
+    observer?.observe(panel)
+    window.addEventListener('resize', reportHeight)
+
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', reportHeight)
+    }
+  }, [onHeightChange, visibleScopes.length])
 
   const handleSourceChange = async (value: string): Promise<void> => {
     if (value === '__system__') {
       setCaptureMode('system')
       await startCapture()
-    } else {
-      await selectDevice(value)
-      await startCapture()
+      return
     }
+
+    await selectDevice(value)
+    await startCapture()
   }
 
-  const indicatorColor = isCapturing
-    ? '#22c55e'
-    : captureStatus === 'error'
-      ? '#ef4444'
-      : '#71717a'
   const indicatorLabel = isCapturing
     ? 'Capturing'
     : captureStatus === 'connecting'
-      ? 'Connecting...'
+      ? 'Connecting'
       : captureStatus === 'error'
         ? 'Capture Failed'
         : 'Idle'
 
   return (
-    <div
-      style={{
-        height: `${PANEL_HEIGHT}px`,
-        backgroundColor: '#050505',
-        borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-        display: 'flex',
-        flexDirection: 'row',
-        overflow: 'hidden',
-        flexShrink: 0,
-      }}
-    >
-      {/* Audio Source section */}
-      <div
-        style={{
-          width: '200px',
-          padding: '12px',
-          borderRight: '1px solid rgba(255, 255, 255, 0.06)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '10px',
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ ...labelStyle, marginBottom: 0, fontSize: '10px', color: 'rgba(255, 255, 255, 0.55)' }}>
-          Audio Source
-        </div>
+    <div className="settings-panel" ref={panelRef}>
+      <div className="settings-panel__utility">
+        <section className="settings-utility-card">
+          <div className="settings-section-title">Audio Source</div>
 
-        <div>
-          <div style={labelStyle}>Source</div>
-          <select
-            value={captureMode === 'system' ? '__system__' : selectedDeviceId ?? ''}
-            onChange={(e) => {
-              void handleSourceChange(e.target.value)
-            }}
-            style={selectStyle}
-          >
-            <option value="__system__">System Audio</option>
-            <optgroup label="Devices">
-              {devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || `Input ${d.deviceId.slice(0, 8)}`}
-                </option>
-              ))}
-            </optgroup>
-          </select>
-        </div>
+          <label className="settings-control settings-control--stack">
+            <span className="settings-control__label">Source</span>
+            <select
+              className="settings-control__select"
+              value={captureMode === 'system' ? '__system__' : selectedDeviceId ?? ''}
+              onChange={(event) => {
+                void handleSourceChange(event.target.value)
+              }}
+            >
+              <option value="__system__">System Audio</option>
+              <optgroup label="Devices">
+                {devices.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || `Input ${device.deviceId.slice(0, 8)}`}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </label>
 
-        {/* Signal indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'rgba(255, 255, 255, 0.5)' }}>
-          <div
-            style={{
-              width: '6px',
-              height: '6px',
-              borderRadius: '50%',
-              backgroundColor: indicatorColor,
-              boxShadow: isCapturing ? '0 0 6px rgba(34, 197, 94, 0.4)' : 'none',
-            }}
-          />
-          {indicatorLabel}
-        </div>
-        {captureError ? (
-          <div style={{ fontSize: '10px', color: 'rgba(239, 68, 68, 0.8)', lineHeight: 1.4 }}>
-            {captureError}
+          <div className={`settings-status-pill is-${captureStatus}`.trim()}>
+            <span className="settings-status-pill__dot" />
+            <span>{indicatorLabel}</span>
           </div>
-        ) : null}
 
-        {/* Theme section */}
-        <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.06)', paddingTop: '10px', marginTop: '2px' }}>
-          <div style={{ ...labelStyle, marginBottom: '6px', fontSize: '10px', color: 'rgba(255, 255, 255, 0.55)' }}>
-            Theme
-          </div>
-          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {captureError ? (
+            <div className="settings-error-text">{captureError}</div>
+          ) : null}
+        </section>
+
+        <section className="settings-utility-card">
+          <div className="settings-section-title">Theme</div>
+
+          <div className="settings-theme-swatches">
             {PRESET_IDS.map((id) => {
-              const p = PRESETS[id]
+              const preset = PRESETS[id]
               const active = presetId === id && !customAccent
               return (
                 <button
                   key={id}
+                  type="button"
+                  className={`settings-swatch ${active ? 'is-active' : ''}`.trim()}
+                  style={{ '--swatch-color': preset.accent } as CSSProperties}
                   onClick={() => setPreset(id)}
-                  title={p.name}
-                  style={{
-                    width: '18px',
-                    height: '18px',
-                    borderRadius: '50%',
-                    backgroundColor: p.accent,
-                    border: active ? '2px solid #fff' : '2px solid transparent',
-                    cursor: 'pointer',
-                    padding: 0,
-                    outline: 'none',
-                    transition: 'border-color 120ms',
-                  }}
+                  title={preset.name}
+                  aria-label={preset.name}
                 />
               )
             })}
           </div>
-          <div style={{ marginTop: '6px' }}>
-            <div style={labelStyle}>Custom</div>
-            <input
-              type="color"
-              value={accent}
-              onChange={(e) => setCustomAccent(e.target.value)}
-              style={{
-                width: '100%',
-                height: '24px',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: '3px',
-                backgroundColor: '#0a0a0a',
-                cursor: 'pointer',
-                padding: '2px',
-              }}
-            />
-          </div>
-        </div>
+
+          <label className="settings-control settings-control--stack">
+            <span className="settings-control__label">Custom Accent</span>
+            <div className="settings-accent-row">
+              <input
+                className="settings-accent-input"
+                type="color"
+                value={accent}
+                onChange={(event) => setCustomAccent(event.target.value)}
+              />
+              <button
+                type="button"
+                className="settings-chip"
+                onClick={() => setCustomAccent(null)}
+              >
+                Reset
+              </button>
+            </div>
+          </label>
+        </section>
       </div>
 
-      {/* Per-scope settings */}
-      <div
-        style={{
-          flex: 1,
-          padding: '12px',
-          overflowX: 'auto',
-          overflowY: 'hidden',
-          display: 'flex',
-          gap: '16px',
-        }}
-      >
+      <div className="settings-panel__scopes">
         {visibleScopes.map((kind) => (
-          <ScopeSettingsColumn
+          <ScopeSettingsCard
             key={kind}
             kind={kind}
             settings={scopeSettings}
             onUpdate={updateScopeSettings}
-            accent={accent}
           />
         ))}
       </div>
 
-      {/* Close button */}
       <button
+        type="button"
+        className="settings-panel__close"
         onClick={onClose}
-        style={{
-          position: 'absolute',
-          right: '8px',
-          bottom: '8px',
-          background: 'transparent',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-          color: 'rgba(255, 255, 255, 0.4)',
-          borderRadius: '3px',
-          padding: '2px 8px',
-          fontSize: '9px',
-          fontFamily: "'JetBrains Mono', monospace",
-          cursor: 'pointer',
-          textTransform: 'uppercase',
-        }}
       >
         Close
       </button>
-    </div>
-  )
-}
-
-function ScopeSettingsColumn({ kind, settings, onUpdate, accent }: {
-  kind: ScopeKind
-  settings: ScopeSettings
-  onUpdate: <K extends ScopeKind>(kind: K, s: Partial<ScopeSettings[K]>) => void
-  accent: string
-}): JSX.Element {
-  const s = settings[kind]
-
-  return (
-    <div style={{ minWidth: '140px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-      <div style={{ ...labelStyle, fontSize: '10px', color: accent, marginBottom: 0 }}>
-        {SCOPE_LABELS[kind]}
-      </div>
-
-      {kind === 'spectrum' && (() => {
-        const ss = s as ScopeSettings['spectrum']
-        return (
-          <>
-            <div>
-              <div style={labelStyle}>FFT Size</div>
-              <select value={ss.fftSize} onChange={(e) => onUpdate('spectrum', { fftSize: Number(e.target.value) })} style={selectStyle}>
-                {[1024, 2048, 4096, 8192, 16384].map((v) => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Tilt (dB/oct)</div>
-              <input type="range" min="0" max="6" step="0.5" value={ss.tiltDbPerOctave} onChange={(e) => onUpdate('spectrum', { tiltDbPerOctave: Number(e.target.value) })} style={{ width: '100%' }} />
-            </div>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.fillGradient} onChange={(e) => onUpdate('spectrum', { fillGradient: e.target.checked })} />
-              Fill
-            </label>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.heatmap} onChange={(e) => onUpdate('spectrum', { heatmap: e.target.checked })} />
-              Heatmap
-            </label>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.showGrid} onChange={(e) => onUpdate('spectrum', { showGrid: e.target.checked })} />
-              Grid
-            </label>
-          </>
-        )
-      })()}
-
-      {kind === 'oscilloscope' && (() => {
-        const ss = s as ScopeSettings['oscilloscope']
-        return (
-          <>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.pitchLock} onChange={(e) => onUpdate('oscilloscope', { pitchLock: e.target.checked })} />
-              Pitch Lock
-            </label>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.showGrid} onChange={(e) => onUpdate('oscilloscope', { showGrid: e.target.checked })} />
-              Grid
-            </label>
-            <div>
-              <div style={labelStyle}>Line Width</div>
-              <input type="range" min="0.5" max="4" step="0.5" value={ss.lineWidth} onChange={(e) => onUpdate('oscilloscope', { lineWidth: Number(e.target.value) })} style={{ width: '100%' }} />
-            </div>
-          </>
-        )
-      })()}
-
-      {kind === 'vectorscope' && (() => {
-        const ss = s as ScopeSettings['vectorscope']
-        return (
-          <>
-            <div>
-              <div style={labelStyle}>Mode</div>
-              <select value={ss.mode} onChange={(e) => onUpdate('vectorscope', { mode: e.target.value as ScopeSettings['vectorscope']['mode'] })} style={selectStyle}>
-                <option value="lissajous">Lissajous</option>
-                <option value="polar-unipolar">Polar (Uni)</option>
-                <option value="polar-bipolar">Polar (Bi)</option>
-                <option value="linear-unipolar">Linear (Uni)</option>
-                <option value="linear-bipolar">Linear (Bi)</option>
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Persistence</div>
-              <input type="range" min="0" max="0.5" step="0.01" value={ss.persistence} onChange={(e) => onUpdate('vectorscope', { persistence: Number(e.target.value) })} style={{ width: '100%' }} />
-            </div>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.multiband} onChange={(e) => onUpdate('vectorscope', { multiband: e.target.checked })} />
-              Multiband
-            </label>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.showGrid} onChange={(e) => onUpdate('vectorscope', { showGrid: e.target.checked })} />
-              Grid
-            </label>
-          </>
-        )
-      })()}
-
-      {kind === 'spectrogram' && (() => {
-        const ss = s as ScopeSettings['spectrogram']
-        return (
-          <>
-            <div>
-              <div style={labelStyle}>FFT Size</div>
-              <select value={ss.fftSize} onChange={(e) => onUpdate('spectrogram', { fftSize: Number(e.target.value) })} style={selectStyle}>
-                {[512, 1024, 2048, 4096].map((v) => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Scale</div>
-              <select value={ss.scaleMode} onChange={(e) => onUpdate('spectrogram', { scaleMode: e.target.value as ScopeSettings['spectrogram']['scaleMode'] })} style={selectStyle}>
-                <option value="log">Log</option>
-                <option value="mel">Mel</option>
-                <option value="linear">Linear</option>
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Clarity</div>
-              <select value={ss.clarityMode} onChange={(e) => onUpdate('spectrogram', { clarityMode: e.target.value as ScopeSettings['spectrogram']['clarityMode'] })} style={selectStyle}>
-                <option value="classic">Classic</option>
-                <option value="sharp">Sharp</option>
-                <option value="sharper">Sharper</option>
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Color</div>
-              <select value={ss.colorScheme} onChange={(e) => onUpdate('spectrogram', { colorScheme: e.target.value as 'heat' | 'mono' })} style={selectStyle}>
-                <option value="heat">Heat</option>
-                <option value="mono">Mono</option>
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Speed</div>
-              <input type="range" min="1" max="8" step="1" value={ss.scrollSpeed} onChange={(e) => onUpdate('spectrogram', { scrollSpeed: Number(e.target.value) })} style={{ width: '100%' }} />
-            </div>
-          </>
-        )
-      })()}
-
-      {kind === 'vumeter' && (() => {
-        const ss = s as ScopeSettings['vumeter']
-        return (
-          <>
-            <div>
-              <div style={labelStyle}>Mode</div>
-              <select value={ss.mode} onChange={(e) => onUpdate('vumeter', { mode: e.target.value as ScopeSettings['vumeter']['mode'] })} style={selectStyle}>
-                <option value="bar">Bar</option>
-                <option value="needle">Needle</option>
-              </select>
-            </div>
-            <div>
-              <div style={labelStyle}>Orientation</div>
-              <select value={ss.orientation} onChange={(e) => onUpdate('vumeter', { orientation: e.target.value as ScopeSettings['vumeter']['orientation'] })} style={selectStyle}>
-                <option value="horizontal">Horizontal</option>
-                <option value="vertical">Vertical</option>
-              </select>
-            </div>
-          </>
-        )
-      })()}
-
-      {kind === 'lufsmeter' && (() => {
-        const ss = s as ScopeSettings['lufsmeter']
-        return (
-          <div>
-            <div style={labelStyle}>Mode</div>
-            <select value={ss.mode} onChange={(e) => onUpdate('lufsmeter', { mode: e.target.value as ScopeSettings['lufsmeter']['mode'] })} style={selectStyle}>
-              <option value="bar">Bar</option>
-            </select>
-          </div>
-        )
-      })()}
-
-      {kind === 'waveform' && (() => {
-        const ss = s as ScopeSettings['waveform']
-        return (
-          <>
-            <div>
-              <div style={labelStyle}>Gain (dB)</div>
-              <input type="range" min="-12" max="12" step="1" value={ss.gainDb} onChange={(e) => onUpdate('waveform', { gainDb: Number(e.target.value) })} style={{ width: '100%' }} />
-            </div>
-            <div>
-              <div style={labelStyle}>Speed</div>
-              <input type="range" min="1" max="8" step="1" value={ss.scrollSpeed} onChange={(e) => onUpdate('waveform', { scrollSpeed: Number(e.target.value) })} style={{ width: '100%' }} />
-            </div>
-            <label style={checkboxRowStyle}>
-              <input type="checkbox" checked={ss.multiband} onChange={(e) => onUpdate('waveform', { multiband: e.target.checked })} />
-              Multiband
-            </label>
-          </>
-        )
-      })()}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type JSX } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { useSettingsStore, type ScopeSettings } from '../stores/settingsStore'
 import { SpectrumAnalyzer } from '../visualizers/SpectrumAnalyzer'
@@ -29,7 +29,16 @@ function scopeSettingsToOptions(kind: ScopeKind, settings: ScopeSettings[ScopeKi
   switch (kind) {
     case 'spectrum': {
       const s = settings as ScopeSettings['spectrum']
-      return { ...base, fftSize: s.fftSize, tiltDbPerOctave: s.tiltDbPerOctave, heatmapFill: s.heatmap, heatmapTiltDbPerOctave: s.heatmapTiltDbPerOctave, showGrid: s.showGrid, fillGradient: s.fillGradient }
+      return {
+        ...base,
+        fftSize: s.fftSize,
+        tiltDbPerOctave: s.tiltDbPerOctave,
+        heatmapFill: s.heatmap,
+        heatmapTiltDbPerOctave: s.heatmapTiltDbPerOctave,
+        showGrid: s.showGrid,
+        fillGradient: s.fillGradient,
+        smoothing: s.smoothing,
+      }
     }
     case 'oscilloscope': {
       const s = settings as ScopeSettings['oscilloscope']
@@ -37,7 +46,14 @@ function scopeSettingsToOptions(kind: ScopeKind, settings: ScopeSettings[ScopeKi
     }
     case 'vectorscope': {
       const s = settings as ScopeSettings['vectorscope']
-      return { ...base, mode: s.mode, multiband: s.multiband, showGrid: s.showGrid, persistence: s.persistence }
+      return {
+        ...base,
+        mode: s.mode,
+        multiband: s.multiband,
+        showGrid: s.showGrid,
+        persistence: s.persistence,
+        lineWidth: s.lineWidth,
+      }
     }
     case 'spectrogram': {
       const s = settings as ScopeSettings['spectrogram']

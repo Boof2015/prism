@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useRef } from 'react'
+import { Fragment, useCallback, useRef, type JSX } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
@@ -43,20 +43,8 @@ function ResizeHandle({ leftKind, rightKind }: { leftKind: ScopeKind; rightKind:
   }, [leftKind, rightKind, setScopeWidthWeight])
 
   return (
-    <div
-      ref={handleRef}
-      onMouseDown={onMouseDown}
-      style={{
-        width: '5px',
-        flexShrink: 0,
-        cursor: 'col-resize',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 2,
-      }}
-    >
-      <div style={{ width: '1px', height: '100%', backgroundColor: 'rgba(255, 255, 255, 0.08)' }} />
+    <div ref={handleRef} onMouseDown={onMouseDown} className="scope-strip__handle">
+      <div className="scope-strip__handle-line" />
     </div>
   )
 }
@@ -70,15 +58,7 @@ export default function Strip(): JSX.Element {
   const visibleScopes = scopeOrder.filter((k) => !hiddenScopes.has(k))
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'row',
-        width: '100%',
-        height: '100%',
-        backgroundColor: 'var(--bg-primary)',
-      }}
-    >
+    <div className="scope-strip">
       {visibleScopes.map((kind, i) => (
         <Fragment key={kind}>
           {i > 0 && (

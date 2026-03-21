@@ -14,6 +14,7 @@ declare global {
       getDesktopSources: () => Promise<{ id: string; name: string }[]>
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
+      setSettingsHeight: (panelHeight: number) => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
       onToggleScope: (callback: (index: number) => void) => () => void
       onToggleCapture: (callback: () => void) => () => void

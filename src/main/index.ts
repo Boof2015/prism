@@ -2,6 +2,7 @@ import { app, BrowserWindow, desktopCapturer, ipcMain, session } from 'electron'
 import { join } from 'path'
 
 let mainWindow: BrowserWindow | null = null
+let currentSettingsHeight = 0
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -33,6 +34,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    currentSettingsHeight = 0
   })
 
   // Load the renderer
@@ -86,6 +88,7 @@ function setupIPC(): void {
     const [minW] = mainWindow.getMinimumSize()
     mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + panelHeight)
     mainWindow.setSize(width, height + panelHeight, true)
+    currentSettingsHeight = Math.max(0, currentSettingsHeight + Math.round(panelHeight))
   })
 
   ipcMain.on('window:collapse-settings', (_event, panelHeight: number) => {
@@ -94,6 +97,23 @@ function setupIPC(): void {
     const [minW] = mainWindow.getMinimumSize()
     mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight)
     mainWindow.setSize(width, Math.max(WINDOW_DEFAULTS.minHeight, height - panelHeight), true)
+    currentSettingsHeight = Math.max(0, currentSettingsHeight - Math.round(panelHeight))
+  })
+
+  ipcMain.on('window:set-settings-height', (_event, panelHeight: number) => {
+    if (!mainWindow) return
+
+    const nextHeight = Math.max(0, Math.round(panelHeight))
+    const delta = nextHeight - currentSettingsHeight
+    const [width, height] = mainWindow.getSize()
+    const [minW] = mainWindow.getMinimumSize()
+
+    mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + nextHeight)
+    if (delta !== 0) {
+      mainWindow.setSize(width, Math.max(WINDOW_DEFAULTS.minHeight, height + delta), true)
+    }
+
+    currentSettingsHeight = nextHeight
   })
 }
 

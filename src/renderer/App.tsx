@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, type JSX } from 'react'
 import Strip from './components/Strip'
 import Toolbar from './components/Toolbar'
 import SettingsPanel from './components/SettingsPanel'
@@ -6,13 +6,14 @@ import { useSettingsStore } from './stores/settingsStore'
 import { useAudioStore } from './stores/audioStore'
 import { SCOPE_KINDS } from '../types/scope'
 
-const SETTINGS_PANEL_HEIGHT = 200
+const DEFAULT_SETTINGS_PANEL_HEIGHT = 280
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsPanelHeight, setSettingsPanelHeight] = useState(DEFAULT_SETTINGS_PANEL_HEIGHT)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const settingsExpandedRef = useRef(false)
+  const appliedSettingsHeightRef = useRef(0)
 
   const toggleScope = useSettingsStore((s) => s.toggleScope)
 
@@ -21,16 +22,13 @@ export default function App(): JSX.Element {
     useAudioStore.getState().startCapture()
   }, [])
 
-  // Settings panel window resize — single stable effect, no double-fire
   useEffect(() => {
-    if (settingsOpen && !settingsExpandedRef.current) {
-      settingsExpandedRef.current = true
-      window.electronAPI.expandSettings(SETTINGS_PANEL_HEIGHT)
-    } else if (!settingsOpen && settingsExpandedRef.current) {
-      settingsExpandedRef.current = false
-      window.electronAPI.collapseSettings(SETTINGS_PANEL_HEIGHT)
+    const nextHeight = settingsOpen ? settingsPanelHeight : 0
+    if (appliedSettingsHeightRef.current !== nextHeight) {
+      window.electronAPI.setSettingsHeight(nextHeight)
+      appliedSettingsHeightRef.current = nextHeight
     }
-  }, [settingsOpen])
+  }, [settingsOpen, settingsPanelHeight])
 
   const showToolbar = useCallback(() => {
     if (hideTimeoutRef.current) {
@@ -80,33 +78,26 @@ export default function App(): JSX.Element {
 
   return (
     <div
-      style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}
+      className="prism-app"
       onMouseEnter={showToolbar}
       onMouseLeave={scheduleHide}
     >
-      {/* Toolbar overlay — fades in on hover */}
       <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 10,
-          opacity: toolbarVisible ? 1 : 0,
-          transition: 'opacity 150ms ease',
-          pointerEvents: toolbarVisible ? 'auto' : 'none',
-        }}
+        className={`prism-toolbar-layer ${toolbarVisible ? 'is-visible' : ''}`.trim()}
       >
         <Toolbar onOpenSettings={handleToggleSettings} settingsOpen={settingsOpen} />
       </div>
 
-      {/* Scope strip — fills all available space */}
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div className="prism-strip-region">
         <Strip />
       </div>
 
-      {/* Settings panel — expands below strip */}
-      {settingsOpen && <SettingsPanel onClose={handleCloseSettings} />}
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={handleCloseSettings}
+          onHeightChange={setSettingsPanelHeight}
+        />
+      )}
     </div>
   )
 }

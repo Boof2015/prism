@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, type CSSProperties, type JSX } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_KINDS } from '../../types/scope'
 import { useSettingsStore } from '../stores/settingsStore'
-import { useThemeStore } from '../stores/themeStore'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   spectrum: 'SPEC',
@@ -14,12 +13,29 @@ const SCOPE_LABELS: Record<ScopeKind, string> = {
   waveform: 'WAVE',
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.replace('#', '')
-  const r = parseInt(h.substring(0, 2), 16)
-  const g = parseInt(h.substring(2, 4), 16)
-  const b = parseInt(h.substring(4, 6), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+function SettingsIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M8 1.7v2M8 12.3v2M14.3 8h-2M3.7 8h-2M12.4 3.6l-1.4 1.4M5 11l-1.4 1.4M12.4 12.4 11 11M5 5 3.6 3.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function PinIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M10.9 2.5 13 4.6 10.8 7v2.2l-1 1L8 8.4 4.8 11.6 4 10.8l3.2-3.2-1.8-1.8 1-1H8.6z" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function CloseIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3.5 3.5 12.5 12.5M12.5 3.5 3.5 12.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  )
 }
 
 interface ToolbarProps {
@@ -28,18 +44,14 @@ interface ToolbarProps {
 }
 
 export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps): JSX.Element {
-  const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
-  const toggleScope = useSettingsStore((s) => s.toggleScope)
-  const accent = useThemeStore((s) => s.accent)
+  const hiddenScopes = useSettingsStore((state) => state.hiddenScopes)
+  const toggleScope = useSettingsStore((state) => state.toggleScope)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true)
-
-  const accentBg = useMemo(() => hexToRgba(accent, 0.15), [accent])
-  const accentBorder = useMemo(() => hexToRgba(accent, 0.3), [accent])
 
   useEffect(() => {
     window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
-    const unsub = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
-    return unsub
+    const unsubscribe = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
+    return unsubscribe
   }, [])
 
   const handlePin = useCallback(() => {
@@ -47,52 +59,24 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   }, [])
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        width: '100%',
-        height: '36px',
-        padding: '0 8px',
-        gap: '2px',
-        backdropFilter: 'blur(12px)',
-        WebkitBackdropFilter: 'blur(12px)',
-        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-      }}
-    >
-      {/* Drag region */}
+    <div className="toolbar">
       <div
-        style={{
-          WebkitAppRegion: 'drag',
-          flex: '0 0 40px',
-          height: '100%',
-          cursor: 'grab',
-        } as React.CSSProperties}
-      />
+        className="toolbar__brand"
+        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+      >
+        <span className="toolbar__brand-mark" />
+        <span className="toolbar__brand-text">Prism</span>
+      </div>
 
-      {/* Scope toggles */}
-      <div style={{ display: 'flex', gap: '2px', flex: 1 }}>
+      <div className="toolbar__chips">
         {SCOPE_KINDS.map((kind) => {
           const active = !hiddenScopes.has(kind)
           return (
             <button
               key={kind}
+              type="button"
+              className={`toolbar__chip ${active ? 'is-active' : ''}`.trim()}
               onClick={() => toggleScope(kind)}
-              style={{
-                background: active ? accentBg : 'transparent',
-                border: `1px solid ${active ? accentBorder : 'rgba(255, 255, 255, 0.08)'}`,
-                borderRadius: '3px',
-                color: active ? accent : 'rgba(255, 255, 255, 0.35)',
-                fontSize: '9px',
-                fontFamily: "'JetBrains Mono', monospace",
-                fontWeight: 400,
-                letterSpacing: '0.05em',
-                padding: '3px 6px',
-                cursor: 'pointer',
-                transition: 'all 120ms',
-                lineHeight: 1,
-              }}
             >
               {SCOPE_LABELS[kind]}
             </button>
@@ -100,60 +84,35 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         })}
       </div>
 
-      {/* Right side: settings, pin, close */}
-      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+      <div className="toolbar__actions">
         <button
+          type="button"
+          className={`toolbar__icon-button ${settingsOpen ? 'is-active' : ''}`.trim()}
           onClick={onOpenSettings}
-          style={{
-            background: settingsOpen ? accentBg : 'transparent',
-            border: 'none',
-            color: settingsOpen ? accent : 'rgba(255, 255, 255, 0.5)',
-            fontSize: '14px',
-            cursor: 'pointer',
-            padding: '4px',
-            borderRadius: '3px',
-            lineHeight: 1,
-            transition: 'color 120ms',
-          }}
           title="Settings"
+          aria-label="Settings"
         >
-          ⚙
+          <SettingsIcon />
         </button>
 
         <button
+          type="button"
+          className={`toolbar__icon-button ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
           onClick={handlePin}
-          style={{
-            background: isAlwaysOnTop ? accentBg : 'transparent',
-            border: 'none',
-            color: isAlwaysOnTop ? accent : 'rgba(255, 255, 255, 0.5)',
-            fontSize: '12px',
-            cursor: 'pointer',
-            padding: '4px',
-            borderRadius: '3px',
-            lineHeight: 1,
-            transition: 'color 120ms',
-          }}
           title={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
+          aria-label={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
         >
-          📌
+          <PinIcon />
         </button>
 
         <button
+          type="button"
+          className="toolbar__icon-button toolbar__icon-button--danger"
           onClick={() => window.electronAPI.close()}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'rgba(255, 255, 255, 0.5)',
-            fontSize: '12px',
-            cursor: 'pointer',
-            padding: '4px',
-            borderRadius: '3px',
-            lineHeight: 1,
-            transition: 'color 120ms',
-          }}
           title="Close"
+          aria-label="Close"
         >
-          ✕
+          <CloseIcon />
         </button>
       </div>
     </div>
