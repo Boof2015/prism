@@ -11,6 +11,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.port.postMessage({
       left: left.slice(),
       right: right.slice(),
+      channelCount: Math.min(Math.max(input.length, 1), 2),
     })
 
     return true

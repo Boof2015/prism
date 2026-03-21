@@ -1,122 +1,112 @@
-import { useEffect } from 'react'
-import { useAudioStore } from './stores/audioStore'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Strip from './components/Strip'
+import Toolbar from './components/Toolbar'
+import SettingsPanel from './components/SettingsPanel'
+import { useSettingsStore } from './stores/settingsStore'
+import { useAudioStore } from './stores/audioStore'
+import { SCOPE_KINDS } from '../types/scope'
+
+const SETTINGS_PANEL_HEIGHT = 200
 
 export default function App(): JSX.Element {
-  const {
-    devices,
-    selectedDeviceId,
-    captureMode,
-    isCapturing,
-    refreshDevices,
-    selectDevice,
-    setCaptureMode,
-    startCapture,
-    stopCapture,
-  } = useAudioStore()
+  const [toolbarVisible, setToolbarVisible] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const settingsExpandedRef = useRef(false)
 
-  // Enumerate devices on mount
+  const toggleScope = useSettingsStore((s) => s.toggleScope)
+
+  // Auto-capture on launch
   useEffect(() => {
-    refreshDevices()
-    navigator.mediaDevices.addEventListener('devicechange', refreshDevices)
-    return () => navigator.mediaDevices.removeEventListener('devicechange', refreshDevices)
-  }, [refreshDevices])
+    useAudioStore.getState().startCapture()
+  }, [])
 
-  const handleSourceChange = (e: React.ChangeEvent<HTMLSelectElement>): void => {
-    const value = e.target.value
-    if (value === '__system__') {
-      setCaptureMode('system')
-    } else {
-      selectDevice(value)
+  // Settings panel window resize — single stable effect, no double-fire
+  useEffect(() => {
+    if (settingsOpen && !settingsExpandedRef.current) {
+      settingsExpandedRef.current = true
+      window.electronAPI.expandSettings(SETTINGS_PANEL_HEIGHT)
+    } else if (!settingsOpen && settingsExpandedRef.current) {
+      settingsExpandedRef.current = false
+      window.electronAPI.collapseSettings(SETTINGS_PANEL_HEIGHT)
     }
-  }
+  }, [settingsOpen])
 
-  const handleToggleCapture = (): void => {
-    if (isCapturing) {
-      stopCapture()
-    } else {
-      startCapture()
+  const showToolbar = useCallback(() => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current)
+      hideTimeoutRef.current = null
     }
-  }
+    setToolbarVisible(true)
+  }, [])
+
+  const scheduleHide = useCallback(() => {
+    if (settingsOpen) return
+    hideTimeoutRef.current = setTimeout(() => {
+      setToolbarVisible(false)
+    }, 400)
+  }, [settingsOpen])
+
+  const handleToggleSettings = useCallback(() => {
+    setSettingsOpen((prev) => !prev)
+  }, [])
+
+  const handleCloseSettings = useCallback(() => {
+    setSettingsOpen(false)
+  }, [])
+
+  // Keyboard shortcuts from main process
+  useEffect(() => {
+    const unsubs = [
+      window.electronAPI.onToggleScope((index) => {
+        if (index >= 0 && index < SCOPE_KINDS.length) {
+          toggleScope(SCOPE_KINDS[index])
+        }
+      }),
+      window.electronAPI.onToggleCapture(() => {
+        const { isCapturing, startCapture, stopCapture } = useAudioStore.getState()
+        if (isCapturing) {
+          stopCapture()
+        } else {
+          startCapture()
+        }
+      }),
+      window.electronAPI.onToggleSettings(() => {
+        setSettingsOpen((prev) => !prev)
+      }),
+    ]
+    return () => unsubs.forEach((unsub) => unsub())
+  }, [toggleScope])
 
   return (
-    <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div
+      style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}
+      onMouseEnter={showToolbar}
+      onMouseLeave={scheduleHide}
+    >
+      {/* Toolbar overlay — fades in on hover */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 10,
+          opacity: toolbarVisible ? 1 : 0,
+          transition: 'opacity 150ms ease',
+          pointerEvents: toolbarVisible ? 'auto' : 'none',
+        }}
+      >
+        <Toolbar onOpenSettings={handleToggleSettings} settingsOpen={settingsOpen} />
+      </div>
+
       {/* Scope strip — fills all available space */}
       <div style={{ flex: 1, minHeight: 0 }}>
         <Strip />
       </div>
 
-      {/* Temporary source picker bar — will be replaced by Toolbar + Settings in Phase 6 */}
-      <div
-        style={{
-          height: '32px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '0 8px',
-          backgroundColor: 'var(--bg-secondary)',
-          borderTop: '1px solid var(--glass-border)',
-          flexShrink: 0,
-        }}
-      >
-        {/* Signal indicator */}
-        <div
-          style={{
-            width: '6px',
-            height: '6px',
-            borderRadius: '50%',
-            backgroundColor: isCapturing ? '#22c55e' : '#71717a',
-            boxShadow: isCapturing ? '0 0 6px rgba(34, 197, 94, 0.4)' : 'none',
-            transition: 'all 150ms',
-            flexShrink: 0,
-          }}
-        />
-
-        <select
-          value={captureMode === 'system' ? '__system__' : selectedDeviceId ?? ''}
-          onChange={handleSourceChange}
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--glass-border)',
-            borderRadius: '3px',
-            padding: '2px 6px',
-            fontSize: '10px',
-            fontFamily: 'Inter, sans-serif',
-            outline: 'none',
-            flex: 1,
-            minWidth: 0,
-          }}
-        >
-          <option value="__system__">System Audio</option>
-          <optgroup label="Audio Devices">
-            {devices.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>
-                {device.label || `Input ${device.deviceId.slice(0, 8)}`}
-              </option>
-            ))}
-          </optgroup>
-        </select>
-
-        <button
-          onClick={handleToggleCapture}
-          style={{
-            backgroundColor: isCapturing ? '#dc2626' : 'var(--accent)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '3px',
-            padding: '2px 10px',
-            fontSize: '9px',
-            fontFamily: 'JetBrains Mono, monospace',
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
-        >
-          {isCapturing ? 'Stop' : 'Start'}
-        </button>
-      </div>
+      {/* Settings panel — expands below strip */}
+      {settingsOpen && <SettingsPanel onClose={handleCloseSettings} />}
     </div>
   )
 }

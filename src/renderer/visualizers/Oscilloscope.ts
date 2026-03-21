@@ -96,6 +96,7 @@ export class Oscilloscope {
   private nativeInitialized: boolean = false
   private samplesReceived: number = 0
   private lastSampleRate: number = 0
+  private unsubscribeSessionChange: (() => void) | null = null
   private static readonly WARMUP_SAMPLES = 4096 // Need ~4K samples before pitch detection is reliable
 
   constructor(canvas: HTMLCanvasElement, options: OscilloscopeOptions = {}) {
@@ -107,17 +108,21 @@ export class Oscilloscope {
 
     // Initialize native module
     this.initNative()
+    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+      this.reset()
+    })
   }
 
   private initNative(): void {
     if (isNativeAvailable() && !this.nativeInitialized) {
-      // Get actual sample rate from AudioEngine (defaults to 48000 if context not ready)
+      // Initialize with current sample rate, but set lastSampleRate to 0 so
+      // updateSampleRateIfNeeded() always fires once the real capture rate is known.
+      // This prevents stale-rate issues when capture starts after initialization.
       const sampleRate = audioRouter.getSampleRate()
-      this.lastSampleRate = sampleRate
+      this.lastSampleRate = 0
       nativeOscilloscope.setSampleRate(sampleRate)
       nativeOscilloscope.setPitchLock(this.options.pitchLock)
       nativeOscilloscope.setDisplaySamples(getNormalizedOscilloscopeDisplaySamples(sampleRate))
-      // Note: Filter is now pitch-adaptive FIR bandpass (auto-configured in native code)
       this.nativeInitialized = true
       console.log(`Oscilloscope: Using native DSP with AudioWorklet (${sampleRate}Hz)`)
     } else if (!isNativeAvailable()) {
@@ -190,6 +195,11 @@ export class Oscilloscope {
 
     // Check if sample rate needs updating (AudioContext may have initialized after us)
     this.updateSampleRateIfNeeded()
+
+    if (!audioRouter.isCapturing()) {
+      this.animationId = requestAnimationFrame(this.draw)
+      return
+    }
 
     // Flush ALL pending samples to native C++ (prevents sample loss)
     const pendingSamples = audioRouter.flushPendingOscilloscopeSamples()
@@ -331,6 +341,11 @@ export class Oscilloscope {
 
   dispose(): void {
     this.stop()
+
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+      this.unsubscribeSessionChange = null
+    }
 
     // Reset native module state
     if (isNativeAvailable()) {

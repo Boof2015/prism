@@ -6,6 +6,8 @@ interface AudioState {
   selectedDeviceId: string | null
   captureMode: CaptureMode
   isCapturing: boolean
+  captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
+  captureError: string | null
   sampleRate: number
   refreshDevices: () => Promise<void>
   selectDevice: (deviceId: string) => Promise<void>
@@ -19,6 +21,8 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   selectedDeviceId: null,
   captureMode: 'system',
   isCapturing: false,
+  captureStatus: 'idle',
+  captureError: null,
   sampleRate: 48000,
 
   refreshDevices: async () => {
@@ -29,11 +33,6 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   selectDevice: async (deviceId: string) => {
     set({ selectedDeviceId: deviceId, captureMode: 'device' })
     audioCapture.setSelectedDeviceId(deviceId)
-
-    // If currently capturing, restart with new device
-    if (get().isCapturing) {
-      await get().startCapture()
-    }
   },
 
   setCaptureMode: (mode: CaptureMode) => {
@@ -41,26 +40,34 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   },
 
   startCapture: async () => {
+    set({ captureStatus: 'connecting', captureError: null })
     try {
       const { captureMode, selectedDeviceId } = get()
       if (captureMode === 'system') {
-        await audioCapture.startSystemAudio()
+        await audioCapture.start()
       } else {
         await audioCapture.startDevice(selectedDeviceId ?? undefined)
       }
       set({
         isCapturing: true,
+        captureStatus: 'capturing',
+        captureError: null,
         sampleRate: audioCapture.getSampleRate(),
         captureMode: audioCapture.getCaptureMode(),
       })
     } catch (err) {
       console.error('Failed to start audio capture:', err)
-      set({ isCapturing: false })
+      const message = err instanceof Error ? err.message : 'Unknown audio capture error'
+      set({
+        isCapturing: false,
+        captureStatus: 'error',
+        captureError: message,
+      })
     }
   },
 
   stopCapture: () => {
     audioCapture.stop()
-    set({ isCapturing: false })
+    set({ isCapturing: false, captureStatus: 'idle', captureError: null })
   },
 }))

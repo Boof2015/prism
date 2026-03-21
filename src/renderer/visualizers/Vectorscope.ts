@@ -41,6 +41,7 @@ export class Vectorscope {
   private isRunning: boolean = false
   private nativeInitialized: boolean = false
   private lastSampleRate: number = 0
+  private unsubscribeSessionChange: (() => void) | null = null
   private splitter: MultibandSplitter = new MultibandSplitter()
   private multibandBuffer: MultibandBuffer = new MultibandBuffer()
 
@@ -61,6 +62,9 @@ export class Vectorscope {
 
     // Initialize native module if available
     this.initNative()
+    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+      this.resetDisplay()
+    })
   }
 
   private initNative(): void {
@@ -139,6 +143,20 @@ export class Vectorscope {
 
     // Update sample rate if changed
     this.updateSampleRateIfNeeded()
+
+    if (!audioRouter.isCapturing()) {
+      ctx.clearRect(0, 0, width, height)
+      if (options.backgroundColor !== 'transparent') {
+        ctx.fillStyle = options.backgroundColor
+        ctx.fillRect(0, 0, width, height)
+      }
+      if (options.showGrid) {
+        const dpr = window.devicePixelRatio || 1
+        drawVectorscopeGridForMode(ctx, width, height, options.gridColor, options.mode, dpr)
+      }
+      this.animationId = requestAnimationFrame(this.draw)
+      return
+    }
 
     // ---- PERSISTENCE FADE ----
     offscreenCtx.globalCompositeOperation = 'destination-in'
@@ -327,6 +345,11 @@ export class Vectorscope {
 
   dispose(): void {
     this.stop()
+
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+      this.unsubscribeSessionChange = null
+    }
 
     // Reset native module state
     if (isNativeAvailable()) {

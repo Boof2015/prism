@@ -46,7 +46,7 @@ function createWindow(): void {
 // Auto-grant media (microphone) permission for audio capture
 function setupPermissions(): void {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'screen') {
+    if (permission === 'media' || permission === 'display-capture') {
       callback(true)
     } else {
       callback(false)
@@ -97,10 +97,48 @@ function setupIPC(): void {
   })
 }
 
+function setupShortcuts(): void {
+  if (!mainWindow) return
+
+  // Scope toggles 1-7
+  const scopeKeys = ['1', '2', '3', '4', '5', '6', '7']
+  scopeKeys.forEach((key) => {
+    mainWindow!.webContents.on('before-input-event', (_event, input) => {
+      if (input.type === 'keyDown' && input.key === key && !input.alt && !input.control && !input.meta && !input.shift) {
+        mainWindow?.webContents.send('shortcut:toggle-scope', parseInt(key) - 1)
+      }
+    })
+  })
+
+  // T = toggle always-on-top
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 't' && !input.alt && !input.control && !input.meta && !input.shift) {
+      const current = mainWindow!.isAlwaysOnTop()
+      mainWindow!.setAlwaysOnTop(!current)
+      mainWindow!.webContents.send('window:always-on-top-changed', !current)
+    }
+  })
+
+  // Space = toggle capture
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === ' ' && !input.alt && !input.control && !input.meta && !input.shift) {
+      mainWindow?.webContents.send('shortcut:toggle-capture')
+    }
+  })
+
+  // Comma (Cmd+,) = toggle settings
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === ',' && input.meta && !input.alt && !input.control && !input.shift) {
+      mainWindow?.webContents.send('shortcut:toggle-settings')
+    }
+  })
+}
+
 app.whenReady().then(() => {
   setupPermissions()
   setupIPC()
   createWindow()
+  setupShortcuts()
 })
 
 app.on('window-all-closed', () => {

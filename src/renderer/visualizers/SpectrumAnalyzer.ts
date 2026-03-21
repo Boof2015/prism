@@ -104,6 +104,7 @@ export class SpectrumAnalyzer {
   private nativeInitialized: boolean = false
   private sampleRate: number = 48000
   private lastSampleRate: number = 0
+  private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: SpectrumAnalyzerOptions = {}) {
     this.canvas = canvas
@@ -125,12 +126,15 @@ export class SpectrumAnalyzer {
 
     // Initialize native module
     this.initNative()
+    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+      this.resetState()
+    })
   }
 
   private initNative(): void {
     if (isNativeAvailable() && !this.nativeInitialized) {
       this.sampleRate = Math.max(1, this.dataSource.getSampleRate())
-      this.lastSampleRate = this.sampleRate
+      this.lastSampleRate = 0 // Force updateSampleRateIfNeeded() to fire once real rate is known
       nativeSpectrum.setFFTSize(this.options.fftSize)
       nativeSpectrum.setSampleRate(this.sampleRate)
       nativeSpectrum.setSmoothing(this.getNativeSmoothing())
@@ -158,8 +162,17 @@ export class SpectrumAnalyzer {
     return Math.min(0.99, Math.max(0, Math.pow(base, fftRatio)))
   }
 
+  private resetState(): void {
+    if (isNativeAvailable()) {
+      nativeSpectrum.reset()
+    }
+    this.sampleRate = Math.max(1, this.dataSource.getSampleRate())
+    this.lastSampleRate = 0
+  }
+
   setOptions(options: Partial<SpectrumAnalyzerOptions>): void {
     const { dataSource, ...optionUpdates } = options
+    const prevFftSize = this.options.fftSize
     const nextOptions = { ...this.options, ...optionUpdates }
     if (optionUpdates.tiltDbPerOctave !== undefined) {
       nextOptions.tiltDbPerOctave = clampSpectrumTiltDbPerOctave(optionUpdates.tiltDbPerOctave)
@@ -172,12 +185,12 @@ export class SpectrumAnalyzer {
       this.dataSource = dataSource
     }
 
-    // Update native module settings
+    // Update native module settings — only when values actually change to avoid buffer resets
     if (isNativeAvailable()) {
-      if (options.fftSize !== undefined) {
+      if (options.fftSize !== undefined && options.fftSize !== prevFftSize) {
         nativeSpectrum.setFFTSize(options.fftSize)
       }
-      if (options.smoothing !== undefined || options.fftSize !== undefined) {
+      if (options.smoothing !== undefined || (options.fftSize !== undefined && options.fftSize !== prevFftSize)) {
         nativeSpectrum.setSmoothing(this.getNativeSmoothing())
       }
     }
@@ -290,23 +303,26 @@ export class SpectrumAnalyzer {
 
     this.updateSampleRateIfNeeded()
 
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height)
+
+    // Draw background if not transparent
+    if (options.backgroundColor !== 'transparent') {
+      ctx.fillStyle = options.backgroundColor
+      ctx.fillRect(0, 0, width, height)
+    }
+
+    // Draw grid
+    const nyquist = this.sampleRate / 2
+    const minFrequency = Math.max(1, Math.min(options.minFrequency, nyquist))
+    const maxFrequency = Math.max(minFrequency + 1, Math.min(options.maxFrequency, nyquist))
+    if (options.showGrid) {
+      this.drawGrid(minFrequency, maxFrequency)
+    }
+
     if (!this.dataSource.isPlaying()) {
       this.dataSource.getPendingSpectrumSamples()
       nativeSpectrum.reset()
-
-      ctx.clearRect(0, 0, width, height)
-      if (options.backgroundColor !== 'transparent') {
-        ctx.fillStyle = options.backgroundColor
-        ctx.fillRect(0, 0, width, height)
-      }
-
-      const nyquist = this.sampleRate / 2
-      const minFrequency = Math.max(1, Math.min(options.minFrequency, nyquist))
-      const maxFrequency = Math.max(minFrequency + 1, Math.min(options.maxFrequency, nyquist))
-      if (options.showGrid) {
-        this.drawGrid(minFrequency, maxFrequency)
-      }
-
       this.animationId = requestAnimationFrame(this.draw)
       return
     }
@@ -330,23 +346,6 @@ export class SpectrumAnalyzer {
     if (bufferLength === 0) {
       this.animationId = requestAnimationFrame(this.draw)
       return
-    }
-
-    // Clear canvas
-    ctx.clearRect(0, 0, width, height)
-
-    // Draw background if not transparent
-    if (options.backgroundColor !== 'transparent') {
-      ctx.fillStyle = options.backgroundColor
-      ctx.fillRect(0, 0, width, height)
-    }
-
-    // Draw grid
-    const nyquist = this.sampleRate / 2
-    const minFrequency = Math.max(1, Math.min(options.minFrequency, nyquist))
-    const maxFrequency = Math.max(minFrequency + 1, Math.min(options.maxFrequency, nyquist))
-    if (options.showGrid) {
-      this.drawGrid(minFrequency, maxFrequency)
     }
 
     // Calculate frequency mapping
@@ -504,6 +503,11 @@ export class SpectrumAnalyzer {
 
   dispose(): void {
     this.stop()
+
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+      this.unsubscribeSessionChange = null
+    }
 
     // Reset native module state
     if (isNativeAvailable()) {

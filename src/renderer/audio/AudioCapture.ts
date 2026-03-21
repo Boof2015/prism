@@ -15,6 +15,7 @@ class AudioCapture {
   private workletNode: AudioWorkletNode | null = null
   private selectedDeviceId: string | null = null
   private captureMode: CaptureMode = 'system'
+  private sessionId: number | null = null
 
   /**
    * Start capturing system audio output via desktopCapturer (ScreenCaptureKit on macOS 13+).
@@ -52,8 +53,8 @@ class AudioCapture {
     // Drop the video track immediately — we only need audio
     this.stream.getVideoTracks().forEach((track) => track.stop())
 
-    this.wireUpStream()
     this.captureMode = 'system'
+    this.wireUpStream()
   }
 
   /**
@@ -80,8 +81,8 @@ class AudioCapture {
 
     this.stream = await navigator.mediaDevices.getUserMedia(constraints)
 
-    this.wireUpStream()
     this.captureMode = 'device'
+    this.wireUpStream()
 
     if (targetDeviceId) {
       this.selectedDeviceId = targetDeviceId
@@ -108,6 +109,18 @@ class AudioCapture {
     if (!this.audioContext || !this.stream) return
 
     this.sourceNode = this.audioContext.createMediaStreamSource(this.stream)
+    const audioTrack = this.stream.getAudioTracks()[0] ?? null
+    const trackSettings = audioTrack?.getSettings()
+    const channelCount = Math.max(
+      1,
+      Math.floor(trackSettings?.channelCount ?? this.sourceNode.channelCount ?? 2)
+    )
+    const sampleRate = Math.max(
+      1,
+      Math.floor(trackSettings?.sampleRate ?? this.audioContext.sampleRate)
+    )
+    const sessionId = audioRouter.beginSession(sampleRate, channelCount)
+    this.sessionId = sessionId
 
     this.workletNode = new AudioWorkletNode(this.audioContext, 'capture-processor', {
       numberOfInputs: 1,
@@ -115,19 +128,29 @@ class AudioCapture {
       channelCount: 2,
     })
 
-    this.workletNode.port.onmessage = (event: MessageEvent<{ left: Float32Array; right: Float32Array }>) => {
-      audioRouter.ingestChunk(event.data.left, event.data.right)
+    this.workletNode.port.onmessage = (event: MessageEvent<{
+      left: Float32Array
+      right: Float32Array
+      channelCount?: number
+    }>) => {
+      audioRouter.ingestChunk(event.data.left, event.data.right, {
+        sessionId,
+        channelCount: event.data.channelCount ?? channelCount,
+      })
     }
 
     this.sourceNode.connect(this.workletNode)
-
-    audioRouter.setSampleRate(this.audioContext.sampleRate)
-    audioRouter.setCapturing(true)
+    console.log(
+      `AudioCapture: session ${sessionId} started (${sampleRate}Hz, ${channelCount}ch, mode=${this.captureMode})`
+    )
   }
 
   stop(): void {
-    audioRouter.setCapturing(false)
-    audioRouter.reset()
+    if (this.sessionId !== null) {
+      console.log(`AudioCapture: ending session ${this.sessionId}`)
+      audioRouter.endSession()
+      this.sessionId = null
+    }
 
     if (this.workletNode) {
       this.workletNode.disconnect()

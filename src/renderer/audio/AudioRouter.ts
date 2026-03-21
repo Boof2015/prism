@@ -7,6 +7,18 @@ const MAX_PENDING_CHUNKS = 20
 const MAX_PENDING_SPECTRUM_CHUNKS = 96
 const MAX_PENDING_VECTORSCOPE_CHUNKS = 20
 
+export interface AudioSessionState {
+  sessionId: number
+  sampleRate: number
+  channelCount: number
+  capturing: boolean
+}
+
+interface AudioChunkMeta {
+  sessionId?: number
+  channelCount?: number
+}
+
 class AudioRouter {
   private pendingOscilloscopeSamples: Float32Array[] = []
   private pendingSpectrumSamples: Float32Array[] = []
@@ -18,6 +30,16 @@ class AudioRouter {
 
   private _sampleRate = 48000
   private _capturing = false
+  private _channelCount = 2
+  private _sessionId = 0
+  private sessionListeners = new Set<(state: AudioSessionState) => void>()
+
+  private emitSessionState(): void {
+    const state = this.getSessionState()
+    for (const listener of this.sessionListeners) {
+      listener(state)
+    }
+  }
 
   setSampleRate(rate: number): void {
     this._sampleRate = rate
@@ -35,12 +57,59 @@ class AudioRouter {
     return this._capturing
   }
 
-  ingestChunk(left: Float32Array, right: Float32Array): void {
+  getChannelCount(): number {
+    return this._channelCount
+  }
+
+  getSessionState(): AudioSessionState {
+    return {
+      sessionId: this._sessionId,
+      sampleRate: this._sampleRate,
+      channelCount: this._channelCount,
+      capturing: this._capturing,
+    }
+  }
+
+  beginSession(sampleRate: number, channelCount: number): number {
+    this._sessionId += 1
+    this._sampleRate = sampleRate
+    this._channelCount = Math.max(1, Math.floor(channelCount) || 1)
+    this._capturing = true
+    this.reset()
+    this.emitSessionState()
+    return this._sessionId
+  }
+
+  endSession(): void {
+    this._sessionId += 1
+    this._capturing = false
+    this.reset()
+    this.emitSessionState()
+  }
+
+  subscribeToSessionChanges(listener: (state: AudioSessionState) => void): () => void {
+    this.sessionListeners.add(listener)
+    listener(this.getSessionState())
+    return () => {
+      this.sessionListeners.delete(listener)
+    }
+  }
+
+  ingestChunk(left: Float32Array, right: Float32Array, meta: AudioChunkMeta = {}): void {
+    if (!this._capturing) return
+    if (meta.sessionId !== undefined && meta.sessionId !== this._sessionId) return
+
+    const effectiveChannelCount = Math.max(1, Math.floor(meta.channelCount ?? this._channelCount) || 1)
+    this._channelCount = effectiveChannelCount
+    const resolvedRight = effectiveChannelCount > 1 && right.length > 0 ? right : left
+
     // Compute mono
-    const len = Math.min(left.length, right.length)
+    const len = Math.min(left.length, resolvedRight.length)
+    if (len === 0) return
+
     const mono = new Float32Array(len)
     for (let i = 0; i < len; i++) {
-      mono[i] = (left[i] + right[i]) / 2
+      mono[i] = (left[i] + resolvedRight[i]) / 2
     }
 
     // Oscilloscope — uses left channel
@@ -49,7 +118,7 @@ class AudioRouter {
         -Math.floor(MAX_PENDING_CHUNKS / 2)
       )
     }
-    this.pendingOscilloscopeSamples.push(new Float32Array(left))
+    this.pendingOscilloscopeSamples.push(left.slice(0, len))
 
     // Spectrum — uses mono
     if (this.pendingSpectrumSamples.length >= MAX_PENDING_SPECTRUM_CHUNKS) {
@@ -74,8 +143,8 @@ class AudioRouter {
       )
     }
     this.pendingVectorscopeSamples.push({
-      left: new Float32Array(left),
-      right: new Float32Array(right),
+      left: left.slice(0, len),
+      right: resolvedRight.slice(0, len),
     })
 
     // VU Meter — uses stereo
@@ -85,8 +154,8 @@ class AudioRouter {
       )
     }
     this.pendingVUMeterSamples.push({
-      left: new Float32Array(left),
-      right: new Float32Array(right),
+      left: left.slice(0, len),
+      right: resolvedRight.slice(0, len),
     })
 
     // LUFS Meter — uses stereo
@@ -96,8 +165,8 @@ class AudioRouter {
       )
     }
     this.pendingLUFSMeterSamples.push({
-      left: new Float32Array(left),
-      right: new Float32Array(right),
+      left: left.slice(0, len),
+      right: resolvedRight.slice(0, len),
     })
 
     // Waveform — uses left channel

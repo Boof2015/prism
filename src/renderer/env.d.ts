@@ -15,6 +15,9 @@ declare global {
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
+      onToggleScope: (callback: (index: number) => void) => () => void
+      onToggleCapture: (callback: () => void) => () => void
+      onToggleSettings: (callback: () => void) => () => void
     }
   }
 }
