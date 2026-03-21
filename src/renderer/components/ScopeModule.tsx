@@ -12,7 +12,6 @@ import { Waveform } from '../visualizers/Waveform'
 interface ScopeModuleProps {
   scopeKind: ScopeKind
   lineColor?: string
-  widthWeight?: number
 }
 
 interface Visualizer {
@@ -98,7 +97,7 @@ function createVisualizer(scopeKind: ScopeKind, canvas: HTMLCanvasElement, mySet
   }
 }
 
-export default function ScopeModule({ scopeKind, lineColor = '#38bdf8', widthWeight = 1 }: ScopeModuleProps): JSX.Element {
+export default function ScopeModule({ scopeKind, lineColor = '#38bdf8' }: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visualizerRef = useRef<Visualizer | null>(null)
@@ -167,7 +166,6 @@ export default function ScopeModule({ scopeKind, lineColor = '#38bdf8', widthWei
     <div
       ref={containerRef}
       style={{
-        flex: widthWeight,
         minWidth: 0,
         height: '100%',
         position: 'relative',

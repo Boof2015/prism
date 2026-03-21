@@ -121,8 +121,8 @@ select {
 .toolbar__chip,
 .toolbar__icon-button,
 .settings-section-title,
-.settings-card__title,
-.settings-card__summary,
+.settings-scope-section__title,
+.settings-scope-section__summary,
 .settings-control__label,
 .settings-chip,
 .settings-status-pill,
@@ -221,24 +221,42 @@ select {
 }
 
 .scope-strip {
-  display: flex;
-  flex-direction: row;
+  position: relative;
   width: 100%;
   height: 100%;
   background-color: var(--bg-primary);
 }
 
-.scope-strip__handle {
-  width: 6px;
-  flex-shrink: 0;
+.scope-strip__grid {
+  display: grid;
+  width: 100%;
+  height: 100%;
+}
+
+.scope-strip__cell {
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.scope-strip__resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  transform: translateX(-50%);
+  padding: 0;
+  border: 0;
+  background: transparent;
   cursor: col-resize;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   z-index: 2;
 }
 
-.scope-strip__handle-line {
+.scope-strip__resize-handle-grip {
   width: 1px;
   height: 100%;
   background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.12), transparent);
@@ -248,75 +266,79 @@ select {
   background: linear-gradient(180deg, rgba(6, 8, 11, 0.98), rgba(4, 5, 7, 0.98));
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
+  gap: 12px;
   overflow: hidden;
   flex-shrink: 0;
   position: relative;
-  padding-bottom: 12px;
+  padding: 12px 0 14px;
 }
 
-.settings-panel__utility {
-  width: 224px;
-  padding: 12px;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+.settings-panel__utility-row {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 14px 18px;
+  flex-wrap: wrap;
+  padding: 0 14px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.settings-utility-card,
-.settings-card {
-  border-radius: 16px;
-  border: 1px solid var(--panel-outline);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0.008)),
-    var(--panel-surface-soft);
-  box-shadow: var(--panel-shadow);
+.settings-utility-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  min-width: 0;
 }
 
-.settings-utility-card {
-  padding: 12px;
+.settings-utility-section--source {
+  flex: 1 1 360px;
+}
+
+.settings-utility-section--theme {
+  flex: 1 1 300px;
+}
+
+.settings-panel__scope-track {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 0;
+  padding: 0 0 2px;
+  align-items: start;
 }
 
 .settings-section-title {
+  width: 100%;
   color: rgba(255, 255, 255, 0.72);
   font-size: 10px;
 }
 
-.settings-panel__scopes {
-  flex: 1;
+.settings-scope-section {
   min-width: 0;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(240px, 1fr);
-  gap: 12px;
-  padding: 12px 12px 36px;
-  overflow-x: auto;
-  overflow-y: visible;
-  align-items: start;
-}
-
-.settings-card {
-  min-width: 240px;
-  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding: 0 16px;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.settings-card__header {
+.settings-scope-section:first-child {
+  border-left: 0;
+}
+
+.settings-scope-section__header {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.settings-card__title {
+.settings-scope-section__title {
   color: var(--accent);
   font-size: 10px;
 }
 
-.settings-card__summary {
+.settings-scope-section__summary {
   color: var(--text-tertiary);
   font-size: 9px;
   letter-spacing: 0.08em;
@@ -325,10 +347,10 @@ select {
   text-overflow: ellipsis;
 }
 
-.settings-card__controls {
+.settings-scope-section__controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 12px;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px 14px;
   align-content: start;
 }
 
@@ -368,17 +390,19 @@ select {
   padding: 0 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: var(--panel-surface);
+  background: rgba(8, 12, 18, 0.72);
   color: rgba(255, 255, 255, 0.86);
   font-size: 11px;
   outline: none;
+  backdrop-filter: blur(14px) saturate(1.04);
+  -webkit-backdrop-filter: blur(14px) saturate(1.04);
   transition: border-color 140ms ease, background-color 140ms ease;
 }
 
 .settings-control__select:hover,
 .settings-control__select:focus {
   border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(10, 14, 20, 0.98);
+  background: rgba(12, 18, 26, 0.82);
 }
 
 .settings-control__range {
@@ -432,9 +456,11 @@ select {
   padding: 0 11px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(8, 12, 18, 0.72);
   color: var(--text-secondary);
   font-size: 10px;
+  backdrop-filter: blur(14px) saturate(1.04);
+  -webkit-backdrop-filter: blur(14px) saturate(1.04);
   cursor: pointer;
   transition:
     border-color 140ms ease,
@@ -463,9 +489,11 @@ select {
   padding: 0 10px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(8, 12, 18, 0.72);
   color: var(--text-secondary);
   font-size: 10px;
+  backdrop-filter: blur(14px) saturate(1.04);
+  -webkit-backdrop-filter: blur(14px) saturate(1.04);
 }
 
 .settings-status-pill__dot {
@@ -496,7 +524,6 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 10px;
 }
 
 .settings-swatch {
@@ -520,31 +547,31 @@ select {
 .settings-accent-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .settings-accent-input {
-  flex: 1;
-  min-width: 0;
+  width: 92px;
   height: 32px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: var(--panel-surface);
+  background: rgba(8, 12, 18, 0.72);
   cursor: pointer;
   padding: 4px;
 }
 
 .settings-panel__close {
-  position: absolute;
-  right: 12px;
-  bottom: 10px;
+  margin-left: auto;
   min-height: 28px;
   padding: 0 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(8, 12, 18, 0.72);
   color: var(--text-tertiary);
   font-size: 9px;
+  backdrop-filter: blur(14px) saturate(1.04);
+  -webkit-backdrop-filter: blur(14px) saturate(1.04);
   cursor: pointer;
   transition:
     border-color 140ms ease,

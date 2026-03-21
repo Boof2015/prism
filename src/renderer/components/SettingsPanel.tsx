@@ -1,8 +1,9 @@
-import { useEffect, useRef, type CSSProperties, type JSX, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { useAudioStore } from '../stores/audioStore'
 import { useSettingsStore, type ScopeSettings } from '../stores/settingsStore'
 import { useThemeStore, PRESETS, PRESET_IDS } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
+import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   spectrum: 'Spectrum',
@@ -151,7 +152,7 @@ function RangeControl({
   )
 }
 
-function ScopeSettingsCard({
+function ScopeSettingsSection({
   kind,
   settings,
   onUpdate,
@@ -163,13 +164,13 @@ function ScopeSettingsCard({
   const scopeSettings = settings[kind]
 
   return (
-    <section className="settings-card">
-      <div className="settings-card__header">
-        <div className="settings-card__title">{SCOPE_LABELS[kind]}</div>
-        <div className="settings-card__summary">{scopeSummary(kind, scopeSettings)}</div>
+    <section className="settings-scope-section">
+      <div className="settings-scope-section__header">
+        <div className="settings-scope-section__title">{SCOPE_LABELS[kind]}</div>
+        <div className="settings-scope-section__summary">{scopeSummary(kind, scopeSettings)}</div>
       </div>
 
-      <div className="settings-card__controls">
+      <div className="settings-scope-section__controls">
         {kind === 'spectrum' && (() => {
           const current = scopeSettings as ScopeSettings['spectrum']
           return (
@@ -487,11 +488,16 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
     setCaptureMode,
     startCapture,
   } = useAudioStore()
-  const { scopeSettings, updateScopeSettings, hiddenScopes, scopeOrder } = useSettingsStore()
+  const { scopeSettings, updateScopeSettings, hiddenScopes, scopeOrder, widthWeights } = useSettingsStore()
   const { presetId, accent, setPreset, setCustomAccent, customAccent } = useThemeStore()
   const panelRef = useRef<HTMLDivElement | null>(null)
 
   const visibleScopes = scopeOrder.filter((kind) => !hiddenScopes.has(kind))
+  const scopeTrackStyle = useMemo(() => {
+    const gridTemplateColumns = buildAnalyzerGridTemplateColumns(visibleScopes, widthWeights)
+    if (!gridTemplateColumns) return undefined
+    return { gridTemplateColumns } as CSSProperties
+  }, [visibleScopes, widthWeights])
 
   useEffect(() => {
     void refreshDevices()
@@ -542,8 +548,8 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
 
   return (
     <div className="settings-panel" ref={panelRef}>
-      <div className="settings-panel__utility">
-        <section className="settings-utility-card">
+      <div className="settings-panel__utility-row">
+        <section className="settings-utility-section settings-utility-section--source">
           <div className="settings-section-title">Audio Source</div>
 
           <label className="settings-control settings-control--stack">
@@ -576,7 +582,7 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
           ) : null}
         </section>
 
-        <section className="settings-utility-card">
+        <section className="settings-utility-section settings-utility-section--theme">
           <div className="settings-section-title">Theme</div>
 
           <div className="settings-theme-swatches">
@@ -616,11 +622,19 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
             </div>
           </label>
         </section>
+
+        <button
+          type="button"
+          className="settings-panel__close"
+          onClick={onClose}
+        >
+          Close
+        </button>
       </div>
 
-      <div className="settings-panel__scopes">
+      <div className="settings-panel__scope-track" style={scopeTrackStyle}>
         {visibleScopes.map((kind) => (
-          <ScopeSettingsCard
+          <ScopeSettingsSection
             key={kind}
             kind={kind}
             settings={scopeSettings}
@@ -628,14 +642,6 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
           />
         ))}
       </div>
-
-      <button
-        type="button"
-        className="settings-panel__close"
-        onClick={onClose}
-      >
-        Close
-      </button>
     </div>
   )
 }
