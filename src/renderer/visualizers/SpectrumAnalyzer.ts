@@ -104,6 +104,7 @@ export class SpectrumAnalyzer {
   private nativeInitialized: boolean = false
   private sampleRate: number = 48000
   private lastSampleRate: number = 0
+  private lastFrequencyData: Float32Array | null = null
   private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: SpectrumAnalyzerOptions = {}) {
@@ -168,6 +169,7 @@ export class SpectrumAnalyzer {
     }
     this.sampleRate = Math.max(1, this.dataSource.getSampleRate())
     this.lastSampleRate = 0
+    this.lastFrequencyData = null
   }
 
   setOptions(options: Partial<SpectrumAnalyzerOptions>): void {
@@ -323,24 +325,31 @@ export class SpectrumAnalyzer {
     if (!this.dataSource.isPlaying()) {
       this.dataSource.getPendingSpectrumSamples()
       nativeSpectrum.reset()
+      this.lastFrequencyData = null
       this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
     const pendingSpectrum = this.dataSource.getPendingSpectrumSamples()
     const monoData = this.mergePendingSpectrumChunks(pendingSpectrum)
-    if (!monoData) {
+    let frequencyData = this.lastFrequencyData
+
+    if (monoData) {
+      const nativeResult = nativeSpectrum.process(monoData)
+      if (!nativeResult) {
+        this.animationId = requestAnimationFrame(this.draw)
+        return
+      }
+
+      frequencyData = nativeResult
+      this.lastFrequencyData = nativeResult
+    }
+
+    if (!frequencyData) {
       this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
-    const nativeResult = nativeSpectrum.process(monoData)
-    if (!nativeResult) {
-      this.animationId = requestAnimationFrame(this.draw)
-      return
-    }
-
-    let frequencyData = nativeResult
     const bufferLength = frequencyData.length
 
     if (bufferLength === 0) {
@@ -514,5 +523,6 @@ export class SpectrumAnalyzer {
       nativeSpectrum.reset()
     }
     this.lastSampleRate = 0
+    this.lastFrequencyData = null
   }
 }
