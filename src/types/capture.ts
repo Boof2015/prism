@@ -13,6 +13,9 @@ export interface CaptureSourceDescriptor {
   id: string
   label: string
   kind: CaptureMode
+  isDefault?: boolean
+  sampleRate?: number
+  channelCount?: number
 }
 
 export interface CaptureBackendSupportEntry {

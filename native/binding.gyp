@@ -19,13 +19,25 @@
       "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
       "conditions": [
         ["OS=='mac'", {
+          "sources": [
+            "src/macos_capture.mm"
+          ],
           "xcode_settings": {
             "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
             "CLANG_CXX_LIBRARY": "libc++",
-            "MACOSX_DEPLOYMENT_TARGET": "10.15"
+            "CLANG_ENABLE_OBJC_ARC": "YES",
+            "MACOSX_DEPLOYMENT_TARGET": "10.15",
+            "OTHER_LDFLAGS": [
+              "-framework Foundation",
+              "-framework CoreAudio",
+              "-framework AudioToolbox"
+            ]
           }
         }],
         ["OS=='win'", {
+          "sources": [
+            "src/macos_capture_stub.cpp"
+          ],
           "msvs_settings": {
             "VCCLCompilerTool": {
               "ExceptionHandling": 1,
@@ -34,6 +46,9 @@
           }
         }],
         ["OS=='linux'", {
+          "sources": [
+            "src/macos_capture_stub.cpp"
+          ],
           "cflags_cc": ["-std=c++17", "-O3", "-ffast-math", "-fPIC"]
         }]
       ]

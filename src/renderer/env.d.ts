@@ -2,10 +2,12 @@
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
 import type { CaptureBackendSupport } from '../types/capture'
+import type { NativeCaptureAPI } from '../types/nativeCapture'
 
 declare global {
   interface Window {
     visualizerAPI: VisualizerDSP | null
+    nativeCaptureAPI: NativeCaptureAPI | null
     electronAPI: {
       platform: string
       minimize: () => void

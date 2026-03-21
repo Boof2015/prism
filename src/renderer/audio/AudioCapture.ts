@@ -13,6 +13,7 @@ import type {
   CaptureMode,
   CaptureSourceDescriptor,
 } from '../../types/capture'
+import type { NativeMacOSCaptureDrainResult, NativeMacOSCaptureStartResult } from '../../types/nativeCapture'
 
 export type { CaptureMode } from '../../types/capture'
 
@@ -60,6 +61,7 @@ export interface CaptureManagerStatus {
 type StatusListener = (status: CaptureManagerStatus) => void
 
 const DEFAULT_BACKEND_POLICY: CaptureBackendPolicy = 'auto'
+const DEFAULT_SYSTEM_SOURCE_ID = '__default_system_output__'
 
 const DEFAULT_BACKEND_SUPPORT: CaptureBackendSupport = {
   policyOptions: ['auto', 'native', 'electron'],
@@ -89,6 +91,15 @@ function toDeviceSourceDescriptor(device: MediaDeviceInfo): CaptureSourceDescrip
     id: device.deviceId,
     label: device.label || `Input ${device.deviceId.slice(0, 8)}`,
     kind: 'device',
+  }
+}
+
+function getDefaultSystemSourceDescriptor(): CaptureSourceDescriptor {
+  return {
+    id: DEFAULT_SYSTEM_SOURCE_ID,
+    label: 'System Output',
+    kind: 'system',
+    isDefault: true,
   }
 }
 
@@ -128,12 +139,7 @@ class ElectronCaptureRuntime {
   }
 
   async listSystemSources(): Promise<CaptureSourceDescriptor[]> {
-    const sources = await window.electronAPI.getDesktopSources()
-    return sources.map((source) => ({
-      id: source.id,
-      label: source.name,
-      kind: 'system',
-    }))
+    return [getDefaultSystemSourceDescriptor()]
   }
 
   async listDeviceSources(): Promise<CaptureSourceDescriptor[]> {
@@ -332,6 +338,142 @@ class ElectronDeviceCaptureBackend implements CaptureBackend {
   }
 }
 
+class NativeMacOSCaptureBackend implements CaptureBackend {
+  readonly kind = 'native-macos' as const
+
+  private readonly chunkListeners = new Set<(chunk: CaptureChunk) => void>()
+  private pollTimer: number | null = null
+  private active = false
+  private sampleRate = 48000
+  private channelCount = 2
+  private supportReason: string | null
+  private performanceOffsetMilliseconds = 0
+
+  constructor(private readonly supportEntry: CaptureBackendSupportEntry) {
+    this.supportReason = supportEntry.reason
+  }
+
+  async start(request?: CaptureBackendStartRequest): Promise<void> {
+    const nativeCapture = window.nativeCaptureAPI?.macosCapture
+    if (!nativeCapture) {
+      throw new Error('Native macOS capture module is not available in this build.')
+    }
+
+    const support = nativeCapture.getSupport()
+    if (!support.available) {
+      throw new Error(support.reason ?? 'Native macOS capture is unavailable.')
+    }
+
+    const nativeNow = nativeCapture.nowMilliseconds()
+    this.performanceOffsetMilliseconds = performance.now() - nativeNow
+
+    const startResult = nativeCapture.start(
+      request?.deviceId && request.deviceId !== DEFAULT_SYSTEM_SOURCE_ID
+        ? request.deviceId
+        : undefined,
+    ) as NativeMacOSCaptureStartResult
+
+    this.sampleRate = Math.max(1, Math.floor(startResult.sampleRate) || 48000)
+    this.channelCount = Math.max(1, Math.floor(startResult.channelCount) || 2)
+    this.supportReason = null
+    this.active = true
+    this.startPolling()
+  }
+
+  async stop(): Promise<void> {
+    this.stopPolling()
+    window.nativeCaptureAPI?.macosCapture.stop()
+    this.active = false
+  }
+
+  async listSources(): Promise<CaptureSourceDescriptor[]> {
+    const nativeCapture = window.nativeCaptureAPI?.macosCapture
+    if (!nativeCapture) {
+      return [getDefaultSystemSourceDescriptor()]
+    }
+
+    const support = nativeCapture.getSupport()
+    if (!support.available) {
+      return [getDefaultSystemSourceDescriptor()]
+    }
+
+    const sources = nativeCapture.listOutputDevices()
+    if (!sources.length) {
+      return [getDefaultSystemSourceDescriptor()]
+    }
+
+    return sources.map((source) => ({
+      id: source.id,
+      label: source.label,
+      kind: 'system',
+      isDefault: source.isDefault,
+      sampleRate: source.sampleRate,
+      channelCount: source.channelCount,
+    }))
+  }
+
+  subscribe(listener: (chunk: CaptureChunk) => void): () => void {
+    this.chunkListeners.add(listener)
+    return () => {
+      this.chunkListeners.delete(listener)
+    }
+  }
+
+  getStatus(): CaptureBackendStatus {
+    return {
+      kind: this.kind,
+      active: this.active,
+      available: this.supportEntry.available,
+      reason: this.supportReason,
+      sampleRate: this.sampleRate,
+      channelCount: this.channelCount,
+    }
+  }
+
+  private startPolling(): void {
+    this.stopPolling()
+
+    const poll = (): void => {
+      if (!this.active) return
+
+      try {
+        const result = window.nativeCaptureAPI?.macosCapture.drain(32) as NativeMacOSCaptureDrainResult | undefined
+        if (result) {
+          for (const chunk of result.chunks) {
+            const routedChunk: CaptureChunk = {
+              left: chunk.left,
+              right: chunk.right,
+              channelCount: Math.max(1, Math.floor(chunk.channelCount) || 1),
+              capturedAt: chunk.capturedAtMilliseconds + this.performanceOffsetMilliseconds,
+              sequence: Math.max(1, Math.floor(chunk.sequence) || 1),
+            }
+
+            for (const listener of this.chunkListeners) {
+              listener(routedChunk)
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Native macOS capture poll failed:', error)
+        this.active = false
+        this.stopPolling()
+        return
+      }
+
+      this.pollTimer = window.setTimeout(poll, 4)
+    }
+
+    this.pollTimer = window.setTimeout(poll, 0)
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer !== null) {
+      window.clearTimeout(this.pollTimer)
+      this.pollTimer = null
+    }
+  }
+}
+
 class NativeUnavailableCaptureBackend implements CaptureBackend {
   readonly kind: CaptureBackendKind
   private readonly reason: string | null
@@ -380,6 +522,7 @@ class AudioCapture {
   private activeBackend: CaptureBackend | null = null
 
   private selectedDeviceId: string | null = null
+  private selectedSystemSourceId: string | null = DEFAULT_SYSTEM_SOURCE_ID
   private captureMode: CaptureMode = 'system'
   private backendPolicy: CaptureBackendPolicy = DEFAULT_BACKEND_POLICY
   private activeBackendReason: string | null = null
@@ -403,12 +546,16 @@ class AudioCapture {
   }
 
   async refreshBackendSupport(): Promise<CaptureBackendSupport> {
+    this.backendSupport = null
     this.backendSupportPromise = null
     return this.ensureBackendSupport()
   }
 
-  async startSystemAudio(): Promise<void> {
+  async startSystemAudio(sourceId?: string): Promise<void> {
     this.captureMode = 'system'
+    if (sourceId) {
+      this.selectedSystemSourceId = sourceId
+    }
     await this.start()
   }
 
@@ -428,8 +575,12 @@ class AudioCapture {
 
     const support = await this.ensureBackendSupport()
     const requestedMode = this.captureMode
-    const requestedDeviceId = requestedMode === 'device' ? this.selectedDeviceId ?? undefined : undefined
+    const requestedDeviceId = requestedMode === 'device'
+      ? this.selectedDeviceId ?? undefined
+      : this.selectedSystemSourceId ?? DEFAULT_SYSTEM_SOURCE_ID
     const candidateBackends = this.resolveCandidateBackends(support, requestedMode)
+
+    await this.stopActiveCapture()
 
     let lastError: Error | null = null
     let nativeFallbackReason: string | null = null
@@ -462,15 +613,7 @@ class AudioCapture {
   }
 
   stop(): void {
-    if (this.sessionId !== null) {
-      audioRouter.endSession()
-      this.sessionId = null
-    }
-
-    if (this.activeBackend) {
-      void this.activeBackend.stop()
-    }
-
+    void this.stopActiveCapture()
     this.emitStatus()
   }
 
@@ -481,7 +624,8 @@ class AudioCapture {
     }
 
     const activeSystemBackend = this.resolveCandidateBackends(this.backendSupport ?? DEFAULT_BACKEND_SUPPORT, 'system')[0]
-    return activeSystemBackend.listSources()
+    const sources = await activeSystemBackend.listSources()
+    return sources.length ? sources : [getDefaultSystemSourceDescriptor()]
   }
 
   async listDevices(): Promise<MediaDeviceInfo[]> {
@@ -495,6 +639,15 @@ class AudioCapture {
 
   setSelectedDeviceId(id: string | null): void {
     this.selectedDeviceId = id
+    this.emitStatus()
+  }
+
+  getSelectedSystemSourceId(): string | null {
+    return this.selectedSystemSourceId
+  }
+
+  setSelectedSystemSourceId(id: string | null): void {
+    this.selectedSystemSourceId = id ?? DEFAULT_SYSTEM_SOURCE_ID
     this.emitStatus()
   }
 
@@ -544,7 +697,7 @@ class AudioCapture {
         .catch(() => DEFAULT_BACKEND_SUPPORT)
         .then((support) => {
           this.backendSupport = support
-          this.nativeBackend = new NativeUnavailableCaptureBackend(support.nativeBackend)
+          this.nativeBackend = this.createNativeBackend(support.nativeBackend)
           this.emitStatus()
           return support
         })
@@ -574,6 +727,28 @@ class AudioCapture {
         }
         this.activeBackendReason = support.nativeBackend.reason
         return [this.electronSystemBackend]
+    }
+  }
+
+  private createNativeBackend(supportEntry: CaptureBackendSupportEntry): CaptureBackend {
+    const backend = supportEntry.kind === 'native-macos' && supportEntry.available
+      ? new NativeMacOSCaptureBackend(supportEntry)
+      : new NativeUnavailableCaptureBackend(supportEntry)
+
+    backend.subscribe((chunk) => this.handleChunk(backend.kind, chunk))
+    return backend
+  }
+
+  private async stopActiveCapture(): Promise<void> {
+    if (this.sessionId !== null) {
+      audioRouter.endSession()
+      this.sessionId = null
+    }
+
+    if (this.activeBackend) {
+      const backend = this.activeBackend
+      this.activeBackend = null
+      await backend.stop()
     }
   }
 

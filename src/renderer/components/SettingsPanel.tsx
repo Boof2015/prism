@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { useAudioStore } from '../stores/audioStore'
 import { useSettingsStore, type ScopeSettings } from '../stores/settingsStore'
 import { useThemeStore, PRESETS, PRESET_IDS } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
-import { audioRouter, type AudioRouterDiagnostics } from '../audio/AudioRouter'
-import type { CaptureBackendKind, CaptureBackendPolicy } from '../../types/capture'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   spectrum: 'Spectrum',
@@ -15,23 +13,6 @@ const SCOPE_LABELS: Record<ScopeKind, string> = {
   vumeter: 'VU Meter',
   lufsmeter: 'LUFS Meter',
   waveform: 'Waveform',
-}
-
-function captureBackendLabel(kind: CaptureBackendKind | null): string {
-  switch (kind) {
-    case 'electron-system':
-      return 'Electron System'
-    case 'electron-device':
-      return 'Electron Device'
-    case 'native-macos':
-      return 'Native macOS'
-    case 'native-windows':
-      return 'Native Windows'
-    case 'native-linux':
-      return 'Native Linux'
-    default:
-      return 'None'
-  }
 }
 
 function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): string {
@@ -496,30 +477,29 @@ interface SettingsPanelProps {
 
 export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanelProps): JSX.Element {
   const {
+    systemSources,
     devices,
+    selectedSystemSourceId,
     selectedDeviceId,
     captureMode,
-    capturePolicy,
-    activeBackendKind,
-    activeBackendReason,
     isCapturing,
     captureStatus,
     captureError,
+    refreshSystemSources,
     refreshDevices,
     refreshBackendSupport,
+    selectSystemSource,
     selectDevice,
-    setCaptureMode,
-    setCapturePolicy,
     startCapture,
   } = useAudioStore()
   const { scopeSettings, updateScopeSettings, hiddenScopes, scopeOrder, widthWeights } = useSettingsStore()
   const { presetId, accent, setPreset, setCustomAccent, customAccent } = useThemeStore()
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const [routerDiagnostics, setRouterDiagnostics] = useState<AudioRouterDiagnostics>(
-    () => audioRouter.getDiagnosticsSnapshot(),
-  )
 
-  const visibleScopes = scopeOrder.filter((kind) => !hiddenScopes.has(kind))
+  const visibleScopes = useMemo(
+    () => scopeOrder.filter((kind) => !hiddenScopes.has(kind)),
+    [scopeOrder, hiddenScopes],
+  )
   const scopeTrackStyle = useMemo(() => {
     const gridTemplateColumns = buildAnalyzerGridTemplateColumns(visibleScopes, widthWeights)
     if (!gridTemplateColumns) return undefined
@@ -527,18 +507,10 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
   }, [visibleScopes, widthWeights])
 
   useEffect(() => {
-    void Promise.all([refreshDevices(), refreshBackendSupport()])
-  }, [refreshBackendSupport, refreshDevices])
-
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setRouterDiagnostics(audioRouter.getDiagnosticsSnapshot())
-    }, 250)
-
-    return () => {
-      window.clearInterval(intervalId)
-    }
-  }, [])
+    void refreshBackendSupport()
+    void refreshSystemSources()
+    void refreshDevices()
+  }, [refreshBackendSupport, refreshSystemSources, refreshDevices])
 
   useEffect(() => {
     const panel = panelRef.current
@@ -565,19 +537,36 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
   }, [onHeightChange, visibleScopes.length])
 
   const handleSourceChange = async (value: string): Promise<void> => {
-    if (value === '__system__') {
-      setCaptureMode('system')
+    if (value.startsWith('system:')) {
+      const sourceId = value.slice('system:'.length)
+      await selectSystemSource(sourceId)
       await startCapture()
       return
     }
 
-    await selectDevice(value)
-    await startCapture()
+    if (value.startsWith('device:')) {
+      const deviceId = value.slice('device:'.length)
+      await selectDevice(deviceId)
+      await startCapture()
+    }
   }
 
-  const handlePolicyChange = async (value: string): Promise<void> => {
-    await setCapturePolicy(value as CaptureBackendPolicy)
-  }
+  const selectedSourceValue = captureMode === 'system'
+    ? `system:${selectedSystemSourceId ?? systemSources[0]?.id ?? '__default_system_output__'}`
+    : `device:${selectedDeviceId ?? ''}`
+
+  const visibleSystemSources = systemSources.length
+    ? systemSources
+    : [{ id: '__default_system_output__', label: 'System Output', kind: 'system', isDefault: true }]
+
+  const showInputDevices = devices.length > 0
+
+  const renderSystemSourceLabel = (label: string, isDefault?: boolean): string => (
+    isDefault ? `${label} (Default)` : label
+  )
+
+  const renderInputDeviceValue = (deviceId: string): string => `device:${deviceId}`
+  const renderSystemSourceValue = (sourceId: string): string => `system:${sourceId}`
 
   const indicatorLabel = isCapturing
     ? 'Capturing'
@@ -586,10 +575,6 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
       : captureStatus === 'error'
         ? 'Capture Failed'
         : 'Idle'
-
-  const latencyLabel = routerDiagnostics.overallP95CaptureToScopeMs === null
-    ? 'Waiting for samples'
-    : `${routerDiagnostics.overallP95CaptureToScopeMs.toFixed(1)} ms p95`
 
   return (
     <div className="settings-panel" ref={panelRef}>
@@ -601,34 +586,27 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
             <span className="settings-control__label">Source</span>
             <select
               className="settings-control__select"
-              value={captureMode === 'system' ? '__system__' : selectedDeviceId ?? ''}
+              value={selectedSourceValue}
               onChange={(event) => {
                 void handleSourceChange(event.target.value)
               }}
             >
-              <option value="__system__">System Audio</option>
-              <optgroup label="Devices">
-                {devices.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label || `Input ${device.deviceId.slice(0, 8)}`}
+              <optgroup label="Output Devices">
+                {visibleSystemSources.map((source) => (
+                  <option key={source.id} value={renderSystemSourceValue(source.id)}>
+                    {renderSystemSourceLabel(source.label, source.isDefault)}
                   </option>
                 ))}
               </optgroup>
-            </select>
-          </label>
-
-          <label className="settings-control settings-control--stack">
-            <span className="settings-control__label">Backend Policy</span>
-            <select
-              className="settings-control__select"
-              value={capturePolicy}
-              onChange={(event) => {
-                void handlePolicyChange(event.target.value)
-              }}
-            >
-              <option value="auto">Auto</option>
-              <option value="native">Native</option>
-              <option value="electron">Electron</option>
+              {showInputDevices ? (
+                <optgroup label="Input Devices">
+                  {devices.map((device) => (
+                    <option key={device.deviceId} value={renderInputDeviceValue(device.deviceId)}>
+                      {device.label || `Input ${device.deviceId.slice(0, 8)}`}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
           </label>
 
@@ -636,18 +614,6 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
             <span className="settings-status-pill__dot" />
             <span>{indicatorLabel}</span>
           </div>
-
-          <div className="settings-info-text">
-            Active backend: {captureBackendLabel(activeBackendKind)}
-          </div>
-
-          <div className="settings-info-text">
-            Latency probe: {latencyLabel} · overwrites {routerDiagnostics.totalOverwriteCount} · stale drops {routerDiagnostics.staleSessionDrops}
-          </div>
-
-          {activeBackendReason ? (
-            <div className="settings-info-text">{activeBackendReason}</div>
-          ) : null}
 
           {captureError ? (
             <div className="settings-error-text">{captureError}</div>

@@ -5,10 +5,13 @@ import type {
   CaptureBackendPolicy,
   CaptureBackendSupport,
   CaptureMode,
+  CaptureSourceDescriptor,
 } from '../../types/capture'
 
 interface AudioState {
+  systemSources: CaptureSourceDescriptor[]
   devices: MediaDeviceInfo[]
+  selectedSystemSourceId: string | null
   selectedDeviceId: string | null
   captureMode: CaptureMode
   capturePolicy: CaptureBackendPolicy
@@ -20,8 +23,10 @@ interface AudioState {
   captureError: string | null
   sampleRate: number
   channelCount: number
+  refreshSystemSources: () => Promise<void>
   refreshDevices: () => Promise<void>
   refreshBackendSupport: () => Promise<void>
+  selectSystemSource: (sourceId: string | null) => Promise<void>
   selectDevice: (deviceId: string) => Promise<void>
   setCaptureMode: (mode: CaptureMode) => void
   setCapturePolicy: (policy: CaptureBackendPolicy) => Promise<void>
@@ -43,7 +48,9 @@ function applyCaptureStatus(status: CaptureManagerStatus): Partial<AudioState> {
 }
 
 export const useAudioStore = create<AudioState>((set, get) => ({
+  systemSources: [],
   devices: [],
+  selectedSystemSourceId: audioCapture.getSelectedSystemSourceId(),
   selectedDeviceId: null,
   captureMode: 'system',
   capturePolicy: 'auto',
@@ -56,6 +63,21 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   sampleRate: 48000,
   channelCount: 2,
 
+  refreshSystemSources: async () => {
+    const systemSources = await audioCapture.listSources('system')
+    const fallbackSourceId = systemSources[0]?.id ?? null
+    const currentSelectedSystemSourceId = get().selectedSystemSourceId
+    const nextSelectedSystemSourceId = currentSelectedSystemSourceId && systemSources.some((source) => source.id === currentSelectedSystemSourceId)
+      ? currentSelectedSystemSourceId
+      : fallbackSourceId
+
+    audioCapture.setSelectedSystemSourceId(nextSelectedSystemSourceId)
+    set({
+      systemSources,
+      selectedSystemSourceId: nextSelectedSystemSourceId,
+    })
+  },
+
   refreshDevices: async () => {
     const devices = await audioCapture.listDevices()
     set({ devices })
@@ -64,6 +86,16 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   refreshBackendSupport: async () => {
     const backendSupport = await audioCapture.refreshBackendSupport()
     set({ backendSupport })
+    await get().refreshSystemSources()
+  },
+
+  selectSystemSource: async (sourceId: string | null) => {
+    audioCapture.setSelectedSystemSourceId(sourceId)
+    audioCapture.setCaptureMode('system')
+    set({
+      selectedSystemSourceId: audioCapture.getSelectedSystemSourceId(),
+      captureMode: 'system',
+    })
   },
 
   selectDevice: async (deviceId: string) => {
@@ -91,13 +123,15 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   startCapture: async () => {
     set({ captureStatus: 'connecting', captureError: null })
     try {
-      const { captureMode, selectedDeviceId, capturePolicy } = get()
+      const { captureMode, capturePolicy } = get()
       audioCapture.setCaptureMode(captureMode)
       audioCapture.setBackendPolicy(capturePolicy)
       await get().refreshBackendSupport()
 
+      const { selectedDeviceId, selectedSystemSourceId } = get()
+
       if (captureMode === 'system') {
-        await audioCapture.startSystemAudio()
+        await audioCapture.startSystemAudio(selectedSystemSourceId ?? undefined)
       } else {
         await audioCapture.startDevice(selectedDeviceId ?? undefined)
       }
