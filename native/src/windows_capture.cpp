@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 
 #include <Audioclient.h>
+#include <propkeydef.h>
 #include <Functiondiscoverykeys_devpkey.h>
 #include <Mmdeviceapi.h>
 #include <ksmedia.h>
