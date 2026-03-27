@@ -1,6 +1,7 @@
 #include <napi.h>
 #include <cstring>
 #include "macos_capture.h"
+#include "windows_capture.h"
 #include "oscilloscope.h"
 #include "spectrum.h"
 #include "vectorscope.h"
@@ -296,6 +297,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("vectorscope", vecExports);
 
     RegisterMacOSCapture(env, exports);
+    RegisterWindowsCapture(env, exports);
 
     return exports;
 }
