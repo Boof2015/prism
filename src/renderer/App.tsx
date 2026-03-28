@@ -84,6 +84,15 @@ export default function App(): JSX.Element {
     window.electronAPI.stopWindowMove()
   }, [])
 
+  useEffect(() => {
+    return () => {
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current)
+      }
+      window.electronAPI.stopWindowMove()
+    }
+  }, [])
+
   // Keyboard shortcuts from main process
   useEffect(() => {
     const unsubs = [

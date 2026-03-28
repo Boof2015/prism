@@ -105,10 +105,13 @@ select {
   justify-content: center;
   width: 20px;
   height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: rgba(255, 255, 255, 0.3);
   cursor: grab;
   flex-shrink: 0;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .toolbar__grab:active {

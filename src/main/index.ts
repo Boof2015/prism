@@ -381,7 +381,6 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     skipTaskbar: true,
     autoHideMenuBar: true,
     title: `Prism ${kind}`,
-    parent: mainWindow,
     alwaysOnTop: mainWindow.isAlwaysOnTop(),
     show: false,
     webPreferences: {

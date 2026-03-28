@@ -4,6 +4,12 @@ import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
+  VUMeterBallistics,
+  VU_METER_MAX_DB,
+  VU_METER_MIN_DB,
+  type VUMeterSnapshot,
+} from './vuMeterBallistics'
+import {
   DEFAULT_VU_METER_ORIENTATION,
   type VUMeterMode,
   type VUMeterOrientation,
@@ -34,15 +40,6 @@ const defaultVUMeterDataSource: VUMeterDataSource = {
   ...defaultVisualizerSessionSource,
 }
 
-// ---- Meter constants ----
-
-const METER_MIN_DB = -60
-const METER_MAX_DB = 0
-const PEAK_HOLD_FRAMES = 45 // ~0.75s at 60fps
-const PEAK_DECAY_DB_PER_FRAME = 0.3
-const RMS_SMOOTHING = 0.85 // exponential smoothing factor
-const CORRELATION_SMOOTHING = 0.88
-
 function colorWithAlpha(r: number, g: number, b: number, a: number): string {
   return `rgba(${r}, ${g}, ${b}, ${a})`
 }
@@ -55,15 +52,14 @@ export class VUMeter {
   private options: ResolvedVUMeterOptions
   private dataSource: VUMeterDataSource
   private frameLoop: VisualizerFrameLoop
+  private meterBallistics: VUMeterBallistics
   private unsubscribeSessionChange: (() => void) | null = null
 
   // Meter state
-  private rmsL = METER_MIN_DB
-  private rmsR = METER_MIN_DB
-  private peakL = METER_MIN_DB
-  private peakR = METER_MIN_DB
-  private peakHoldL = 0
-  private peakHoldR = 0
+  private rmsL = VU_METER_MIN_DB
+  private rmsR = VU_METER_MIN_DB
+  private peakL = VU_METER_MIN_DB
+  private peakR = VU_METER_MIN_DB
   private correlation = 0
 
   constructor(canvas: HTMLCanvasElement, options: VUMeterOptions = {}) {
@@ -75,6 +71,7 @@ export class VUMeter {
     const { dataSource, frameScheduler, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultVUMeterDataSource
+    this.meterBallistics = new VUMeterBallistics(this.dataSource.getSampleRate())
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
@@ -93,13 +90,8 @@ export class VUMeter {
   }
 
   private resetMeters(): void {
-    this.rmsL = METER_MIN_DB
-    this.rmsR = METER_MIN_DB
-    this.peakL = METER_MIN_DB
-    this.peakR = METER_MIN_DB
-    this.peakHoldL = 0
-    this.peakHoldR = 0
-    this.correlation = 0
+    this.meterBallistics.reinitialize(this.dataSource.getSampleRate())
+    this.applySnapshot(this.meterBallistics.getSnapshot())
     this.invalidate()
   }
 
@@ -131,79 +123,31 @@ export class VUMeter {
     this.invalidate()
   }
 
-  private processAudio(): void {
-    const chunks = this.dataSource.getPendingVUMeterSamples()
+  private applySnapshot(snapshot: VUMeterSnapshot): void {
+    this.rmsL = snapshot.rmsLDb
+    this.rmsR = snapshot.rmsRDb
+    this.peakL = snapshot.peakLDb
+    this.peakR = snapshot.peakRDb
+    this.correlation = snapshot.correlation
+  }
 
-    if (!this.dataSource.isPlaying() || chunks.length === 0) {
-      // Decay toward silence
-      this.rmsL = this.rmsL * RMS_SMOOTHING + METER_MIN_DB * (1 - RMS_SMOOTHING)
-      this.rmsR = this.rmsR * RMS_SMOOTHING + METER_MIN_DB * (1 - RMS_SMOOTHING)
-      this.correlation = this.correlation * CORRELATION_SMOOTHING
-      this.updatePeaks()
+  private processAudio(): void {
+    const sampleRate = this.dataSource.getSampleRate()
+    if (Math.abs(sampleRate - this.meterBallistics.getSampleRate()) > 100) {
+      this.meterBallistics.reinitialize(sampleRate)
+    }
+
+    if (!this.dataSource.isPlaying()) {
+      this.applySnapshot(this.meterBallistics.getSnapshot())
       return
     }
 
-    // Compute RMS and correlation across all chunks
-    let sumSqL = 0
-    let sumSqR = 0
-    let sumLR = 0
-    let totalSamples = 0
-
-    for (const chunk of chunks) {
-      const len = Math.min(chunk.left.length, chunk.right.length)
-      for (let i = 0; i < len; i++) {
-        const l = chunk.left[i]
-        const r = chunk.right[i]
-        sumSqL += l * l
-        sumSqR += r * r
-        sumLR += l * r
-      }
-      totalSamples += len
-    }
-
-    if (totalSamples === 0) return
-
-    const rawRmsL = Math.sqrt(sumSqL / totalSamples)
-    const rawRmsR = Math.sqrt(sumSqR / totalSamples)
-    const dbL = 20 * Math.log10(Math.max(rawRmsL, 1e-10))
-    const dbR = 20 * Math.log10(Math.max(rawRmsR, 1e-10))
-
-    // Smooth RMS values
-    this.rmsL = this.rmsL * RMS_SMOOTHING + dbL * (1 - RMS_SMOOTHING)
-    this.rmsR = this.rmsR * RMS_SMOOTHING + dbR * (1 - RMS_SMOOTHING)
-
-    // Compute correlation coefficient: sum(L*R) / sqrt(sum(L^2) * sum(R^2))
-    const denominator = Math.sqrt(sumSqL * sumSqR)
-    const rawCorrelation = denominator > 1e-10 ? sumLR / denominator : 0
-    this.correlation = this.correlation * CORRELATION_SMOOTHING + rawCorrelation * (1 - CORRELATION_SMOOTHING)
-
-    this.updatePeaks()
-  }
-
-  private updatePeaks(): void {
-    // Update peak hold for L
-    if (this.rmsL > this.peakL) {
-      this.peakL = this.rmsL
-      this.peakHoldL = PEAK_HOLD_FRAMES
-    } else if (this.peakHoldL > 0) {
-      this.peakHoldL--
-    } else {
-      this.peakL = Math.max(this.peakL - PEAK_DECAY_DB_PER_FRAME, METER_MIN_DB)
-    }
-
-    // Update peak hold for R
-    if (this.rmsR > this.peakR) {
-      this.peakR = this.rmsR
-      this.peakHoldR = PEAK_HOLD_FRAMES
-    } else if (this.peakHoldR > 0) {
-      this.peakHoldR--
-    } else {
-      this.peakR = Math.max(this.peakR - PEAK_DECAY_DB_PER_FRAME, METER_MIN_DB)
-    }
+    const chunks = this.dataSource.getPendingVUMeterSamples()
+    this.applySnapshot(this.meterBallistics.process(chunks, performance.now()))
   }
 
   private dbToNormalized(db: number): number {
-    return Math.max(0, Math.min(1, (db - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB)))
+    return Math.max(0, Math.min(1, (db - VU_METER_MIN_DB) / (VU_METER_MAX_DB - VU_METER_MIN_DB)))
   }
 
   private drawBarMode(width: number, height: number): void {
@@ -403,8 +347,8 @@ export class VUMeter {
     x: number, y: number, _w: number, h: number,
     db: number
   ): void {
-    const displayDb = Math.max(METER_MIN_DB, Math.min(0, db))
-    const text = displayDb <= METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
+    const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, db))
+    const text = displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'
     ctx.font = `${Math.min(20, Math.max(9, h * 0.55))}px "JetBrains Mono", monospace`
     ctx.textAlign = 'left'
@@ -417,8 +361,8 @@ export class VUMeter {
     x: number, y: number, w: number, h: number,
     db: number
   ): void {
-    const displayDb = Math.max(METER_MIN_DB, Math.min(0, db))
-    const text = displayDb <= METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
+    const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, db))
+    const text = displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'
     ctx.font = `${Math.min(16, Math.max(8, h * 0.5))}px "JetBrains Mono", monospace`
     ctx.textAlign = 'center'
@@ -579,8 +523,8 @@ export class VUMeter {
     ctx.fillText(label, centerX, y + 4)
 
     // dB readout
-    const displayDb = Math.max(METER_MIN_DB, Math.min(0, rmsDb))
-    const dbText = displayDb <= METER_MIN_DB + 1 ? '-∞ dB' : `${displayDb.toFixed(1)} dB`
+    const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, rmsDb))
+    const dbText = displayDb <= VU_METER_MIN_DB + 1 ? '-∞ dB' : `${displayDb.toFixed(1)} dB`
     ctx.fillStyle = 'rgba(255, 255, 255, 0.35)'
     ctx.font = `${Math.max(9, fontSize - 1)}px "JetBrains Mono", monospace`
     ctx.textAlign = 'center'

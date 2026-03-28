@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties, type JSX } from 'react'
+import { useState, useEffect, useCallback, useRef, type CSSProperties, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
 
 function SettingsIcon(): JSX.Element {
@@ -180,17 +180,36 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     })
   }, [activeProfileId, profiles])
 
+  const handleDragStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    window.electronAPI.startWindowMove()
+  }, [])
+
+  const handleDragEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    window.electronAPI.stopWindowMove()
+  }, [])
+
   const activeProfile = activeProfileId ? profiles[activeProfileId] : null
 
   return (
     <div className="toolbar">
-      <div
+      <button
+        type="button"
         className="toolbar__grab"
-        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
-        title="Drag to move window"
+        onPointerDown={handleDragStart}
+        onPointerUp={handleDragEnd}
+        onPointerCancel={handleDragEnd}
+        onLostPointerCapture={handleDragEnd}
+        title="Drag window"
+        aria-label="Drag window"
       >
         <GripIcon />
-      </div>
+      </button>
 
       <div
         className="toolbar__brand"
