@@ -7,10 +7,17 @@ import {
   resolveColorToRgb,
 } from '../src/renderer/utils/color'
 import {
+  createDefaultProfile,
+} from '../src/shared/profileState'
+import { usePerformanceStore } from '../src/renderer/stores/performanceStore'
+import {
+  moveDockedScopeOrder,
+  useSettingsStore,
+} from '../src/renderer/stores/settingsStore'
+import {
   applyInputGainToStereoSamples,
   inputGainDbToLinear,
 } from '../src/renderer/audio/inputGain'
-import { moveDockedScopeOrder } from '../src/renderer/stores/settingsStore'
 import { SCOPE_KINDS, type ScopeKind } from '../src/types/scope'
 import type { ScopePopoutStateMap } from '../src/types/popout'
 import {
@@ -19,6 +26,7 @@ import {
   VU_METER_MIN_DB,
   VU_PEAK_HOLD_MS,
 } from '../src/renderer/visualizers/vuMeterBallistics'
+import { FrameScheduler } from '../src/renderer/visualizers/frameScheduler'
 import { VisualizerFrameLoop } from '../src/renderer/visualizers/visualizerFrameLoop'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
@@ -153,6 +161,89 @@ test('applyInputGainToStereoSamples is a no-op for unity gain', () => {
   assert.deepEqual(Array.from(right), initialRight)
 })
 
+test('FrameScheduler dispatches every animation frame in display-sync mode', () => {
+  const raf = installFakeAnimationFrame()
+
+  try {
+    const scheduler = new FrameScheduler({ frameTarget: 'display-sync' })
+    let frameCount = 0
+    const unsubscribe = scheduler.subscribe(() => {
+      frameCount += 1
+    })
+
+    assert.equal(raf.pendingCount(), 1)
+
+    raf.runFrame(0)
+    raf.runFrame(16.7)
+    raf.runFrame(33.4)
+
+    assert.equal(frameCount, 3)
+    assert.equal(raf.pendingCount(), 1)
+
+    unsubscribe()
+    assert.equal(raf.pendingCount(), 0)
+  } finally {
+    raf.restore()
+  }
+})
+
+test('FrameScheduler caps numeric frame targets by skipping intermediate animation frames', () => {
+  const raf = installFakeAnimationFrame()
+
+  try {
+    const scheduler = new FrameScheduler({ frameTarget: 30 })
+    let frameCount = 0
+    const unsubscribe = scheduler.subscribe(() => {
+      frameCount += 1
+    })
+
+    raf.runFrame(0)
+    raf.runFrame(16.7)
+    raf.runFrame(33.4)
+    raf.runFrame(50.1)
+    raf.runFrame(66.8)
+
+    assert.equal(frameCount, 3)
+    assert.equal(raf.pendingCount(), 1)
+
+    unsubscribe()
+    assert.equal(raf.pendingCount(), 0)
+  } finally {
+    raf.restore()
+  }
+})
+
+test('FrameScheduler updates cadence when the frame target changes without duplicating subscriptions', () => {
+  const raf = installFakeAnimationFrame()
+
+  try {
+    const scheduler = new FrameScheduler({ frameTarget: 30 })
+    let frameCount = 0
+    const unsubscribe = scheduler.subscribe(() => {
+      frameCount += 1
+    })
+
+    raf.runFrame(0)
+    raf.runFrame(16.7)
+    assert.equal(frameCount, 1)
+    assert.equal(raf.pendingCount(), 1)
+
+    scheduler.setFrameTarget(60)
+
+    raf.runFrame(33.4)
+    raf.runFrame(41.7)
+    raf.runFrame(50.1)
+
+    assert.equal(frameCount, 3)
+    assert.equal(raf.pendingCount(), 1)
+
+    unsubscribe()
+    assert.equal(raf.pendingCount(), 0)
+  } finally {
+    raf.restore()
+  }
+})
+
 test('VisualizerFrameLoop renders one invalidated frame while idle', () => {
   const raf = installFakeAnimationFrame()
 
@@ -256,6 +347,36 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'lufsmeter',
     'waveform',
   ])
+})
+
+test('applying a profile snapshot does not change the machine-local frame target', () => {
+  const previousPerformanceState = usePerformanceStore.getState()
+  const previousSettingsState = useSettingsStore.getState()
+
+  try {
+    usePerformanceStore.getState().setFrameTarget(120)
+
+    const defaultProfile = createDefaultProfile('Default')
+    const alternateProfile = createDefaultProfile('Live Mix')
+    alternateProfile.hiddenScopes = []
+    alternateProfile.scopeSettings.waveform.gainDb = 6
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: 'profile_live_mix',
+      profiles: {
+        profile_default: defaultProfile,
+        profile_live_mix: alternateProfile,
+      },
+    })
+
+    assert.equal(usePerformanceStore.getState().frameTarget, 120)
+  } finally {
+    usePerformanceStore.setState({
+      frameTarget: previousPerformanceState.frameTarget,
+      dockedRenderFps: previousPerformanceState.dockedRenderFps,
+    })
+    useSettingsStore.setState(previousSettingsState)
+  }
 })
 
 test('moveDockedScopeOrder is a no-op at the docked boundaries', () => {

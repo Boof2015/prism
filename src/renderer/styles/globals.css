@@ -906,6 +906,10 @@ select {
   min-width: 360px;
 }
 
+.bottom-bar__section--performance {
+  min-width: 328px;
+}
+
 .bottom-bar__section--trim {
   min-width: 196px;
 }
@@ -946,6 +950,10 @@ select {
   gap: 6px;
 }
 
+.bottom-bar__inline--performance {
+  gap: 10px;
+}
+
 .bottom-bar__divider {
   width: 1px;
   align-self: stretch;
@@ -972,6 +980,14 @@ select {
 .bottom-bar .settings-control__select {
   min-width: 280px;
   max-width: 280px;
+}
+
+.bottom-bar__fps-pill {
+  min-width: 84px;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.84);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.08em;
 }
 
 .bottom-bar__error-text {

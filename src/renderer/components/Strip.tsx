@@ -6,6 +6,7 @@ import type { WindowBounds } from '../../types/popout'
 import ScopeModule from './ScopeModule'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
 import { audioRouter } from '../audio/AudioRouter'
+import { usePerformanceStore } from '../stores/performanceStore'
 import { FrameScheduler } from '../visualizers/frameScheduler'
 
 export default function Strip(): JSX.Element {
@@ -17,7 +18,9 @@ export default function Strip(): JSX.Element {
   const setScopeWidthWeight = useSettingsStore((s) => s.setScopeWidthWeight)
   const popOutScope = useSettingsStore((s) => s.popOutScope)
   const accent = useThemeStore((s) => s.accent)
-  const frameScheduler = useMemo(() => new FrameScheduler(), [])
+  const frameTarget = usePerformanceStore((s) => s.frameTarget)
+  const setDockedRenderFps = usePerformanceStore((s) => s.setDockedRenderFps)
+  const frameScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
   const stripRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const scopeRefs = useRef<Partial<Record<ScopeKind, HTMLDivElement | null>>>({})
@@ -34,6 +37,21 @@ export default function Strip(): JSX.Element {
     if (!gridTemplateColumns) return undefined
     return { gridTemplateColumns } as CSSProperties
   }, [gridTemplateColumns])
+
+  useEffect(() => {
+    frameScheduler.setFrameTarget(frameTarget)
+  }, [frameScheduler, frameTarget])
+
+  useEffect(() => {
+    const unsubscribe = frameScheduler.subscribeToActualFps((fps) => {
+      setDockedRenderFps(fps)
+    })
+
+    return () => {
+      unsubscribe()
+      setDockedRenderFps(0)
+    }
+  }, [frameScheduler, setDockedRenderFps])
 
   const updateHandleOffsets = useCallback((): void => {
     if (dockedScopes.length < 2) {

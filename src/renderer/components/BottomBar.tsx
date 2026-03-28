@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, type CSSProperties, type JSX } from 'react'
 import { useAudioStore } from '../stores/audioStore'
+import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore, PRESETS, PRESET_IDS } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
+import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { SCOPE_KINDS } from '../../types/scope'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -20,11 +22,23 @@ interface BottomBarProps {
   onHeightChange?: (height: number) => void
 }
 
+const FRAME_TARGET_LABELS: Record<VisualizerFrameTarget, string> = {
+  10: '10',
+  30: '30',
+  60: '60',
+  120: '120',
+  144: '144',
+  'display-sync': 'Sync',
+}
+
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const toggleScope = useSettingsStore((s) => s.toggleScope)
+  const frameTarget = usePerformanceStore((s) => s.frameTarget)
+  const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
+  const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
   const { presetId, accent, setPreset, setCustomAccent, customAccent } = useThemeStore()
 
   const {
@@ -113,6 +127,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
         : 'Idle'
 
   const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
+  const roundedDockedRenderFps = Math.max(0, Math.round(dockedRenderFps))
 
   return (
     <div className="bottom-bar" ref={rootRef}>
@@ -221,6 +236,33 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
               {captureError ? (
                 <div className="settings-error-text bottom-bar__error-text">{captureError}</div>
               ) : null}
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--performance">
+            <div className="bottom-bar__section-title">Performance</div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--performance">
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
+                  {VISUALIZER_FRAME_TARGETS.map((target) => (
+                    <button
+                      key={String(target)}
+                      type="button"
+                      className={`settings-chip ${frameTarget === target ? 'is-active' : ''}`.trim()}
+                      onClick={() => setFrameTarget(target)}
+                      title={target === 'display-sync' ? 'Display Sync' : `Cap visualizers at ${target} FPS`}
+                    >
+                      {FRAME_TARGET_LABELS[target]}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="settings-status-pill bottom-bar__fps-pill" title="Docked visualizer render FPS">
+                  <span>{roundedDockedRenderFps} FPS</span>
+                </div>
+              </div>
             </div>
           </section>
 

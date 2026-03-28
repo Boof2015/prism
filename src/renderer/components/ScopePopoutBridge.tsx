@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { audioRouter } from '../audio/AudioRouter'
+import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { FrameScheduler } from '../visualizers/frameScheduler'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -59,13 +61,19 @@ export default function ScopePopoutBridge(): null {
   const updatePopoutBounds = useSettingsStore((s) => s.updatePopoutBounds)
   const updateScopeSettings = useSettingsStore((s) => s.updateScopeSettings)
   const accent = useThemeStore((s) => s.accent)
+  const frameTarget = usePerformanceStore((s) => s.frameTarget)
 
   const activePopoutKinds = useMemo(
     () => SCOPE_KINDS.filter((kind) => scopePopouts[kind]?.poppedOut && !hiddenScopes.has(kind)),
     [hiddenScopes, scopePopouts],
   )
+  const flushScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
   const activePopoutKindsRef = useRef<ScopeKind[]>(activePopoutKinds)
   const sessionStateRef = useRef(audioRouter.getSessionState())
+
+  useEffect(() => {
+    flushScheduler.setFrameTarget(frameTarget)
+  }, [flushScheduler, frameTarget])
 
   useEffect(() => {
     activePopoutKindsRef.current = activePopoutKinds
@@ -153,10 +161,9 @@ export default function ScopePopoutBridge(): null {
   }, [activePopoutKinds])
 
   useEffect(() => {
-    let frameId = 0
+    let unsubscribeFlush: (() => void) | null = null
 
     const flushFrame = (): void => {
-      frameId = 0
       if (!sessionStateRef.current.capturing || activePopoutKindsRef.current.length === 0) {
         return
       }
@@ -167,22 +174,20 @@ export default function ScopePopoutBridge(): null {
           window.electronAPI.sendScopePopoutAudio(kind, batch)
         }
       }
-
-      frameId = window.requestAnimationFrame(flushFrame)
     }
 
     const syncFlushLoop = (): void => {
       const shouldRun = sessionStateRef.current.capturing && activePopoutKindsRef.current.length > 0
       if (!shouldRun) {
-        if (frameId) {
-          window.cancelAnimationFrame(frameId)
-          frameId = 0
+        if (unsubscribeFlush) {
+          unsubscribeFlush()
+          unsubscribeFlush = null
         }
         return
       }
 
-      if (!frameId) {
-        frameId = window.requestAnimationFrame(flushFrame)
+      if (!unsubscribeFlush) {
+        unsubscribeFlush = flushScheduler.subscribe(flushFrame)
       }
     }
 
@@ -194,12 +199,12 @@ export default function ScopePopoutBridge(): null {
     syncFlushLoop()
 
     return () => {
-      if (frameId) {
-        window.cancelAnimationFrame(frameId)
+      if (unsubscribeFlush) {
+        unsubscribeFlush()
       }
       unsubscribeSession()
     }
-  }, [activePopoutKinds])
+  }, [activePopoutKinds, flushScheduler])
 
   useEffect(() => {
     return audioRouter.subscribeToSessionChanges((state) => {

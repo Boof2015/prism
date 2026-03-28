@@ -4,6 +4,7 @@ import { SCOPE_LABELS, type ScopeKind } from '../../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings'
 import ScopeModule from '../components/ScopeModule'
 import ScopeSettingsSection from '../components/ScopeSettingsSection'
+import { usePerformanceStore } from '../stores/performanceStore'
 import { applyAccentToDOM } from '../stores/themeStore'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
@@ -48,8 +49,13 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
   const [miniSettingsOpen, setMiniSettingsOpen] = useState(false)
   const prevMiniSettingsOpenRef = useRef(false)
-  const frameScheduler = useMemo(() => new FrameScheduler(), [])
+  const frameTarget = usePerformanceStore((s) => s.frameTarget)
+  const frameScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
+
+  useEffect(() => {
+    frameScheduler.setFrameTarget(frameTarget)
+  }, [frameScheduler, frameTarget])
 
   useEffect(() => {
     const unsubscribeSnapshot = window.electronAPI.onScopePopoutSnapshot((nextSnapshot) => {
