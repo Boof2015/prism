@@ -6,6 +6,9 @@ import {
   parseColorToRgb,
   resolveColorToRgb,
 } from '../src/renderer/utils/color'
+import { moveDockedScopeOrder } from '../src/renderer/stores/settingsStore'
+import { SCOPE_KINDS, type ScopeKind } from '../src/types/scope'
+import type { ScopePopoutStateMap } from '../src/types/popout'
 import {
   VUMeterBallistics,
   VU_INTEGRATION_WINDOW_MS,
@@ -88,6 +91,14 @@ function createProgramSamples(length: number): { left: Float32Array; right: Floa
   }
 
   return { left, right }
+}
+
+function createScopePopouts(poppedOutScopes: ScopeKind[] = []): ScopePopoutStateMap {
+  const poppedOutSet = new Set(poppedOutScopes)
+  return SCOPE_KINDS.reduce((acc, kind) => {
+    acc[kind] = { poppedOut: poppedOutSet.has(kind) }
+    return acc
+  }, {} as ScopePopoutStateMap)
 }
 
 test('parseColorToRgb handles hex, rgb, rgba, and percentage formats', () => {
@@ -188,6 +199,79 @@ test('VisualizerFrameLoop invalidate and stop manage subscriptions correctly', (
   } finally {
     raf.restore()
   }
+})
+
+test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked neighbor', () => {
+  const nextOrder = moveDockedScopeOrder(
+    [...SCOPE_KINDS],
+    new Set<ScopeKind>(),
+    createScopePopouts(),
+    'vectorscope',
+    'left',
+  )
+
+  assert.deepEqual(nextOrder, [
+    'spectrum',
+    'vectorscope',
+    'oscilloscope',
+    'spectrogram',
+    'vumeter',
+    'lufsmeter',
+    'waveform',
+  ])
+})
+
+test('moveDockedScopeOrder is a no-op at the docked boundaries', () => {
+  const initialOrder = [...SCOPE_KINDS]
+
+  assert.equal(
+    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'spectrum', 'left'),
+    initialOrder,
+  )
+  assert.equal(
+    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'waveform', 'right'),
+    initialOrder,
+  )
+})
+
+test('moveDockedScopeOrder preserves hidden scope positions in the full order', () => {
+  const nextOrder = moveDockedScopeOrder(
+    [...SCOPE_KINDS],
+    new Set<ScopeKind>(['oscilloscope']),
+    createScopePopouts(),
+    'vectorscope',
+    'left',
+  )
+
+  assert.deepEqual(nextOrder, [
+    'vectorscope',
+    'oscilloscope',
+    'spectrum',
+    'spectrogram',
+    'vumeter',
+    'lufsmeter',
+    'waveform',
+  ])
+})
+
+test('moveDockedScopeOrder preserves popped-out scope positions in the full order', () => {
+  const nextOrder = moveDockedScopeOrder(
+    [...SCOPE_KINDS],
+    new Set<ScopeKind>(),
+    createScopePopouts(['oscilloscope']),
+    'spectrogram',
+    'left',
+  )
+
+  assert.deepEqual(nextOrder, [
+    'spectrum',
+    'oscilloscope',
+    'spectrogram',
+    'vectorscope',
+    'vumeter',
+    'lufsmeter',
+    'waveform',
+  ])
 })
 
 test('VUMeterBallistics holds RMS and correlation steady when an active frame receives no chunks', () => {

@@ -13,6 +13,7 @@ export default function Strip(): JSX.Element {
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopePopouts = useSettingsStore((s) => s.scopePopouts)
   const widthWeights = useSettingsStore((s) => s.widthWeights)
+  const moveDockedScope = useSettingsStore((s) => s.moveDockedScope)
   const setScopeWidthWeight = useSettingsStore((s) => s.setScopeWidthWeight)
   const popOutScope = useSettingsStore((s) => s.popOutScope)
   const accent = useThemeStore((s) => s.accent)
@@ -192,7 +193,7 @@ export default function Strip(): JSX.Element {
   return (
     <div ref={stripRef} className="scope-strip">
       <div ref={gridRef} className="scope-strip__grid" style={gridStyle}>
-        {dockedScopes.map((kind) => (
+        {dockedScopes.map((kind, index) => (
           <div
             key={kind}
             ref={(element) => {
@@ -200,6 +201,34 @@ export default function Strip(): JSX.Element {
             }}
             className="scope-strip__cell"
           >
+            {dockedScopes.length > 1 && (
+              <div className="scope-strip__reorder-controls">
+                <button
+                  type="button"
+                  className="scope-strip__reorder-button"
+                  onClick={() => moveDockedScope(kind, 'left')}
+                  aria-label={`Move ${SCOPE_LABELS[kind]} left`}
+                  title={`Move ${SCOPE_LABELS[kind]} left`}
+                  disabled={index === 0}
+                >
+                  <span className="scope-strip__reorder-icon" aria-hidden="true">
+                    &#8592;
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="scope-strip__reorder-button"
+                  onClick={() => moveDockedScope(kind, 'right')}
+                  aria-label={`Move ${SCOPE_LABELS[kind]} right`}
+                  title={`Move ${SCOPE_LABELS[kind]} right`}
+                  disabled={index === dockedScopes.length - 1}
+                >
+                  <span className="scope-strip__reorder-icon" aria-hidden="true">
+                    &#8594;
+                  </span>
+                </button>
+              </div>
+            )}
             <button
               type="button"
               className="scope-strip__popout-button"

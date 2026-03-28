@@ -342,13 +342,24 @@ select {
   overflow: hidden;
 }
 
-.scope-strip__popout-button {
+.scope-strip__reorder-controls {
   position: absolute;
   bottom: 8px;
-  right: 8px;
+  left: 8px;
   z-index: 3;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  pointer-events: none;
+}
+
+.scope-strip__reorder-button,
+.scope-strip__popout-button {
   width: 28px;
   height: 28px;
+  padding: 0;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(8, 12, 18, 0.74);
@@ -356,24 +367,57 @@ select {
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   cursor: pointer;
-  opacity: 0;
-  transform: translateY(-2px);
   transition: opacity 120ms ease, transform 120ms ease, border-color 120ms ease, color 120ms ease;
   backdrop-filter: blur(14px) saturate(1.04);
   -webkit-backdrop-filter: blur(14px) saturate(1.04);
 }
 
+.scope-strip__reorder-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scope-strip__popout-button {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 3;
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+}
+
+.scope-strip__cell:hover .scope-strip__reorder-controls,
+.scope-strip__cell:focus-within .scope-strip__reorder-controls,
 .scope-strip__cell:hover .scope-strip__popout-button,
+.scope-strip__cell:focus-within .scope-strip__popout-button,
 .scope-strip__popout-button:focus-visible {
   opacity: 1;
   transform: translateY(0);
+  pointer-events: auto;
 }
 
-.scope-strip__popout-button:hover {
+.scope-strip__reorder-button:hover:not(:disabled),
+.scope-strip__reorder-button:focus-visible,
+.scope-strip__popout-button:hover,
+.scope-strip__popout-button:focus-visible {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb), 0.28);
 }
 
+.scope-strip__reorder-button:focus-visible,
+.scope-strip__popout-button:focus-visible {
+  outline: none;
+}
+
+.scope-strip__reorder-button:disabled {
+  color: rgba(255, 255, 255, 0.32);
+  border-color: rgba(255, 255, 255, 0.08);
+  cursor: default;
+}
+
+.scope-strip__reorder-icon,
 .scope-strip__popout-icon {
   display: inline-flex;
   align-items: center;

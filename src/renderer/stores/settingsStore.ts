@@ -68,7 +68,7 @@ interface SettingsState {
 
   // Actions
   toggleScope: (kind: ScopeKind) => void
-  moveScope: (kind: ScopeKind, direction: 'left' | 'right') => void
+  moveDockedScope: (kind: ScopeKind, direction: 'left' | 'right') => void
   setScopeWidthWeight: (kind: ScopeKind, weight: number) => void
   updateScopeSettings: <K extends ScopeKind>(kind: K, settings: Partial<ScopeSettings[K]>) => void
   popOutScope: (kind: ScopeKind, bounds?: WindowBounds) => void
@@ -199,6 +199,49 @@ function normalizeScopePopouts(raw: unknown): ScopePopoutStateMap {
   return defaults
 }
 
+function isDockedScope(
+  kind: ScopeKind,
+  hiddenScopes: ReadonlySet<ScopeKind>,
+  scopePopouts: ScopePopoutStateMap,
+): boolean {
+  return !hiddenScopes.has(kind) && !scopePopouts[kind]?.poppedOut
+}
+
+export function moveDockedScopeOrder(
+  scopeOrder: ScopeKind[],
+  hiddenScopes: ReadonlySet<ScopeKind>,
+  scopePopouts: ScopePopoutStateMap,
+  kind: ScopeKind,
+  direction: 'left' | 'right',
+): ScopeKind[] {
+  const dockedScopes = scopeOrder.filter((scope) => isDockedScope(scope, hiddenScopes, scopePopouts))
+  const index = dockedScopes.indexOf(kind)
+  if (index === -1) return scopeOrder
+
+  const targetIndex = direction === 'left' ? index - 1 : index + 1
+  if (targetIndex < 0 || targetIndex >= dockedScopes.length) return scopeOrder
+
+  const reorderedDockedScopes = [...dockedScopes]
+  ;[reorderedDockedScopes[index], reorderedDockedScopes[targetIndex]] = [
+    reorderedDockedScopes[targetIndex],
+    reorderedDockedScopes[index],
+  ]
+
+  let reorderedIndex = 0
+  let didChange = false
+  const mergedOrder = scopeOrder.map((scope) => {
+    if (!isDockedScope(scope, hiddenScopes, scopePopouts)) return scope
+    const nextScope = reorderedDockedScopes[reorderedIndex] ?? scope
+    reorderedIndex += 1
+    if (nextScope !== scope) {
+      didChange = true
+    }
+    return nextScope
+  })
+
+  return didChange ? mergedOrder : scopeOrder
+}
+
 function cloneScopeSettings(settings: ScopeSettings): ScopeSettings {
   return JSON.parse(JSON.stringify(settings)) as ScopeSettings
 }
@@ -262,15 +305,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     })
   },
 
-  moveScope: (kind: ScopeKind, direction: 'left' | 'right') => {
+  moveDockedScope: (kind: ScopeKind, direction: 'left' | 'right') => {
     set((state) => {
-      const order = [...state.scopeOrder]
-      const idx = order.indexOf(kind)
-      if (idx === -1) return state
-      const swap = direction === 'left' ? idx - 1 : idx + 1
-      if (swap < 0 || swap >= order.length) return state
-      ;[order[idx], order[swap]] = [order[swap], order[idx]]
-      const newState = { ...state, scopeOrder: order }
+      const nextOrder = moveDockedScopeOrder(
+        state.scopeOrder,
+        state.hiddenScopes,
+        state.scopePopouts,
+        kind,
+        direction,
+      )
+      if (nextOrder === state.scopeOrder) return state
+      const newState = { ...state, scopeOrder: nextOrder }
       saveToStorage(newState as SettingsState)
       return newState
     })
