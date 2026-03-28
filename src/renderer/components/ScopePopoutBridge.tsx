@@ -60,7 +60,7 @@ export default function ScopePopoutBridge(): null {
   const popInScope = useSettingsStore((s) => s.popInScope)
   const updatePopoutBounds = useSettingsStore((s) => s.updatePopoutBounds)
   const updateScopeSettings = useSettingsStore((s) => s.updateScopeSettings)
-  const accent = useThemeStore((s) => s.accent)
+  const activeTheme = useThemeStore((s) => s.activeTheme)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
 
   const activePopoutKinds = useMemo(
@@ -96,12 +96,13 @@ export default function ScopePopoutBridge(): null {
       const snapshot: ScopePopoutSnapshot = {
         kind,
         label: SCOPE_LABELS[kind],
-        accent,
+        interfaceTheme: activeTheme.interface,
+        scopeTheme: activeTheme[kind],
         settings: scopeSettings[kind],
       }
       window.electronAPI.sendScopePopoutSnapshot(snapshot)
     }
-  }, [accent, activePopoutKinds, scopeSettings])
+  }, [activePopoutKinds, activeTheme, scopeSettings])
 
   useEffect(() => {
     const sessionState = toPopoutSessionState(audioRouter.getSessionState())
@@ -129,7 +130,8 @@ export default function ScopePopoutBridge(): null {
       window.electronAPI.sendScopePopoutSnapshot({
         kind,
         label: SCOPE_LABELS[kind],
-        accent: useThemeStore.getState().accent,
+        interfaceTheme: useThemeStore.getState().activeTheme.interface,
+        scopeTheme: useThemeStore.getState().activeTheme[kind],
         settings: useSettingsStore.getState().scopeSettings[kind],
       })
       window.electronAPI.sendScopePopoutSession(kind, toPopoutSessionState(audioRouter.getSessionState()))

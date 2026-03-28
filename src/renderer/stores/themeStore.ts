@@ -1,133 +1,146 @@
 import { create } from 'zustand'
+import type {
+  LegacyThemeMigrationPayload,
+  PrismResolvedTheme,
+  PrismTheme,
+  ThemeLibrarySnapshot,
+} from '../../types/theme'
+import {
+  applyResolvedThemeToDocument,
+  createDefaultTheme,
+  normalizeLegacyThemePayload,
+  resolveTheme,
+} from '../../shared/themeState'
 
-export interface ThemePreset {
-  name: string
-  accent: string
-  accentHover: string
-  accentGlow: string
-  accentRgb: string
-}
-
-const PRESETS: Record<string, ThemePreset> = {
-  default: {
-    name: 'Cyan',
-    accent: '#38bdf8',
-    accentHover: '#7dd3fc',
-    accentGlow: 'rgba(56, 189, 248, 0.3)',
-    accentRgb: '56, 189, 248',
-  },
-  graphite: {
-    name: 'Graphite',
-    accent: '#4fc3f7',
-    accentHover: '#81d4fa',
-    accentGlow: 'rgba(79, 195, 247, 0.3)',
-    accentRgb: '79, 195, 247',
-  },
-  midnight: {
-    name: 'Midnight',
-    accent: '#4f9bff',
-    accentHover: '#7eb8ff',
-    accentGlow: 'rgba(79, 155, 255, 0.3)',
-    accentRgb: '79, 155, 255',
-  },
-  green: {
-    name: 'Green',
-    accent: '#4ade80',
-    accentHover: '#86efac',
-    accentGlow: 'rgba(74, 222, 128, 0.3)',
-    accentRgb: '74, 222, 128',
-  },
-  purple: {
-    name: 'Purple',
-    accent: '#a78bfa',
-    accentHover: '#c4b5fd',
-    accentGlow: 'rgba(167, 139, 250, 0.3)',
-    accentRgb: '167, 139, 250',
-  },
-  rose: {
-    name: 'Rose',
-    accent: '#fb7185',
-    accentHover: '#fda4af',
-    accentGlow: 'rgba(251, 113, 133, 0.3)',
-    accentRgb: '251, 113, 133',
-  },
-}
-
-export const PRESET_IDS = Object.keys(PRESETS)
-
-const STORAGE_KEY = 'prism:theme'
-
-function hexToRgb(hex: string): string {
-  const h = hex.replace('#', '')
-  const r = parseInt(h.substring(0, 2), 16)
-  const g = parseInt(h.substring(2, 4), 16)
-  const b = parseInt(h.substring(4, 6), 16)
-  return `${r}, ${g}, ${b}`
-}
-
-function lightenHex(hex: string, amount: number): string {
-  const h = hex.replace('#', '')
-  const r = Math.min(255, parseInt(h.substring(0, 2), 16) + amount)
-  const g = Math.min(255, parseInt(h.substring(2, 4), 16) + amount)
-  const b = Math.min(255, parseInt(h.substring(4, 6), 16) + amount)
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
-}
+const LEGACY_STORAGE_KEY = 'prism:theme'
 
 interface ThemeState {
-  presetId: string
-  customAccent: string | null // null = use preset accent
-  accent: string // resolved accent hex
-
-  setPreset: (id: string) => void
-  setCustomAccent: (hex: string | null) => void
+  themes: Record<string, PrismTheme>
+  activeThemeId: string | null
+  activeTheme: PrismResolvedTheme
+  accent: string
+  initializeThemes: () => Promise<void>
+  applyExternalThemeSnapshot: (snapshot: ThemeLibrarySnapshot) => void
+  loadTheme: (id: string) => Promise<void>
+  renameTheme: (id: string, name: string) => Promise<void>
+  deleteTheme: (id: string) => Promise<void>
+  reloadThemes: () => Promise<void>
+  importThemeFromDialog: () => Promise<void>
+  showThemesFolder: () => Promise<void>
 }
 
-function loadTheme(): { presetId: string; customAccent: string | null } {
+function canUseElectronAPI(): boolean {
+  return typeof window !== 'undefined' && typeof window.electronAPI !== 'undefined'
+}
+
+function loadLegacyThemeMigrationPayload(): LegacyThemeMigrationPayload | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw)
-  } catch { /* ignore */ }
-  return { presetId: 'default', customAccent: null }
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (!raw) return null
+    return normalizeLegacyThemePayload(JSON.parse(raw) as unknown)
+  } catch {
+    return null
+  }
 }
 
-export function applyAccentToDOM(accent: string): void {
-  const rgb = hexToRgb(accent)
-  const root = document.documentElement
-  root.style.setProperty('--accent', accent)
-  root.style.setProperty('--accent-hover', lightenHex(accent, 50))
-  root.style.setProperty('--accent-glow', `rgba(${rgb}, 0.3)`)
-  root.style.setProperty('--accent-rgb', rgb)
+function clearLegacyThemeStorage(): void {
+  try {
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+  } catch {
+    // Ignore localStorage failures.
+  }
 }
 
-const stored = loadTheme()
-const initialPreset = PRESETS[stored.presetId] ?? PRESETS.default
-const initialAccent = stored.customAccent ?? initialPreset.accent
+function applyThemeToDOM(theme: PrismResolvedTheme): void {
+  if (typeof document === 'undefined') return
+  applyResolvedThemeToDocument(theme, document.documentElement.style)
+}
 
-// Apply immediately on load
-applyAccentToDOM(initialAccent)
+function resolveActiveTheme(snapshot: ThemeLibrarySnapshot): PrismResolvedTheme {
+  const theme = snapshot.activeThemeId
+    ? snapshot.themes[snapshot.activeThemeId] ?? null
+    : null
+  return resolveTheme(theme ?? createDefaultTheme())
+}
+
+function applyThemeSnapshot(
+  set: (partial: Partial<ThemeState>) => void,
+  snapshot: ThemeLibrarySnapshot,
+): void {
+  const activeTheme = resolveActiveTheme(snapshot)
+  applyThemeToDOM(activeTheme)
+  set({
+    themes: snapshot.themes,
+    activeThemeId: snapshot.activeThemeId,
+    activeTheme,
+    accent: activeTheme.interface.accent,
+  })
+}
+
+const fallbackTheme = resolveTheme(createDefaultTheme())
+applyThemeToDOM(fallbackTheme)
 
 export const useThemeStore = create<ThemeState>((set) => ({
-  presetId: stored.presetId,
-  customAccent: stored.customAccent,
-  accent: initialAccent,
+  themes: {
+    [fallbackTheme.id]: createDefaultTheme(),
+  },
+  activeThemeId: fallbackTheme.id,
+  activeTheme: fallbackTheme,
+  accent: fallbackTheme.interface.accent,
 
-  setPreset: (id: string) => {
-    const preset = PRESETS[id] ?? PRESETS.default
-    applyAccentToDOM(preset.accent)
-    const state = { presetId: id, customAccent: null, accent: preset.accent }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ presetId: id, customAccent: null }))
-    set(state)
+  initializeThemes: async () => {
+    if (!canUseElectronAPI()) return
+
+    let snapshot = await window.electronAPI.getThemeSnapshot()
+    const legacyPayload = loadLegacyThemeMigrationPayload()
+    if (legacyPayload) {
+      const migration = await window.electronAPI.migrateLegacyTheme(legacyPayload)
+      if (migration.didMigrate) {
+        snapshot = migration.snapshot
+      }
+      clearLegacyThemeStorage()
+    }
+
+    applyThemeSnapshot(set, snapshot)
   },
 
-  setCustomAccent: (hex: string | null) => {
-    set((prev) => {
-      const preset = PRESETS[prev.presetId] ?? PRESETS.default
-      const accent = hex ?? preset.accent
-      applyAccentToDOM(accent)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ presetId: prev.presetId, customAccent: hex }))
-      return { ...prev, customAccent: hex, accent }
-    })
+  applyExternalThemeSnapshot: (snapshot) => {
+    applyThemeSnapshot(set, snapshot)
+  },
+
+  loadTheme: async (id: string) => {
+    if (!canUseElectronAPI()) return
+    const snapshot = await window.electronAPI.loadTheme(id)
+    applyThemeSnapshot(set, snapshot)
+  },
+
+  renameTheme: async (id: string, name: string) => {
+    if (!canUseElectronAPI()) return
+    const snapshot = await window.electronAPI.renameTheme(id, name)
+    applyThemeSnapshot(set, snapshot)
+  },
+
+  deleteTheme: async (id: string) => {
+    if (!canUseElectronAPI()) return
+    const snapshot = await window.electronAPI.deleteTheme(id)
+    applyThemeSnapshot(set, snapshot)
+  },
+
+  reloadThemes: async () => {
+    if (!canUseElectronAPI()) return
+    const snapshot = await window.electronAPI.reloadThemes()
+    applyThemeSnapshot(set, snapshot)
+  },
+
+  importThemeFromDialog: async () => {
+    if (!canUseElectronAPI()) return
+    const snapshot = await window.electronAPI.importThemeDialog()
+    if (!snapshot) return
+    applyThemeSnapshot(set, snapshot)
+  },
+
+  showThemesFolder: async () => {
+    if (!canUseElectronAPI()) return
+    await window.electronAPI.revealThemesFolder()
   },
 }))
-
-export { PRESETS }

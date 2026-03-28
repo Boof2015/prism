@@ -9,8 +9,8 @@ import {
   PROFILE_FILE_VERSION,
   type LegacyProfileMigrationPayload,
   type Profile,
+  type PrismProfileFile,
   type ProfileLibrarySnapshot,
-  type PrismProfileFileV1,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import type { ScopeKind } from '../types/scope'
@@ -45,6 +45,7 @@ export class FileBackedProfileLibrary {
   constructor(
     private readonly profilesDir: string,
     private readonly localStatePath: string,
+    private readonly resolveDefaultThemeId?: () => Promise<string | null>,
   ) {}
 
   getProfilesDirectory(): string {
@@ -270,7 +271,9 @@ export class FileBackedProfileLibrary {
     let entries = await this.readManagedEntries(localState)
 
     if (!entries.some((entry) => entry.id === DEFAULT_PROFILE_ID)) {
+      const defaultThemeId = await this.resolveDefaultThemeId?.() ?? null
       const defaultProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+      defaultProfile.themeId = defaultThemeId
       const defaultPath = await this.writeManagedProfile(entries, DEFAULT_PROFILE_ID, defaultProfile)
       entries = await this.readManagedEntries({
         ...localState,
@@ -333,7 +336,7 @@ export class FileBackedProfileLibrary {
     return entries
   }
 
-  private async readProfileFile(filePath: string): Promise<PrismProfileFileV1> {
+  private async readProfileFile(filePath: string): Promise<PrismProfileFile> {
     let parsed: unknown
 
     try {
@@ -346,12 +349,12 @@ export class FileBackedProfileLibrary {
       throw new Error(`Profile file ${basename(filePath)} must contain an object.`)
     }
 
-    const candidate = parsed as Partial<PrismProfileFileV1>
+    const candidate = parsed as Partial<PrismProfileFile>
     if (candidate.format !== PROFILE_FILE_FORMAT) {
       throw new Error(`Unsupported profile format in ${basename(filePath)}.`)
     }
 
-    if (candidate.version !== PROFILE_FILE_VERSION) {
+    if (candidate.version !== 1 && candidate.version !== PROFILE_FILE_VERSION) {
       throw new Error(`Unsupported profile version in ${basename(filePath)}.`)
     }
 

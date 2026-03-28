@@ -25,13 +25,31 @@ async function createHarness(): Promise<{
   profilesDir: string
   rootDir: string
 }> {
+  return createHarnessWithOptions()
+}
+
+async function createHarnessWithOptions(options?: {
+  defaultThemeId?: string | null
+}): Promise<{
+  cleanup: () => Promise<void>
+  library: FileBackedProfileLibrary
+  localStatePath: string
+  profilesDir: string
+  rootDir: string
+}> {
   const rootDir = await mkdtemp(join(tmpdir(), 'prism-profile-library-'))
   const profilesDir = join(rootDir, 'Documents', 'Prism Profiles')
   const localStatePath = join(rootDir, 'userData', 'profile-state.json')
 
   return {
     cleanup: () => rm(rootDir, { recursive: true, force: true }),
-    library: new FileBackedProfileLibrary(profilesDir, localStatePath),
+    library: new FileBackedProfileLibrary(
+      profilesDir,
+      localStatePath,
+      options && 'defaultThemeId' in options
+        ? async () => options.defaultThemeId ?? null
+        : undefined,
+    ),
     localStatePath,
     profilesDir,
     rootDir,
@@ -40,6 +58,7 @@ async function createHarness(): Promise<{
 
 function createProfile(name: string): Profile {
   const profile = createDefaultProfile(name)
+  profile.themeId = 'theme_default'
   profile.scopePopouts.spectrum = {
     poppedOut: true,
     windowBounds: { x: 120, y: 40, width: 420, height: 240 },
@@ -55,6 +74,7 @@ test('profile file serialization excludes geometry and round-trips with local me
 
   assert.equal(file.format, PROFILE_FILE_FORMAT)
   assert.equal(file.version, PROFILE_FILE_VERSION)
+  assert.equal(file.themeId, 'theme_default')
   assert.equal(JSON.stringify(file).includes('windowBounds'), false)
   assert.equal(JSON.stringify(file).includes('frameTarget'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
@@ -94,6 +114,24 @@ test('library saves, renames, deletes, and resolves filename collisions', async 
     assert.equal(deletedSnapshot.profiles[secondId], undefined)
     fileNames = (await readdir(harness.profilesDir)).sort()
     assert.deepEqual(fileNames, ['Default.prsm', 'Mix Bus.prsm'])
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('default profile seeds with the current active theme when available', async () => {
+  const harness = await createHarnessWithOptions({ defaultThemeId: 'theme_midnight' })
+
+  try {
+    const snapshot = await harness.library.getSnapshot()
+    assert.equal(snapshot.profiles[DEFAULT_PROFILE_ID]?.themeId, 'theme_midnight')
+
+    const defaultFile = JSON.parse(
+      await readFile(join(harness.profilesDir, 'Default.prsm'), 'utf8'),
+    ) as {
+      themeId?: string | null
+    }
+    assert.equal(defaultFile.themeId, 'theme_midnight')
   } finally {
     await harness.cleanup()
   }
@@ -148,7 +186,7 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     const partialPath = join(harness.rootDir, 'partial.prsm')
     await writeFile(partialPath, `${JSON.stringify({
       format: PROFILE_FILE_FORMAT,
-      version: PROFILE_FILE_VERSION,
+      version: 1,
       id: 'profile_partial',
       name: 'Partial',
       scopeOrder: ['spectrogram'],

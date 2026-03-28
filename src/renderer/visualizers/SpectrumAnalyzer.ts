@@ -3,6 +3,7 @@ import { spectrum as nativeSpectrum, isNativeAvailable } from '../audio/native'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
+import { resolveColorToRgb } from '../utils/color'
 import {
   DEFAULT_SPECTRUM_TILT_DB_PER_OCTAVE,
   DEFAULT_SPECTRUM_HEATMAP_TILT_DB_PER_OCTAVE,
@@ -20,6 +21,7 @@ export interface SpectrumAnalyzerOptions {
   fillGradient?: boolean
   heatmapFill?: boolean
   gradientColors?: string[]
+  heatColors?: [string, string, string]
   backgroundColor?: string
   showGrid?: boolean
   gridColor?: string
@@ -40,26 +42,59 @@ export interface SpectrumAnalyzerOptions {
 type ResolvedSpectrumAnalyzerOptions = Required<Omit<SpectrumAnalyzerOptions, 'dataSource' | 'frameScheduler'>>
 
 type HeatStop = { at: number; color: [number, number, number] }
-const HEAT_STOPS: readonly HeatStop[] = [
-  { at: 0, color: [0, 0, 0] },
-  { at: 0.14, color: [15, 7, 33] },
-  { at: 0.32, color: [61, 11, 94] },
-  { at: 0.54, color: [163, 26, 121] },
-  { at: 0.74, color: [255, 82, 87] },
-  { at: 0.9, color: [255, 166, 63] },
-  { at: 1, color: [255, 241, 209] },
+const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
+  'rgb(15, 7, 33)',
+  'rgb(163, 26, 121)',
+  'rgb(255, 241, 209)',
 ]
 
-function buildHeatLUT(): Uint8Array {
+function isLegacyDefaultHeatColors(colors: [string, string, string]): boolean {
+  return colors.every((color, index) => {
+    const left = resolveColorToRgb(color)
+    const right = resolveColorToRgb(LEGACY_DEFAULT_HEAT_COLORS[index])
+    return left.r === right.r && left.g === right.g && left.b === right.b
+  })
+}
+
+function buildHeatStops(colors: [string, string, string]): HeatStop[] {
+  if (isLegacyDefaultHeatColors(colors)) {
+    // Preserve Prism's original default spectrum heatmap instead of flattening it
+    // into the generic themed stop builder.
+    return [
+      { at: 0, color: [0, 0, 0] },
+      { at: 0.14, color: [15, 7, 33] },
+      { at: 0.32, color: [61, 11, 94] },
+      { at: 0.54, color: [163, 26, 121] },
+      { at: 0.74, color: [255, 82, 87] },
+      { at: 0.9, color: [255, 166, 63] },
+      { at: 1, color: [255, 241, 209] },
+    ]
+  }
+
+  const low = resolveColorToRgb(colors[0])
+  const mid = resolveColorToRgb(colors[1])
+  const high = resolveColorToRgb(colors[2])
+
+  return [
+    { at: 0, color: [0, 0, 0] },
+    { at: 0.2, color: [Math.round(low.r * 0.5), Math.round(low.g * 0.5), Math.round(low.b * 0.5)] },
+    { at: 0.48, color: [low.r, low.g, low.b] },
+    { at: 0.76, color: [mid.r, mid.g, mid.b] },
+    { at: 1, color: [high.r, high.g, high.b] },
+  ]
+}
+
+function buildHeatLUT(colors: [string, string, string]): Uint8Array {
+  const heatStops = buildHeatStops(colors)
   const lut = new Uint8Array(256 * 3)
   for (let i = 0; i < 256; i++) {
     const t = i / 255
-    let s = HEAT_STOPS[0]
-    let e = HEAT_STOPS[HEAT_STOPS.length - 1]
-    for (let si = 0; si < HEAT_STOPS.length - 1; si++) {
-      if (t <= HEAT_STOPS[si + 1].at) {
-        s = HEAT_STOPS[si]
-        e = HEAT_STOPS[si + 1]
+    let s = heatStops[0]
+    let e = heatStops[heatStops.length - 1]
+    for (let si = 0; si < heatStops.length - 1; si++) {
+      if (t <= heatStops[si + 1].at) {
+        s = heatStops[si]
+        e = heatStops[si + 1]
         break
       }
     }
@@ -70,8 +105,6 @@ function buildHeatLUT(): Uint8Array {
   }
   return lut
 }
-
-const HEAT_LUT = buildHeatLUT()
 const HEATMAP_GAMMA = 1.4
 
 const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
@@ -80,6 +113,7 @@ const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
   fillGradient: true,
   heatmapFill: false,
   gradientColors: ['rgba(0, 255, 255, 0)', 'rgba(0, 255, 255, 0.3)', 'rgba(138, 43, 226, 0.5)'],
+  heatColors: [...LEGACY_DEFAULT_HEAT_COLORS],
   backgroundColor: 'transparent',
   showGrid: true,
   gridColor: 'rgba(255, 255, 255, 0.1)',
@@ -109,6 +143,7 @@ export class SpectrumAnalyzer {
   private nativeInitialized = false
   private sampleRate = 48000
   private lastSampleRate = 0
+  private heatLut: Uint8Array
   private staticLayerCanvas: HTMLCanvasElement
   private staticLayerCtx: CanvasRenderingContext2D
   private staticLayerKey = ''
@@ -132,6 +167,7 @@ export class SpectrumAnalyzer {
       ),
     }
     this.dataSource = dataSource ?? defaultSpectrumDataSource
+    this.heatLut = buildHeatLUT(this.options.heatColors)
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
@@ -205,6 +241,7 @@ export class SpectrumAnalyzer {
       nextOptions.heatmapTiltDbPerOctave = clampSpectrumHeatmapTiltDbPerOctave(optionUpdates.heatmapTiltDbPerOctave)
     }
     this.options = nextOptions
+    this.heatLut = buildHeatLUT(this.options.heatColors)
     if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
       this.subscribeToSessionChanges()
@@ -400,9 +437,9 @@ export class SpectrumAnalyzer {
 
         const intensity = points[i].heatmapIntensity
         const li = Math.round(intensity * 255)
-        const r = HEAT_LUT[li * 3]
-        const g = HEAT_LUT[li * 3 + 1]
-        const b = HEAT_LUT[li * 3 + 2]
+        const r = this.heatLut[li * 3]
+        const g = this.heatLut[li * 3 + 1]
+        const b = this.heatLut[li * 3 + 2]
 
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.85)`
         ctx.fillRect(x, Math.floor(y), colWidth, Math.ceil(fillHeight))

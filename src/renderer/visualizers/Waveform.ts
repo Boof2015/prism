@@ -17,6 +17,13 @@ export interface WaveformDataSource extends VisualizerSessionSource {
 
 export interface WaveformOptions {
   lineColor?: string
+  gridMajorColor?: string
+  gridMinorColor?: string
+  bandColors?: {
+    low: string
+    mid: string
+    high: string
+  }
   scrollSpeed?: number
   gainDb?: number
   multiband?: boolean
@@ -28,15 +35,18 @@ type ResolvedWaveformOptions = Required<Omit<WaveformOptions, 'dataSource' | 'fr
 
 const defaultOptions: ResolvedWaveformOptions = {
   lineColor: '#38bdf8',
+  gridMajorColor: 'rgba(255, 255, 255, 0.08)',
+  gridMinorColor: 'rgba(255, 255, 255, 0.04)',
+  bandColors: {
+    low: '#ff4444',
+    mid: '#44dd44',
+    high: '#4488ff',
+  },
   scrollSpeed: DEFAULT_WAVEFORM_SCROLL_SPEED,
   gainDb: DEFAULT_WAVEFORM_GAIN_DB,
   multiband: false,
 }
 
-// Band colors for multiband mode — same hues as vectorscope RGB
-const BAND_LOW:  [number, number, number] = [255, 68, 68]   // red — bass
-const BAND_MID:  [number, number, number] = [68, 221, 68]   // green — mids
-const BAND_HIGH: [number, number, number] = [68, 136, 255]  // blue — highs
 const MULTIBAND_WEIGHT_EMPHASIS = 2.6
 const MULTIBAND_DOMINANCE_SENSITIVITY = 5
 const MULTIBAND_FOCUSED_BLEND = 0.68
@@ -211,8 +221,11 @@ export class Waveform {
   }
 
   private computeBandColor(): [number, number, number] {
+    const lowBand = this.toBandColorTuple(this.options.bandColors.low)
+    const midBand = this.toBandColorTuple(this.options.bandColors.mid)
+    const highBand = this.toBandColorTuple(this.options.bandColors.high)
     const n = this.columnAccumulatorPos
-    if (n === 0) return BAND_MID
+    if (n === 0) return midBand
 
     // Compute RMS energy for each band
     let lowSum = 0
@@ -232,7 +245,7 @@ export class Waveform {
     const highRms = Math.sqrt(highSum / n)
     const total = lowRms + midRms + highRms
 
-    if (total < 1e-10) return BAND_MID
+    if (total < 1e-10) return midBand
 
     const emphasizedWeights = [
       Math.pow(lowRms / total, MULTIBAND_WEIGHT_EMPHASIS),
@@ -240,12 +253,12 @@ export class Waveform {
       Math.pow(highRms / total, MULTIBAND_WEIGHT_EMPHASIS),
     ] as const
     const emphasizedTotal = emphasizedWeights[0] + emphasizedWeights[1] + emphasizedWeights[2]
-    if (emphasizedTotal < 1e-10) return BAND_MID
+    if (emphasizedTotal < 1e-10) return midBand
 
     const normalizedBands = [
-      { color: BAND_LOW, weight: emphasizedWeights[0] / emphasizedTotal },
-      { color: BAND_MID, weight: emphasizedWeights[1] / emphasizedTotal },
-      { color: BAND_HIGH, weight: emphasizedWeights[2] / emphasizedTotal },
+      { color: lowBand, weight: emphasizedWeights[0] / emphasizedTotal },
+      { color: midBand, weight: emphasizedWeights[1] / emphasizedTotal },
+      { color: highBand, weight: emphasizedWeights[2] / emphasizedTotal },
     ] as const
 
     const blended: [number, number, number] = [
@@ -270,6 +283,11 @@ export class Waveform {
       Math.round(blended[1] * (1 - focusBlend) + focused[1] * focusBlend),
       Math.round(blended[2] * (1 - focusBlend) + focused[2] * focusBlend),
     ]
+  }
+
+  private toBandColorTuple(color: string): [number, number, number] {
+    const { r, g, b } = resolveColorToRgb(color)
+    return [r, g, b]
   }
 
   private shiftAndPaintColumn(min: number, max: number, width: number, height: number): void {
@@ -336,7 +354,7 @@ export class Waveform {
     const centerY = height / 2
 
     // Center line (zero crossing)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'
+    ctx.strokeStyle = this.options.gridMajorColor
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, centerY)
@@ -344,7 +362,7 @@ export class Waveform {
     ctx.stroke()
 
     // ±0.5 guide lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)'
+    ctx.strokeStyle = this.options.gridMinorColor
     const quarterY = centerY * 0.5
     ctx.beginPath()
     ctx.moveTo(0, quarterY)

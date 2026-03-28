@@ -6,6 +6,7 @@ import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAudioStore } from './stores/audioStore'
+import { useThemeStore } from './stores/themeStore'
 import { SCOPE_KINDS } from '../types/scope'
 
 const DEFAULT_SETTINGS_HEIGHT = 400
@@ -20,6 +21,8 @@ export default function App(): JSX.Element {
   const toggleScope = useSettingsStore((s) => s.toggleScope)
   const initializeProfiles = useSettingsStore((s) => s.initializeProfiles)
   const applyExternalProfileSnapshot = useSettingsStore((s) => s.applyExternalProfileSnapshot)
+  const initializeThemes = useThemeStore((s) => s.initializeThemes)
+  const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
 
   // Auto-capture on launch
   useEffect(() => {
@@ -30,14 +33,23 @@ export default function App(): JSX.Element {
   }, [])
 
   useEffect(() => {
-    void initializeProfiles()
+    void (async () => {
+      await initializeThemes()
+      await initializeProfiles()
+    })()
 
-    const unsubscribe = window.electronAPI.onExternalProfileActivated((snapshot) => {
+    const unsubscribeProfile = window.electronAPI.onExternalProfileActivated((snapshot) => {
       applyExternalProfileSnapshot(snapshot)
     })
+    const unsubscribeTheme = window.electronAPI.onExternalThemeActivated((snapshot) => {
+      applyExternalThemeSnapshot(snapshot)
+    })
 
-    return unsubscribe
-  }, [applyExternalProfileSnapshot, initializeProfiles])
+    return () => {
+      unsubscribeProfile()
+      unsubscribeTheme()
+    }
+  }, [applyExternalProfileSnapshot, applyExternalThemeSnapshot, initializeProfiles, initializeThemes])
 
   const measuredSettingsHeight = settingsPanelHeight > 0 && bottomBarHeight > 0
     ? settingsPanelHeight + bottomBarHeight

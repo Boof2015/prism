@@ -23,6 +23,10 @@ export interface VUMeterOptions {
   mode?: VUMeterMode
   orientation?: VUMeterOrientation
   lineColor?: string
+  peakColor?: string
+  clipColor?: string
+  scaleColor?: string
+  labelColor?: string
   dataSource?: VUMeterDataSource
   frameScheduler?: FrameScheduler
 }
@@ -33,6 +37,10 @@ const defaultOptions: ResolvedVUMeterOptions = {
   mode: 'bar',
   orientation: DEFAULT_VU_METER_ORIENTATION,
   lineColor: '#38bdf8',
+  peakColor: 'rgb(255, 127, 0)',
+  clipColor: 'rgba(255, 120, 80, 0.9)',
+  scaleColor: 'rgba(255, 255, 255, 0.12)',
+  labelColor: 'rgba(255, 255, 255, 0.5)',
 }
 
 const defaultVUMeterDataSource: VUMeterDataSource = {
@@ -42,6 +50,11 @@ const defaultVUMeterDataSource: VUMeterDataSource = {
 
 function colorWithAlpha(r: number, g: number, b: number, a: number): string {
   return `rgba(${r}, ${g}, ${b}, ${a})`
+}
+
+function alphaColor(color: string, alpha: number): string {
+  const { r, g, b } = resolveColorToRgb(color)
+  return colorWithAlpha(r, g, b, alpha)
 }
 
 // ---- VU Meter class ----
@@ -245,7 +258,7 @@ export class VUMeter {
     const hotThreshold = this.dbToNormalized(-6) * w
 
     // Background track
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)'
+    ctx.fillStyle = alphaColor(this.options.scaleColor, 0.25)
     ctx.fillRect(x, y, w, h)
 
     // Main level bar
@@ -272,13 +285,13 @@ export class VUMeter {
       const peakX = x + peakNorm * w
       const peakInHot = peakDb > -6
       ctx.fillStyle = peakInHot
-        ? 'rgba(255, 120, 80, 0.9)'
-        : colorWithAlpha(cr, cg, cb, 0.9)
+        ? this.options.clipColor
+        : this.options.peakColor
       ctx.fillRect(peakX - 1, y, 2, h)
     }
 
     // Scale ticks
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
+    ctx.fillStyle = this.options.scaleColor
     const tickDbs = [-48, -36, -24, -18, -12, -6, -3, 0]
     for (const db of tickDbs) {
       const tickX = x + this.dbToNormalized(db) * w
@@ -297,7 +310,7 @@ export class VUMeter {
     const levelHeight = levelNorm * h
     const hotThreshold = this.dbToNormalized(-6) * h
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)'
+    ctx.fillStyle = alphaColor(this.options.scaleColor, 0.25)
     ctx.fillRect(x, y, w, h)
 
     if (levelHeight > 0) {
@@ -321,12 +334,12 @@ export class VUMeter {
       const peakY = y + h - peakNorm * h
       const peakInHot = peakDb > -6
       ctx.fillStyle = peakInHot
-        ? 'rgba(255, 120, 80, 0.9)'
-        : colorWithAlpha(cr, cg, cb, 0.9)
+        ? this.options.clipColor
+        : this.options.peakColor
       ctx.fillRect(x, peakY - 1, w, 2)
     }
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)'
+    ctx.fillStyle = alphaColor(this.options.scaleColor, 0.84)
     const tickDbs = [-48, -36, -24, -18, -12, -6, -3, 0]
     for (const db of tickDbs) {
       const tickY = y + h - this.dbToNormalized(db) * h
@@ -339,7 +352,7 @@ export class VUMeter {
     x: number, y: number, w: number, h: number,
     label: string
   ): void {
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'
+    ctx.fillStyle = this.options.labelColor
     ctx.font = `${Math.min(22, Math.max(10, h * 0.65))}px "JetBrains Mono", monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -353,7 +366,7 @@ export class VUMeter {
   ): void {
     const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, db))
     const text = displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'
+    ctx.fillStyle = alphaColor(this.options.labelColor, 0.8)
     ctx.font = `${Math.min(20, Math.max(9, h * 0.55))}px "JetBrains Mono", monospace`
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
@@ -367,7 +380,7 @@ export class VUMeter {
   ): void {
     const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, db))
     const text = displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'
+    ctx.fillStyle = alphaColor(this.options.labelColor, 0.8)
     ctx.font = `${Math.min(16, Math.max(8, h * 0.5))}px "JetBrains Mono", monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -383,11 +396,11 @@ export class VUMeter {
     const corr = Math.max(-1, Math.min(1, this.correlation))
 
     // Background track
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.04)'
+    ctx.fillStyle = alphaColor(this.options.scaleColor, 0.25)
     ctx.fillRect(x, y, w, h)
 
     // Center line
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
+    ctx.fillStyle = this.options.scaleColor
     ctx.fillRect(centerX - 0.5, y, 1, h)
 
     // Correlation indicator
@@ -399,7 +412,7 @@ export class VUMeter {
         ctx.fillRect(centerX, y, indicatorWidth, h)
       } else {
         // Negative correlation: draw leftward from center (out of phase)
-        ctx.fillStyle = 'rgba(255, 120, 80, 0.6)'
+        ctx.fillStyle = alphaColor(this.options.clipColor, 0.6)
         ctx.fillRect(centerX - indicatorWidth, y, indicatorWidth, h)
       }
     }
@@ -408,7 +421,7 @@ export class VUMeter {
     const fontSize = Math.min(18, Math.max(8, h * 0.55))
     ctx.font = `${fontSize}px "JetBrains Mono", monospace`
     ctx.textBaseline = 'middle'
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)'
+    ctx.fillStyle = alphaColor(this.options.labelColor, 0.6)
     ctx.textAlign = 'left'
     ctx.fillText('-1', x + 2, y + h / 2)
     ctx.textAlign = 'center'
@@ -455,7 +468,7 @@ export class VUMeter {
     const endAngle = Math.PI * 1.75 // 315° (bottom-right)
 
     // Scale arc
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'
+    ctx.strokeStyle = alphaColor(this.options.scaleColor, 0.66)
     ctx.lineWidth = 2
     ctx.beginPath()
     ctx.arc(centerX, arcCenterY, arcRadius, startAngle, endAngle)
@@ -470,8 +483,8 @@ export class VUMeter {
       const outerR = arcRadius + 2
 
       ctx.strokeStyle = db >= -6
-        ? 'rgba(255, 120, 80, 0.3)'
-        : 'rgba(255, 255, 255, 0.15)'
+        ? alphaColor(this.options.clipColor, 0.3)
+        : alphaColor(this.options.scaleColor, 0.9)
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(centerX + Math.cos(angle) * innerR, arcCenterY + Math.sin(angle) * innerR)
@@ -507,8 +520,8 @@ export class VUMeter {
       const peakAngle = startAngle + peakNorm * (endAngle - startAngle)
       const peakInHot = peakDb > -6
       ctx.fillStyle = peakInHot
-        ? 'rgba(255, 120, 80, 0.8)'
-        : colorWithAlpha(cr, cg, cb, 0.8)
+        ? alphaColor(this.options.clipColor, 0.8)
+        : alphaColor(this.options.peakColor, 0.8)
       ctx.beginPath()
       ctx.arc(
         centerX + Math.cos(peakAngle) * arcRadius,
@@ -520,7 +533,7 @@ export class VUMeter {
 
     // Channel label
     const fontSize = Math.min(22, Math.max(10, h * 0.1))
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)'
+    ctx.fillStyle = alphaColor(this.options.labelColor, 0.9)
     ctx.font = `${fontSize}px "JetBrains Mono", monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
@@ -529,7 +542,7 @@ export class VUMeter {
     // dB readout
     const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, rmsDb))
     const dbText = displayDb <= VU_METER_MIN_DB + 1 ? '-∞ dB' : `${displayDb.toFixed(1)} dB`
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)'
+    ctx.fillStyle = alphaColor(this.options.labelColor, 0.7)
     ctx.font = `${Math.max(9, fontSize - 1)}px "JetBrains Mono", monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'bottom'

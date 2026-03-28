@@ -12,8 +12,13 @@ import type {
 import type { ProfileMenuRequest } from '../types/profileMenu'
 import type { LegacyProfileMigrationPayload, Profile, ProfileLibrarySnapshot } from '../types/profile'
 import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
+import type {
+  LegacyThemeMigrationPayload,
+  ThemeLibrarySnapshot,
+} from '../types/theme'
 import { normalizeProfile } from '../shared/profileState'
 import { FileBackedProfileLibrary } from './profileLibrary'
+import { FileBackedThemeLibrary } from './themeLibrary'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
@@ -27,8 +32,10 @@ const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
 const windowSettingsHeights = new Map<number, number>()
 const windowSettingsBottomAnchors = new Map<number, number>()
 const pendingProfileOpenPaths: string[] = []
+const pendingThemeOpenPaths: string[] = []
 
 let profileLibrary: FileBackedProfileLibrary | null = null
+let themeLibrary: FileBackedThemeLibrary | null = null
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -49,10 +56,22 @@ function getProfileLibrary(): FileBackedProfileLibrary {
     profileLibrary = new FileBackedProfileLibrary(
       join(app.getPath('documents'), 'Prism Profiles'),
       join(app.getPath('userData'), 'profile-state.json'),
+      async () => getThemeLibrary().getActiveThemeId(),
     )
   }
 
   return profileLibrary
+}
+
+function getThemeLibrary(): FileBackedThemeLibrary {
+  if (!themeLibrary) {
+    themeLibrary = new FileBackedThemeLibrary(
+      join(app.getPath('documents'), 'Prism Themes'),
+      join(app.getPath('userData'), 'theme-state.json'),
+    )
+  }
+
+  return themeLibrary
 }
 
 function queueProfileOpenPath(filePath: string): void {
@@ -70,9 +89,30 @@ function queueProfileOpenPaths(paths: string[]): void {
   }
 }
 
+function queueThemeOpenPath(filePath: string): void {
+  if (extname(filePath).toLowerCase() !== '.iro') return
+
+  const resolvedPath = resolve(filePath)
+  if (!pendingThemeOpenPaths.includes(resolvedPath)) {
+    pendingThemeOpenPaths.push(resolvedPath)
+  }
+}
+
+function queueThemeOpenPaths(paths: string[]): void {
+  for (const filePath of paths) {
+    queueThemeOpenPath(filePath)
+  }
+}
+
 function extractProfilePathsFromArgv(argv: string[]): string[] {
   return argv
     .filter((value) => extname(value).toLowerCase() === '.prsm')
+    .map((value) => resolve(value))
+}
+
+function extractThemePathsFromArgv(argv: string[]): string[] {
+  return argv
+    .filter((value) => extname(value).toLowerCase() === '.iro')
     .map((value) => resolve(value))
 }
 
@@ -114,6 +154,31 @@ async function processPendingProfileOpenPaths(): Promise<void> {
 
   focusMainWindow()
   mainWindow.webContents.send('profiles:external-activated', latestSnapshot)
+}
+
+async function processPendingThemeOpenPaths(): Promise<void> {
+  if (pendingThemeOpenPaths.length === 0) return
+
+  const paths = [...pendingThemeOpenPaths]
+  pendingThemeOpenPaths.length = 0
+
+  let latestSnapshot: ThemeLibrarySnapshot | null = null
+
+  for (const filePath of paths) {
+    try {
+      latestSnapshot = await getThemeLibrary().importThemeFromPath(filePath)
+    } catch (error) {
+      dialog.showErrorBox(
+        'Could Not Open Theme',
+        getErrorMessage(error, `Prism could not open ${filePath}.`),
+      )
+    }
+  }
+
+  if (!latestSnapshot || !mainWindow || mainWindow.isDestroyed()) return
+
+  focusMainWindow()
+  mainWindow.webContents.send('themes:external-activated', latestSnapshot)
 }
 
 function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
@@ -752,6 +817,60 @@ function setupIPC(): void {
     return getProfileLibrary().migrateLegacyProfiles(payload)
   })
 
+  ipcMain.handle('themes:get-snapshot', async () => {
+    return getThemeLibrary().getSnapshot()
+  })
+
+  ipcMain.handle('themes:load', async (_event, id: string) => {
+    return getThemeLibrary().loadTheme(id)
+  })
+
+  ipcMain.handle('themes:rename', async (_event, id: string, name: string) => {
+    return getThemeLibrary().renameTheme(id, name)
+  })
+
+  ipcMain.handle('themes:delete', async (_event, id: string) => {
+    return getThemeLibrary().deleteTheme(id)
+  })
+
+  ipcMain.handle('themes:reload', async () => {
+    return getThemeLibrary().reloadThemes()
+  })
+
+  ipcMain.handle('themes:import-dialog', async () => {
+    const targetWindow = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
+    const dialogOptions: OpenDialogOptions = {
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Prism Themes',
+          extensions: ['iro'],
+        },
+      ],
+    }
+    const result = targetWindow
+      ? await dialog.showOpenDialog(targetWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+
+    return getThemeLibrary().importThemeFromPath(result.filePaths[0])
+  })
+
+  ipcMain.handle('themes:reveal-folder', async () => {
+    const folderPath = getThemeLibrary().getThemesDirectory()
+    const openResult = await shell.openPath(folderPath)
+    if (openResult) {
+      throw new Error(openResult)
+    }
+  })
+
+  ipcMain.handle('themes:migrate-legacy', async (_event, payload: LegacyThemeMigrationPayload) => {
+    return getThemeLibrary().migrateLegacyTheme(payload)
+  })
+
   ipcMain.on('profile-menu:open', (event, rawRequest: unknown) => {
     const request = normalizeProfileMenuRequest(rawRequest)
     if (!request) return
@@ -914,22 +1033,28 @@ if (!hasSingleInstanceLock) {
     createMainWindow()
     setupShortcuts()
     queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
+    queueThemeOpenPaths(extractThemePathsFromArgv(process.argv))
     void processPendingProfileOpenPaths()
+    void processPendingThemeOpenPaths()
   })
 
   app.on('open-file', (event, filePath) => {
     event.preventDefault()
     queueProfileOpenPath(filePath)
+    queueThemeOpenPath(filePath)
     if (app.isReady()) {
       void processPendingProfileOpenPaths()
+      void processPendingThemeOpenPaths()
     }
   })
 
   app.on('second-instance', (_event, argv) => {
     queueProfileOpenPaths(extractProfilePathsFromArgv(argv))
+    queueThemeOpenPaths(extractThemePathsFromArgv(argv))
     if (app.isReady()) {
       focusMainWindow()
       void processPendingProfileOpenPaths()
+      void processPendingThemeOpenPaths()
     }
   })
 }

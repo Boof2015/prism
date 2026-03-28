@@ -2,10 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { ScopePopoutSnapshot } from '../../types/popout'
 import { SCOPE_LABELS, type ScopeKind } from '../../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings'
+import { applyResolvedThemeToDocument, createDefaultTheme, resolveTheme } from '../../shared/themeState'
 import ScopeModule from '../components/ScopeModule'
 import ScopeSettingsSection from '../components/ScopeSettingsSection'
 import { usePerformanceStore } from '../stores/performanceStore'
-import { applyAccentToDOM } from '../stores/themeStore'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
 
@@ -44,6 +44,7 @@ interface ScopePopoutWindowProps {
 }
 
 const POPOUT_SETTINGS_EXPAND_HEIGHT = 260
+const defaultTheme = resolveTheme(createDefaultTheme())
 
 export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
@@ -61,7 +62,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
     const unsubscribeSnapshot = window.electronAPI.onScopePopoutSnapshot((nextSnapshot) => {
       if (nextSnapshot.kind !== scopeKind) return
       setSnapshot(nextSnapshot)
-      applyAccentToDOM(nextSnapshot.accent)
+      applyResolvedThemeToDocument({ interface: nextSnapshot.interfaceTheme }, document.documentElement.style)
     })
     const unsubscribeAudio = window.electronAPI.onScopePopoutAudio((kind, batch) => {
       if (kind !== scopeKind) return
@@ -81,8 +82,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
     }
   }, [dataSource, scopeKind])
 
-  const effectiveAccent = snapshot?.accent ?? '#38bdf8'
   const effectiveSettings = (snapshot?.settings ?? DEFAULT_SCOPE_SETTINGS[scopeKind]) as ScopeSettings[ScopeKind]
+  const effectiveScopeTheme = snapshot?.scopeTheme ?? defaultTheme[scopeKind]
   const settingsHeight = miniSettingsOpen ? POPOUT_SETTINGS_EXPAND_HEIGHT : 0
 
   const handleUpdateScopeSettings = <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>): void => {
@@ -215,7 +216,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
           <div className="scope-popout__canvas-region">
             <ScopeModule
               scopeKind={scopeKind}
-              lineColor={effectiveAccent}
+              theme={effectiveScopeTheme}
               settings={effectiveSettings}
               frameScheduler={frameScheduler}
               dataSource={dataSource}
