@@ -13,7 +13,6 @@ import type { ProfileMenuRequest } from '../types/profileMenu'
 import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
 
 let mainWindow: BrowserWindow | null = null
-let currentSettingsHeight = 0
 let moveInterval: ReturnType<typeof setInterval> | null = null
 let moveStartCursor: { x: number; y: number } | null = null
 let moveStartPosition: number[] | null = null
@@ -21,6 +20,8 @@ let moveStartPosition: number[] | null = null
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
+const windowSettingsHeights = new Map<number, number>()
+const windowSettingsBottomAnchors = new Map<number, number>()
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -46,6 +47,99 @@ function getWindowFromSender(sender: WebContents): BrowserWindow | null {
 
 function isMainRendererWindow(window: BrowserWindow | null): boolean {
   return window !== null && window === mainWindow
+}
+
+function getBaseMinHeight(window: BrowserWindow): number {
+  return isMainRendererWindow(window) ? WINDOW_DEFAULTS.minHeight : POPOUT_DEFAULTS.minHeight
+}
+
+function getSettingsHeight(window: BrowserWindow | null): number {
+  if (!window) return 0
+  return windowSettingsHeights.get(window.id) ?? 0
+}
+
+function setSettingsHeightForWindow(window: BrowserWindow, height: number): void {
+  const nextHeight = Math.max(0, Math.round(height))
+  if (nextHeight === 0) {
+    windowSettingsHeights.delete(window.id)
+    windowSettingsBottomAnchors.delete(window.id)
+    return
+  }
+
+  windowSettingsHeights.set(window.id, nextHeight)
+}
+
+function toLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): WindowBounds {
+  return {
+    ...bounds,
+    height: Math.max(getBaseMinHeight(window), bounds.height - getSettingsHeight(window)),
+  }
+}
+
+function applyLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
+  window.setBounds({
+    ...bounds,
+    height: bounds.height + getSettingsHeight(window),
+  })
+}
+
+function setWindowHeight(window: BrowserWindow, bounds: WindowBounds, height: number, y = bounds.y): void {
+  window.setBounds({
+    x: bounds.x,
+    y,
+    width: bounds.width,
+    height,
+  })
+}
+
+function applySettingsHeight(window: BrowserWindow, rawNextHeight: number): void {
+  const currentSettingsHeight = getSettingsHeight(window)
+  const nextSettingsHeight = Math.max(0, Math.round(rawNextHeight))
+  const delta = nextSettingsHeight - currentSettingsHeight
+  const baseMinHeight = getBaseMinHeight(window)
+  const [minW] = window.getMinimumSize()
+
+  window.setMinimumSize(minW, baseMinHeight + nextSettingsHeight)
+
+  if (delta !== 0) {
+    const bounds = window.getBounds()
+    const newHeight = Math.max(baseMinHeight + nextSettingsHeight, bounds.height + delta)
+    const display = screen.getDisplayMatching(bounds)
+    const workArea = display.workArea
+    const workAreaBottom = workArea.y + workArea.height
+    const bottomEdge = bounds.y + newHeight
+
+    if (delta > 0 && bottomEdge > workAreaBottom) {
+      if (!windowSettingsBottomAnchors.has(window.id)) {
+        windowSettingsBottomAnchors.set(window.id, bounds.y + bounds.height)
+      }
+      const newY = Math.max(workArea.y, workAreaBottom - newHeight)
+      setWindowHeight(window, bounds, newHeight, newY)
+    } else if (delta < 0) {
+      const anchoredBottom = windowSettingsBottomAnchors.get(window.id)
+      if (anchoredBottom !== undefined) {
+        const targetY = Math.max(workArea.y, Math.min(anchoredBottom - newHeight, workAreaBottom - newHeight))
+        setWindowHeight(window, bounds, newHeight, targetY)
+      } else {
+        const baseHeight = newHeight - nextSettingsHeight
+        const naturalBottom = bounds.y + baseHeight
+        if (naturalBottom < workAreaBottom) {
+          const maxY = workAreaBottom - newHeight
+          if (bounds.y < maxY) {
+            setWindowHeight(window, bounds, newHeight)
+          } else {
+            setWindowHeight(window, bounds, newHeight, maxY)
+          }
+        } else {
+          setWindowHeight(window, bounds, newHeight)
+        }
+      }
+    } else {
+      setWindowHeight(window, bounds, newHeight)
+    }
+  }
+
+  setSettingsHeightForWindow(window, nextSettingsHeight)
 }
 
 function sendToRenderer(sender: WebContents, channel: string, ...args: unknown[]): void {
@@ -189,8 +283,11 @@ function createMainWindow(): void {
   })
 
   mainWindow.on('closed', () => {
+    if (mainWindow) {
+      windowSettingsHeights.delete(mainWindow.id)
+      windowSettingsBottomAnchors.delete(mainWindow.id)
+    }
     mainWindow = null
-    currentSettingsHeight = 0
 
     for (const kind of SCOPE_KINDS) {
       destroyScopePopoutWindow(kind)
@@ -219,7 +316,7 @@ function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
     popoutBoundsTimers.delete(kind)
 
     if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed()) return
-    const bounds = window.getBounds()
+    const bounds = toLogicalBounds(window)
     mainWindow.webContents.send('scope-popout:bounds-changed', kind, bounds)
   }, 80)
 
@@ -293,6 +390,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   }
 
   const popoutWindow = new BrowserWindow(options)
+  setSettingsHeightForWindow(popoutWindow, 0)
   scopePopoutWindows.set(kind, popoutWindow)
 
   popoutWindow.once('ready-to-show', () => {
@@ -311,6 +409,8 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   })
 
   popoutWindow.on('closed', () => {
+    windowSettingsHeights.delete(popoutWindow.id)
+    windowSettingsBottomAnchors.delete(popoutWindow.id)
     scopePopoutWindows.delete(kind)
     scopePopoutCloseAllowed.delete(kind)
 
@@ -348,7 +448,7 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
       || currentBounds.height !== nextBounds.height
 
     if (hasBoundsDelta) {
-      popoutWindow.setBounds(nextBounds)
+      applyLogicalBounds(popoutWindow, nextBounds)
     }
   }
 }
@@ -486,30 +586,14 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
 
-    if (isMainRendererWindow(targetWindow)) {
-      targetWindow.setBounds({
-        ...bounds,
-        height: bounds.height + currentSettingsHeight,
-      })
-      return
-    }
-
-    targetWindow.setBounds(bounds)
+    applyLogicalBounds(targetWindow, bounds)
   })
 
   ipcMain.handle('window:get-bounds', (event) => {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return null
 
-    const bounds = targetWindow.getBounds()
-    if (!isMainRendererWindow(targetWindow)) {
-      return bounds
-    }
-
-    return {
-      ...bounds,
-      height: bounds.height - currentSettingsHeight,
-    }
+    return toLogicalBounds(targetWindow)
   })
 
   ipcMain.on('window:reposition', (event, position: 'top' | 'bottom') => {
@@ -530,84 +614,23 @@ function setupIPC(): void {
 
   ipcMain.on('window:expand-settings', (event, panelHeight: number) => {
     const targetWindow = getWindowFromSender(event.sender)
-    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
+    if (!targetWindow) return
 
-    const bounds = targetWindow.getBounds()
-    const [minW] = targetWindow.getMinimumSize()
-    const newHeight = bounds.height + panelHeight
-    targetWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + panelHeight)
-
-    const display = screen.getDisplayMatching(bounds)
-    const workArea = display.workArea
-    const bottomEdge = bounds.y + newHeight
-    if (bottomEdge > workArea.y + workArea.height) {
-      const newY = Math.max(workArea.y, workArea.y + workArea.height - newHeight)
-      targetWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
-    } else {
-      targetWindow.setSize(bounds.width, newHeight, true)
-    }
-    currentSettingsHeight = Math.max(0, currentSettingsHeight + Math.round(panelHeight))
+    applySettingsHeight(targetWindow, getSettingsHeight(targetWindow) + panelHeight)
   })
 
   ipcMain.on('window:collapse-settings', (event, panelHeight: number) => {
     const targetWindow = getWindowFromSender(event.sender)
-    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
+    if (!targetWindow) return
 
-    const bounds = targetWindow.getBounds()
-    const [minW] = targetWindow.getMinimumSize()
-    const newHeight = Math.max(WINDOW_DEFAULTS.minHeight, bounds.height - panelHeight)
-    targetWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight)
-
-    const display = screen.getDisplayMatching(bounds)
-    const workArea = display.workArea
-    const wasAtBottom = bounds.y + bounds.height >= workArea.y + workArea.height - 10
-    if (wasAtBottom) {
-      const newY = Math.min(bounds.y + panelHeight, workArea.y + workArea.height - newHeight)
-      targetWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
-    } else {
-      targetWindow.setSize(bounds.width, newHeight, true)
-    }
-    currentSettingsHeight = Math.max(0, currentSettingsHeight - Math.round(panelHeight))
+    applySettingsHeight(targetWindow, getSettingsHeight(targetWindow) - panelHeight)
   })
 
   ipcMain.on('window:set-settings-height', (event, panelHeight: number) => {
     const targetWindow = getWindowFromSender(event.sender)
-    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
+    if (!targetWindow) return
 
-    const nextHeight = Math.max(0, Math.round(panelHeight))
-    const delta = nextHeight - currentSettingsHeight
-    const [width, height] = targetWindow.getSize()
-    const [minW] = targetWindow.getMinimumSize()
-
-    targetWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + nextHeight)
-    if (delta !== 0) {
-      const newHeight = Math.max(WINDOW_DEFAULTS.minHeight, height + delta)
-      const bounds = targetWindow.getBounds()
-      const display = screen.getDisplayMatching(bounds)
-      const workArea = display.workArea
-      const bottomEdge = bounds.y + newHeight
-      if (delta > 0 && bottomEdge > workArea.y + workArea.height) {
-        const newY = Math.max(workArea.y, workArea.y + workArea.height - newHeight)
-        targetWindow.setBounds({ x: bounds.x, y: newY, width, height: newHeight })
-      } else if (delta < 0) {
-        const baseHeight = newHeight - nextHeight
-        const naturalBottom = bounds.y + baseHeight
-        if (naturalBottom < workArea.y + workArea.height) {
-          const maxY = workArea.y + workArea.height - newHeight
-          if (bounds.y < maxY) {
-            targetWindow.setSize(width, newHeight, true)
-          } else {
-            targetWindow.setBounds({ x: bounds.x, y: maxY, width, height: newHeight })
-          }
-        } else {
-          targetWindow.setSize(width, newHeight, true)
-        }
-      } else {
-        targetWindow.setSize(width, newHeight, true)
-      }
-    }
-
-    currentSettingsHeight = nextHeight
+    applySettingsHeight(targetWindow, panelHeight)
   })
 
   ipcMain.on('scope-popout:sync', (event, state: ScopePopoutSyncStateMap) => {

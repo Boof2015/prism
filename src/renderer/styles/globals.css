@@ -817,6 +817,13 @@ select {
   color: var(--text-primary);
 }
 
+.scope-popout__viewport {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .scope-popout__chrome {
   position: absolute;
   top: 0;
@@ -831,17 +838,13 @@ select {
   transition: max-height 160ms ease, opacity 120ms ease, transform 160ms ease;
 }
 
-.scope-popout:hover .scope-popout__chrome,
+.scope-popout__viewport:hover .scope-popout__chrome,
 .scope-popout__chrome:hover,
 .scope-popout__chrome.is-expanded {
   max-height: 58px;
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
-}
-
-.scope-popout__chrome.is-expanded {
-  max-height: 420px;
 }
 
 .scope-popout__header {
@@ -951,12 +954,12 @@ select {
 }
 
 .scope-popout__settings-panel {
-  flex-shrink: 0;
+  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   background: linear-gradient(180deg, rgba(6, 8, 11, 0.98), rgba(4, 5, 7, 0.98));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 12px 0 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 12px 0 10px;
 }
 
 .scope-popout__settings-panel .settings-scope-section {
@@ -964,12 +967,17 @@ select {
   padding: 0 14px 12px;
 }
 
+.scope-popout__settings-region {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .scope-popout__content {
-  flex: 1;
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  transition: padding-top 160ms ease;
 }
 
 .scope-popout__canvas-region {

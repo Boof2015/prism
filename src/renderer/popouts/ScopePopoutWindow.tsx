@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { ScopePopoutSnapshot } from '../../types/popout'
 import { SCOPE_LABELS, type ScopeKind } from '../../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings'
@@ -41,11 +41,12 @@ interface ScopePopoutWindowProps {
   scopeKind: ScopeKind
 }
 
+const POPOUT_SETTINGS_EXPAND_HEIGHT = 260
+
 export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
   const [miniSettingsOpen, setMiniSettingsOpen] = useState(false)
-  const [chromeHeight, setChromeHeight] = useState(0)
-  const chromeRef = useRef<HTMLDivElement>(null)
+  const prevMiniSettingsOpenRef = useRef(false)
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
 
   useEffect(() => {
@@ -74,6 +75,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
 
   const effectiveAccent = snapshot?.accent ?? '#38bdf8'
   const effectiveSettings = (snapshot?.settings ?? DEFAULT_SCOPE_SETTINGS[scopeKind]) as ScopeSettings[ScopeKind]
+  const settingsHeight = miniSettingsOpen ? POPOUT_SETTINGS_EXPAND_HEIGHT : 0
 
   const handleUpdateScopeSettings = <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>): void => {
     if (kind !== scopeKind) return
@@ -121,26 +123,21 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
     window.electronAPI.stopWindowMove()
   }, [])
 
-  useEffect(() => {
-    const chrome = chromeRef.current
-    if (!chrome) return
-
-    const updateHeight = (): void => {
-      setChromeHeight(chrome.scrollHeight)
+  useLayoutEffect(() => {
+    if (miniSettingsOpen && !prevMiniSettingsOpenRef.current) {
+      window.electronAPI.expandSettings(POPOUT_SETTINGS_EXPAND_HEIGHT)
+    } else if (!miniSettingsOpen && prevMiniSettingsOpenRef.current) {
+      window.electronAPI.collapseSettings(POPOUT_SETTINGS_EXPAND_HEIGHT)
     }
 
-    updateHeight()
-
-    const observer = typeof ResizeObserver === 'undefined'
-      ? null
-      : new ResizeObserver(() => updateHeight())
-    observer?.observe(chrome)
-
-    return () => observer?.disconnect()
-  }, [miniSettingsOpen, snapshot])
+    prevMiniSettingsOpenRef.current = miniSettingsOpen
+  }, [miniSettingsOpen])
 
   useEffect(() => {
     return () => {
+      if (prevMiniSettingsOpenRef.current) {
+        window.electronAPI.setSettingsHeight(0)
+      }
       window.electronAPI.stopWindowMove()
     }
   }, [])
@@ -152,57 +149,77 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
       onMouseUp={handleAltDragEnd}
     >
       <div
-        ref={chromeRef}
-        className={[
-          'scope-popout__chrome',
-          miniSettingsOpen ? 'is-expanded' : '',
-        ].join(' ').trim()}
+        className="scope-popout__viewport"
+        style={{ height: `calc(100vh - ${settingsHeight}px)` }}
       >
-        <header className="scope-popout__header">
-          <div className="scope-popout__drag">
-            <button
-              type="button"
-              className="scope-popout__drag-handle"
-              onPointerDown={handleDragStart}
-              onPointerUp={handleDragEnd}
-              onPointerCancel={handleDragEnd}
-              onLostPointerCapture={handleDragEnd}
-              aria-label="Drag window"
-              title="Drag window"
-            >
-              <span className="scope-popout__drag-icon" aria-hidden="true">
-                <GripIcon />
-              </span>
-            </button>
-            <div className="scope-popout__title-group">
-              <span className="scope-popout__title">{snapshot?.label ?? SCOPE_LABELS[scopeKind]}</span>
-              <span className="scope-popout__subtitle">Detached Scope</span>
+        <div
+          className={[
+            'scope-popout__chrome',
+            miniSettingsOpen ? 'is-expanded' : '',
+          ].join(' ').trim()}
+        >
+          <header className="scope-popout__header">
+            <div className="scope-popout__drag">
+              <button
+                type="button"
+                className="scope-popout__drag-handle"
+                onPointerDown={handleDragStart}
+                onPointerUp={handleDragEnd}
+                onPointerCancel={handleDragEnd}
+                onLostPointerCapture={handleDragEnd}
+                aria-label="Drag window"
+                title="Drag window"
+              >
+                <span className="scope-popout__drag-icon" aria-hidden="true">
+                  <GripIcon />
+                </span>
+              </button>
+              <div className="scope-popout__title-group">
+                <span className="scope-popout__title">{snapshot?.label ?? SCOPE_LABELS[scopeKind]}</span>
+                <span className="scope-popout__subtitle">Detached Scope</span>
+              </div>
             </div>
-          </div>
 
-          <div className="scope-popout__actions">
-            <button
-              type="button"
-              className={`scope-popout__button ${miniSettingsOpen ? 'is-active' : ''}`.trim()}
-              onClick={() => setMiniSettingsOpen((prev) => !prev)}
-              aria-label="Toggle mini settings"
-              title="Mini settings"
-            >
-              <SettingsIcon />
-            </button>
-            <button
-              type="button"
-              className="scope-popout__button"
-              onClick={() => window.electronAPI.requestScopePopIn(scopeKind)}
-              aria-label={`Pop in ${SCOPE_LABELS[scopeKind]}`}
-              title={`Pop in ${SCOPE_LABELS[scopeKind]}`}
-            >
-              <PopInIcon />
-            </button>
-          </div>
-        </header>
+            <div className="scope-popout__actions">
+              <button
+                type="button"
+                className={`scope-popout__button ${miniSettingsOpen ? 'is-active' : ''}`.trim()}
+                onClick={() => setMiniSettingsOpen((prev) => !prev)}
+                aria-label="Toggle mini settings"
+                title="Mini settings"
+              >
+                <SettingsIcon />
+              </button>
+              <button
+                type="button"
+                className="scope-popout__button"
+                onClick={() => window.electronAPI.requestScopePopIn(scopeKind)}
+                aria-label={`Pop in ${SCOPE_LABELS[scopeKind]}`}
+                title={`Pop in ${SCOPE_LABELS[scopeKind]}`}
+              >
+                <PopInIcon />
+              </button>
+            </div>
+          </header>
+        </div>
 
-        {miniSettingsOpen && (
+        <div className="scope-popout__content">
+          <div className="scope-popout__canvas-region">
+            <ScopeModule
+              scopeKind={scopeKind}
+              lineColor={effectiveAccent}
+              settings={effectiveSettings}
+              dataSource={dataSource}
+            />
+          </div>
+        </div>
+      </div>
+
+      {miniSettingsOpen && (
+        <div
+          className="scope-popout__settings-region"
+          style={{ height: `${settingsHeight}px` }}
+        >
           <div className="scope-popout__settings-panel">
             <ScopeSettingsSection
               kind={scopeKind}
@@ -210,22 +227,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
               onUpdate={handleUpdateScopeSettings}
             />
           </div>
-        )}
-      </div>
-
-      <div
-        className="scope-popout__content"
-        style={miniSettingsOpen ? { paddingTop: `${chromeHeight}px` } : undefined}
-      >
-        <div className="scope-popout__canvas-region">
-          <ScopeModule
-            scopeKind={scopeKind}
-            lineColor={effectiveAccent}
-            settings={effectiveSettings}
-            dataSource={dataSource}
-          />
         </div>
-      </div>
+      )}
     </div>
   )
 }
