@@ -334,14 +334,20 @@ export class SpectrumAnalyzer {
       return
     }
 
+    const nativeTransport = this.dataSource.getNativeVisualizerTransport?.() ?? null
     const pendingSpectrum = this.dataSource.getPendingSpectrumSamples()
-    const monoData = this.mergePendingSpectrumChunks(pendingSpectrum)
-    if (!monoData) {
-      return
+    if (!nativeTransport) {
+      const monoData = this.mergePendingSpectrumChunks(pendingSpectrum)
+      if (monoData) {
+        nativeSpectrum.pushSamples(monoData)
+      }
     }
 
-    const frequencyData = nativeSpectrum.process(monoData)
+    const frequencyData = nativeTransport
+      ? nativeTransport.getLatestSpectrumMagnitudes()
+      : nativeSpectrum.getMagnitudes()
     if (!frequencyData) {
+      this.renderStaticLayer(minFrequency, maxFrequency)
       return
     }
 

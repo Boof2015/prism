@@ -195,9 +195,12 @@ export class Oscilloscope {
       return
     }
 
+    const nativeTransport = this.dataSource.getNativeVisualizerTransport?.() ?? null
     const pendingSamples = this.dataSource.getPendingOscilloscopeSamples()
     for (const chunk of pendingSamples) {
-      nativeOscilloscope.pushSamples(chunk)
+      if (!nativeTransport) {
+        nativeOscilloscope.pushSamples(chunk)
+      }
       this.samplesReceived += chunk.length
     }
 

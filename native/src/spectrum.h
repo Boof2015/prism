@@ -16,6 +16,12 @@ public:
     void setSampleRate(float sampleRate);
     void setSmoothing(float smoothing); // 0.0 - 1.0
 
+    // Feed new samples into the rolling history and update the latest magnitudes.
+    void pushSamples(const float* input, size_t length);
+
+    // Read the latest smoothed magnitudes without mutating analyzer state.
+    const std::vector<float>& getMagnitudes() const { return smoothedMagnitudes_; }
+
     // Process audio and get spectrum data
     // Returns magnitude data (size = fftSize / 2)
     const std::vector<float>& process(const float* audioData, size_t length);
@@ -39,7 +45,8 @@ private:
     size_t bufferedSamples_;
 
     void applyWindow(const float* input, float* output, size_t length);
-    void pushSamples(const float* input, size_t length);
+    void pushHistory(const float* input, size_t length);
+    void updateMagnitudes();
 };
 
 } // namespace Visualizer

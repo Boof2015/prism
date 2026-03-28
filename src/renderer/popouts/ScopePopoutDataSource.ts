@@ -4,6 +4,7 @@ import type {
   ScopePopoutStereoBatch,
 } from '../../types/popout'
 import type { ScopeKind } from '../../types/scope'
+import { NativeVisualizerTransport } from '../audio/NativeVisualizerTransport'
 import type { LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import type { OscilloscopeDataSource } from '../visualizers/Oscilloscope'
 import type { SpectrogramDataSource } from '../visualizers/Spectrogram'
@@ -42,22 +43,43 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
   private stereoQueue: ScopePopoutStereoBatch = []
   private sessionState: ScopePopoutSessionState = INITIAL_SESSION_STATE
   private readonly listeners = new Set<(state: ScopePopoutSessionState) => void>()
+  private readonly nativeVisualizerTransport = new NativeVisualizerTransport()
 
-  constructor(private readonly scopeKind: ScopeKind) {}
+  constructor(private readonly scopeKind: ScopeKind) {
+    this.nativeVisualizerTransport.setDemand({
+      spectrum: scopeKind === 'spectrum',
+      oscilloscope: scopeKind === 'oscilloscope',
+      vectorscope: scopeKind === 'vectorscope',
+    })
+    this.nativeVisualizerTransport.reset(this.sessionState)
+  }
 
   pushAudioBatch(batch: ScopePopoutAudioBatch): void {
     if (isStereoScope(this.scopeKind)) {
       if (!isStereoBatch(batch)) return
       this.stereoQueue.push(...batch)
+      for (const chunk of batch) {
+        this.nativeVisualizerTransport.handleChunk(chunk.left, chunk.right, {
+          sessionId: this.sessionState.sessionId,
+          channelCount: this.sessionState.channelCount,
+        })
+      }
       return
     }
 
     if (isStereoBatch(batch)) return
     this.monoQueue.push(...batch)
+    for (const chunk of batch) {
+      this.nativeVisualizerTransport.handleChunk(chunk, chunk, {
+        sessionId: this.sessionState.sessionId,
+        channelCount: 1,
+      })
+    }
   }
 
   setSessionState(nextState: ScopePopoutSessionState): void {
     this.sessionState = nextState
+    this.nativeVisualizerTransport.reset(nextState)
     if (!nextState.capturing) {
       this.monoQueue = []
       this.stereoQueue = []
@@ -82,6 +104,10 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     return () => {
       this.listeners.delete(listener)
     }
+  }
+
+  getNativeVisualizerTransport(): NativeVisualizerTransport {
+    return this.nativeVisualizerTransport
   }
 
   getPendingSpectrumSamples(): Float32Array[] {

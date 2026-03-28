@@ -28,8 +28,17 @@ import {
 } from '../src/renderer/visualizers/vuMeterBallistics'
 import { FrameScheduler } from '../src/renderer/visualizers/frameScheduler'
 import { VisualizerFrameLoop } from '../src/renderer/visualizers/visualizerFrameLoop'
+import {
+  NativeVisualizerTransport,
+  type NativeVisualizerTransportBridge,
+} from '../src/renderer/audio/NativeVisualizerTransport'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
+type WindowWithTimers = typeof globalThis & Pick<Window, 'setTimeout' | 'clearTimeout'> & {
+  electronAPI: {
+    platform: string
+  }
+}
 
 function installFakeAnimationFrame(): {
   pendingCount: () => number
@@ -73,6 +82,76 @@ function installFakeAnimationFrame(): {
   }
 }
 
+function installFakeTimeouts(hidden = false): {
+  pendingCount: () => number
+  nextDelay: () => number | null
+  runNext: () => void
+  restore: () => void
+  setHidden: (value: boolean) => void
+} {
+  let nextTimerId = 1
+  const timers = new Map<number, { callback: () => void; delay: number }>()
+  const globalWithWindow = globalThis as typeof globalThis & { window?: WindowWithTimers; document?: Document }
+  const previousWindow = globalWithWindow.window
+  const previousDocument = globalWithWindow.document
+  const documentState = { hidden }
+
+  globalWithWindow.window = {
+    ...globalThis,
+    electronAPI: { platform: 'darwin' },
+    setTimeout(callback: TimerHandler, delay?: number): number {
+      const timerId = nextTimerId
+      nextTimerId += 1
+      const run = typeof callback === 'function'
+        ? callback as () => void
+        : () => {}
+      timers.set(timerId, {
+        callback: run,
+        delay: typeof delay === 'number' ? delay : 0,
+      })
+      return timerId
+    },
+    clearTimeout(timerId: number): void {
+      timers.delete(timerId)
+    },
+  } as WindowWithTimers
+
+  globalWithWindow.document = documentState as Document
+
+  return {
+    pendingCount: () => timers.size,
+    nextDelay: () => {
+      const nextTimer = timers.values().next().value
+      return nextTimer ? nextTimer.delay : null
+    },
+    runNext(): void {
+      const next = timers.entries().next().value as [number, { callback: () => void; delay: number }] | undefined
+      if (!next) {
+        return
+      }
+      const [timerId, timer] = next
+      timers.delete(timerId)
+      timer.callback()
+    },
+    restore(): void {
+      if (previousWindow === undefined) {
+        delete globalWithWindow.window
+      } else {
+        globalWithWindow.window = previousWindow
+      }
+
+      if (previousDocument === undefined) {
+        delete globalWithWindow.document
+      } else {
+        globalWithWindow.document = previousDocument
+      }
+    },
+    setHidden(value: boolean): void {
+      documentState.hidden = value
+    },
+  }
+}
+
 function assertAlmostEqual(actual: number, expected: number, tolerance: number, message: string): void {
   assert.ok(
     Math.abs(actual - expected) <= tolerance,
@@ -111,6 +190,77 @@ function createScopePopouts(poppedOutScopes: ScopeKind[] = []): ScopePopoutState
     acc[kind] = { poppedOut: poppedOutSet.has(kind) }
     return acc
   }, {} as ScopePopoutStateMap)
+}
+
+function createFakeTransportBridge(): {
+  bridge: NativeVisualizerTransportBridge
+  calls: {
+    oscilloscopePushes: Float32Array[]
+    vectorscopePushes: Array<{ left: Float32Array; right: Float32Array }>
+    spectrumPushes: Float32Array[]
+    oscilloscopeResets: number
+    vectorscopeResets: number
+    spectrumResets: number
+    oscilloscopeSampleRates: number[]
+    vectorscopeSampleRates: number[]
+    spectrumSampleRates: number[]
+  }
+} {
+  let latestSpectrumMagnitudes: Float32Array | null = null
+  const calls = {
+    oscilloscopePushes: [] as Float32Array[],
+    vectorscopePushes: [] as Array<{ left: Float32Array; right: Float32Array }>,
+    spectrumPushes: [] as Float32Array[],
+    oscilloscopeResets: 0,
+    vectorscopeResets: 0,
+    spectrumResets: 0,
+    oscilloscopeSampleRates: [] as number[],
+    vectorscopeSampleRates: [] as number[],
+    spectrumSampleRates: [] as number[],
+  }
+
+  return {
+    bridge: {
+      isAvailable: () => true,
+      oscilloscope: {
+        setSampleRate: (sampleRate) => {
+          calls.oscilloscopeSampleRates.push(sampleRate)
+        },
+        pushSamples: (samples) => {
+          calls.oscilloscopePushes.push(samples)
+        },
+        reset: () => {
+          calls.oscilloscopeResets += 1
+        },
+      },
+      spectrum: {
+        setSampleRate: (sampleRate) => {
+          calls.spectrumSampleRates.push(sampleRate)
+        },
+        pushSamples: (samples) => {
+          calls.spectrumPushes.push(samples)
+          latestSpectrumMagnitudes = new Float32Array([samples[0] ?? 0, samples[samples.length - 1] ?? 0])
+        },
+        getMagnitudes: () => latestSpectrumMagnitudes,
+        reset: () => {
+          calls.spectrumResets += 1
+          latestSpectrumMagnitudes = null
+        },
+      },
+      vectorscope: {
+        setSampleRate: (sampleRate) => {
+          calls.vectorscopeSampleRates.push(sampleRate)
+        },
+        pushSamples: (left, right) => {
+          calls.vectorscopePushes.push({ left, right })
+        },
+        reset: () => {
+          calls.vectorscopeResets += 1
+        },
+      },
+    },
+    calls,
+  }
 }
 
 test('parseColorToRgb handles hex, rgb, rgba, and percentage formats', () => {
@@ -498,4 +648,189 @@ test('VUMeterBallistics lets the bar outrun the VU needle while peak hold remain
   assert.equal(beforeDecay.peakLDb, 0)
   assert.ok(afterDecay.peakLDb < beforeDecay.peakLDb)
   assert.ok(afterDecay.peakLDb > -3)
+})
+
+test('NativeVisualizerTransport feeds native scope state from chunk arrival without a render tick', () => {
+  const { bridge, calls } = createFakeTransportBridge()
+  const transport = new NativeVisualizerTransport(bridge)
+  const left = new Float32Array([0.2, 0.4, 0.6])
+  const right = new Float32Array([0.8, 0.6, 0.4])
+
+  transport.setDemand({
+    spectrum: true,
+    oscilloscope: true,
+    vectorscope: true,
+  })
+  transport.reset({
+    sessionId: 1,
+    sampleRate: 48000,
+    channelCount: 2,
+    capturing: true,
+  })
+  transport.handleChunk(left, right, {
+    sessionId: 1,
+    channelCount: 2,
+  })
+
+  assert.equal(calls.oscilloscopePushes.length, 1)
+  assert.equal(calls.vectorscopePushes.length, 1)
+  assert.equal(calls.spectrumPushes.length, 1)
+  assert.equal(calls.oscilloscopePushes[0], left)
+  assert.equal(calls.vectorscopePushes[0]?.left, left)
+  assert.equal(calls.vectorscopePushes[0]?.right, right)
+  assert.deepEqual(Array.from(calls.spectrumPushes[0]), [0.5, 0.5, 0.5])
+  assert.deepEqual(Array.from(transport.getLatestSpectrumMagnitudes() ?? []), [0.5, 0.5])
+})
+
+test('NativeVisualizerTransport resets cached state on session changes and sample-rate updates', () => {
+  const { bridge, calls } = createFakeTransportBridge()
+  const transport = new NativeVisualizerTransport(bridge)
+
+  transport.setDemand({ spectrum: true, oscilloscope: true, vectorscope: true })
+  transport.reset({
+    sessionId: 7,
+    sampleRate: 48000,
+    channelCount: 2,
+    capturing: true,
+  })
+  transport.handleChunk(new Float32Array([1, 1]), new Float32Array([1, 1]), {
+    sessionId: 7,
+    channelCount: 2,
+  })
+  assert.deepEqual(Array.from(transport.getLatestSpectrumMagnitudes() ?? []), [1, 1])
+
+  transport.setSampleRate(96000)
+  transport.reset({
+    sessionId: 8,
+    sampleRate: 96000,
+    channelCount: 2,
+    capturing: true,
+  })
+
+  assert.equal(calls.oscilloscopeSampleRates.at(-1), 96000)
+  assert.equal(calls.spectrumSampleRates.at(-1), 96000)
+  assert.equal(calls.vectorscopeSampleRates.at(-1), 96000)
+  assert.equal(calls.oscilloscopeResets >= 2, true)
+  assert.equal(calls.spectrumResets >= 2, true)
+  assert.equal(calls.vectorscopeResets >= 2, true)
+  assert.equal(transport.getLatestSpectrumMagnitudes(), null)
+})
+
+test('NativeVisualizerTransport stops feeding scopes when demand is removed', () => {
+  const { bridge, calls } = createFakeTransportBridge()
+  const transport = new NativeVisualizerTransport(bridge)
+
+  transport.setDemand({ spectrum: true })
+  transport.reset({
+    sessionId: 2,
+    sampleRate: 48000,
+    channelCount: 2,
+    capturing: true,
+  })
+  transport.handleChunk(new Float32Array([0.25]), new Float32Array([0.75]), {
+    sessionId: 2,
+    channelCount: 2,
+  })
+  assert.equal(calls.spectrumPushes.length, 1)
+
+  transport.setDemand({})
+  transport.handleChunk(new Float32Array([0.5]), new Float32Array([0.5]), {
+    sessionId: 2,
+    channelCount: 2,
+  })
+
+  assert.equal(calls.spectrumPushes.length, 1)
+  assert.equal(calls.spectrumResets >= 1, true)
+  assert.equal(transport.getLatestSpectrumMagnitudes(), null)
+})
+
+test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-document polls and cancels on stop', async () => {
+  const timers = installFakeTimeouts()
+
+  try {
+    const { NativePolledCaptureBackend } = await import('../src/renderer/audio/AudioCapture')
+
+    const drainResults = [
+      {
+        chunks: [{
+          left: new Float32Array([0.1, 0.2]),
+          right: new Float32Array([0.3, 0.4]),
+          channelCount: 2,
+          capturedAtMilliseconds: 5,
+          sequence: 1,
+        }],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+      {
+        chunks: [],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+      {
+        chunks: [],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+    ]
+
+    const nativeModule = {
+      getSupport: () => ({ available: true, reason: null }),
+      listOutputDevices: () => [],
+      start: () => ({
+        sampleRate: 48000,
+        channelCount: 2,
+        deviceId: 'device',
+        deviceLabel: 'Device',
+      }),
+      stop: () => {},
+      drain: () => drainResults.shift() ?? {
+        chunks: [],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+      nowMilliseconds: () => 0,
+    }
+
+    class TestNativeBackend extends NativePolledCaptureBackend {
+      readonly kind = 'native-macos' as const
+
+      protected getNativeCaptureModule() {
+        return nativeModule
+      }
+
+      protected getBackendLabel(): string {
+        return 'Test Native'
+      }
+    }
+
+    const backend = new TestNativeBackend({
+      kind: 'native-macos',
+      available: true,
+      reason: null,
+    })
+    const receivedSequences: number[] = []
+    backend.subscribe((chunk) => {
+      receivedSequences.push(chunk.sequence)
+    })
+
+    await backend.start()
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.deepEqual(receivedSequences, [1])
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.equal(timers.nextDelay(), 2)
+
+    timers.setHidden(true)
+    timers.runNext()
+    assert.equal(timers.nextDelay(), 16)
+
+    await backend.stop()
+    assert.equal(timers.pendingCount(), 0)
+  } finally {
+    timers.restore()
+  }
 })

@@ -60,6 +60,8 @@ export interface AudioRouterDiagnostics {
   scopes: Record<ScopeKind, AudioRouterScopeDiagnostics>
 }
 
+export type NormalizedVisualizerConsumerDemand = Required<VisualizerConsumerDemand>
+
 interface AudioChunkMeta {
   sessionId?: number
   channelCount?: number
@@ -187,7 +189,7 @@ class RollingLatencyWindow {
   }
 }
 
-function createEmptyDemand(): VisualizerConsumerDemand {
+function createEmptyDemand(): NormalizedVisualizerConsumerDemand {
   return {
     spectrum: false,
     oscilloscope: false,
@@ -242,6 +244,7 @@ export class AudioRouter {
   private undemandedChunks = 0
 
   private sessionListeners = new Set<(state: AudioSessionState) => void>()
+  private demandListeners = new Set<(demand: NormalizedVisualizerConsumerDemand) => void>()
 
   private emitSessionState(): void {
     const state = this.getSessionState()
@@ -307,6 +310,18 @@ export class AudioRouter {
     }
   }
 
+  subscribeToDemandChanges(listener: (demand: NormalizedVisualizerConsumerDemand) => void): () => void {
+    this.demandListeners.add(listener)
+    listener(this.getActiveVisualizerDemand())
+    return () => {
+      this.demandListeners.delete(listener)
+    }
+  }
+
+  getActiveVisualizerDemand(): NormalizedVisualizerConsumerDemand {
+    return this.getActiveDemand()
+  }
+
   setVisualizerConsumerDemand(consumerId: string, demand: VisualizerConsumerDemand): void {
     const normalized: VisualizerConsumerDemand = {
       spectrum: Boolean(demand.spectrum),
@@ -326,11 +341,13 @@ export class AudioRouter {
     }
 
     this.pruneQueuesForDemand()
+    this.emitDemandState()
   }
 
   clearVisualizerConsumerDemand(consumerId: string): void {
     if (this.consumerDemand.delete(consumerId)) {
       this.pruneQueuesForDemand()
+      this.emitDemandState()
     }
   }
 
@@ -491,7 +508,7 @@ export class AudioRouter {
     this.resetLatencyTrackers()
   }
 
-  private getActiveDemand(): VisualizerConsumerDemand {
+  private getActiveDemand(): NormalizedVisualizerConsumerDemand {
     const aggregated = createEmptyDemand()
     for (const demand of this.consumerDemand.values()) {
       for (const scope of SCOPE_KINDS) {
@@ -501,6 +518,13 @@ export class AudioRouter {
       }
     }
     return aggregated
+  }
+
+  private emitDemandState(): void {
+    const demand = this.getActiveVisualizerDemand()
+    for (const listener of this.demandListeners) {
+      listener(demand)
+    }
   }
 
   private pruneQueuesForDemand(): void {

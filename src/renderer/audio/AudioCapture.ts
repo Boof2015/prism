@@ -5,6 +5,7 @@
  */
 
 import { audioRouter } from './AudioRouter'
+import { nativeVisualizerTransport } from './NativeVisualizerTransport'
 import { applyInputGainToStereoSamples, inputGainDbToLinear } from './inputGain'
 import type {
   CaptureBackendKind,
@@ -50,6 +51,17 @@ interface CaptureBackend {
   listSources(): Promise<CaptureSourceDescriptor[]>
   subscribe(listener: (chunk: CaptureChunk) => void): () => void
   getStatus(): CaptureBackendStatus
+}
+
+function isDocumentHidden(): boolean {
+  return typeof document !== 'undefined' && document.hidden === true
+}
+
+export function resolveNativeCapturePollDelay(chunkCount: number): number {
+  if (isDocumentHidden()) {
+    return 16
+  }
+  return chunkCount > 0 ? 0 : 2
 }
 
 export interface CaptureManagerStatus {
@@ -366,7 +378,7 @@ class ElectronDeviceCaptureBackend implements CaptureBackend {
   }
 }
 
-abstract class NativePolledCaptureBackend implements CaptureBackend {
+export abstract class NativePolledCaptureBackend implements CaptureBackend {
   abstract readonly kind: CaptureBackendKind
 
   private readonly chunkListeners = new Set<(chunk: CaptureChunk) => void>()
@@ -464,8 +476,10 @@ abstract class NativePolledCaptureBackend implements CaptureBackend {
     const poll = (): void => {
       if (!this.active) return
 
+      let chunkCount = 0
       try {
         const result = this.getNativeCaptureModule()?.drain(32) as NativeCaptureDrainResult | undefined
+        chunkCount = result?.chunks.length ?? 0
         if (result) {
           for (const chunk of result.chunks) {
             const routedChunk: CaptureChunk = {
@@ -488,7 +502,7 @@ abstract class NativePolledCaptureBackend implements CaptureBackend {
         return
       }
 
-      this.pollTimer = window.setTimeout(poll, 4)
+      this.pollTimer = window.setTimeout(poll, resolveNativeCapturePollDelay(chunkCount))
     }
 
     this.pollTimer = window.setTimeout(poll, 0)
@@ -592,6 +606,11 @@ class AudioCapture {
 
     this.electronSystemBackend.subscribe((chunk) => this.handleChunk(this.electronSystemBackend.kind, chunk))
     this.electronDeviceBackend.subscribe((chunk) => this.handleChunk(this.electronDeviceBackend.kind, chunk))
+
+    audioRouter.subscribeToDemandChanges((demand) => {
+      nativeVisualizerTransport.setDemand(demand)
+    })
+    nativeVisualizerTransport.reset(audioRouter.getSessionState())
   }
 
   subscribeStatus(listener: StatusListener): () => void {
@@ -653,6 +672,7 @@ class AudioCapture {
           backendStatus.channelCount,
           backend.kind,
         )
+        nativeVisualizerTransport.reset(audioRouter.getSessionState())
         this.emitStatus()
         return
       } catch (error) {
@@ -813,6 +833,7 @@ class AudioCapture {
   private async stopActiveCapture(): Promise<void> {
     if (this.sessionId !== null) {
       audioRouter.endSession()
+      nativeVisualizerTransport.reset(audioRouter.getSessionState())
       this.sessionId = null
     }
 
@@ -837,6 +858,10 @@ class AudioCapture {
       channelCount: chunk.channelCount,
       capturedAt: chunk.capturedAt,
       sequence: chunk.sequence,
+    })
+    nativeVisualizerTransport.handleChunk(chunk.left, chunk.right, {
+      sessionId: this.sessionId,
+      channelCount: chunk.channelCount,
     })
   }
 

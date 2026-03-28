@@ -49,6 +49,8 @@ export interface SpectrumModule {
   getFFTSize(): number;
   setSampleRate(sampleRate: number): void;
   setSmoothing(smoothing: number): void;
+  pushSamples(audioData: Float32Array): void;
+  getMagnitudes(): Float32Array;
   process(audioData: Float32Array): Float32Array;
   binToFrequency(bin: number): number;
   reset(): void;

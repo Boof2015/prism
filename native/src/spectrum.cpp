@@ -55,7 +55,7 @@ void Spectrum::applyWindow(const float* input, float* output, size_t length) {
     }
 }
 
-void Spectrum::pushSamples(const float* input, size_t length) {
+void Spectrum::pushHistory(const float* input, size_t length) {
     if (length == 0 || fftSize_ == 0) {
         return;
     }
@@ -73,13 +73,9 @@ void Spectrum::pushSamples(const float* input, size_t length) {
     bufferedSamples_ = std::min(fftSize_, bufferedSamples_ + length);
 }
 
-const std::vector<float>& Spectrum::process(const float* audioData, size_t length) {
-    if (audioData != nullptr && length > 0) {
-        pushSamples(audioData, length);
-    }
-
+void Spectrum::updateMagnitudes() {
     if (historyBuffer_.empty() || magnitudes_.empty()) {
-        return smoothedMagnitudes_;
+        return;
     }
 
     // Always analyze a full FFT frame from the rolling buffer.
@@ -115,6 +111,21 @@ const std::vector<float>& Spectrum::process(const float* audioData, size_t lengt
             smoothedMagnitudes_[i] = -100.0f;
         }
     }
+}
+
+void Spectrum::pushSamples(const float* input, size_t length) {
+    if (input != nullptr && length > 0) {
+        pushHistory(input, length);
+    }
+    updateMagnitudes();
+}
+
+const std::vector<float>& Spectrum::process(const float* audioData, size_t length) {
+    if (audioData != nullptr && length > 0) {
+        pushHistory(audioData, length);
+    }
+
+    updateMagnitudes();
 
     return smoothedMagnitudes_;
 }

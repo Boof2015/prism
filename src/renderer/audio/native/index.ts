@@ -93,6 +93,15 @@ export const spectrum = {
     nativeModule?.spectrum.setSmoothing(smoothing)
   },
 
+  pushSamples: (audioData: Float32Array): void => {
+    nativeModule?.spectrum.pushSamples(audioData)
+  },
+
+  getMagnitudes: (): Float32Array | null => {
+    if (!nativeModule) return null
+    return nativeModule.spectrum.getMagnitudes()
+  },
+
   process: (audioData: Float32Array): Float32Array | null => {
     if (!nativeModule) return null
     return nativeModule.spectrum.process(audioData)

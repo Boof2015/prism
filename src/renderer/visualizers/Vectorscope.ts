@@ -195,13 +195,16 @@ export class Vectorscope {
     offscreenCtx.fillRect(0, 0, width, height)
     offscreenCtx.globalCompositeOperation = 'source-over'
 
+    const nativeTransport = this.dataSource.getNativeVisualizerTransport?.() ?? null
     const pendingSamples = this.dataSource.getPendingVectorscopeSamples()
 
     if (options.multiband) {
       this.drawMultibandPoints(offscreenCtx, pendingSamples, centerX, centerY, scale)
     } else if (isNativeAvailable()) {
-      for (const chunk of pendingSamples) {
-        nativeVectorscope.pushSamples(chunk.left, chunk.right)
+      if (!nativeTransport) {
+        for (const chunk of pendingSamples) {
+          nativeVectorscope.pushSamples(chunk.left, chunk.right)
+        }
       }
 
       const pointsResult = nativeVectorscope.getPoints(options.displayPoints)

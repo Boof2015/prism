@@ -88,3 +88,54 @@ test('drops stale-session chunks before they reach scope queues', () => {
   assert.equal(router.flushPendingVUMeterSamples().length, 0)
   assert.equal(router.getDiagnosticsSnapshot().staleSessionDrops, 1)
 })
+
+test('publishes aggregated visualizer demand changes for downstream transports', () => {
+  const router = new AudioRouter()
+  const snapshots: Array<ReturnType<AudioRouter['getActiveVisualizerDemand']>> = []
+
+  const unsubscribe = router.subscribeToDemandChanges((demand) => {
+    snapshots.push({ ...demand })
+  })
+
+  router.setVisualizerConsumerDemand('docked-strip', { spectrum: true, oscilloscope: true })
+  router.setVisualizerConsumerDemand('popout:vectorscope', { vectorscope: true })
+  router.clearVisualizerConsumerDemand('docked-strip')
+  unsubscribe()
+
+  assert.deepEqual(snapshots[0], {
+    spectrum: false,
+    oscilloscope: false,
+    vectorscope: false,
+    spectrogram: false,
+    vumeter: false,
+    lufsmeter: false,
+    waveform: false,
+  })
+  assert.deepEqual(snapshots[1], {
+    spectrum: true,
+    oscilloscope: true,
+    vectorscope: false,
+    spectrogram: false,
+    vumeter: false,
+    lufsmeter: false,
+    waveform: false,
+  })
+  assert.deepEqual(snapshots[2], {
+    spectrum: true,
+    oscilloscope: true,
+    vectorscope: true,
+    spectrogram: false,
+    vumeter: false,
+    lufsmeter: false,
+    waveform: false,
+  })
+  assert.deepEqual(snapshots[3], {
+    spectrum: false,
+    oscilloscope: false,
+    vectorscope: true,
+    spectrogram: false,
+    vumeter: false,
+    lufsmeter: false,
+    waveform: false,
+  })
+})
