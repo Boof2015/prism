@@ -127,28 +127,6 @@ export class NativeVisualizerTransport {
     this.demand = nextDemand
   }
 
-  setSampleRate(sampleRate: number): void {
-    const nextSampleRate = Math.max(1, Math.floor(sampleRate) || 1)
-    if (nextSampleRate === this.sampleRate) {
-      return
-    }
-
-    this.sampleRate = nextSampleRate
-    if (!this.bridge.isAvailable()) {
-      return
-    }
-
-    if (this.demand.oscilloscope) {
-      this.bridge.oscilloscope.setSampleRate(nextSampleRate)
-    }
-    if (this.demand.spectrum) {
-      this.bridge.spectrum.setSampleRate(nextSampleRate)
-    }
-    if (this.demand.vectorscope) {
-      this.bridge.vectorscope.setSampleRate(nextSampleRate)
-    }
-  }
-
   handleChunk(left: Float32Array, right: Float32Array, meta: NativeVisualizerTransportChunkMeta = {}): void {
     if (!this.capturing || !this.bridge.isAvailable()) {
       return

@@ -57,7 +57,7 @@ function isDocumentHidden(): boolean {
   return typeof document !== 'undefined' && document.hidden === true
 }
 
-export function resolveNativeCapturePollDelay(chunkCount: number): number {
+function resolveNativeCapturePollDelay(chunkCount: number): number {
   if (isDocumentHidden()) {
     return 16
   }

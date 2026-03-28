@@ -253,16 +253,8 @@ export class AudioRouter {
     }
   }
 
-  setSampleRate(rate: number): void {
-    this._sampleRate = rate
-  }
-
   getSampleRate(): number {
     return this._sampleRate
-  }
-
-  setCapturing(capturing: boolean): void {
-    this._capturing = capturing
   }
 
   isCapturing(): boolean {

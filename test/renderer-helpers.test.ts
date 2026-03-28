@@ -699,7 +699,6 @@ test('NativeVisualizerTransport resets cached state on session changes and sampl
   })
   assert.deepEqual(Array.from(transport.getLatestSpectrumMagnitudes() ?? []), [1, 1])
 
-  transport.setSampleRate(96000)
   transport.reset({
     sessionId: 8,
     sampleRate: 96000,
