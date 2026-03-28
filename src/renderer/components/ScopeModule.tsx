@@ -1,17 +1,27 @@
 import { useEffect, useRef, type JSX } from 'react'
 import type { ScopeKind } from '../../types/scope'
-import { useSettingsStore, type ScopeSettings } from '../stores/settingsStore'
-import { SpectrumAnalyzer } from '../visualizers/SpectrumAnalyzer'
-import { Oscilloscope } from '../visualizers/Oscilloscope'
-import { Vectorscope } from '../visualizers/Vectorscope'
-import { Spectrogram } from '../visualizers/Spectrogram'
-import { VUMeter } from '../visualizers/VUMeter'
-import { LUFSMeter } from '../visualizers/LUFSMeter'
-import { Waveform } from '../visualizers/Waveform'
+import type { ScopeSettings } from '../../types/settings'
+import { useSettingsStore } from '../stores/settingsStore'
+import { SpectrumAnalyzer, type SpectrumAnalyzerDataSource } from '../visualizers/SpectrumAnalyzer'
+import { Oscilloscope, type OscilloscopeDataSource } from '../visualizers/Oscilloscope'
+import { Vectorscope, type VectorscopeDataSource } from '../visualizers/Vectorscope'
+import { Spectrogram, type SpectrogramDataSource } from '../visualizers/Spectrogram'
+import { VUMeter, type VUMeterDataSource } from '../visualizers/VUMeter'
+import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
+import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
 
 interface ScopeModuleProps {
   scopeKind: ScopeKind
   lineColor?: string
+  settings?: ScopeSettings[ScopeKind]
+  dataSource?:
+    | SpectrumAnalyzerDataSource
+    | OscilloscopeDataSource
+    | VectorscopeDataSource
+    | SpectrogramDataSource
+    | VUMeterDataSource
+    | LUFSMeterDataSource
+    | WaveformDataSource
 }
 
 interface Visualizer {
@@ -75,36 +85,68 @@ function scopeSettingsToOptions(kind: ScopeKind, settings: ScopeSettings[ScopeKi
   }
 }
 
-function createVisualizer(scopeKind: ScopeKind, canvas: HTMLCanvasElement, mySettings: ScopeSettings[ScopeKind], lineColor: string): Visualizer | null {
+function createVisualizer(
+  scopeKind: ScopeKind,
+  canvas: HTMLCanvasElement,
+  mySettings: ScopeSettings[ScopeKind],
+  lineColor: string,
+  dataSource?: ScopeModuleProps['dataSource'],
+): Visualizer | null {
   const opts = scopeSettingsToOptions(scopeKind, mySettings, lineColor)
   switch (scopeKind) {
     case 'spectrum':
-      return new SpectrumAnalyzer(canvas, opts)
+      return new SpectrumAnalyzer(canvas, {
+        ...opts,
+        ...(dataSource ? { dataSource: dataSource as SpectrumAnalyzerDataSource } : {}),
+      })
     case 'oscilloscope':
-      return new Oscilloscope(canvas, opts)
+      return new Oscilloscope(canvas, {
+        ...opts,
+        ...(dataSource ? { dataSource: dataSource as OscilloscopeDataSource } : {}),
+      })
     case 'vectorscope':
-      return new Vectorscope(canvas, opts)
+      return new Vectorscope(canvas, {
+        ...opts,
+        ...(dataSource ? { dataSource: dataSource as VectorscopeDataSource } : {}),
+      })
     case 'spectrogram':
-      return new Spectrogram(canvas, opts)
+      return new Spectrogram(canvas, {
+        ...opts,
+        ...(dataSource ? { dataSource: dataSource as SpectrogramDataSource } : {}),
+      })
     case 'vumeter':
-      return new VUMeter(canvas, opts)
+      return new VUMeter(canvas, {
+        ...opts,
+        ...(dataSource ? { dataSource: dataSource as VUMeterDataSource } : {}),
+      })
     case 'lufsmeter':
-      return new LUFSMeter(canvas, opts)
+      return new LUFSMeter(canvas, {
+        ...opts,
+        ...(dataSource ? { dataSource: dataSource as LUFSMeterDataSource } : {}),
+      })
     case 'waveform':
-      return new Waveform(canvas, opts)
+      return new Waveform(canvas, {
+        ...opts,
+        ...(dataSource ? { dataSource: dataSource as WaveformDataSource } : {}),
+      })
     default:
       return null
   }
 }
 
-export default function ScopeModule({ scopeKind, lineColor = '#38bdf8' }: ScopeModuleProps): JSX.Element {
+export default function ScopeModule({
+  scopeKind,
+  lineColor = '#38bdf8',
+  settings,
+  dataSource,
+}: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visualizerRef = useRef<Visualizer | null>(null)
   const initializedRef = useRef(false)
 
-  // Subscribe to ONLY this scope's settings — avoids triggering setOptions when other scopes change
-  const mySettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
+  const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
+  const mySettings = settings ?? storeSettings
 
   // Initialize visualizer
   useEffect(() => {
@@ -112,7 +154,7 @@ export default function ScopeModule({ scopeKind, lineColor = '#38bdf8' }: ScopeM
     if (!canvas) return
 
     initializedRef.current = false
-    const viz = createVisualizer(scopeKind, canvas, mySettings, lineColor)
+    const viz = createVisualizer(scopeKind, canvas, mySettings, lineColor, dataSource)
     if (!viz) return
 
     visualizerRef.current = viz
@@ -126,14 +168,14 @@ export default function ScopeModule({ scopeKind, lineColor = '#38bdf8' }: ScopeM
       visualizerRef.current = null
       initializedRef.current = false
     }
-  }, [scopeKind])
+  }, [dataSource, scopeKind])
 
   // Push settings + lineColor changes to live visualizer (skip initial — constructor already handled it)
   useEffect(() => {
     if (!visualizerRef.current || !initializedRef.current) return
-    const opts = scopeSettingsToOptions(scopeKind, mySettings, lineColor)
+    const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, lineColor), ...(dataSource ? { dataSource } : {}) }
     visualizerRef.current.setOptions(opts)
-  }, [mySettings, lineColor])
+  }, [dataSource, lineColor, mySettings, scopeKind])
 
   // ResizeObserver for DPI-aware canvas sizing
   useEffect(() => {

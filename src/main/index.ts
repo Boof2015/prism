@@ -1,12 +1,26 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, screen, session } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, screen, session } from 'electron'
+import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, WebContents } from 'electron'
 import { join } from 'path'
 import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
+import type {
+  ScopePopoutAudioBatch,
+  ScopePopoutSessionState,
+  ScopePopoutSnapshot,
+  ScopePopoutSyncStateMap,
+  WindowBounds,
+} from '../types/popout'
+import type { ProfileMenuRequest } from '../types/profileMenu'
+import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
 
 let mainWindow: BrowserWindow | null = null
 let currentSettingsHeight = 0
 let moveInterval: ReturnType<typeof setInterval> | null = null
 let moveStartCursor: { x: number; y: number } | null = null
 let moveStartPosition: number[] | null = null
+
+const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
+const scopePopoutCloseAllowed = new Set<ScopeKind>()
+const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -15,7 +29,145 @@ const WINDOW_DEFAULTS = {
   minHeight: 100,
 }
 
-function createWindow(): void {
+const POPOUT_DEFAULTS = {
+  width: 360,
+  height: 240,
+  minWidth: 220,
+  minHeight: 160,
+}
+
+function isScopeKind(value: unknown): value is ScopeKind {
+  return typeof value === 'string' && SCOPE_KINDS.includes(value as ScopeKind)
+}
+
+function getWindowFromSender(sender: WebContents): BrowserWindow | null {
+  return BrowserWindow.fromWebContents(sender)
+}
+
+function isMainRendererWindow(window: BrowserWindow | null): boolean {
+  return window !== null && window === mainWindow
+}
+
+function sendToRenderer(sender: WebContents, channel: string, ...args: unknown[]): void {
+  if (!sender.isDestroyed()) {
+    sender.send(channel, ...args)
+  }
+}
+
+function normalizeProfileMenuRequest(raw: unknown): ProfileMenuRequest | null {
+  if (typeof raw !== 'object' || raw === null) return null
+
+  const candidate = raw as Partial<ProfileMenuRequest>
+  if (
+    typeof candidate.x !== 'number'
+    || typeof candidate.y !== 'number'
+    || !Array.isArray(candidate.profiles)
+  ) {
+    return null
+  }
+
+  const profiles = candidate.profiles
+    .filter((profile): profile is ProfileMenuRequest['profiles'][number] => {
+      return typeof profile?.id === 'string'
+        && typeof profile?.name === 'string'
+        && typeof profile?.isDefault === 'boolean'
+    })
+    .map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      isDefault: profile.isDefault,
+    }))
+
+  return {
+    x: Math.round(candidate.x),
+    y: Math.round(candidate.y),
+    profiles,
+    activeProfileId: typeof candidate.activeProfileId === 'string' ? candidate.activeProfileId : null,
+  }
+}
+
+function buildProfileMenuTemplate(
+  request: ProfileMenuRequest,
+  sender: WebContents,
+): MenuItemConstructorOptions[] {
+  const activeProfile = request.activeProfileId
+    ? request.profiles.find((profile) => profile.id === request.activeProfileId) ?? null
+    : null
+
+  const template: MenuItemConstructorOptions[] = [
+    { label: 'Presets', enabled: false },
+    ...request.profiles.map((profile) => ({
+      type: 'checkbox' as const,
+      checked: profile.id === request.activeProfileId,
+      label: profile.name,
+      click: () => sendToRenderer(sender, 'profile-menu:load', profile.id),
+    })),
+    { type: 'separator' },
+    {
+      label: 'Save as New Preset',
+      click: () => sendToRenderer(sender, 'profile-menu:save-new'),
+    },
+  ]
+
+  if (activeProfile) {
+    template.push({
+      label: `Save to "${activeProfile.name}"`,
+      click: () => sendToRenderer(sender, 'profile-menu:save-overwrite'),
+    })
+  }
+
+  if (activeProfile && !activeProfile.isDefault) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: `Rename "${activeProfile.name}"...`,
+        click: () => sendToRenderer(sender, 'profile-menu:rename-active', activeProfile.id),
+      },
+      {
+        label: `Delete "${activeProfile.name}"`,
+        click: () => sendToRenderer(sender, 'profile-menu:delete-active', activeProfile.id),
+      },
+    )
+  }
+
+  return template
+}
+
+function normalizeBounds(raw: unknown, fallback: WindowBounds): WindowBounds {
+  if (typeof raw !== 'object' || raw === null) return fallback
+
+  const candidate = raw as Partial<WindowBounds>
+  if (
+    typeof candidate.x !== 'number'
+    || typeof candidate.y !== 'number'
+    || typeof candidate.width !== 'number'
+    || typeof candidate.height !== 'number'
+  ) {
+    return fallback
+  }
+
+  return {
+    x: Math.round(candidate.x),
+    y: Math.round(candidate.y),
+    width: Math.max(POPOUT_DEFAULTS.minWidth, Math.round(candidate.width)),
+    height: Math.max(POPOUT_DEFAULTS.minHeight, Math.round(candidate.height)),
+  }
+}
+
+function loadRendererTarget(window: BrowserWindow, query: Record<string, string>): void {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL(process.env.ELECTRON_RENDERER_URL)
+    for (const [key, value] of Object.entries(query)) {
+      url.searchParams.set(key, value)
+    }
+    void window.loadURL(url.toString())
+    return
+  }
+
+  void window.loadFile(join(__dirname, '../renderer/index.html'), { query })
+}
+
+function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     ...WINDOW_DEFAULTS,
     frame: false,
@@ -39,13 +191,165 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
     currentSettingsHeight = 0
+
+    for (const kind of SCOPE_KINDS) {
+      destroyScopePopoutWindow(kind)
+    }
   })
 
-  // Load the renderer
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  loadRendererTarget(mainWindow, { window: 'main' })
+}
+
+function setAllWindowsAlwaysOnTop(next: boolean): void {
+  mainWindow?.setAlwaysOnTop(next)
+  for (const window of scopePopoutWindows.values()) {
+    window.setAlwaysOnTop(next)
+  }
+}
+
+function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
+  if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed()) return
+
+  const existingTimer = popoutBoundsTimers.get(kind)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+  }
+
+  const timer = setTimeout(() => {
+    popoutBoundsTimers.delete(kind)
+
+    if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed()) return
+    const bounds = window.getBounds()
+    mainWindow.webContents.send('scope-popout:bounds-changed', kind, bounds)
+  }, 80)
+
+  popoutBoundsTimers.set(kind, timer)
+}
+
+function destroyScopePopoutWindow(kind: ScopeKind): void {
+  const window = scopePopoutWindows.get(kind)
+  if (!window) return
+
+  const pendingTimer = popoutBoundsTimers.get(kind)
+  if (pendingTimer) {
+    clearTimeout(pendingTimer)
+    popoutBoundsTimers.delete(kind)
+  }
+
+  scopePopoutCloseAllowed.add(kind)
+  scopePopoutWindows.delete(kind)
+
+  if (!window.isDestroyed()) {
+    window.close()
+  }
+
+  scopePopoutCloseAllowed.delete(kind)
+}
+
+function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): BrowserWindow | null {
+  if (!mainWindow) return null
+
+  const existing = scopePopoutWindows.get(kind)
+  if (existing && !existing.isDestroyed()) {
+    return existing
+  }
+
+  const mainBounds = mainWindow.getBounds()
+  const fallbackBounds: WindowBounds = {
+    x: mainBounds.x + 40,
+    y: mainBounds.y + 40,
+    width: POPOUT_DEFAULTS.width,
+    height: POPOUT_DEFAULTS.height,
+  }
+  const bounds = normalizeBounds(rawBounds, fallbackBounds)
+
+  const options: BrowserWindowConstructorOptions = {
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: POPOUT_DEFAULTS.minWidth,
+    minHeight: POPOUT_DEFAULTS.minHeight,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#000000',
+    resizable: true,
+    fullscreenable: false,
+    maximizable: false,
+    minimizable: true,
+    skipTaskbar: true,
+    autoHideMenuBar: true,
+    title: `Prism ${kind}`,
+    parent: mainWindow,
+    alwaysOnTop: mainWindow.isAlwaysOnTop(),
+    show: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  }
+
+  const popoutWindow = new BrowserWindow(options)
+  scopePopoutWindows.set(kind, popoutWindow)
+
+  popoutWindow.once('ready-to-show', () => {
+    if (!popoutWindow.isDestroyed()) {
+      popoutWindow.show()
+    }
+  })
+
+  popoutWindow.on('close', (event) => {
+    if (scopePopoutCloseAllowed.has(kind) || !mainWindow || mainWindow.isDestroyed()) {
+      return
+    }
+
+    event.preventDefault()
+    mainWindow.webContents.send('scope-popout:close-requested', kind)
+  })
+
+  popoutWindow.on('closed', () => {
+    scopePopoutWindows.delete(kind)
+    scopePopoutCloseAllowed.delete(kind)
+
+    const pendingTimer = popoutBoundsTimers.get(kind)
+    if (pendingTimer) {
+      clearTimeout(pendingTimer)
+      popoutBoundsTimers.delete(kind)
+    }
+  })
+
+  popoutWindow.on('move', () => emitPopoutBoundsChanged(kind, popoutWindow))
+  popoutWindow.on('resize', () => emitPopoutBoundsChanged(kind, popoutWindow))
+
+  loadRendererTarget(popoutWindow, { window: 'scope-popout', scope: kind })
+  return popoutWindow
+}
+
+function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
+  for (const kind of SCOPE_KINDS) {
+    const desired = nextState[kind]
+    if (!desired?.shouldBeOpen) {
+      destroyScopePopoutWindow(kind)
+      continue
+    }
+
+    const popoutWindow = createScopePopoutWindow(kind, desired.bounds)
+    if (!popoutWindow || popoutWindow.isDestroyed()) continue
+
+    const currentBounds = popoutWindow.getBounds()
+    const nextBounds = normalizeBounds(desired.bounds, currentBounds)
+    const hasBoundsDelta =
+      currentBounds.x !== nextBounds.x
+      || currentBounds.y !== nextBounds.y
+      || currentBounds.width !== nextBounds.width
+      || currentBounds.height !== nextBounds.height
+
+    if (hasBoundsDelta) {
+      popoutWindow.setBounds(nextBounds)
+    }
   }
 }
 
@@ -90,7 +394,6 @@ function getCaptureBackendSupport(): CaptureBackendSupport {
   }
 }
 
-// Auto-grant media (microphone) permission for audio capture
 function setupPermissions(): void {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     if (permission === 'media' || permission === 'display-capture') {
@@ -101,25 +404,26 @@ function setupPermissions(): void {
   })
 }
 
-// IPC handlers
 function setupIPC(): void {
-  ipcMain.on('window:minimize', () => {
-    mainWindow?.minimize()
+  ipcMain.on('window:minimize', (event) => {
+    getWindowFromSender(event.sender)?.minimize()
   })
 
-  ipcMain.on('window:start-move', () => {
-    if (!mainWindow) return
+  ipcMain.on('window:start-move', (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow) return
+
     const cursor = screen.getCursorScreenPoint()
     moveStartCursor = { x: cursor.x, y: cursor.y }
-    moveStartPosition = mainWindow.getPosition()
+    moveStartPosition = targetWindow.getPosition()
 
     if (moveInterval) clearInterval(moveInterval)
     moveInterval = setInterval(() => {
-      if (!mainWindow || !moveStartCursor || !moveStartPosition) return
+      if (!targetWindow || targetWindow.isDestroyed() || !moveStartCursor || !moveStartPosition) return
       const current = screen.getCursorScreenPoint()
       const dx = current.x - moveStartCursor.x
       const dy = current.y - moveStartCursor.y
-      mainWindow.setPosition(moveStartPosition[0] + dx, moveStartPosition[1] + dy)
+      targetWindow.setPosition(moveStartPosition[0] + dx, moveStartPosition[1] + dy)
     }, 16)
   })
 
@@ -132,19 +436,27 @@ function setupIPC(): void {
     moveStartPosition = null
   })
 
-  ipcMain.on('window:close', () => {
-    mainWindow?.close()
+  ipcMain.on('window:close', (event) => {
+    getWindowFromSender(event.sender)?.close()
   })
 
-  ipcMain.on('window:toggle-always-on-top', () => {
-    if (!mainWindow) return
-    const current = mainWindow.isAlwaysOnTop()
-    mainWindow.setAlwaysOnTop(!current)
-    mainWindow.webContents.send('window:always-on-top-changed', !current)
+  ipcMain.on('window:toggle-always-on-top', (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow) return
+
+    const current = targetWindow.isAlwaysOnTop()
+    const next = !current
+    if (isMainRendererWindow(targetWindow)) {
+      setAllWindowsAlwaysOnTop(next)
+      mainWindow?.webContents.send('window:always-on-top-changed', next)
+      return
+    }
+
+    targetWindow.setAlwaysOnTop(next)
   })
 
-  ipcMain.handle('window:is-always-on-top', () => {
-    return mainWindow?.isAlwaysOnTop() ?? true
+  ipcMain.handle('window:is-always-on-top', (event) => {
+    return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? true
   })
 
   ipcMain.handle('audio:get-desktop-sources', async () => {
@@ -156,126 +468,203 @@ function setupIPC(): void {
     return getCaptureBackendSupport()
   })
 
-  ipcMain.on('window:set-bounds', (_event, bounds: { x: number; y: number; width: number; height: number }) => {
-    if (!mainWindow) return
-    // Saved bounds are base (without settings). Add back current settings height so scopes stay the same size.
-    mainWindow.setBounds({
-      ...bounds,
-      height: bounds.height + currentSettingsHeight,
+  ipcMain.on('profile-menu:open', (event, rawRequest: unknown) => {
+    const request = normalizeProfileMenuRequest(rawRequest)
+    if (!request) return
+
+    const targetWindow = getWindowFromSender(event.sender)
+    const menu = Menu.buildFromTemplate(buildProfileMenuTemplate(request, event.sender))
+    menu.popup({
+      window: targetWindow ?? undefined,
+      x: request.x,
+      y: request.y,
+      callback: () => sendToRenderer(event.sender, 'profile-menu:closed'),
     })
   })
 
-  ipcMain.handle('window:get-bounds', () => {
-    if (!mainWindow) return null
-    const bounds = mainWindow.getBounds()
-    // Strip settings height so we always save base bounds
+  ipcMain.on('window:set-bounds', (event, bounds: WindowBounds) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow) return
+
+    if (isMainRendererWindow(targetWindow)) {
+      targetWindow.setBounds({
+        ...bounds,
+        height: bounds.height + currentSettingsHeight,
+      })
+      return
+    }
+
+    targetWindow.setBounds(bounds)
+  })
+
+  ipcMain.handle('window:get-bounds', (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow) return null
+
+    const bounds = targetWindow.getBounds()
+    if (!isMainRendererWindow(targetWindow)) {
+      return bounds
+    }
+
     return {
       ...bounds,
       height: bounds.height - currentSettingsHeight,
     }
   })
 
-  ipcMain.on('window:reposition', (_event, position: 'top' | 'bottom') => {
-    if (!mainWindow) return
-    const display = screen.getDisplayMatching(mainWindow.getBounds())
+  ipcMain.on('window:reposition', (event, position: 'top' | 'bottom') => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow) return
+
+    const display = screen.getDisplayMatching(targetWindow.getBounds())
     const workArea = display.workArea
-    const [, height] = mainWindow.getSize()
+    const [, height] = targetWindow.getSize()
 
     if (position === 'top') {
-      mainWindow.setPosition(workArea.x, workArea.y)
+      targetWindow.setPosition(workArea.x, workArea.y)
     } else {
-      mainWindow.setPosition(workArea.x, workArea.y + workArea.height - height)
+      targetWindow.setPosition(workArea.x, workArea.y + workArea.height - height)
     }
-    mainWindow.setSize(workArea.width, height)
+    targetWindow.setSize(workArea.width, height)
   })
 
-  ipcMain.on('window:expand-settings', (_event, panelHeight: number) => {
-    if (!mainWindow) return
-    const bounds = mainWindow.getBounds()
-    const [minW] = mainWindow.getMinimumSize()
-    const newHeight = bounds.height + panelHeight
-    mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + panelHeight)
+  ipcMain.on('window:expand-settings', (event, panelHeight: number) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
 
-    // Check if expanding would push window off screen bottom
+    const bounds = targetWindow.getBounds()
+    const [minW] = targetWindow.getMinimumSize()
+    const newHeight = bounds.height + panelHeight
+    targetWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + panelHeight)
+
     const display = screen.getDisplayMatching(bounds)
     const workArea = display.workArea
     const bottomEdge = bounds.y + newHeight
     if (bottomEdge > workArea.y + workArea.height) {
       const newY = Math.max(workArea.y, workArea.y + workArea.height - newHeight)
-      mainWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
+      targetWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
     } else {
-      mainWindow.setSize(bounds.width, newHeight, true)
+      targetWindow.setSize(bounds.width, newHeight, true)
     }
     currentSettingsHeight = Math.max(0, currentSettingsHeight + Math.round(panelHeight))
   })
 
-  ipcMain.on('window:collapse-settings', (_event, panelHeight: number) => {
-    if (!mainWindow) return
-    const bounds = mainWindow.getBounds()
-    const [minW] = mainWindow.getMinimumSize()
-    const newHeight = Math.max(WINDOW_DEFAULTS.minHeight, bounds.height - panelHeight)
-    mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight)
+  ipcMain.on('window:collapse-settings', (event, panelHeight: number) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
 
-    // If window was pushed up when expanding, push it back down
+    const bounds = targetWindow.getBounds()
+    const [minW] = targetWindow.getMinimumSize()
+    const newHeight = Math.max(WINDOW_DEFAULTS.minHeight, bounds.height - panelHeight)
+    targetWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight)
+
     const display = screen.getDisplayMatching(bounds)
     const workArea = display.workArea
     const wasAtBottom = bounds.y + bounds.height >= workArea.y + workArea.height - 10
     if (wasAtBottom) {
       const newY = Math.min(bounds.y + panelHeight, workArea.y + workArea.height - newHeight)
-      mainWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
+      targetWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
     } else {
-      mainWindow.setSize(bounds.width, newHeight, true)
+      targetWindow.setSize(bounds.width, newHeight, true)
     }
     currentSettingsHeight = Math.max(0, currentSettingsHeight - Math.round(panelHeight))
   })
 
-  ipcMain.on('window:set-settings-height', (_event, panelHeight: number) => {
-    if (!mainWindow) return
+  ipcMain.on('window:set-settings-height', (event, panelHeight: number) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
 
     const nextHeight = Math.max(0, Math.round(panelHeight))
     const delta = nextHeight - currentSettingsHeight
-    const [width, height] = mainWindow.getSize()
-    const [minW] = mainWindow.getMinimumSize()
+    const [width, height] = targetWindow.getSize()
+    const [minW] = targetWindow.getMinimumSize()
 
-    mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + nextHeight)
+    targetWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + nextHeight)
     if (delta !== 0) {
       const newHeight = Math.max(WINDOW_DEFAULTS.minHeight, height + delta)
-      // If expanding near the bottom of the screen, move the window up so it doesn't go off-screen
-      const bounds = mainWindow.getBounds()
+      const bounds = targetWindow.getBounds()
       const display = screen.getDisplayMatching(bounds)
       const workArea = display.workArea
       const bottomEdge = bounds.y + newHeight
       if (delta > 0 && bottomEdge > workArea.y + workArea.height) {
         const newY = Math.max(workArea.y, workArea.y + workArea.height - newHeight)
-        mainWindow.setBounds({ x: bounds.x, y: newY, width, height: newHeight })
+        targetWindow.setBounds({ x: bounds.x, y: newY, width, height: newHeight })
       } else if (delta < 0) {
-        // Collapsing: if we moved the window up previously, move it back down
         const baseHeight = newHeight - nextHeight
         const naturalBottom = bounds.y + baseHeight
         if (naturalBottom < workArea.y + workArea.height) {
-          // Push window down so it stays near the bottom
           const maxY = workArea.y + workArea.height - newHeight
           if (bounds.y < maxY) {
-            mainWindow.setSize(width, newHeight, true)
+            targetWindow.setSize(width, newHeight, true)
           } else {
-            mainWindow.setBounds({ x: bounds.x, y: maxY, width, height: newHeight })
+            targetWindow.setBounds({ x: bounds.x, y: maxY, width, height: newHeight })
           }
         } else {
-          mainWindow.setSize(width, newHeight, true)
+          targetWindow.setSize(width, newHeight, true)
         }
       } else {
-        mainWindow.setSize(width, newHeight, true)
+        targetWindow.setSize(width, newHeight, true)
       }
     }
 
     currentSettingsHeight = nextHeight
+  })
+
+  ipcMain.on('scope-popout:sync', (event, state: ScopePopoutSyncStateMap) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow)) return
+    syncScopePopouts(state)
+  })
+
+  ipcMain.on('scope-popout:snapshot', (event, snapshot: ScopePopoutSnapshot) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow) || !isScopeKind(snapshot?.kind)) return
+
+    const popoutWindow = scopePopoutWindows.get(snapshot.kind)
+    if (!popoutWindow || popoutWindow.isDestroyed()) return
+    popoutWindow.webContents.send('scope-popout:snapshot', snapshot)
+  })
+
+  ipcMain.on('scope-popout:audio', (event, kind: ScopeKind, batch: ScopePopoutAudioBatch) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
+
+    const popoutWindow = scopePopoutWindows.get(kind)
+    if (!popoutWindow || popoutWindow.isDestroyed()) return
+    popoutWindow.webContents.send('scope-popout:audio', kind, batch)
+  })
+
+  ipcMain.on('scope-popout:session', (event, kind: ScopeKind, sessionState: ScopePopoutSessionState) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
+
+    const popoutWindow = scopePopoutWindows.get(kind)
+    if (!popoutWindow || popoutWindow.isDestroyed()) return
+    popoutWindow.webContents.send('scope-popout:session', kind, sessionState)
+  })
+
+  ipcMain.on('scope-popout:ready', (event, kind: ScopeKind) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
+    mainWindow?.webContents.send('scope-popout:ready', kind)
+  })
+
+  ipcMain.on('scope-popout:request-pop-in', (event, kind: ScopeKind) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
+    mainWindow?.webContents.send('scope-popout:close-requested', kind)
+  })
+
+  ipcMain.on('scope-popout:settings-update', (event, kind: ScopeKind, partial: unknown) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
+    mainWindow?.webContents.send('scope-popout:settings-update', kind, partial)
   })
 }
 
 function setupShortcuts(): void {
   if (!mainWindow) return
 
-  // Scope toggles 1-7
   const scopeKeys = ['1', '2', '3', '4', '5', '6', '7']
   scopeKeys.forEach((key) => {
     mainWindow!.webContents.on('before-input-event', (_event, input) => {
@@ -285,23 +674,21 @@ function setupShortcuts(): void {
     })
   })
 
-  // T = toggle always-on-top
   mainWindow.webContents.on('before-input-event', (_event, input) => {
     if (input.type === 'keyDown' && input.key === 't' && !input.alt && !input.control && !input.meta && !input.shift) {
       const current = mainWindow!.isAlwaysOnTop()
-      mainWindow!.setAlwaysOnTop(!current)
-      mainWindow!.webContents.send('window:always-on-top-changed', !current)
+      const next = !current
+      setAllWindowsAlwaysOnTop(next)
+      mainWindow!.webContents.send('window:always-on-top-changed', next)
     }
   })
 
-  // Space = toggle capture
   mainWindow.webContents.on('before-input-event', (_event, input) => {
     if (input.type === 'keyDown' && input.key === ' ' && !input.alt && !input.control && !input.meta && !input.shift) {
       mainWindow?.webContents.send('shortcut:toggle-capture')
     }
   })
 
-  // Comma (Cmd+,) = toggle settings
   mainWindow.webContents.on('before-input-event', (_event, input) => {
     if (input.type === 'keyDown' && input.key === ',' && input.meta && !input.alt && !input.control && !input.shift) {
       mainWindow?.webContents.send('shortcut:toggle-settings')
@@ -312,7 +699,7 @@ function setupShortcuts(): void {
 app.whenReady().then(() => {
   setupPermissions()
   setupIPC()
-  createWindow()
+  createMainWindow()
   setupShortcuts()
 })
 

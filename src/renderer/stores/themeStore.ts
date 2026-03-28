@@ -90,7 +90,7 @@ function loadTheme(): { presetId: string; customAccent: string | null } {
   return { presetId: 'default', customAccent: null }
 }
 
-function applyToDOM(accent: string): void {
+export function applyAccentToDOM(accent: string): void {
   const rgb = hexToRgb(accent)
   const root = document.documentElement
   root.style.setProperty('--accent', accent)
@@ -104,7 +104,7 @@ const initialPreset = PRESETS[stored.presetId] ?? PRESETS.default
 const initialAccent = stored.customAccent ?? initialPreset.accent
 
 // Apply immediately on load
-applyToDOM(initialAccent)
+applyAccentToDOM(initialAccent)
 
 export const useThemeStore = create<ThemeState>((set) => ({
   presetId: stored.presetId,
@@ -113,7 +113,7 @@ export const useThemeStore = create<ThemeState>((set) => ({
 
   setPreset: (id: string) => {
     const preset = PRESETS[id] ?? PRESETS.default
-    applyToDOM(preset.accent)
+    applyAccentToDOM(preset.accent)
     const state = { presetId: id, customAccent: null, accent: preset.accent }
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ presetId: id, customAccent: null }))
     set(state)
@@ -123,7 +123,7 @@ export const useThemeStore = create<ThemeState>((set) => ({
     set((prev) => {
       const preset = PRESETS[prev.presetId] ?? PRESETS.default
       const accent = hex ?? preset.accent
-      applyToDOM(accent)
+      applyAccentToDOM(accent)
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ presetId: prev.presetId, customAccent: hex }))
       return { ...prev, customAccent: hex, accent }
     })

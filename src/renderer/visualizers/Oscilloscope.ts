@@ -5,6 +5,11 @@ import {
   isNativeAvailable
 } from '../audio/native'
 import { getNormalizedOscilloscopeDisplaySamples } from '../audio/native/oscilloscopeDisplaySamples'
+import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
+
+export interface OscilloscopeDataSource extends VisualizerSessionSource {
+  getPendingOscilloscopeSamples: () => Float32Array[]
+}
 
 export interface OscilloscopeOptions {
   lineColor?: string
@@ -14,9 +19,12 @@ export interface OscilloscopeOptions {
   gridColor?: string
   pitchLock?: boolean
   underfillEnabled?: boolean
+  dataSource?: OscilloscopeDataSource
 }
 
-const defaultOptions: Required<OscilloscopeOptions> = {
+type ResolvedOscilloscopeOptions = Required<Omit<OscilloscopeOptions, 'dataSource'>>
+
+const defaultOptions: ResolvedOscilloscopeOptions = {
   lineColor: '#00ffff',
   lineWidth: 2,
   backgroundColor: 'transparent',
@@ -24,6 +32,11 @@ const defaultOptions: Required<OscilloscopeOptions> = {
   gridColor: 'rgba(255, 255, 255, 0.1)',
   pitchLock: true,
   underfillEnabled: false
+}
+
+const defaultOscilloscopeDataSource: OscilloscopeDataSource = {
+  getPendingOscilloscopeSamples: () => audioRouter.flushPendingOscilloscopeSamples(),
+  ...defaultVisualizerSessionSource,
 }
 
 function parseRgbChannels(color: string): string | null {
@@ -90,7 +103,8 @@ function highContrastUnderfillColor(accentColor: string, alpha: number): string 
 export class Oscilloscope {
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
-  private options: Required<OscilloscopeOptions>
+  private options: ResolvedOscilloscopeOptions
+  private dataSource: OscilloscopeDataSource
   private animationId: number | null = null
   private isRunning: boolean = false
   private nativeInitialized: boolean = false
@@ -104,11 +118,13 @@ export class Oscilloscope {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
-    this.options = { ...defaultOptions, ...options }
+    const { dataSource, ...optionOverrides } = options
+    this.options = { ...defaultOptions, ...optionOverrides }
+    this.dataSource = dataSource ?? defaultOscilloscopeDataSource
 
     // Initialize native module
     this.initNative()
-    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+    this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
       this.reset()
     })
   }
@@ -118,7 +134,7 @@ export class Oscilloscope {
       // Initialize with current sample rate, but set lastSampleRate to 0 so
       // updateSampleRateIfNeeded() always fires once the real capture rate is known.
       // This prevents stale-rate issues when capture starts after initialization.
-      const sampleRate = audioRouter.getSampleRate()
+      const sampleRate = this.dataSource.getSampleRate()
       this.lastSampleRate = 0
       nativeOscilloscope.setSampleRate(sampleRate)
       nativeOscilloscope.setPitchLock(this.options.pitchLock)
@@ -133,7 +149,7 @@ export class Oscilloscope {
   // Update sample rate if AudioContext changes (called from draw loop)
   private updateSampleRateIfNeeded(): void {
     if (!isNativeAvailable()) return
-    const currentRate = audioRouter.getSampleRate()
+    const currentRate = this.dataSource.getSampleRate()
     if (currentRate !== this.lastSampleRate && currentRate > 0) {
       this.lastSampleRate = currentRate
       nativeOscilloscope.setSampleRate(currentRate)
@@ -143,7 +159,11 @@ export class Oscilloscope {
   }
 
   setOptions(options: Partial<OscilloscopeOptions>): void {
-    this.options = { ...this.options, ...options }
+    const { dataSource, ...optionUpdates } = options
+    this.options = { ...this.options, ...optionUpdates }
+    if (dataSource) {
+      this.dataSource = dataSource
+    }
 
     // Update native module settings
     if (isNativeAvailable() && options.pitchLock !== undefined) {
@@ -196,13 +216,13 @@ export class Oscilloscope {
     // Check if sample rate needs updating (AudioContext may have initialized after us)
     this.updateSampleRateIfNeeded()
 
-    if (!audioRouter.isCapturing()) {
+    if (!this.dataSource.isPlaying()) {
       this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
     // Flush ALL pending samples to native C++ (prevents sample loss)
-    const pendingSamples = audioRouter.flushPendingOscilloscopeSamples()
+    const pendingSamples = this.dataSource.getPendingOscilloscopeSamples()
     for (const chunk of pendingSamples) {
       nativeOscilloscope.pushSamples(chunk)
       this.samplesReceived += chunk.length

@@ -1,4 +1,5 @@
 import { audioRouter } from '../audio/AudioRouter'
+import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import {
   DEFAULT_SPECTROGRAM_CLARITY_MODE,
   DEFAULT_SPECTROGRAM_SCALE_MODE,
@@ -10,10 +11,8 @@ import {
   type SpectrogramScaleMode,
 } from '../../types/spectrogram'
 
-export interface SpectrogramDataSource {
+export interface SpectrogramDataSource extends VisualizerSessionSource {
   getPendingSpectrogramSamples: () => Float32Array[]
-  getSampleRate: () => number
-  isPlaying: () => boolean
 }
 
 export interface SpectrogramOptions {
@@ -53,8 +52,7 @@ const defaultOptions: ResolvedSpectrogramOptions = {
 
 const defaultSpectrogramDataSource: SpectrogramDataSource = {
   getPendingSpectrogramSamples: () => audioRouter.flushPendingSpectrogramSamples(),
-  getSampleRate: () => audioRouter.getSampleRate(),
-  isPlaying: () => audioRouter.isCapturing(),
+  ...defaultVisualizerSessionSource,
 }
 
 function getClarityProfile(mode: SpectrogramClarityMode): SpectrogramClarityProfile {

@@ -1,4 +1,5 @@
 import { audioRouter } from '../audio/AudioRouter'
+import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import {
   DEFAULT_WAVEFORM_GAIN_DB,
   DEFAULT_WAVEFORM_SCROLL_SPEED,
@@ -7,10 +8,8 @@ import {
 } from '../../types/waveform'
 import { MultibandSplitter } from './multibandSplitter'
 
-export interface WaveformDataSource {
+export interface WaveformDataSource extends VisualizerSessionSource {
   getPendingWaveformSamples: () => Float32Array[]
-  getSampleRate: () => number
-  isPlaying: () => boolean
 }
 
 export interface WaveformOptions {
@@ -42,8 +41,7 @@ const MULTIBAND_EDGE_ALPHA = 1.0
 
 const defaultWaveformDataSource: WaveformDataSource = {
   getPendingWaveformSamples: () => audioRouter.flushPendingWaveformSamples(),
-  getSampleRate: () => audioRouter.getSampleRate(),
-  isPlaying: () => audioRouter.isCapturing(),
+  ...defaultVisualizerSessionSource,
 }
 
 // Calibrate 1.0x to the prior 8s window at roughly 512px wide,

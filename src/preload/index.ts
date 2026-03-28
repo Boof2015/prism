@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
+import type {
+  ScopePopoutAudioBatch,
+  ScopePopoutSessionState,
+  ScopePopoutSnapshot,
+  ScopePopoutSyncStateMap,
+  WindowBounds,
+} from '../types/popout'
+import type { ProfileMenuRequest } from '../types/profileMenu'
+import type { ScopeKind } from '../types/scope'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
@@ -12,8 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   close: () => ipcRenderer.send('window:close'),
   startWindowMove: () => ipcRenderer.send('window:start-move'),
   stopWindowMove: () => ipcRenderer.send('window:stop-move'),
-  setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => ipcRenderer.send('window:set-bounds', bounds),
-  getWindowBounds: () => ipcRenderer.invoke('window:get-bounds') as Promise<{ x: number; y: number; width: number; height: number } | null>,
+  setWindowBounds: (bounds: WindowBounds) => ipcRenderer.send('window:set-bounds', bounds),
+  getWindowBounds: () => ipcRenderer.invoke('window:get-bounds') as Promise<WindowBounds | null>,
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
@@ -28,6 +37,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),
+  openProfileMenu: (request: ProfileMenuRequest) => ipcRenderer.send('profile-menu:open', request),
+  syncScopePopouts: (state: ScopePopoutSyncStateMap) => ipcRenderer.send('scope-popout:sync', state),
+  sendScopePopoutSnapshot: (snapshot: ScopePopoutSnapshot) => ipcRenderer.send('scope-popout:snapshot', snapshot),
+  sendScopePopoutAudio: (kind: ScopeKind, batch: ScopePopoutAudioBatch) => ipcRenderer.send('scope-popout:audio', kind, batch),
+  sendScopePopoutSession: (kind: ScopeKind, session: ScopePopoutSessionState) => ipcRenderer.send('scope-popout:session', kind, session),
+  notifyScopePopoutReady: (kind: ScopeKind) => ipcRenderer.send('scope-popout:ready', kind),
+  requestScopePopIn: (kind: ScopeKind) => ipcRenderer.send('scope-popout:request-pop-in', kind),
+  sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => ipcRenderer.send('scope-popout:settings-update', kind, partial),
   onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, isOnTop: boolean): void => callback(isOnTop)
     ipcRenderer.on('window:always-on-top-changed', handler)
@@ -47,6 +64,71 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (): void => callback()
     ipcRenderer.on('shortcut:toggle-settings', handler)
     return () => ipcRenderer.removeListener('shortcut:toggle-settings', handler)
+  },
+  onProfileMenuClosed: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('profile-menu:closed', handler)
+    return () => ipcRenderer.removeListener('profile-menu:closed', handler)
+  },
+  onProfileMenuLoad: (callback: (id: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: string): void => callback(id)
+    ipcRenderer.on('profile-menu:load', handler)
+    return () => ipcRenderer.removeListener('profile-menu:load', handler)
+  },
+  onProfileMenuSaveNew: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('profile-menu:save-new', handler)
+    return () => ipcRenderer.removeListener('profile-menu:save-new', handler)
+  },
+  onProfileMenuSaveOverwrite: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('profile-menu:save-overwrite', handler)
+    return () => ipcRenderer.removeListener('profile-menu:save-overwrite', handler)
+  },
+  onProfileMenuRenameActive: (callback: (id: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: string): void => callback(id)
+    ipcRenderer.on('profile-menu:rename-active', handler)
+    return () => ipcRenderer.removeListener('profile-menu:rename-active', handler)
+  },
+  onProfileMenuDeleteActive: (callback: (id: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: string): void => callback(id)
+    ipcRenderer.on('profile-menu:delete-active', handler)
+    return () => ipcRenderer.removeListener('profile-menu:delete-active', handler)
+  },
+  onScopePopoutReady: (callback: (kind: ScopeKind) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind): void => callback(kind)
+    ipcRenderer.on('scope-popout:ready', handler)
+    return () => ipcRenderer.removeListener('scope-popout:ready', handler)
+  },
+  onScopePopoutCloseRequested: (callback: (kind: ScopeKind) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind): void => callback(kind)
+    ipcRenderer.on('scope-popout:close-requested', handler)
+    return () => ipcRenderer.removeListener('scope-popout:close-requested', handler)
+  },
+  onScopePopoutBoundsChanged: (callback: (kind: ScopeKind, bounds: WindowBounds) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind, bounds: WindowBounds): void => callback(kind, bounds)
+    ipcRenderer.on('scope-popout:bounds-changed', handler)
+    return () => ipcRenderer.removeListener('scope-popout:bounds-changed', handler)
+  },
+  onScopePopoutSettingsUpdate: (callback: (kind: ScopeKind, partial: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind, partial: unknown): void => callback(kind, partial)
+    ipcRenderer.on('scope-popout:settings-update', handler)
+    return () => ipcRenderer.removeListener('scope-popout:settings-update', handler)
+  },
+  onScopePopoutSnapshot: (callback: (snapshot: ScopePopoutSnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: ScopePopoutSnapshot): void => callback(snapshot)
+    ipcRenderer.on('scope-popout:snapshot', handler)
+    return () => ipcRenderer.removeListener('scope-popout:snapshot', handler)
+  },
+  onScopePopoutAudio: (callback: (kind: ScopeKind, batch: ScopePopoutAudioBatch) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind, batch: ScopePopoutAudioBatch): void => callback(kind, batch)
+    ipcRenderer.on('scope-popout:audio', handler)
+    return () => ipcRenderer.removeListener('scope-popout:audio', handler)
+  },
+  onScopePopoutSession: (callback: (kind: ScopeKind, session: ScopePopoutSessionState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind, session: ScopePopoutSessionState): void => callback(kind, session)
+    ipcRenderer.on('scope-popout:session', handler)
+    return () => ipcRenderer.removeListener('scope-popout:session', handler)
   },
 })
 

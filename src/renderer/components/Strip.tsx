@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
-import type { ScopeKind } from '../../types/scope'
+import { SCOPE_LABELS, type ScopeKind } from '../../types/scope'
+import type { WindowBounds } from '../../types/popout'
 import ScopeModule from './ScopeModule'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
 import { audioRouter } from '../audio/AudioRouter'
@@ -9,44 +10,46 @@ import { audioRouter } from '../audio/AudioRouter'
 export default function Strip(): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
+  const scopePopouts = useSettingsStore((s) => s.scopePopouts)
   const widthWeights = useSettingsStore((s) => s.widthWeights)
   const setScopeWidthWeight = useSettingsStore((s) => s.setScopeWidthWeight)
+  const popOutScope = useSettingsStore((s) => s.popOutScope)
   const accent = useThemeStore((s) => s.accent)
   const stripRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const scopeRefs = useRef<Partial<Record<ScopeKind, HTMLDivElement | null>>>({})
   const [handleOffsets, setHandleOffsets] = useState<number[]>([])
-  const visibleScopes = useMemo(
-    () => scopeOrder.filter((k) => !hiddenScopes.has(k)),
-    [hiddenScopes, scopeOrder],
+  const dockedScopes = useMemo(
+    () => scopeOrder.filter((k) => !hiddenScopes.has(k) && !scopePopouts[k]?.poppedOut),
+    [hiddenScopes, scopeOrder, scopePopouts],
   )
-  const visibleScopeKey = useMemo(() => visibleScopes.join('|'), [visibleScopes])
+  const visibleScopeKey = useMemo(() => dockedScopes.join('|'), [dockedScopes])
   const gridTemplateColumns = useMemo(() => {
-    return buildAnalyzerGridTemplateColumns(visibleScopes, widthWeights)
-  }, [visibleScopes, widthWeights])
+    return buildAnalyzerGridTemplateColumns(dockedScopes, widthWeights)
+  }, [dockedScopes, widthWeights])
   const gridStyle = useMemo(() => {
     if (!gridTemplateColumns) return undefined
     return { gridTemplateColumns } as CSSProperties
   }, [gridTemplateColumns])
 
   const updateHandleOffsets = useCallback((): void => {
-    if (visibleScopes.length < 2) {
+    if (dockedScopes.length < 2) {
       setHandleOffsets([])
       return
     }
 
     const nextOffsets: number[] = []
-    for (let index = 0; index < visibleScopes.length - 1; index += 1) {
-      const leftElement = scopeRefs.current[visibleScopes[index]]
+    for (let index = 0; index < dockedScopes.length - 1; index += 1) {
+      const leftElement = scopeRefs.current[dockedScopes[index]]
       if (!leftElement) continue
       nextOffsets.push(leftElement.offsetLeft + leftElement.offsetWidth)
     }
 
     setHandleOffsets(nextOffsets)
-  }, [visibleScopes])
+  }, [dockedScopes])
 
   useEffect(() => {
-    const visibleScopeSet = new Set(visibleScopes)
+    const visibleScopeSet = new Set(dockedScopes)
     audioRouter.setVisualizerConsumerDemand('docked-strip', {
       spectrum: visibleScopeSet.has('spectrum'),
       oscilloscope: visibleScopeSet.has('oscilloscope'),
@@ -60,7 +63,7 @@ export default function Strip(): JSX.Element {
     return () => {
       audioRouter.clearVisualizerConsumerDemand('docked-strip')
     }
-  }, [visibleScopeKey, visibleScopes])
+  }, [visibleScopeKey, dockedScopes])
 
   useEffect(() => {
     const strip = stripRef.current
@@ -97,7 +100,7 @@ export default function Strip(): JSX.Element {
       observer?.observe(gridRef.current)
     }
 
-    for (const scope of visibleScopes) {
+    for (const scope of dockedScopes) {
       const element = scopeRefs.current[scope]
       if (element) {
         observer?.observe(element)
@@ -110,11 +113,11 @@ export default function Strip(): JSX.Element {
       observer?.disconnect()
       window.removeEventListener('resize', updateHandleOffsets)
     }
-  }, [gridTemplateColumns, updateHandleOffsets, visibleScopes])
+  }, [dockedScopes, gridTemplateColumns, updateHandleOffsets])
 
   const startResizeDrag = useCallback((handleIndex: number, event: React.MouseEvent<HTMLButtonElement>) => {
-    const leftKind = visibleScopes[handleIndex]
-    const rightKind = visibleScopes[handleIndex + 1]
+    const leftKind = dockedScopes[handleIndex]
+    const rightKind = dockedScopes[handleIndex + 1]
     if (!leftKind || !rightKind) return
 
     const leftElement = scopeRefs.current[leftKind]
@@ -164,12 +167,30 @@ export default function Strip(): JSX.Element {
     document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [setScopeWidthWeight, visibleScopes])
+  }, [dockedScopes, setScopeWidthWeight])
+
+  const handlePopoutScope = useCallback(async (kind: ScopeKind): Promise<void> => {
+    const element = scopeRefs.current[kind]
+    const rect = element?.getBoundingClientRect()
+    const windowBounds = await window.electronAPI.getWindowBounds()
+
+    let nextBounds: WindowBounds | undefined
+    if (rect && windowBounds) {
+      nextBounds = {
+        x: Math.round(windowBounds.x + rect.left),
+        y: Math.round(windowBounds.y + rect.top),
+        width: Math.max(220, Math.round(rect.width)),
+        height: Math.max(160, Math.round(rect.height)),
+      }
+    }
+
+    popOutScope(kind, nextBounds)
+  }, [popOutScope])
 
   return (
     <div ref={stripRef} className="scope-strip">
       <div ref={gridRef} className="scope-strip__grid" style={gridStyle}>
-        {visibleScopes.map((kind) => (
+        {dockedScopes.map((kind) => (
           <div
             key={kind}
             ref={(element) => {
@@ -177,6 +198,19 @@ export default function Strip(): JSX.Element {
             }}
             className="scope-strip__cell"
           >
+            <button
+              type="button"
+              className="scope-strip__popout-button"
+              onClick={() => {
+                void handlePopoutScope(kind)
+              }}
+              aria-label={`Pop out ${SCOPE_LABELS[kind]}`}
+              title={`Pop out ${SCOPE_LABELS[kind]}`}
+            >
+              <span className="scope-strip__popout-icon" aria-hidden="true">
+                &#8599;
+              </span>
+            </button>
             <ScopeModule
               scopeKind={kind}
               lineColor={accent}
@@ -185,14 +219,14 @@ export default function Strip(): JSX.Element {
         ))}
       </div>
 
-      {visibleScopes.length > 1 && handleOffsets.map((offset, index) => (
+      {dockedScopes.length > 1 && handleOffsets.map((offset, index) => (
         <button
-          key={`${visibleScopes[index]}:${visibleScopes[index + 1]}`}
+          key={`${dockedScopes[index]}:${dockedScopes[index + 1]}`}
           type="button"
           className="scope-strip__resize-handle"
           style={{ left: `${offset}px` }}
           onMouseDown={(event) => startResizeDrag(index, event)}
-          aria-label={`Resize between ${visibleScopes[index]} and ${visibleScopes[index + 1]}`}
+          aria-label={`Resize between ${dockedScopes[index]} and ${dockedScopes[index + 1]}`}
         >
           <span className="scope-strip__resize-handle-grip" aria-hidden="true" />
         </button>

@@ -2,8 +2,13 @@ import { audioRouter } from '../audio/AudioRouter'
 import { vectorscope as nativeVectorscope, isNativeAvailable } from '../audio/native'
 import { transformPoint, drawVectorscopeGridForMode, getVectorscopeLayout } from './vectorscopeGrids'
 import { MultibandSplitter, MultibandBuffer, BAND_COLORS } from './multibandSplitter'
+import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 
 export type VectorscopeMode = 'lissajous' | 'polar-unipolar' | 'polar-bipolar' | 'linear-unipolar' | 'linear-bipolar'
+
+export interface VectorscopeDataSource extends VisualizerSessionSource {
+  getPendingVectorscopeSamples: () => Array<{ left: Float32Array; right: Float32Array }>
+}
 
 export interface VectorscopeOptions {
   lineColor?: string
@@ -15,9 +20,12 @@ export interface VectorscopeOptions {
   displayPoints?: number  // how many points to request from native, default 4096
   mode?: VectorscopeMode
   multiband?: boolean
+  dataSource?: VectorscopeDataSource
 }
 
-const defaultOptions: Required<VectorscopeOptions> = {
+type ResolvedVectorscopeOptions = Required<Omit<VectorscopeOptions, 'dataSource'>>
+
+const defaultOptions: ResolvedVectorscopeOptions = {
   lineColor: '#00ffff',
   lineWidth: 1.5,
   backgroundColor: 'transparent',
@@ -29,6 +37,11 @@ const defaultOptions: Required<VectorscopeOptions> = {
   multiband: false,
 }
 
+const defaultVectorscopeDataSource: VectorscopeDataSource = {
+  getPendingVectorscopeSamples: () => audioRouter.flushPendingVectorscopeSamples(),
+  ...defaultVisualizerSessionSource,
+}
+
 const BAND_ORDER = ['low', 'mid', 'high'] as const
 
 export class Vectorscope {
@@ -36,7 +49,8 @@ export class Vectorscope {
   private ctx: CanvasRenderingContext2D
   private offscreenCanvas: HTMLCanvasElement
   private offscreenCtx: CanvasRenderingContext2D
-  private options: Required<VectorscopeOptions>
+  private options: ResolvedVectorscopeOptions
+  private dataSource: VectorscopeDataSource
   private animationId: number | null = null
   private isRunning: boolean = false
   private nativeInitialized: boolean = false
@@ -50,7 +64,9 @@ export class Vectorscope {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
-    this.options = { ...defaultOptions, ...options }
+    const { dataSource, ...optionOverrides } = options
+    this.options = { ...defaultOptions, ...optionOverrides }
+    this.dataSource = dataSource ?? defaultVectorscopeDataSource
 
     // Create offscreen canvas for persistence/fade
     this.offscreenCanvas = document.createElement('canvas')
@@ -62,14 +78,14 @@ export class Vectorscope {
 
     // Initialize native module if available
     this.initNative()
-    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+    this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
       this.resetDisplay()
     })
   }
 
   private initNative(): void {
     if (isNativeAvailable() && !this.nativeInitialized) {
-      const sampleRate = audioRouter.getSampleRate()
+      const sampleRate = this.dataSource.getSampleRate()
       this.lastSampleRate = sampleRate
       nativeVectorscope.setSampleRate(sampleRate)
       this.nativeInitialized = true
@@ -80,7 +96,7 @@ export class Vectorscope {
   }
 
   private updateSampleRateIfNeeded(): void {
-    const currentRate = audioRouter.getSampleRate()
+    const currentRate = this.dataSource.getSampleRate()
     if (currentRate !== this.lastSampleRate && currentRate > 0) {
       this.lastSampleRate = currentRate
       if (isNativeAvailable()) {
@@ -101,7 +117,11 @@ export class Vectorscope {
   }
 
   setOptions(options: Partial<VectorscopeOptions>): void {
-    this.options = { ...this.options, ...options }
+    const { dataSource, ...optionUpdates } = options
+    this.options = { ...this.options, ...optionUpdates }
+    if (dataSource) {
+      this.dataSource = dataSource
+    }
   }
 
   start(): void {
@@ -144,7 +164,7 @@ export class Vectorscope {
     // Update sample rate if changed
     this.updateSampleRateIfNeeded()
 
-    if (!audioRouter.isCapturing()) {
+    if (!this.dataSource.isPlaying()) {
       ctx.clearRect(0, 0, width, height)
       if (options.backgroundColor !== 'transparent') {
         ctx.fillStyle = options.backgroundColor
@@ -165,7 +185,7 @@ export class Vectorscope {
     offscreenCtx.globalCompositeOperation = 'source-over'
 
     // ---- FLUSH SAMPLES ----
-    const pendingSamples = audioRouter.flushPendingVectorscopeSamples()
+    const pendingSamples = this.dataSource.getPendingVectorscopeSamples()
 
     if (options.multiband) {
       // Multiband path: split into 3 bands, render each with its own color
@@ -293,7 +313,7 @@ export class Vectorscope {
     const dotSize = options.lineWidth * dpr
 
     // Ensure splitter is configured
-    const sampleRate = audioRouter.getSampleRate()
+    const sampleRate = this.dataSource.getSampleRate()
     if (sampleRate > 0) {
       this.splitter.configure(sampleRate)
     }

@@ -1,10 +1,9 @@
 import { audioRouter } from '../audio/AudioRouter'
 import type { LUFSMeterMode } from '../../types/lufsmeter'
+import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 
-export interface LUFSMeterDataSource {
+export interface LUFSMeterDataSource extends VisualizerSessionSource {
   getPendingLUFSMeterSamples: () => Array<{ left: Float32Array; right: Float32Array }>
-  getSampleRate: () => number
-  isPlaying: () => boolean
 }
 
 export interface LUFSMeterOptions {
@@ -22,8 +21,7 @@ const defaultOptions: ResolvedLUFSMeterOptions = {
 
 const defaultLUFSMeterDataSource: LUFSMeterDataSource = {
   getPendingLUFSMeterSamples: () => audioRouter.flushPendingLUFSMeterSamples(),
-  getSampleRate: () => audioRouter.getSampleRate(),
-  isPlaying: () => audioRouter.isCapturing(),
+  ...defaultVisualizerSessionSource,
 }
 
 // ---- Constants ----

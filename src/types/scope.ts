@@ -9,3 +9,13 @@ export const SCOPE_KINDS: ScopeKind[] = [
   'lufsmeter',
   'waveform',
 ]
+
+export const SCOPE_LABELS: Record<ScopeKind, string> = {
+  spectrum: 'Spectrum',
+  oscilloscope: 'Oscilloscope',
+  vectorscope: 'Vectorscope',
+  spectrogram: 'Spectrogram',
+  vumeter: 'VU Meter',
+  lufsmeter: 'LUFS Meter',
+  waveform: 'Waveform',
+}

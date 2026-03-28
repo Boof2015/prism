@@ -1,64 +1,9 @@
 import { create } from 'zustand'
 import { SCOPE_KINDS, type ScopeKind } from '../../types/scope'
-import type { VectorscopeMode } from '../visualizers/Vectorscope'
-import type { SpectrogramClarityMode, SpectrogramScaleMode } from '../../types/spectrogram'
-import type { VUMeterMode, VUMeterOrientation } from '../../types/vumeter'
-import type { LUFSMeterMode } from '../../types/lufsmeter'
+import type { ScopePopoutStateMap, WindowBounds } from '../../types/popout'
+import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings'
 
-// Per-scope settings (mirrors Astra's AnalyzerProfileScopeSettings)
-export interface ScopeSettings {
-  spectrum: {
-    fftSize: number
-    tiltDbPerOctave: number
-    heatmap: boolean
-    heatmapTiltDbPerOctave: number
-    showGrid: boolean
-    smoothing: number
-    fillGradient: boolean
-  }
-  oscilloscope: {
-    pitchLock: boolean
-    underfillEnabled: boolean
-    showGrid: boolean
-    lineWidth: number
-  }
-  vectorscope: {
-    mode: VectorscopeMode
-    multiband: boolean
-    showGrid: boolean
-    persistence: number
-    lineWidth: number
-  }
-  spectrogram: {
-    fftSize: number
-    scrollSpeed: number
-    clarityMode: SpectrogramClarityMode
-    scaleMode: SpectrogramScaleMode
-    colorScheme: 'heat' | 'mono'
-  }
-  vumeter: {
-    mode: VUMeterMode
-    orientation: VUMeterOrientation
-  }
-  lufsmeter: {
-    mode: LUFSMeterMode
-  }
-  waveform: {
-    scrollSpeed: number
-    gainDb: number
-    multiband: boolean
-  }
-}
-
-const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
-  spectrum: { fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, showGrid: true, smoothing: 0.9, fillGradient: true },
-  oscilloscope: { pitchLock: true, underfillEnabled: false, showGrid: true, lineWidth: 2 },
-  vectorscope: { mode: 'lissajous', multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
-  spectrogram: { fftSize: 2048, scrollSpeed: 2, clarityMode: 'sharper', scaleMode: 'log', colorScheme: 'heat' },
-  vumeter: { mode: 'bar', orientation: 'horizontal' },
-  lufsmeter: { mode: 'bar' },
-  waveform: { scrollSpeed: 1, gainDb: 0, multiband: false },
-}
+export type { ScopeSettings } from '../../types/settings'
 
 const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 
@@ -73,7 +18,8 @@ export interface Profile {
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
-  windowBounds?: { x: number; y: number; width: number; height: number }
+  scopePopouts: ScopePopoutStateMap
+  windowBounds?: WindowBounds
 }
 
 function loadProfiles(): Record<string, Profile> {
@@ -111,6 +57,7 @@ interface SettingsState {
   hiddenScopes: Set<ScopeKind>
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
+  scopePopouts: ScopePopoutStateMap
 
   // Derived
   visibleScopes: () => ScopeKind[]
@@ -124,6 +71,9 @@ interface SettingsState {
   moveScope: (kind: ScopeKind, direction: 'left' | 'right') => void
   setScopeWidthWeight: (kind: ScopeKind, weight: number) => void
   updateScopeSettings: <K extends ScopeKind>(kind: K, settings: Partial<ScopeSettings[K]>) => void
+  popOutScope: (kind: ScopeKind, bounds?: WindowBounds) => void
+  popInScope: (kind: ScopeKind) => void
+  updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => void
   saveProfile: (name: string) => string
   saveProfileAs: (name: string) => string
   updateActiveProfile: () => void
@@ -132,7 +82,13 @@ interface SettingsState {
   renameProfile: (id: string, name: string) => void
 }
 
-function loadFromStorage(): Partial<{ scopeOrder: ScopeKind[]; hiddenScopes: ScopeKind[]; widthWeights: Record<ScopeKind, number>; scopeSettings: ScopeSettings }> {
+function loadFromStorage(): Partial<{
+  scopeOrder: ScopeKind[]
+  hiddenScopes: ScopeKind[]
+  widthWeights: Record<ScopeKind, number>
+  scopeSettings: ScopeSettings
+  scopePopouts: ScopePopoutStateMap
+}> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) return JSON.parse(raw)
@@ -147,6 +103,7 @@ function saveToStorage(state: SettingsState): void {
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: state.widthWeights,
       scopeSettings: state.scopeSettings,
+      scopePopouts: state.scopePopouts,
     }))
   } catch { /* ignore */ }
 }
@@ -199,6 +156,53 @@ function mergeScopeSettings(raw: unknown): ScopeSettings {
   }
 }
 
+function createDefaultScopePopouts(): ScopePopoutStateMap {
+  return SCOPE_KINDS.reduce((acc, kind) => {
+    acc[kind] = { poppedOut: false }
+    return acc
+  }, {} as ScopePopoutStateMap)
+}
+
+function normalizeWindowBounds(raw: unknown): WindowBounds | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const candidate = raw as Partial<WindowBounds>
+  if (
+    typeof candidate.x !== 'number'
+    || typeof candidate.y !== 'number'
+    || typeof candidate.width !== 'number'
+    || typeof candidate.height !== 'number'
+  ) {
+    return undefined
+  }
+  return {
+    x: Math.round(candidate.x),
+    y: Math.round(candidate.y),
+    width: Math.max(120, Math.round(candidate.width)),
+    height: Math.max(80, Math.round(candidate.height)),
+  }
+}
+
+function normalizeScopePopouts(raw: unknown): ScopePopoutStateMap {
+  const defaults = createDefaultScopePopouts()
+  const parsed = typeof raw === 'object' && raw !== null
+    ? raw as Partial<Record<ScopeKind, Partial<ScopePopoutStateMap[ScopeKind]>>>
+    : {}
+
+  for (const kind of SCOPE_KINDS) {
+    const value = parsed[kind]
+    defaults[kind] = {
+      poppedOut: Boolean(value?.poppedOut),
+      windowBounds: normalizeWindowBounds(value?.windowBounds),
+    }
+  }
+
+  return defaults
+}
+
+function cloneScopeSettings(settings: ScopeSettings): ScopeSettings {
+  return JSON.parse(JSON.stringify(settings)) as ScopeSettings
+}
+
 const stored = loadFromStorage()
 
 const defaultWeights: Record<ScopeKind, number> = {
@@ -214,7 +218,8 @@ function ensureDefaultProfile(profiles: Record<string, Profile>): Record<string,
     scopeOrder: [...SCOPE_KINDS],
     hiddenScopes: SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind)),
     widthWeights: { ...defaultWeights },
-    scopeSettings: JSON.parse(JSON.stringify(DEFAULT_SCOPE_SETTINGS)),
+    scopeSettings: cloneScopeSettings(DEFAULT_SCOPE_SETTINGS),
+    scopePopouts: createDefaultScopePopouts(),
   }
   const updated = { [DEFAULT_PROFILE_ID]: defaultProfile, ...profiles }
   saveProfiles(updated)
@@ -231,6 +236,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   ),
   widthWeights: stored.widthWeights ?? { ...defaultWeights },
   scopeSettings: mergeScopeSettings(stored.scopeSettings),
+  scopePopouts: normalizeScopePopouts(stored.scopePopouts),
   profiles: initialProfiles,
   activeProfileId: initialActiveProfileId,
 
@@ -292,6 +298,51 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     })
   },
 
+  popOutScope: (kind: ScopeKind, bounds?: WindowBounds) => {
+    set((state) => {
+      const nextPopout = {
+        ...state.scopePopouts,
+        [kind]: {
+          poppedOut: true,
+          windowBounds: bounds ?? state.scopePopouts[kind]?.windowBounds,
+        },
+      }
+      const newState = { ...state, scopePopouts: nextPopout }
+      saveToStorage(newState as SettingsState)
+      return newState
+    })
+  },
+
+  popInScope: (kind: ScopeKind) => {
+    set((state) => {
+      const nextPopout = {
+        ...state.scopePopouts,
+        [kind]: {
+          ...state.scopePopouts[kind],
+          poppedOut: false,
+        },
+      }
+      const newState = { ...state, scopePopouts: nextPopout }
+      saveToStorage(newState as SettingsState)
+      return newState
+    })
+  },
+
+  updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => {
+    set((state) => {
+      const nextPopout = {
+        ...state.scopePopouts,
+        [kind]: {
+          ...state.scopePopouts[kind],
+          windowBounds: normalizeWindowBounds(bounds),
+        },
+      }
+      const newState = { ...state, scopePopouts: nextPopout }
+      saveToStorage(newState as SettingsState)
+      return newState
+    })
+  },
+
   saveProfile: (name: string) => {
     const state = get()
     const id = `profile_${Date.now()}`
@@ -300,7 +351,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       scopeOrder: [...state.scopeOrder],
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: { ...state.widthWeights },
-      scopeSettings: JSON.parse(JSON.stringify(state.scopeSettings)),
+      scopeSettings: cloneScopeSettings(state.scopeSettings),
+      scopePopouts: normalizeScopePopouts(state.scopePopouts),
     }
     // Capture window bounds asynchronously
     window.electronAPI.getWindowBounds().then((bounds) => {
@@ -332,7 +384,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       scopeOrder: [...state.scopeOrder],
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: { ...state.widthWeights },
-      scopeSettings: JSON.parse(JSON.stringify(state.scopeSettings)),
+      scopeSettings: cloneScopeSettings(state.scopeSettings),
+      scopePopouts: normalizeScopePopouts(state.scopePopouts),
     }
     // Capture window bounds asynchronously
     window.electronAPI.getWindowBounds().then((bounds) => {
@@ -358,6 +411,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(profile.hiddenScopes)),
       widthWeights: profile.widthWeights ?? { ...defaultWeights },
       scopeSettings: mergeScopeSettings(profile.scopeSettings),
+      scopePopouts: normalizeScopePopouts(profile.scopePopouts),
       activeProfileId: id,
     }
     saveToStorage(newState as SettingsState)
@@ -403,5 +457,6 @@ if (initialActiveProfileId && initialProfiles[initialActiveProfileId]) {
     hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(profile.hiddenScopes)),
     widthWeights: profile.widthWeights ?? { ...defaultWeights },
     scopeSettings: mergeScopeSettings(profile.scopeSettings),
+    scopePopouts: normalizeScopePopouts(profile.scopePopouts),
   })
 }

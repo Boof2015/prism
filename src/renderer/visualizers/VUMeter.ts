@@ -1,14 +1,13 @@
 import { audioRouter } from '../audio/AudioRouter'
+import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import {
   DEFAULT_VU_METER_ORIENTATION,
   type VUMeterMode,
   type VUMeterOrientation,
 } from '../../types/vumeter'
 
-export interface VUMeterDataSource {
+export interface VUMeterDataSource extends VisualizerSessionSource {
   getPendingVUMeterSamples: () => Array<{ left: Float32Array; right: Float32Array }>
-  getSampleRate: () => number
-  isPlaying: () => boolean
 }
 
 export interface VUMeterOptions {
@@ -28,8 +27,7 @@ const defaultOptions: ResolvedVUMeterOptions = {
 
 const defaultVUMeterDataSource: VUMeterDataSource = {
   getPendingVUMeterSamples: () => audioRouter.flushPendingVUMeterSamples(),
-  getSampleRate: () => audioRouter.getSampleRate(),
-  isPlaying: () => audioRouter.isCapturing(),
+  ...defaultVisualizerSessionSource,
 }
 
 // ---- Meter constants ----
@@ -85,7 +83,7 @@ export class VUMeter {
     const { dataSource, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultVUMeterDataSource
-    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+    this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
       this.resetMeters()
     })
   }

@@ -1,5 +1,6 @@
 import { audioRouter } from '../audio/AudioRouter'
 import { spectrum as nativeSpectrum, isNativeAvailable } from '../audio/native'
+import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import {
   DEFAULT_SPECTRUM_TILT_DB_PER_OCTAVE,
   DEFAULT_SPECTRUM_HEATMAP_TILT_DB_PER_OCTAVE,
@@ -7,10 +8,8 @@ import {
   clampSpectrumHeatmapTiltDbPerOctave,
 } from '../../types/spectrum'
 
-export interface SpectrumAnalyzerDataSource {
+export interface SpectrumAnalyzerDataSource extends VisualizerSessionSource {
   getPendingSpectrumSamples: () => Float32Array[]
-  getSampleRate: () => number
-  isPlaying: () => boolean
 }
 
 export interface SpectrumAnalyzerOptions {
@@ -90,8 +89,7 @@ const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
 
 const defaultSpectrumDataSource: SpectrumAnalyzerDataSource = {
   getPendingSpectrumSamples: () => audioRouter.flushPendingSpectrumSamples(),
-  getSampleRate: () => audioRouter.getSampleRate(),
-  isPlaying: () => audioRouter.isCapturing(),
+  ...defaultVisualizerSessionSource,
 }
 
 export class SpectrumAnalyzer {
@@ -127,7 +125,7 @@ export class SpectrumAnalyzer {
 
     // Initialize native module
     this.initNative()
-    this.unsubscribeSessionChange = audioRouter.subscribeToSessionChanges(() => {
+    this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
       this.resetState()
     })
   }

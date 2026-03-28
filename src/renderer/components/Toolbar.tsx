@@ -68,6 +68,8 @@ interface ToolbarProps {
   settingsOpen: boolean
 }
 
+const DEFAULT_PROFILE_ID = 'profile_default'
+
 export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps): JSX.Element {
   const profiles = useSettingsStore((s) => s.profiles)
   const activeProfileId = useSettingsStore((s) => s.activeProfileId)
@@ -78,11 +80,8 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const updateActiveProfile = useSettingsStore((s) => s.updateActiveProfile)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true)
   const [showReposition, setShowReposition] = useState(false)
-  const [showProfileMenu, setShowProfileMenu] = useState(false)
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-  const profileMenuRef = useRef<HTMLDivElement>(null)
-  const renameInputRef = useRef<HTMLInputElement>(null)
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
+  const profileButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
@@ -90,26 +89,69 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     return unsubscribe
   }, [])
 
-  // Close profile menu on outside click
-  useEffect(() => {
-    if (!showProfileMenu) return
-    const handleClick = (e: MouseEvent): void => {
-      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
-        setShowProfileMenu(false)
-        setRenamingId(null)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [showProfileMenu])
+  const handleSaveNew = useCallback(() => {
+    const count = Object.keys(useSettingsStore.getState().profiles).length
+    saveProfile(`Profile ${count}`)
+    setIsProfileMenuOpen(false)
+  }, [saveProfile])
 
-  // Focus rename input when it appears
-  useEffect(() => {
-    if (renamingId && renameInputRef.current) {
-      renameInputRef.current.focus()
-      renameInputRef.current.select()
+  const handleSaveOverwrite = useCallback(() => {
+    updateActiveProfile()
+    setIsProfileMenuOpen(false)
+  }, [updateActiveProfile])
+
+  const handleRenameActive = useCallback((id: string) => {
+    const profile = useSettingsStore.getState().profiles[id]
+    if (!profile || id === DEFAULT_PROFILE_ID) {
+      setIsProfileMenuOpen(false)
+      return
     }
-  }, [renamingId])
+
+    const nextName = window.prompt('Rename preset', profile.name)?.trim()
+    if (nextName) {
+      renameProfile(id, nextName)
+    }
+    setIsProfileMenuOpen(false)
+  }, [renameProfile])
+
+  const handleDeleteActive = useCallback((id: string) => {
+    const profile = useSettingsStore.getState().profiles[id]
+    if (!profile || id === DEFAULT_PROFILE_ID) {
+      setIsProfileMenuOpen(false)
+      return
+    }
+
+    if (!window.confirm(`Delete "${profile.name}"?`)) {
+      setIsProfileMenuOpen(false)
+      return
+    }
+
+    deleteProfile(id)
+    setIsProfileMenuOpen(false)
+  }, [deleteProfile])
+
+  useEffect(() => {
+    const offClosed = window.electronAPI.onProfileMenuClosed(() => {
+      setIsProfileMenuOpen(false)
+    })
+    const offLoad = window.electronAPI.onProfileMenuLoad((id) => {
+      loadProfile(id)
+      setIsProfileMenuOpen(false)
+    })
+    const offSaveNew = window.electronAPI.onProfileMenuSaveNew(handleSaveNew)
+    const offSaveOverwrite = window.electronAPI.onProfileMenuSaveOverwrite(handleSaveOverwrite)
+    const offRename = window.electronAPI.onProfileMenuRenameActive(handleRenameActive)
+    const offDelete = window.electronAPI.onProfileMenuDeleteActive(handleDeleteActive)
+
+    return () => {
+      offClosed()
+      offLoad()
+      offSaveNew()
+      offSaveOverwrite()
+      offRename()
+      offDelete()
+    }
+  }, [handleDeleteActive, handleRenameActive, handleSaveNew, handleSaveOverwrite, loadProfile])
 
   const handlePin = useCallback(() => {
     window.electronAPI.toggleAlwaysOnTop()
@@ -120,30 +162,24 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     setShowReposition(false)
   }, [])
 
-  const handleSaveNew = useCallback(() => {
-    const count = Object.keys(profiles).length
-    saveProfile(`Profile ${count}`)
-    setShowProfileMenu(false)
-  }, [profiles, saveProfile])
+  const handleOpenProfileMenu = useCallback(() => {
+    const buttonRect = profileButtonRef.current?.getBoundingClientRect()
+    if (!buttonRect) return
 
-  const handleSaveOverwrite = useCallback(() => {
-    updateActiveProfile()
-    setShowProfileMenu(false)
-  }, [updateActiveProfile])
+    setShowReposition(false)
+    setIsProfileMenuOpen(true)
+    window.electronAPI.openProfileMenu({
+      x: Math.round(buttonRect.left),
+      y: Math.round(buttonRect.bottom + 4),
+      activeProfileId,
+      profiles: Object.entries(profiles).map(([id, profile]) => ({
+        id,
+        name: profile.name,
+        isDefault: id === DEFAULT_PROFILE_ID,
+      })),
+    })
+  }, [activeProfileId, profiles])
 
-  const handleStartRename = useCallback((id: string, currentName: string) => {
-    setRenamingId(id)
-    setRenameValue(currentName)
-  }, [])
-
-  const handleFinishRename = useCallback(() => {
-    if (renamingId && renameValue.trim()) {
-      renameProfile(renamingId, renameValue.trim())
-    }
-    setRenamingId(null)
-  }, [renamingId, renameValue, renameProfile])
-
-  const profileIds = Object.keys(profiles)
   const activeProfile = activeProfileId ? profiles[activeProfileId] : null
 
   return (
@@ -164,11 +200,12 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         <span className="toolbar__brand-text">Prism</span>
       </div>
 
-      <div className="toolbar__profile" ref={profileMenuRef}>
+      <div className="toolbar__profile">
         <button
+          ref={profileButtonRef}
           type="button"
-          className={`toolbar__profile-button ${showProfileMenu ? 'is-active' : ''}`.trim()}
-          onClick={() => setShowProfileMenu((prev) => !prev)}
+          className={`toolbar__profile-button ${isProfileMenuOpen ? 'is-active' : ''}`.trim()}
+          onClick={handleOpenProfileMenu}
           title="Presets"
         >
           <span className="toolbar__profile-name">
@@ -176,95 +213,6 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           </span>
           <ChevronIcon />
         </button>
-
-        {showProfileMenu && (
-          <div className="toolbar__profile-menu">
-            <div className="toolbar__profile-menu-section">
-              <div className="toolbar__profile-menu-label">Presets</div>
-              {profileIds.map((id) => {
-                const profile = profiles[id]
-                const isActive = id === activeProfileId
-                const isDefault = id === 'profile_default'
-
-                if (renamingId === id) {
-                  return (
-                    <div key={id} className="toolbar__profile-menu-item">
-                      <input
-                        ref={renameInputRef}
-                        className="toolbar__profile-rename-input"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onBlur={handleFinishRename}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleFinishRename()
-                          if (e.key === 'Escape') setRenamingId(null)
-                        }}
-                      />
-                    </div>
-                  )
-                }
-
-                return (
-                  <div
-                    key={id}
-                    className={`toolbar__profile-menu-item ${isActive ? 'is-active' : ''}`.trim()}
-                  >
-                    <button
-                      type="button"
-                      className="toolbar__profile-menu-item-name"
-                      onClick={() => {
-                        loadProfile(id)
-                        setShowProfileMenu(false)
-                      }}
-                    >
-                      {isActive && <span className="toolbar__profile-check">&#10003;</span>}
-                      {profile.name}
-                    </button>
-                    {!isDefault && (
-                      <div className="toolbar__profile-menu-item-actions">
-                        <button
-                          type="button"
-                          className="toolbar__profile-menu-action"
-                          onClick={() => handleStartRename(id, profile.name)}
-                          title="Rename"
-                        >
-                          &#9998;
-                        </button>
-                        <button
-                          type="button"
-                          className="toolbar__profile-menu-action toolbar__profile-menu-action--danger"
-                          onClick={() => deleteProfile(id)}
-                          title="Delete"
-                        >
-                          &times;
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="toolbar__profile-menu-divider" />
-
-            <button
-              type="button"
-              className="toolbar__profile-menu-action-row"
-              onClick={handleSaveNew}
-            >
-              Save as New Preset
-            </button>
-            {activeProfileId && (
-              <button
-                type="button"
-                className="toolbar__profile-menu-action-row"
-                onClick={handleSaveOverwrite}
-              >
-                Save to "{activeProfile?.name}"
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       <div

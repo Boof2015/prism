@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback, useEffect, type JSX } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, type JSX } from 'react'
 import Strip from './components/Strip'
 import Toolbar from './components/Toolbar'
 import SettingsPanel from './components/SettingsPanel'
 import BottomBar from './components/BottomBar'
+import ScopePopoutBridge from './components/ScopePopoutBridge'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAudioStore } from './stores/audioStore'
 import { SCOPE_KINDS } from '../types/scope'
@@ -14,8 +15,22 @@ export default function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevSettingsOpenRef = useRef(false)
+  const startupBoundsAppliedRef = useRef(false)
 
   const toggleScope = useSettingsStore((s) => s.toggleScope)
+  const profiles = useSettingsStore((s) => s.profiles)
+  const activeProfileId = useSettingsStore((s) => s.activeProfileId)
+
+  useLayoutEffect(() => {
+    if (startupBoundsAppliedRef.current) return
+
+    const profile = activeProfileId ? profiles[activeProfileId] : null
+    startupBoundsAppliedRef.current = true
+
+    if (profile?.windowBounds) {
+      window.electronAPI.setWindowBounds(profile.windowBounds)
+    }
+  }, [activeProfileId, profiles])
 
   // Auto-capture on launch
   useEffect(() => {
@@ -109,6 +124,8 @@ export default function App(): JSX.Element {
       <div className="prism-strip-region">
         <Strip />
       </div>
+
+      <ScopePopoutBridge />
 
       {settingsOpen && (
         <div className="prism-settings-region" style={{ height: SETTINGS_EXPAND_HEIGHT }}>
