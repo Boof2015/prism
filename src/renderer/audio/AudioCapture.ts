@@ -111,6 +111,7 @@ class ElectronCaptureRuntime {
   private audioContext: AudioContext | null = null
   private stream: MediaStream | null = null
   private sourceNode: MediaStreamAudioSourceNode | null = null
+  private gainNode: GainNode | null = null
   private workletNode: AudioWorkletNode | null = null
   private workletLoaded = false
   private chunkListeners = new Set<(chunk: CaptureChunk) => void>()
@@ -119,6 +120,12 @@ class ElectronCaptureRuntime {
   private sequence = 0
   private sampleRate = 48000
   private channelCount = 2
+
+  setInputGain(db: number): void {
+    if (this.gainNode) {
+      this.gainNode.gain.value = Math.pow(10, db / 20)
+    }
+  }
 
   subscribe(listener: (chunk: CaptureChunk) => void): () => void {
     this.chunkListeners.add(listener)
@@ -193,6 +200,11 @@ class ElectronCaptureRuntime {
       this.workletLoaded = true
     }
 
+    if (!this.gainNode) {
+      this.gainNode = this.audioContext.createGain()
+      this.gainNode.gain.value = 1.0
+    }
+
     if (!this.workletNode) {
       this.workletNode = new AudioWorkletNode(this.audioContext, 'capture-processor', {
         numberOfInputs: 1,
@@ -236,7 +248,12 @@ class ElectronCaptureRuntime {
 
     this.stream = stream
     this.sourceNode = this.audioContext.createMediaStreamSource(stream)
-    this.sourceNode.connect(this.workletNode)
+    if (this.gainNode) {
+      this.sourceNode.connect(this.gainNode)
+      this.gainNode.connect(this.workletNode)
+    } else {
+      this.sourceNode.connect(this.workletNode)
+    }
 
     const audioTrack = stream.getAudioTracks()[0] ?? null
     const trackSettings = audioTrack?.getSettings()
@@ -808,6 +825,10 @@ class AudioCapture {
       capturedAt: chunk.capturedAt,
       sequence: chunk.sequence,
     })
+  }
+
+  setInputGain(db: number): void {
+    this.electronRuntime.setInputGain(db)
   }
 
   private emitStatus(): void {

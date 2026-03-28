@@ -1,17 +1,5 @@
-import { useState, useEffect, useCallback, type CSSProperties, type JSX } from 'react'
-import type { ScopeKind } from '../../types/scope'
-import { SCOPE_KINDS } from '../../types/scope'
+import { useState, useEffect, useCallback, useRef, type CSSProperties, type JSX } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
-
-const SCOPE_LABELS: Record<ScopeKind, string> = {
-  spectrum: 'SPEC',
-  oscilloscope: 'OSC',
-  vectorscope: 'VEC',
-  spectrogram: 'GRAM',
-  vumeter: 'VU',
-  lufsmeter: 'LUFS',
-  waveform: 'WAVE',
-}
 
 function SettingsIcon(): JSX.Element {
   return (
@@ -38,15 +26,63 @@ function CloseIcon(): JSX.Element {
   )
 }
 
+function GripIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="5.5" cy="4" r="1.2" fill="currentColor" />
+      <circle cx="10.5" cy="4" r="1.2" fill="currentColor" />
+      <circle cx="5.5" cy="8" r="1.2" fill="currentColor" />
+      <circle cx="10.5" cy="8" r="1.2" fill="currentColor" />
+      <circle cx="5.5" cy="12" r="1.2" fill="currentColor" />
+      <circle cx="10.5" cy="12" r="1.2" fill="currentColor" />
+    </svg>
+  )
+}
+
+function MinimizeIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3.5 8h9" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function RepositionIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4 6l4-3 4 3M4 10l4 3 4-3" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function ChevronIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" style={{ width: 10, height: 10 }}>
+      <path d="M5 6l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 interface ToolbarProps {
   onOpenSettings: () => void
   settingsOpen: boolean
 }
 
 export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps): JSX.Element {
-  const hiddenScopes = useSettingsStore((state) => state.hiddenScopes)
-  const toggleScope = useSettingsStore((state) => state.toggleScope)
+  const profiles = useSettingsStore((s) => s.profiles)
+  const activeProfileId = useSettingsStore((s) => s.activeProfileId)
+  const saveProfile = useSettingsStore((s) => s.saveProfile)
+  const loadProfile = useSettingsStore((s) => s.loadProfile)
+  const deleteProfile = useSettingsStore((s) => s.deleteProfile)
+  const renameProfile = useSettingsStore((s) => s.renameProfile)
+  const updateActiveProfile = useSettingsStore((s) => s.updateActiveProfile)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true)
+  const [showReposition, setShowReposition] = useState(false)
+  const [showProfileMenu, setShowProfileMenu] = useState(false)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const profileMenuRef = useRef<HTMLDivElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
@@ -54,12 +90,72 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     return unsubscribe
   }, [])
 
+  // Close profile menu on outside click
+  useEffect(() => {
+    if (!showProfileMenu) return
+    const handleClick = (e: MouseEvent): void => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setShowProfileMenu(false)
+        setRenamingId(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showProfileMenu])
+
+  // Focus rename input when it appears
+  useEffect(() => {
+    if (renamingId && renameInputRef.current) {
+      renameInputRef.current.focus()
+      renameInputRef.current.select()
+    }
+  }, [renamingId])
+
   const handlePin = useCallback(() => {
     window.electronAPI.toggleAlwaysOnTop()
   }, [])
 
+  const handleReposition = useCallback((position: 'top' | 'bottom') => {
+    window.electronAPI.repositionWindow(position)
+    setShowReposition(false)
+  }, [])
+
+  const handleSaveNew = useCallback(() => {
+    const count = Object.keys(profiles).length
+    saveProfile(`Profile ${count}`)
+    setShowProfileMenu(false)
+  }, [profiles, saveProfile])
+
+  const handleSaveOverwrite = useCallback(() => {
+    updateActiveProfile()
+    setShowProfileMenu(false)
+  }, [updateActiveProfile])
+
+  const handleStartRename = useCallback((id: string, currentName: string) => {
+    setRenamingId(id)
+    setRenameValue(currentName)
+  }, [])
+
+  const handleFinishRename = useCallback(() => {
+    if (renamingId && renameValue.trim()) {
+      renameProfile(renamingId, renameValue.trim())
+    }
+    setRenamingId(null)
+  }, [renamingId, renameValue, renameProfile])
+
+  const profileIds = Object.keys(profiles)
+  const activeProfile = activeProfileId ? profiles[activeProfileId] : null
+
   return (
     <div className="toolbar">
+      <div
+        className="toolbar__grab"
+        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+        title="Drag to move window"
+      >
+        <GripIcon />
+      </div>
+
       <div
         className="toolbar__brand"
         style={{ WebkitAppRegion: 'drag' } as CSSProperties}
@@ -68,23 +164,145 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         <span className="toolbar__brand-text">Prism</span>
       </div>
 
-      <div className="toolbar__chips">
-        {SCOPE_KINDS.map((kind) => {
-          const active = !hiddenScopes.has(kind)
-          return (
+      <div className="toolbar__profile" ref={profileMenuRef}>
+        <button
+          type="button"
+          className={`toolbar__profile-button ${showProfileMenu ? 'is-active' : ''}`.trim()}
+          onClick={() => setShowProfileMenu((prev) => !prev)}
+          title="Presets"
+        >
+          <span className="toolbar__profile-name">
+            {activeProfile?.name ?? 'Presets'}
+          </span>
+          <ChevronIcon />
+        </button>
+
+        {showProfileMenu && (
+          <div className="toolbar__profile-menu">
+            <div className="toolbar__profile-menu-section">
+              <div className="toolbar__profile-menu-label">Presets</div>
+              {profileIds.map((id) => {
+                const profile = profiles[id]
+                const isActive = id === activeProfileId
+                const isDefault = id === 'profile_default'
+
+                if (renamingId === id) {
+                  return (
+                    <div key={id} className="toolbar__profile-menu-item">
+                      <input
+                        ref={renameInputRef}
+                        className="toolbar__profile-rename-input"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={handleFinishRename}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleFinishRename()
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                      />
+                    </div>
+                  )
+                }
+
+                return (
+                  <div
+                    key={id}
+                    className={`toolbar__profile-menu-item ${isActive ? 'is-active' : ''}`.trim()}
+                  >
+                    <button
+                      type="button"
+                      className="toolbar__profile-menu-item-name"
+                      onClick={() => {
+                        loadProfile(id)
+                        setShowProfileMenu(false)
+                      }}
+                    >
+                      {isActive && <span className="toolbar__profile-check">&#10003;</span>}
+                      {profile.name}
+                    </button>
+                    {!isDefault && (
+                      <div className="toolbar__profile-menu-item-actions">
+                        <button
+                          type="button"
+                          className="toolbar__profile-menu-action"
+                          onClick={() => handleStartRename(id, profile.name)}
+                          title="Rename"
+                        >
+                          &#9998;
+                        </button>
+                        <button
+                          type="button"
+                          className="toolbar__profile-menu-action toolbar__profile-menu-action--danger"
+                          onClick={() => deleteProfile(id)}
+                          title="Delete"
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="toolbar__profile-menu-divider" />
+
             <button
-              key={kind}
               type="button"
-              className={`toolbar__chip ${active ? 'is-active' : ''}`.trim()}
-              onClick={() => toggleScope(kind)}
+              className="toolbar__profile-menu-action-row"
+              onClick={handleSaveNew}
             >
-              {SCOPE_LABELS[kind]}
+              Save as New Preset
             </button>
-          )
-        })}
+            {activeProfileId && (
+              <button
+                type="button"
+                className="toolbar__profile-menu-action-row"
+                onClick={handleSaveOverwrite}
+              >
+                Save to "{activeProfile?.name}"
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
+      <div
+        className="toolbar__spacer"
+        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+      />
+
       <div className="toolbar__actions">
+        <div className="toolbar__reposition-wrap">
+          <button
+            type="button"
+            className={`toolbar__icon-button ${showReposition ? 'is-active' : ''}`.trim()}
+            onClick={() => setShowReposition((prev) => !prev)}
+            title="Reposition window"
+            aria-label="Reposition window"
+          >
+            <RepositionIcon />
+          </button>
+          {showReposition && (
+            <div className="toolbar__reposition-menu">
+              <button
+                type="button"
+                className="toolbar__reposition-option"
+                onClick={() => handleReposition('top')}
+              >
+                Top
+              </button>
+              <button
+                type="button"
+                className="toolbar__reposition-option"
+                onClick={() => handleReposition('bottom')}
+              >
+                Bottom
+              </button>
+            </div>
+          )}
+        </div>
+
         <button
           type="button"
           className={`toolbar__icon-button ${settingsOpen ? 'is-active' : ''}`.trim()}
@@ -103,6 +321,16 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           aria-label={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
         >
           <PinIcon />
+        </button>
+
+        <button
+          type="button"
+          className="toolbar__icon-button"
+          onClick={() => window.electronAPI.minimize()}
+          title="Minimize"
+          aria-label="Minimize"
+        >
+          <MinimizeIcon />
         </button>
 
         <button

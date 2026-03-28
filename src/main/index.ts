@@ -1,9 +1,12 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, session } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, screen, session } from 'electron'
 import { join } from 'path'
 import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 
 let mainWindow: BrowserWindow | null = null
 let currentSettingsHeight = 0
+let moveInterval: ReturnType<typeof setInterval> | null = null
+let moveStartCursor: { x: number; y: number } | null = null
+let moveStartPosition: number[] | null = null
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -21,8 +24,8 @@ function createWindow(): void {
     alwaysOnTop: true,
     autoHideMenuBar: true,
     resizable: true,
-    maximizable: false,
-    fullscreenable: false,
+    maximizable: true,
+    fullscreenable: true,
     title: 'Prism',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -104,6 +107,31 @@ function setupIPC(): void {
     mainWindow?.minimize()
   })
 
+  ipcMain.on('window:start-move', () => {
+    if (!mainWindow) return
+    const cursor = screen.getCursorScreenPoint()
+    moveStartCursor = { x: cursor.x, y: cursor.y }
+    moveStartPosition = mainWindow.getPosition()
+
+    if (moveInterval) clearInterval(moveInterval)
+    moveInterval = setInterval(() => {
+      if (!mainWindow || !moveStartCursor || !moveStartPosition) return
+      const current = screen.getCursorScreenPoint()
+      const dx = current.x - moveStartCursor.x
+      const dy = current.y - moveStartCursor.y
+      mainWindow.setPosition(moveStartPosition[0] + dx, moveStartPosition[1] + dy)
+    }, 16)
+  })
+
+  ipcMain.on('window:stop-move', () => {
+    if (moveInterval) {
+      clearInterval(moveInterval)
+      moveInterval = null
+    }
+    moveStartCursor = null
+    moveStartPosition = null
+  })
+
   ipcMain.on('window:close', () => {
     mainWindow?.close()
   })
@@ -128,21 +156,76 @@ function setupIPC(): void {
     return getCaptureBackendSupport()
   })
 
+  ipcMain.on('window:set-bounds', (_event, bounds: { x: number; y: number; width: number; height: number }) => {
+    if (!mainWindow) return
+    // Saved bounds are base (without settings). Add back current settings height so scopes stay the same size.
+    mainWindow.setBounds({
+      ...bounds,
+      height: bounds.height + currentSettingsHeight,
+    })
+  })
+
+  ipcMain.handle('window:get-bounds', () => {
+    if (!mainWindow) return null
+    const bounds = mainWindow.getBounds()
+    // Strip settings height so we always save base bounds
+    return {
+      ...bounds,
+      height: bounds.height - currentSettingsHeight,
+    }
+  })
+
+  ipcMain.on('window:reposition', (_event, position: 'top' | 'bottom') => {
+    if (!mainWindow) return
+    const display = screen.getDisplayMatching(mainWindow.getBounds())
+    const workArea = display.workArea
+    const [, height] = mainWindow.getSize()
+
+    if (position === 'top') {
+      mainWindow.setPosition(workArea.x, workArea.y)
+    } else {
+      mainWindow.setPosition(workArea.x, workArea.y + workArea.height - height)
+    }
+    mainWindow.setSize(workArea.width, height)
+  })
+
   ipcMain.on('window:expand-settings', (_event, panelHeight: number) => {
     if (!mainWindow) return
-    const [width, height] = mainWindow.getSize()
+    const bounds = mainWindow.getBounds()
     const [minW] = mainWindow.getMinimumSize()
+    const newHeight = bounds.height + panelHeight
     mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + panelHeight)
-    mainWindow.setSize(width, height + panelHeight, true)
+
+    // Check if expanding would push window off screen bottom
+    const display = screen.getDisplayMatching(bounds)
+    const workArea = display.workArea
+    const bottomEdge = bounds.y + newHeight
+    if (bottomEdge > workArea.y + workArea.height) {
+      const newY = Math.max(workArea.y, workArea.y + workArea.height - newHeight)
+      mainWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
+    } else {
+      mainWindow.setSize(bounds.width, newHeight, true)
+    }
     currentSettingsHeight = Math.max(0, currentSettingsHeight + Math.round(panelHeight))
   })
 
   ipcMain.on('window:collapse-settings', (_event, panelHeight: number) => {
     if (!mainWindow) return
-    const [width, height] = mainWindow.getSize()
+    const bounds = mainWindow.getBounds()
     const [minW] = mainWindow.getMinimumSize()
+    const newHeight = Math.max(WINDOW_DEFAULTS.minHeight, bounds.height - panelHeight)
     mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight)
-    mainWindow.setSize(width, Math.max(WINDOW_DEFAULTS.minHeight, height - panelHeight), true)
+
+    // If window was pushed up when expanding, push it back down
+    const display = screen.getDisplayMatching(bounds)
+    const workArea = display.workArea
+    const wasAtBottom = bounds.y + bounds.height >= workArea.y + workArea.height - 10
+    if (wasAtBottom) {
+      const newY = Math.min(bounds.y + panelHeight, workArea.y + workArea.height - newHeight)
+      mainWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: newHeight })
+    } else {
+      mainWindow.setSize(bounds.width, newHeight, true)
+    }
     currentSettingsHeight = Math.max(0, currentSettingsHeight - Math.round(panelHeight))
   })
 
@@ -156,7 +239,33 @@ function setupIPC(): void {
 
     mainWindow.setMinimumSize(minW, WINDOW_DEFAULTS.minHeight + nextHeight)
     if (delta !== 0) {
-      mainWindow.setSize(width, Math.max(WINDOW_DEFAULTS.minHeight, height + delta), true)
+      const newHeight = Math.max(WINDOW_DEFAULTS.minHeight, height + delta)
+      // If expanding near the bottom of the screen, move the window up so it doesn't go off-screen
+      const bounds = mainWindow.getBounds()
+      const display = screen.getDisplayMatching(bounds)
+      const workArea = display.workArea
+      const bottomEdge = bounds.y + newHeight
+      if (delta > 0 && bottomEdge > workArea.y + workArea.height) {
+        const newY = Math.max(workArea.y, workArea.y + workArea.height - newHeight)
+        mainWindow.setBounds({ x: bounds.x, y: newY, width, height: newHeight })
+      } else if (delta < 0) {
+        // Collapsing: if we moved the window up previously, move it back down
+        const baseHeight = newHeight - nextHeight
+        const naturalBottom = bounds.y + baseHeight
+        if (naturalBottom < workArea.y + workArea.height) {
+          // Push window down so it stays near the bottom
+          const maxY = workArea.y + workArea.height - newHeight
+          if (bounds.y < maxY) {
+            mainWindow.setSize(width, newHeight, true)
+          } else {
+            mainWindow.setBounds({ x: bounds.x, y: maxY, width, height: newHeight })
+          }
+        } else {
+          mainWindow.setSize(width, newHeight, true)
+        }
+      } else {
+        mainWindow.setSize(width, newHeight, true)
+      }
     }
 
     currentSettingsHeight = nextHeight

@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useRef, type CSSProperties, type JSX, type ReactNode } from 'react'
-import { useAudioStore } from '../stores/audioStore'
+import { useMemo, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { useSettingsStore, type ScopeSettings } from '../stores/settingsStore'
-import { useThemeStore, PRESETS, PRESET_IDS } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
 
@@ -470,31 +468,8 @@ function ScopeSettingsSection({
   )
 }
 
-interface SettingsPanelProps {
-  onClose: () => void
-  onHeightChange?: (height: number) => void
-}
-
-export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanelProps): JSX.Element {
-  const {
-    systemSources,
-    devices,
-    selectedSystemSourceId,
-    selectedDeviceId,
-    captureMode,
-    isCapturing,
-    captureStatus,
-    captureError,
-    refreshSystemSources,
-    refreshDevices,
-    refreshBackendSupport,
-    selectSystemSource,
-    selectDevice,
-    startCapture,
-  } = useAudioStore()
+export default function SettingsPanel(): JSX.Element {
   const { scopeSettings, updateScopeSettings, hiddenScopes, scopeOrder, widthWeights } = useSettingsStore()
-  const { presetId, accent, setPreset, setCustomAccent, customAccent } = useThemeStore()
-  const panelRef = useRef<HTMLDivElement | null>(null)
 
   const visibleScopes = useMemo(
     () => scopeOrder.filter((kind) => !hiddenScopes.has(kind)),
@@ -506,170 +481,8 @@ export default function SettingsPanel({ onClose, onHeightChange }: SettingsPanel
     return { gridTemplateColumns } as CSSProperties
   }, [visibleScopes, widthWeights])
 
-  useEffect(() => {
-    void refreshBackendSupport()
-    void refreshSystemSources()
-    void refreshDevices()
-  }, [refreshBackendSupport, refreshSystemSources, refreshDevices])
-
-  useEffect(() => {
-    const panel = panelRef.current
-    if (!panel || !onHeightChange) return
-
-    const reportHeight = (): void => {
-      const nextHeight = Math.ceil(panel.getBoundingClientRect().height)
-      onHeightChange(nextHeight)
-    }
-
-    reportHeight()
-
-    const observer = typeof ResizeObserver === 'undefined'
-      ? null
-      : new ResizeObserver(() => reportHeight())
-
-    observer?.observe(panel)
-    window.addEventListener('resize', reportHeight)
-
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('resize', reportHeight)
-    }
-  }, [onHeightChange, visibleScopes.length])
-
-  const handleSourceChange = async (value: string): Promise<void> => {
-    if (value.startsWith('system:')) {
-      const sourceId = value.slice('system:'.length)
-      await selectSystemSource(sourceId)
-      await startCapture()
-      return
-    }
-
-    if (value.startsWith('device:')) {
-      const deviceId = value.slice('device:'.length)
-      await selectDevice(deviceId)
-      await startCapture()
-    }
-  }
-
-  const selectedSourceValue = captureMode === 'system'
-    ? `system:${selectedSystemSourceId ?? systemSources[0]?.id ?? '__default_system_output__'}`
-    : `device:${selectedDeviceId ?? ''}`
-
-  const visibleSystemSources = systemSources.length
-    ? systemSources
-    : [{ id: '__default_system_output__', label: 'System Output', kind: 'system', isDefault: true }]
-
-  const showInputDevices = devices.length > 0
-
-  const renderSystemSourceLabel = (label: string, isDefault?: boolean): string => (
-    isDefault ? `${label} (Default)` : label
-  )
-
-  const renderInputDeviceValue = (deviceId: string): string => `device:${deviceId}`
-  const renderSystemSourceValue = (sourceId: string): string => `system:${sourceId}`
-
-  const indicatorLabel = isCapturing
-    ? 'Capturing'
-    : captureStatus === 'connecting'
-      ? 'Connecting'
-      : captureStatus === 'error'
-        ? 'Capture Failed'
-        : 'Idle'
-
   return (
-    <div className="settings-panel" ref={panelRef}>
-      <div className="settings-panel__utility-row">
-        <section className="settings-utility-section settings-utility-section--source">
-          <div className="settings-section-title">Audio Source</div>
-
-          <label className="settings-control settings-control--stack">
-            <span className="settings-control__label">Source</span>
-            <select
-              className="settings-control__select"
-              value={selectedSourceValue}
-              onChange={(event) => {
-                void handleSourceChange(event.target.value)
-              }}
-            >
-              <optgroup label="Output Devices">
-                {visibleSystemSources.map((source) => (
-                  <option key={source.id} value={renderSystemSourceValue(source.id)}>
-                    {renderSystemSourceLabel(source.label, source.isDefault)}
-                  </option>
-                ))}
-              </optgroup>
-              {showInputDevices ? (
-                <optgroup label="Input Devices">
-                  {devices.map((device) => (
-                    <option key={device.deviceId} value={renderInputDeviceValue(device.deviceId)}>
-                      {device.label || `Input ${device.deviceId.slice(0, 8)}`}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
-            </select>
-          </label>
-
-          <div className={`settings-status-pill is-${captureStatus}`.trim()}>
-            <span className="settings-status-pill__dot" />
-            <span>{indicatorLabel}</span>
-          </div>
-
-          {captureError ? (
-            <div className="settings-error-text">{captureError}</div>
-          ) : null}
-        </section>
-
-        <section className="settings-utility-section settings-utility-section--theme">
-          <div className="settings-section-title">Theme</div>
-
-          <div className="settings-theme-swatches">
-            {PRESET_IDS.map((id) => {
-              const preset = PRESETS[id]
-              const active = presetId === id && !customAccent
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className={`settings-swatch ${active ? 'is-active' : ''}`.trim()}
-                  style={{ '--swatch-color': preset.accent } as CSSProperties}
-                  onClick={() => setPreset(id)}
-                  title={preset.name}
-                  aria-label={preset.name}
-                />
-              )
-            })}
-          </div>
-
-          <label className="settings-control settings-control--stack">
-            <span className="settings-control__label">Custom Accent</span>
-            <div className="settings-accent-row">
-              <input
-                className="settings-accent-input"
-                type="color"
-                value={accent}
-                onChange={(event) => setCustomAccent(event.target.value)}
-              />
-              <button
-                type="button"
-                className="settings-chip"
-                onClick={() => setCustomAccent(null)}
-              >
-                Reset
-              </button>
-            </div>
-          </label>
-        </section>
-
-        <button
-          type="button"
-          className="settings-panel__close"
-          onClick={onClose}
-        >
-          Close
-        </button>
-      </div>
-
+    <div className="settings-panel">
       <div className="settings-panel__scope-track" style={scopeTrackStyle}>
         {visibleScopes.map((kind) => (
           <ScopeSettingsSection

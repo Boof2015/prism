@@ -2,18 +2,18 @@ import { useState, useRef, useCallback, useEffect, type JSX } from 'react'
 import Strip from './components/Strip'
 import Toolbar from './components/Toolbar'
 import SettingsPanel from './components/SettingsPanel'
+import BottomBar from './components/BottomBar'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAudioStore } from './stores/audioStore'
 import { SCOPE_KINDS } from '../types/scope'
 
-const DEFAULT_SETTINGS_PANEL_HEIGHT = 280
+const SETTINGS_EXPAND_HEIGHT = 280
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsPanelHeight, setSettingsPanelHeight] = useState(DEFAULT_SETTINGS_PANEL_HEIGHT)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const appliedSettingsHeightRef = useRef(0)
+  const prevSettingsOpenRef = useRef(false)
 
   const toggleScope = useSettingsStore((s) => s.toggleScope)
 
@@ -25,13 +25,15 @@ export default function App(): JSX.Element {
     }
   }, [])
 
+  // Expand/collapse window by a fixed amount when settings toggle — no dynamic tracking
   useEffect(() => {
-    const nextHeight = settingsOpen ? settingsPanelHeight : 0
-    if (appliedSettingsHeightRef.current !== nextHeight) {
-      window.electronAPI.setSettingsHeight(nextHeight)
-      appliedSettingsHeightRef.current = nextHeight
+    if (settingsOpen && !prevSettingsOpenRef.current) {
+      window.electronAPI.expandSettings(SETTINGS_EXPAND_HEIGHT)
+    } else if (!settingsOpen && prevSettingsOpenRef.current) {
+      window.electronAPI.collapseSettings(SETTINGS_EXPAND_HEIGHT)
     }
-  }, [settingsOpen, settingsPanelHeight])
+    prevSettingsOpenRef.current = settingsOpen
+  }, [settingsOpen])
 
   const showToolbar = useCallback(() => {
     if (hideTimeoutRef.current) {
@@ -54,6 +56,17 @@ export default function App(): JSX.Element {
 
   const handleCloseSettings = useCallback(() => {
     setSettingsOpen(false)
+  }, [])
+
+  const handleAltDragStart = useCallback((event: React.MouseEvent) => {
+    if (event.altKey && event.button === 0) {
+      event.preventDefault()
+      window.electronAPI.startWindowMove()
+    }
+  }, [])
+
+  const handleAltDragEnd = useCallback(() => {
+    window.electronAPI.stopWindowMove()
   }, [])
 
   // Keyboard shortcuts from main process
@@ -84,6 +97,8 @@ export default function App(): JSX.Element {
       className="prism-app"
       onMouseEnter={showToolbar}
       onMouseLeave={scheduleHide}
+      onMouseDown={handleAltDragStart}
+      onMouseUp={handleAltDragEnd}
     >
       <div
         className={`prism-toolbar-layer ${toolbarVisible ? 'is-visible' : ''}`.trim()}
@@ -96,10 +111,10 @@ export default function App(): JSX.Element {
       </div>
 
       {settingsOpen && (
-        <SettingsPanel
-          onClose={handleCloseSettings}
-          onHeightChange={setSettingsPanelHeight}
-        />
+        <div className="prism-settings-region" style={{ height: SETTINGS_EXPAND_HEIGHT }}>
+          <SettingsPanel />
+          <BottomBar onClose={handleCloseSettings} />
+        </div>
       )}
     </div>
   )

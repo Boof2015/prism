@@ -63,6 +63,48 @@ const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
 const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 
 const STORAGE_KEY = 'prism:settings'
+const PROFILES_STORAGE_KEY = 'prism:profiles'
+const ACTIVE_PROFILE_KEY = 'prism:activeProfile'
+const DEFAULT_PROFILE_ID = 'profile_default'
+
+export interface Profile {
+  name: string
+  scopeOrder: ScopeKind[]
+  hiddenScopes: ScopeKind[]
+  widthWeights: Record<ScopeKind, number>
+  scopeSettings: ScopeSettings
+  windowBounds?: { x: number; y: number; width: number; height: number }
+}
+
+function loadProfiles(): Record<string, Profile> {
+  try {
+    const raw = localStorage.getItem(PROFILES_STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return {}
+}
+
+function saveProfiles(profiles: Record<string, Profile>): void {
+  try {
+    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(profiles))
+  } catch { /* ignore */ }
+}
+
+function loadActiveProfileId(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_PROFILE_KEY)
+  } catch { return null }
+}
+
+function saveActiveProfileId(id: string | null): void {
+  try {
+    if (id) {
+      localStorage.setItem(ACTIVE_PROFILE_KEY, id)
+    } else {
+      localStorage.removeItem(ACTIVE_PROFILE_KEY)
+    }
+  } catch { /* ignore */ }
+}
 
 interface SettingsState {
   scopeOrder: ScopeKind[]
@@ -73,11 +115,21 @@ interface SettingsState {
   // Derived
   visibleScopes: () => ScopeKind[]
 
+  // Profiles
+  profiles: Record<string, Profile>
+  activeProfileId: string | null
+
   // Actions
   toggleScope: (kind: ScopeKind) => void
   moveScope: (kind: ScopeKind, direction: 'left' | 'right') => void
   setScopeWidthWeight: (kind: ScopeKind, weight: number) => void
   updateScopeSettings: <K extends ScopeKind>(kind: K, settings: Partial<ScopeSettings[K]>) => void
+  saveProfile: (name: string) => string
+  saveProfileAs: (name: string) => string
+  updateActiveProfile: () => void
+  loadProfile: (id: string) => void
+  deleteProfile: (id: string) => void
+  renameProfile: (id: string, name: string) => void
 }
 
 function loadFromStorage(): Partial<{ scopeOrder: ScopeKind[]; hiddenScopes: ScopeKind[]; widthWeights: Record<ScopeKind, number>; scopeSettings: ScopeSettings }> {
@@ -154,6 +206,24 @@ const defaultWeights: Record<ScopeKind, number> = {
   vumeter: 0.5, lufsmeter: 0.5, waveform: 1,
 }
 
+// Ensure a default profile always exists
+function ensureDefaultProfile(profiles: Record<string, Profile>): Record<string, Profile> {
+  if (profiles[DEFAULT_PROFILE_ID]) return profiles
+  const defaultProfile: Profile = {
+    name: 'Default',
+    scopeOrder: [...SCOPE_KINDS],
+    hiddenScopes: SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind)),
+    widthWeights: { ...defaultWeights },
+    scopeSettings: JSON.parse(JSON.stringify(DEFAULT_SCOPE_SETTINGS)),
+  }
+  const updated = { [DEFAULT_PROFILE_ID]: defaultProfile, ...profiles }
+  saveProfiles(updated)
+  return updated
+}
+
+const initialProfiles = ensureDefaultProfile(loadProfiles())
+const initialActiveProfileId = loadActiveProfileId()
+
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   scopeOrder: normalizeScopeOrder(stored.scopeOrder),
   hiddenScopes: new Set<ScopeKind>(
@@ -161,6 +231,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   ),
   widthWeights: stored.widthWeights ?? { ...defaultWeights },
   scopeSettings: mergeScopeSettings(stored.scopeSettings),
+  profiles: initialProfiles,
+  activeProfileId: initialActiveProfileId,
 
   visibleScopes: () => {
     const { scopeOrder, hiddenScopes } = get()
@@ -219,4 +291,117 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       return newState
     })
   },
+
+  saveProfile: (name: string) => {
+    const state = get()
+    const id = `profile_${Date.now()}`
+    const profile: Profile = {
+      name,
+      scopeOrder: [...state.scopeOrder],
+      hiddenScopes: Array.from(state.hiddenScopes),
+      widthWeights: { ...state.widthWeights },
+      scopeSettings: JSON.parse(JSON.stringify(state.scopeSettings)),
+    }
+    // Capture window bounds asynchronously
+    window.electronAPI.getWindowBounds().then((bounds) => {
+      if (bounds) {
+        const profiles = get().profiles
+        const updated = { ...profiles, [id]: { ...profiles[id], windowBounds: bounds } }
+        saveProfiles(updated)
+        set({ profiles: updated })
+      }
+    })
+    const profiles = { ...state.profiles, [id]: profile }
+    saveProfiles(profiles)
+    saveActiveProfileId(id)
+    set({ profiles, activeProfileId: id })
+    return id
+  },
+
+  saveProfileAs: (name: string) => {
+    // Same as saveProfile but always creates a new entry
+    return get().saveProfile(name)
+  },
+
+  updateActiveProfile: () => {
+    const state = get()
+    const id = state.activeProfileId
+    if (!id || !state.profiles[id]) return
+    const updated: Profile = {
+      ...state.profiles[id],
+      scopeOrder: [...state.scopeOrder],
+      hiddenScopes: Array.from(state.hiddenScopes),
+      widthWeights: { ...state.widthWeights },
+      scopeSettings: JSON.parse(JSON.stringify(state.scopeSettings)),
+    }
+    // Capture window bounds asynchronously
+    window.electronAPI.getWindowBounds().then((bounds) => {
+      if (bounds) {
+        const profiles = get().profiles
+        const withBounds = { ...profiles, [id]: { ...profiles[id], windowBounds: bounds } }
+        saveProfiles(withBounds)
+        set({ profiles: withBounds })
+      }
+    })
+    const profiles = { ...state.profiles, [id]: updated }
+    saveProfiles(profiles)
+    set({ profiles })
+  },
+
+  loadProfile: (id: string) => {
+    const state = get()
+    const profile = state.profiles[id]
+    if (!profile) return
+    const newState = {
+      ...state,
+      scopeOrder: normalizeScopeOrder(profile.scopeOrder),
+      hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(profile.hiddenScopes)),
+      widthWeights: profile.widthWeights ?? { ...defaultWeights },
+      scopeSettings: mergeScopeSettings(profile.scopeSettings),
+      activeProfileId: id,
+    }
+    saveToStorage(newState as SettingsState)
+    saveActiveProfileId(id)
+    set(newState)
+
+    if (profile.windowBounds) {
+      window.electronAPI.setWindowBounds(profile.windowBounds)
+    }
+  },
+
+  deleteProfile: (id: string) => {
+    // Prevent deleting the default profile
+    if (id === DEFAULT_PROFILE_ID) return
+    const state = get()
+    const profiles = { ...state.profiles }
+    delete profiles[id]
+    saveProfiles(profiles)
+    const nextActiveId = state.activeProfileId === id ? null : state.activeProfileId
+    saveActiveProfileId(nextActiveId)
+    set({
+      profiles,
+      activeProfileId: nextActiveId,
+    })
+  },
+
+  renameProfile: (id: string, name: string) => {
+    if (id === DEFAULT_PROFILE_ID) return
+    const state = get()
+    const profile = state.profiles[id]
+    if (!profile) return
+    const profiles = { ...state.profiles, [id]: { ...profile, name } }
+    saveProfiles(profiles)
+    set({ profiles })
+  },
 }))
+
+// On startup, restore last active profile's settings (but not window bounds — those are handled by Electron)
+if (initialActiveProfileId && initialProfiles[initialActiveProfileId]) {
+  const profile = initialProfiles[initialActiveProfileId]
+  useSettingsStore.setState({
+    scopeOrder: normalizeScopeOrder(profile.scopeOrder),
+    hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(profile.hiddenScopes)),
+    widthWeights: profile.widthWeights ?? { ...defaultWeights },
+    scopeSettings: mergeScopeSettings(profile.scopeSettings),
+  })
+}

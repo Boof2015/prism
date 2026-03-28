@@ -23,6 +23,8 @@ interface AudioState {
   captureError: string | null
   sampleRate: number
   channelCount: number
+  inputGainDb: number
+  setInputGain: (db: number) => void
   refreshSystemSources: () => Promise<void>
   refreshDevices: () => Promise<void>
   refreshBackendSupport: () => Promise<void>
@@ -62,6 +64,12 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   captureError: null,
   sampleRate: 48000,
   channelCount: 2,
+  inputGainDb: 0,
+
+  setInputGain: (db: number) => {
+    audioCapture.setInputGain(db)
+    set({ inputGainDb: db })
+  },
 
   refreshSystemSources: async () => {
     const systemSources = await audioCapture.listSources('system')

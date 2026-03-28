@@ -12,6 +12,11 @@ declare global {
       platform: string
       minimize: () => void
       close: () => void
+      startWindowMove: () => void
+      stopWindowMove: () => void
+      setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
+      getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number } | null>
+      repositionWindow: (position: 'top' | 'bottom') => void
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
       getDesktopSources: () => Promise<{ id: string; name: string }[]>
