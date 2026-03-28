@@ -11,6 +11,12 @@ import type {
   WindowBounds,
 } from '../types/popout'
 import type { ProfileMenuRequest } from '../types/profileMenu'
+import type {
+  LegacyProfileMigrationPayload,
+  LegacyProfileMigrationResult,
+  Profile,
+  ProfileLibrarySnapshot,
+} from '../types/profile'
 import type { ScopeKind } from '../types/scope'
 
 declare global {
@@ -30,6 +36,15 @@ declare global {
       isAlwaysOnTop: () => Promise<boolean>
       getDesktopSources: () => Promise<{ id: string; name: string }[]>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
+      getProfileSnapshot: () => Promise<ProfileLibrarySnapshot>
+      saveNewProfile: (name: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
+      overwriteProfile: (id: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
+      loadProfile: (id: string) => Promise<ProfileLibrarySnapshot>
+      deleteProfile: (id: string) => Promise<ProfileLibrarySnapshot>
+      renameProfile: (id: string, name: string) => Promise<ProfileLibrarySnapshot>
+      importProfileDialog: () => Promise<ProfileLibrarySnapshot | null>
+      revealProfilesFolder: () => Promise<void>
+      migrateLegacyProfiles: (payload: LegacyProfileMigrationPayload) => Promise<LegacyProfileMigrationResult>
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
       setSettingsHeight: (panelHeight: number) => void
@@ -51,6 +66,9 @@ declare global {
       onProfileMenuSaveOverwrite: (callback: () => void) => () => void
       onProfileMenuRenameActive: (callback: (id: string) => void) => () => void
       onProfileMenuDeleteActive: (callback: (id: string) => void) => () => void
+      onProfileMenuImport: (callback: () => void) => () => void
+      onProfileMenuShowFolder: (callback: () => void) => () => void
+      onExternalProfileActivated: (callback: (snapshot: ProfileLibrarySnapshot) => void) => () => void
       onScopePopoutReady: (callback: (kind: ScopeKind) => void) => () => void
       onScopePopoutCloseRequested: (callback: (kind: ScopeKind) => void) => () => void
       onScopePopoutBoundsChanged: (callback: (kind: ScopeKind, bounds: WindowBounds) => void) => () => void

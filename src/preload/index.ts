@@ -9,6 +9,12 @@ import type {
   WindowBounds,
 } from '../types/popout'
 import type { ProfileMenuRequest } from '../types/profileMenu'
+import type {
+  LegacyProfileMigrationPayload,
+  LegacyProfileMigrationResult,
+  Profile,
+  ProfileLibrarySnapshot,
+} from '../types/profile'
 import type { ScopeKind } from '../types/scope'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 
@@ -34,6 +40,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       nativeBackend: resolveNativeCaptureSupport(support.nativeBackend),
     } satisfies CaptureBackendSupport
   },
+  getProfileSnapshot: () => ipcRenderer.invoke('profiles:get-snapshot') as Promise<ProfileLibrarySnapshot>,
+  saveNewProfile: (name: string, profile: Profile) => ipcRenderer.invoke('profiles:save-new', name, profile) as Promise<ProfileLibrarySnapshot>,
+  overwriteProfile: (id: string, profile: Profile) => ipcRenderer.invoke('profiles:overwrite', id, profile) as Promise<ProfileLibrarySnapshot>,
+  loadProfile: (id: string) => ipcRenderer.invoke('profiles:load', id) as Promise<ProfileLibrarySnapshot>,
+  deleteProfile: (id: string) => ipcRenderer.invoke('profiles:delete', id) as Promise<ProfileLibrarySnapshot>,
+  renameProfile: (id: string, name: string) => ipcRenderer.invoke('profiles:rename', id, name) as Promise<ProfileLibrarySnapshot>,
+  importProfileDialog: () => ipcRenderer.invoke('profiles:import-dialog') as Promise<ProfileLibrarySnapshot | null>,
+  revealProfilesFolder: () => ipcRenderer.invoke('profiles:reveal-folder') as Promise<void>,
+  migrateLegacyProfiles: (payload: LegacyProfileMigrationPayload) => ipcRenderer.invoke('profiles:migrate-legacy', payload) as Promise<LegacyProfileMigrationResult>,
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),
@@ -94,6 +109,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, id: string): void => callback(id)
     ipcRenderer.on('profile-menu:delete-active', handler)
     return () => ipcRenderer.removeListener('profile-menu:delete-active', handler)
+  },
+  onProfileMenuImport: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('profile-menu:import', handler)
+    return () => ipcRenderer.removeListener('profile-menu:import', handler)
+  },
+  onProfileMenuShowFolder: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('profile-menu:show-folder', handler)
+    return () => ipcRenderer.removeListener('profile-menu:show-folder', handler)
+  },
+  onExternalProfileActivated: (callback: (snapshot: ProfileLibrarySnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: ProfileLibrarySnapshot): void => callback(snapshot)
+    ipcRenderer.on('profiles:external-activated', handler)
+    return () => ipcRenderer.removeListener('profiles:external-activated', handler)
   },
   onScopePopoutReady: (callback: (kind: ScopeKind) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind): void => callback(kind)

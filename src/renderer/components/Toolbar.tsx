@@ -70,6 +70,12 @@ interface ToolbarProps {
 
 const DEFAULT_PROFILE_ID = 'profile_default'
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : fallback
+}
+
 export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps): JSX.Element {
   const profiles = useSettingsStore((s) => s.profiles)
   const activeProfileId = useSettingsStore((s) => s.activeProfileId)
@@ -78,6 +84,8 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const deleteProfile = useSettingsStore((s) => s.deleteProfile)
   const renameProfile = useSettingsStore((s) => s.renameProfile)
   const updateActiveProfile = useSettingsStore((s) => s.updateActiveProfile)
+  const importProfileFromDialog = useSettingsStore((s) => s.importProfileFromDialog)
+  const showProfilesFolder = useSettingsStore((s) => s.showProfilesFolder)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true)
   const [showReposition, setShowReposition] = useState(false)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
@@ -89,32 +97,50 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     return unsubscribe
   }, [])
 
-  const handleSaveNew = useCallback(() => {
+  const handleSaveNew = useCallback(async () => {
     const count = Object.keys(useSettingsStore.getState().profiles).length
-    saveProfile(`Profile ${count}`)
-    setIsProfileMenuOpen(false)
+    try {
+      await saveProfile(`Profile ${count}`)
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Could not save the profile.'))
+    } finally {
+      setIsProfileMenuOpen(false)
+    }
   }, [saveProfile])
 
-  const handleSaveOverwrite = useCallback(() => {
-    updateActiveProfile()
-    setIsProfileMenuOpen(false)
+  const handleSaveOverwrite = useCallback(async () => {
+    try {
+      await updateActiveProfile()
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Could not update the active profile.'))
+    } finally {
+      setIsProfileMenuOpen(false)
+    }
   }, [updateActiveProfile])
 
-  const handleRenameActive = useCallback((id: string) => {
+  const handleRenameActive = useCallback(async (id: string) => {
     const profile = useSettingsStore.getState().profiles[id]
     if (!profile || id === DEFAULT_PROFILE_ID) {
       setIsProfileMenuOpen(false)
       return
     }
 
-    const nextName = window.prompt('Rename preset', profile.name)?.trim()
-    if (nextName) {
-      renameProfile(id, nextName)
+    const nextName = window.prompt('Rename profile', profile.name)?.trim()
+    if (!nextName) {
+      setIsProfileMenuOpen(false)
+      return
     }
-    setIsProfileMenuOpen(false)
+
+    try {
+      await renameProfile(id, nextName)
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Could not rename the profile.'))
+    } finally {
+      setIsProfileMenuOpen(false)
+    }
   }, [renameProfile])
 
-  const handleDeleteActive = useCallback((id: string) => {
+  const handleDeleteActive = useCallback(async (id: string) => {
     const profile = useSettingsStore.getState().profiles[id]
     if (!profile || id === DEFAULT_PROFILE_ID) {
       setIsProfileMenuOpen(false)
@@ -126,22 +152,70 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
       return
     }
 
-    deleteProfile(id)
-    setIsProfileMenuOpen(false)
+    try {
+      await deleteProfile(id)
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Could not delete the profile.'))
+    } finally {
+      setIsProfileMenuOpen(false)
+    }
   }, [deleteProfile])
+
+  const handleLoadProfile = useCallback(async (id: string) => {
+    try {
+      await loadProfile(id)
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Could not load the profile.'))
+    } finally {
+      setIsProfileMenuOpen(false)
+    }
+  }, [loadProfile])
+
+  const handleImportProfile = useCallback(async () => {
+    try {
+      await importProfileFromDialog()
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Could not import the profile file.'))
+    } finally {
+      setIsProfileMenuOpen(false)
+    }
+  }, [importProfileFromDialog])
+
+  const handleShowProfilesFolder = useCallback(async () => {
+    try {
+      await showProfilesFolder()
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Could not open the profiles folder.'))
+    } finally {
+      setIsProfileMenuOpen(false)
+    }
+  }, [showProfilesFolder])
 
   useEffect(() => {
     const offClosed = window.electronAPI.onProfileMenuClosed(() => {
       setIsProfileMenuOpen(false)
     })
     const offLoad = window.electronAPI.onProfileMenuLoad((id) => {
-      loadProfile(id)
-      setIsProfileMenuOpen(false)
+      void handleLoadProfile(id)
     })
-    const offSaveNew = window.electronAPI.onProfileMenuSaveNew(handleSaveNew)
-    const offSaveOverwrite = window.electronAPI.onProfileMenuSaveOverwrite(handleSaveOverwrite)
-    const offRename = window.electronAPI.onProfileMenuRenameActive(handleRenameActive)
-    const offDelete = window.electronAPI.onProfileMenuDeleteActive(handleDeleteActive)
+    const offSaveNew = window.electronAPI.onProfileMenuSaveNew(() => {
+      void handleSaveNew()
+    })
+    const offSaveOverwrite = window.electronAPI.onProfileMenuSaveOverwrite(() => {
+      void handleSaveOverwrite()
+    })
+    const offRename = window.electronAPI.onProfileMenuRenameActive((id) => {
+      void handleRenameActive(id)
+    })
+    const offDelete = window.electronAPI.onProfileMenuDeleteActive((id) => {
+      void handleDeleteActive(id)
+    })
+    const offImport = window.electronAPI.onProfileMenuImport(() => {
+      void handleImportProfile()
+    })
+    const offShowFolder = window.electronAPI.onProfileMenuShowFolder(() => {
+      void handleShowProfilesFolder()
+    })
 
     return () => {
       offClosed()
@@ -150,8 +224,18 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
       offSaveOverwrite()
       offRename()
       offDelete()
+      offImport()
+      offShowFolder()
     }
-  }, [handleDeleteActive, handleRenameActive, handleSaveNew, handleSaveOverwrite, loadProfile])
+  }, [
+    handleDeleteActive,
+    handleImportProfile,
+    handleLoadProfile,
+    handleRenameActive,
+    handleSaveNew,
+    handleSaveOverwrite,
+    handleShowProfilesFolder,
+  ])
 
   const handlePin = useCallback(() => {
     window.electronAPI.toggleAlwaysOnTop()
@@ -225,10 +309,10 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           type="button"
           className={`toolbar__profile-button ${isProfileMenuOpen ? 'is-active' : ''}`.trim()}
           onClick={handleOpenProfileMenu}
-          title="Presets"
+          title="Profiles"
         >
           <span className="toolbar__profile-name">
-            {activeProfile?.name ?? 'Presets'}
+            {activeProfile?.name ?? 'Profiles'}
           </span>
           <ChevronIcon />
         </button>

@@ -1,6 +1,6 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, screen, session } from 'electron'
-import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, WebContents } from 'electron'
-import { join } from 'path'
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
+import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
+import { extname, join, resolve } from 'path'
 import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 import type {
   ScopePopoutAudioBatch,
@@ -10,18 +10,25 @@ import type {
   WindowBounds,
 } from '../types/popout'
 import type { ProfileMenuRequest } from '../types/profileMenu'
+import type { LegacyProfileMigrationPayload, Profile, ProfileLibrarySnapshot } from '../types/profile'
 import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
+import { normalizeProfile } from '../shared/profileState'
+import { FileBackedProfileLibrary } from './profileLibrary'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
 let moveStartCursor: { x: number; y: number } | null = null
 let moveStartPosition: number[] | null = null
+let mainWindowBoundsTimer: ReturnType<typeof setTimeout> | null = null
 
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
 const windowSettingsHeights = new Map<number, number>()
 const windowSettingsBottomAnchors = new Map<number, number>()
+const pendingProfileOpenPaths: string[] = []
+
+let profileLibrary: FileBackedProfileLibrary | null = null
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -35,6 +42,96 @@ const POPOUT_DEFAULTS = {
   height: 240,
   minWidth: 220,
   minHeight: 160,
+}
+
+function getProfileLibrary(): FileBackedProfileLibrary {
+  if (!profileLibrary) {
+    profileLibrary = new FileBackedProfileLibrary(
+      join(app.getPath('documents'), 'Prism Profiles'),
+      join(app.getPath('userData'), 'profile-state.json'),
+    )
+  }
+
+  return profileLibrary
+}
+
+function queueProfileOpenPath(filePath: string): void {
+  if (extname(filePath).toLowerCase() !== '.prsm') return
+
+  const resolvedPath = resolve(filePath)
+  if (!pendingProfileOpenPaths.includes(resolvedPath)) {
+    pendingProfileOpenPaths.push(resolvedPath)
+  }
+}
+
+function queueProfileOpenPaths(paths: string[]): void {
+  for (const filePath of paths) {
+    queueProfileOpenPath(filePath)
+  }
+}
+
+function extractProfilePathsFromArgv(argv: string[]): string[] {
+  return argv
+    .filter((value) => extname(value).toLowerCase() === '.prsm')
+    .map((value) => resolve(value))
+}
+
+function focusMainWindow(): void {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : fallback
+}
+
+async function processPendingProfileOpenPaths(): Promise<void> {
+  if (pendingProfileOpenPaths.length === 0) return
+
+  const paths = [...pendingProfileOpenPaths]
+  pendingProfileOpenPaths.length = 0
+
+  let latestSnapshot: ProfileLibrarySnapshot | null = null
+
+  for (const filePath of paths) {
+    try {
+      latestSnapshot = await getProfileLibrary().importProfileFromPath(filePath)
+    } catch (error) {
+      dialog.showErrorBox(
+        'Could Not Open Profile',
+        getErrorMessage(error, `Prism could not open ${filePath}.`),
+      )
+    }
+  }
+
+  if (!latestSnapshot || !mainWindow || mainWindow.isDestroyed()) return
+
+  focusMainWindow()
+  mainWindow.webContents.send('profiles:external-activated', latestSnapshot)
+}
+
+function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
+  if (!isMainRendererWindow(window)) return
+
+  if (mainWindowBoundsTimer) {
+    clearTimeout(mainWindowBoundsTimer)
+  }
+
+  mainWindowBoundsTimer = setTimeout(() => {
+    mainWindowBoundsTimer = null
+    if (window.isDestroyed()) return
+    void getProfileLibrary().updateActiveProfileWindowBounds(toLogicalBounds(window))
+  }, 80)
+}
+
+function normalizeIncomingProfile(raw: unknown, fallbackName = 'Profile'): Profile {
+  return normalizeProfile(raw, fallbackName)
 }
 
 function isScopeKind(value: unknown): value is ScopeKind {
@@ -189,7 +286,7 @@ function buildProfileMenuTemplate(
     : null
 
   const template: MenuItemConstructorOptions[] = [
-    { label: 'Presets', enabled: false },
+    { label: 'Profiles', enabled: false },
     ...request.profiles.map((profile) => ({
       type: 'checkbox' as const,
       checked: profile.id === request.activeProfileId,
@@ -198,7 +295,7 @@ function buildProfileMenuTemplate(
     })),
     { type: 'separator' },
     {
-      label: 'Save as New Preset',
+      label: 'Save as New Profile',
       click: () => sendToRenderer(sender, 'profile-menu:save-new'),
     },
   ]
@@ -209,6 +306,18 @@ function buildProfileMenuTemplate(
       click: () => sendToRenderer(sender, 'profile-menu:save-overwrite'),
     })
   }
+
+  template.push(
+    { type: 'separator' },
+    {
+      label: 'Import .prsm...',
+      click: () => sendToRenderer(sender, 'profile-menu:import'),
+    },
+    {
+      label: 'Show Profiles Folder',
+      click: () => sendToRenderer(sender, 'profile-menu:show-folder'),
+    },
+  )
 
   if (activeProfile && !activeProfile.isDefault) {
     template.push(
@@ -285,6 +394,10 @@ function createMainWindow(): void {
   })
 
   mainWindow.on('closed', () => {
+    if (mainWindowBoundsTimer) {
+      clearTimeout(mainWindowBoundsTimer)
+      mainWindowBoundsTimer = null
+    }
     if (mainWindow) {
       windowSettingsHeights.delete(mainWindow.id)
       windowSettingsBottomAnchors.delete(mainWindow.id)
@@ -294,6 +407,15 @@ function createMainWindow(): void {
     for (const kind of SCOPE_KINDS) {
       destroyScopePopoutWindow(kind)
     }
+  })
+
+  mainWindow.on('move', () => {
+    if (!mainWindow) return
+    scheduleMainWindowBoundsSave(mainWindow)
+  })
+  mainWindow.on('resize', () => {
+    if (!mainWindow) return
+    scheduleMainWindowBoundsSave(mainWindow)
   })
 
   loadRendererTarget(mainWindow, { window: 'main' })
@@ -319,6 +441,7 @@ function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
 
     if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed()) return
     const bounds = toLogicalBounds(window)
+    void getProfileLibrary().updateActiveProfilePopoutBounds(kind, bounds)
     mainWindow.webContents.send('scope-popout:bounds-changed', kind, bounds)
   }, 80)
 
@@ -571,6 +694,64 @@ function setupIPC(): void {
     return getCaptureBackendSupport()
   })
 
+  ipcMain.handle('profiles:get-snapshot', async () => {
+    return getProfileLibrary().getSnapshot()
+  })
+
+  ipcMain.handle('profiles:save-new', async (_event, name: string, rawProfile: unknown) => {
+    return getProfileLibrary().saveNewProfile(name, normalizeIncomingProfile(rawProfile, name))
+  })
+
+  ipcMain.handle('profiles:overwrite', async (_event, id: string, rawProfile: unknown) => {
+    return getProfileLibrary().overwriteProfile(id, normalizeIncomingProfile(rawProfile))
+  })
+
+  ipcMain.handle('profiles:load', async (_event, id: string) => {
+    return getProfileLibrary().loadProfile(id)
+  })
+
+  ipcMain.handle('profiles:delete', async (_event, id: string) => {
+    return getProfileLibrary().deleteProfile(id)
+  })
+
+  ipcMain.handle('profiles:rename', async (_event, id: string, name: string) => {
+    return getProfileLibrary().renameProfile(id, name)
+  })
+
+  ipcMain.handle('profiles:import-dialog', async () => {
+    const targetWindow = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
+    const dialogOptions: OpenDialogOptions = {
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Prism Profiles',
+          extensions: ['prsm'],
+        },
+      ],
+    }
+    const result = targetWindow
+      ? await dialog.showOpenDialog(targetWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+
+    return getProfileLibrary().importProfileFromPath(result.filePaths[0])
+  })
+
+  ipcMain.handle('profiles:reveal-folder', async () => {
+    const folderPath = getProfileLibrary().getProfilesDirectory()
+    const openResult = await shell.openPath(folderPath)
+    if (openResult) {
+      throw new Error(openResult)
+    }
+  })
+
+  ipcMain.handle('profiles:migrate-legacy', async (_event, payload: LegacyProfileMigrationPayload) => {
+    return getProfileLibrary().migrateLegacyProfiles(payload)
+  })
+
   ipcMain.on('profile-menu:open', (event, rawRequest: unknown) => {
     const request = normalizeProfileMenuRequest(rawRequest)
     if (!request) return
@@ -722,12 +903,36 @@ function setupShortcuts(): void {
   })
 }
 
-app.whenReady().then(() => {
-  setupPermissions()
-  setupIPC()
-  createMainWindow()
-  setupShortcuts()
-})
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.whenReady().then(() => {
+    setupPermissions()
+    setupIPC()
+    createMainWindow()
+    setupShortcuts()
+    queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
+    void processPendingProfileOpenPaths()
+  })
+
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault()
+    queueProfileOpenPath(filePath)
+    if (app.isReady()) {
+      void processPendingProfileOpenPaths()
+    }
+  })
+
+  app.on('second-instance', (_event, argv) => {
+    queueProfileOpenPaths(extractProfilePathsFromArgv(argv))
+    if (app.isReady()) {
+      focusMainWindow()
+      void processPendingProfileOpenPaths()
+    }
+  })
+}
 
 app.on('window-all-closed', () => {
   app.quit()

@@ -16,22 +16,10 @@ export default function App(): JSX.Element {
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const startupBoundsAppliedRef = useRef(false)
 
   const toggleScope = useSettingsStore((s) => s.toggleScope)
-  const profiles = useSettingsStore((s) => s.profiles)
-  const activeProfileId = useSettingsStore((s) => s.activeProfileId)
-
-  useLayoutEffect(() => {
-    if (startupBoundsAppliedRef.current) return
-
-    const profile = activeProfileId ? profiles[activeProfileId] : null
-    startupBoundsAppliedRef.current = true
-
-    if (profile?.windowBounds) {
-      window.electronAPI.setWindowBounds(profile.windowBounds)
-    }
-  }, [activeProfileId, profiles])
+  const initializeProfiles = useSettingsStore((s) => s.initializeProfiles)
+  const applyExternalProfileSnapshot = useSettingsStore((s) => s.applyExternalProfileSnapshot)
 
   // Auto-capture on launch
   useEffect(() => {
@@ -40,6 +28,16 @@ export default function App(): JSX.Element {
       void startCapture()
     }
   }, [])
+
+  useEffect(() => {
+    void initializeProfiles()
+
+    const unsubscribe = window.electronAPI.onExternalProfileActivated((snapshot) => {
+      applyExternalProfileSnapshot(snapshot)
+    })
+
+    return unsubscribe
+  }, [applyExternalProfileSnapshot, initializeProfiles])
 
   const measuredSettingsHeight = settingsPanelHeight > 0 && bottomBarHeight > 0
     ? settingsPanelHeight + bottomBarHeight
