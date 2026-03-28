@@ -432,21 +432,23 @@ test('moveDockedScopeOrder preserves popped-out scope positions in the full orde
   ])
 })
 
-test('VUMeterBallistics holds RMS and correlation steady when an active frame receives no chunks', () => {
+test('VUMeterBallistics holds VU, bar, and correlation steady when an active frame receives no chunks', () => {
   const sampleRate = 48000
   const windowSamples = Math.round((sampleRate * VU_INTEGRATION_WINDOW_MS) / 1000)
   const meter = new VUMeterBallistics(sampleRate)
   const initial = meter.process([createFilledStereoChunk(0.5, 0.5, windowSamples)], 300)
   const held = meter.process([], 316)
 
-  assert.ok(initial.rmsLDb > -7 && initial.rmsLDb < -5)
-  assertAlmostEqual(held.rmsLDb, initial.rmsLDb, 1e-12, 'left RMS should hold across empty frames')
-  assertAlmostEqual(held.rmsRDb, initial.rmsRDb, 1e-12, 'right RMS should hold across empty frames')
+  assert.ok(initial.vuLDb > -7 && initial.vuLDb < -5)
+  assertAlmostEqual(held.vuLDb, initial.vuLDb, 1e-12, 'left VU should hold across empty frames')
+  assertAlmostEqual(held.vuRDb, initial.vuRDb, 1e-12, 'right VU should hold across empty frames')
+  assertAlmostEqual(held.barLDb, initial.barLDb, 1e-12, 'left bar should hold across empty frames')
+  assertAlmostEqual(held.barRDb, initial.barRDb, 1e-12, 'right bar should hold across empty frames')
   assertAlmostEqual(held.correlation, initial.correlation, 1e-12, 'correlation should hold across empty frames')
-  assert.notEqual(held.rmsLDb, VU_METER_MIN_DB)
+  assert.notEqual(held.vuLDb, VU_METER_MIN_DB)
 })
 
-test('VUMeterBallistics produces the same RMS and correlation for contiguous and irregular chunk delivery', () => {
+test('VUMeterBallistics produces the same VU, bar, and correlation for contiguous and irregular chunk delivery', () => {
   const sampleRate = 48000
   const windowSamples = Math.round((sampleRate * VU_INTEGRATION_WINDOW_MS) / 1000)
   const program = createProgramSamples(windowSamples)
@@ -471,29 +473,28 @@ test('VUMeterBallistics produces the same RMS and correlation for contiguous and
   }
 
   const irregularSnapshot = irregular.getSnapshot()
-  assertAlmostEqual(irregularSnapshot.rmsLDb, contiguousSnapshot.rmsLDb, 1e-6, 'left RMS should be chunking-invariant')
-  assertAlmostEqual(irregularSnapshot.rmsRDb, contiguousSnapshot.rmsRDb, 1e-6, 'right RMS should be chunking-invariant')
+  assertAlmostEqual(irregularSnapshot.vuLDb, contiguousSnapshot.vuLDb, 1e-6, 'left VU should be chunking-invariant')
+  assertAlmostEqual(irregularSnapshot.vuRDb, contiguousSnapshot.vuRDb, 1e-6, 'right VU should be chunking-invariant')
+  assertAlmostEqual(irregularSnapshot.barLDb, contiguousSnapshot.barLDb, 1e-6, 'left bar should be chunking-invariant')
+  assertAlmostEqual(irregularSnapshot.barRDb, contiguousSnapshot.barRDb, 1e-6, 'right bar should be chunking-invariant')
   assertAlmostEqual(irregularSnapshot.correlation, contiguousSnapshot.correlation, 1e-6, 'correlation should be chunking-invariant')
 })
 
-test('VUMeterBallistics tracks a transient peak independently of the RMS bar and decays it by elapsed time', () => {
+test('VUMeterBallistics lets the bar outrun the VU needle while peak hold remains highest', () => {
   const sampleRate = 48000
-  const windowSamples = Math.round((sampleRate * VU_INTEGRATION_WINDOW_MS) / 1000)
-  const left = new Float32Array(windowSamples)
-  const right = new Float32Array(windowSamples)
-  left.fill(0.1)
-  right.fill(0.1)
-  left[Math.floor(windowSamples / 2)] = 1.0
-  right[Math.floor(windowSamples / 2)] = 1.0
-
   const meter = new VUMeterBallistics(sampleRate)
-  const initial = meter.process([{ left, right }], 300)
-  const beforeDecay = meter.process([], 300 + VU_PEAK_HOLD_MS - 10)
-  const afterDecay = meter.process([], 300 + VU_PEAK_HOLD_MS + 100)
+  const baselineSamples = Math.floor(sampleRate * 0.2)
+  const burstSamples = Math.floor(sampleRate * 0.016)
 
-  assert.ok(initial.rmsLDb < -19)
-  assert.equal(initial.peakLDb, 0)
-  assert.ok(initial.peakLDb > initial.rmsLDb + 10)
+  meter.process([createFilledStereoChunk(0.1, 0.1, baselineSamples)], 200)
+  const burstSnapshot = meter.process([createFilledStereoChunk(1.0, 1.0, burstSamples)], 216)
+  const beforeDecay = meter.process([], 216 + VU_PEAK_HOLD_MS - 10)
+  const afterDecay = meter.process([], 216 + VU_PEAK_HOLD_MS + 100)
+
+  assert.ok(burstSnapshot.vuLDb < -10)
+  assert.ok(burstSnapshot.barLDb > burstSnapshot.vuLDb + 8)
+  assert.ok(burstSnapshot.peakLDb >= burstSnapshot.barLDb)
+  assert.equal(burstSnapshot.peakLDb, 0)
   assert.equal(beforeDecay.peakLDb, 0)
   assert.ok(afterDecay.peakLDb < beforeDecay.peakLDb)
   assert.ok(afterDecay.peakLDb > -3)

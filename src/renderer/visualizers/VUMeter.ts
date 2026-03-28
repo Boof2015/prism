@@ -56,8 +56,10 @@ export class VUMeter {
   private unsubscribeSessionChange: (() => void) | null = null
 
   // Meter state
-  private rmsL = VU_METER_MIN_DB
-  private rmsR = VU_METER_MIN_DB
+  private vuL = VU_METER_MIN_DB
+  private vuR = VU_METER_MIN_DB
+  private barL = VU_METER_MIN_DB
+  private barR = VU_METER_MIN_DB
   private peakL = VU_METER_MIN_DB
   private peakR = VU_METER_MIN_DB
   private correlation = 0
@@ -124,8 +126,10 @@ export class VUMeter {
   }
 
   private applySnapshot(snapshot: VUMeterSnapshot): void {
-    this.rmsL = snapshot.rmsLDb
-    this.rmsR = snapshot.rmsRDb
+    this.vuL = snapshot.vuLDb
+    this.vuR = snapshot.vuRDb
+    this.barL = snapshot.barLDb
+    this.barR = snapshot.barRDb
     this.peakL = snapshot.peakLDb
     this.peakR = snapshot.peakRDb
     this.correlation = snapshot.correlation
@@ -178,15 +182,15 @@ export class VUMeter {
 
     // ---- L meter ----
     const lY = topOffset
-    this.drawHorizontalMeterBar(ctx, barLeft, lY, barWidth, meterHeight, this.rmsL, this.peakL, cr, cg, cb)
+    this.drawHorizontalMeterBar(ctx, barLeft, lY, barWidth, meterHeight, this.barL, this.peakL, cr, cg, cb)
     this.drawMeterLabel(ctx, 0, lY, labelWidth, meterHeight, 'L')
-    this.drawDbLabel(ctx, barRight + 4, lY, dbLabelWidth, meterHeight, this.rmsL)
+    this.drawDbLabel(ctx, barRight + 4, lY, dbLabelWidth, meterHeight, this.barL)
 
     // ---- R meter ----
     const rY = lY + meterHeight + gap
-    this.drawHorizontalMeterBar(ctx, barLeft, rY, barWidth, meterHeight, this.rmsR, this.peakR, cr, cg, cb)
+    this.drawHorizontalMeterBar(ctx, barLeft, rY, barWidth, meterHeight, this.barR, this.peakR, cr, cg, cb)
     this.drawMeterLabel(ctx, 0, rY, labelWidth, meterHeight, 'R')
-    this.drawDbLabel(ctx, barRight + 4, rY, dbLabelWidth, meterHeight, this.rmsR)
+    this.drawDbLabel(ctx, barRight + 4, rY, dbLabelWidth, meterHeight, this.barR)
 
     // ---- Correlation meter ----
     const corrY = rY + meterHeight + gap
@@ -219,12 +223,12 @@ export class VUMeter {
     const rX = meterLeft + meterWidth + channelGap
 
     this.drawMeterLabel(ctx, lX, 0, meterWidth, labelHeight, 'L')
-    this.drawVerticalMeterBar(ctx, lX, meterTop, meterWidth, meterHeight, this.rmsL, this.peakL, cr, cg, cb)
-    this.drawCenteredDbLabel(ctx, lX, dbY, meterWidth, dbHeight, this.rmsL)
+    this.drawVerticalMeterBar(ctx, lX, meterTop, meterWidth, meterHeight, this.barL, this.peakL, cr, cg, cb)
+    this.drawCenteredDbLabel(ctx, lX, dbY, meterWidth, dbHeight, this.barL)
 
     this.drawMeterLabel(ctx, rX, 0, meterWidth, labelHeight, 'R')
-    this.drawVerticalMeterBar(ctx, rX, meterTop, meterWidth, meterHeight, this.rmsR, this.peakR, cr, cg, cb)
-    this.drawCenteredDbLabel(ctx, rX, dbY, meterWidth, dbHeight, this.rmsR)
+    this.drawVerticalMeterBar(ctx, rX, meterTop, meterWidth, meterHeight, this.barR, this.peakR, cr, cg, cb)
+    this.drawCenteredDbLabel(ctx, rX, dbY, meterWidth, dbHeight, this.barR)
 
     this.drawCorrelationBar(ctx, corrX, corrY, corrWidth, corrHeight, cr, cg, cb)
   }
@@ -232,28 +236,28 @@ export class VUMeter {
   private drawHorizontalMeterBar(
     ctx: CanvasRenderingContext2D,
     x: number, y: number, w: number, h: number,
-    rmsDb: number, peakDb: number,
+    levelDb: number, peakDb: number,
     cr: number, cg: number, cb: number
   ): void {
-    const rmsNorm = this.dbToNormalized(rmsDb)
+    const levelNorm = this.dbToNormalized(levelDb)
     const peakNorm = this.dbToNormalized(peakDb)
-    const rmsWidth = rmsNorm * w
+    const levelWidth = levelNorm * w
     const hotThreshold = this.dbToNormalized(-6) * w
 
     // Background track
     ctx.fillStyle = 'rgba(255, 255, 255, 0.04)'
     ctx.fillRect(x, y, w, h)
 
-    // RMS bar
-    if (rmsWidth > 0) {
-      const safeWidth = Math.min(rmsWidth, hotThreshold)
+    // Main level bar
+    if (levelWidth > 0) {
+      const safeWidth = Math.min(levelWidth, hotThreshold)
       if (safeWidth > 0) {
         ctx.fillStyle = colorWithAlpha(cr, cg, cb, 0.82)
         ctx.fillRect(x, y, safeWidth, h)
       }
-      if (rmsWidth > hotThreshold) {
+      if (levelWidth > hotThreshold) {
         // Hot zone: transition to warm/red
-        const hotWidth = rmsWidth - hotThreshold
+        const hotWidth = levelWidth - hotThreshold
         const hotProgress = Math.min(1, hotWidth / Math.max(1, w - hotThreshold))
         const hotR = Math.round(cr + (255 - cr) * hotProgress * 0.7)
         const hotG = Math.round(cg * (1 - hotProgress * 0.6))
@@ -285,31 +289,31 @@ export class VUMeter {
   private drawVerticalMeterBar(
     ctx: CanvasRenderingContext2D,
     x: number, y: number, w: number, h: number,
-    rmsDb: number, peakDb: number,
+    levelDb: number, peakDb: number,
     cr: number, cg: number, cb: number
   ): void {
-    const rmsNorm = this.dbToNormalized(rmsDb)
+    const levelNorm = this.dbToNormalized(levelDb)
     const peakNorm = this.dbToNormalized(peakDb)
-    const rmsHeight = rmsNorm * h
+    const levelHeight = levelNorm * h
     const hotThreshold = this.dbToNormalized(-6) * h
 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.04)'
     ctx.fillRect(x, y, w, h)
 
-    if (rmsHeight > 0) {
-      const safeHeight = Math.min(rmsHeight, hotThreshold)
+    if (levelHeight > 0) {
+      const safeHeight = Math.min(levelHeight, hotThreshold)
       if (safeHeight > 0) {
         ctx.fillStyle = colorWithAlpha(cr, cg, cb, 0.82)
         ctx.fillRect(x, y + h - safeHeight, w, safeHeight)
       }
-      if (rmsHeight > hotThreshold) {
-        const hotHeight = rmsHeight - hotThreshold
+      if (levelHeight > hotThreshold) {
+        const hotHeight = levelHeight - hotThreshold
         const hotProgress = Math.min(1, hotHeight / Math.max(1, h - hotThreshold))
         const hotR = Math.round(cr + (255 - cr) * hotProgress * 0.7)
         const hotG = Math.round(cg * (1 - hotProgress * 0.6))
         const hotB = Math.round(cb * (1 - hotProgress * 0.7))
         ctx.fillStyle = colorWithAlpha(hotR, hotG, hotB, 0.82)
-        ctx.fillRect(x, y + h - rmsHeight, w, hotHeight)
+        ctx.fillRect(x, y + h - levelHeight, w, hotHeight)
       }
     }
 
@@ -427,9 +431,9 @@ export class VUMeter {
     const barWidth = Math.max(1, barRight - barLeft)
 
     // L needle
-    this.drawNeedleMeter(ctx, 0, 0, meterWidth, meterAreaHeight, this.rmsL, this.peakL, 'L', cr, cg, cb)
+    this.drawNeedleMeter(ctx, 0, 0, meterWidth, meterAreaHeight, this.vuL, this.peakL, 'L', cr, cg, cb)
     // R needle
-    this.drawNeedleMeter(ctx, meterWidth + 4, 0, meterWidth, meterAreaHeight, this.rmsR, this.peakR, 'R', cr, cg, cb)
+    this.drawNeedleMeter(ctx, meterWidth + 4, 0, meterWidth, meterAreaHeight, this.vuR, this.peakR, 'R', cr, cg, cb)
 
     // Correlation bar at bottom
     this.drawCorrelationBar(ctx, barLeft, meterAreaHeight + gap, barWidth, corrHeight, cr, cg, cb)
