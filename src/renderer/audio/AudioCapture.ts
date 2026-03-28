@@ -5,6 +5,7 @@
  */
 
 import { audioRouter } from './AudioRouter'
+import { applyInputGainToStereoSamples, inputGainDbToLinear } from './inputGain'
 import type {
   CaptureBackendKind,
   CaptureBackendPolicy,
@@ -120,11 +121,11 @@ class ElectronCaptureRuntime {
   private sequence = 0
   private sampleRate = 48000
   private channelCount = 2
+  private inputGainLinear = 1
 
   setInputGain(db: number): void {
-    if (this.gainNode) {
-      this.gainNode.gain.value = Math.pow(10, db / 20)
-    }
+    this.inputGainLinear = inputGainDbToLinear(db)
+    this.syncGainNode()
   }
 
   subscribe(listener: (chunk: CaptureChunk) => void): () => void {
@@ -202,8 +203,8 @@ class ElectronCaptureRuntime {
 
     if (!this.gainNode) {
       this.gainNode = this.audioContext.createGain()
-      this.gainNode.gain.value = 1.0
     }
+    this.syncGainNode()
 
     if (!this.workletNode) {
       this.workletNode = new AudioWorkletNode(this.audioContext, 'capture-processor', {
@@ -264,6 +265,12 @@ class ElectronCaptureRuntime {
     )
     this.sampleRate = Math.max(1, Math.floor(this.audioContext.sampleRate))
     this.currentConfigKey = configKey
+  }
+
+  private syncGainNode(): void {
+    if (this.gainNode) {
+      this.gainNode.gain.value = this.inputGainLinear
+    }
   }
 
   private async requestSystemStream(): Promise<MediaStream> {
@@ -575,6 +582,8 @@ class AudioCapture {
   private backendPolicy: CaptureBackendPolicy = DEFAULT_BACKEND_POLICY
   private activeBackendReason: string | null = null
   private sessionId: number | null = null
+  private inputGainDb = 0
+  private inputGainLinear = 1
   private statusListeners = new Set<StatusListener>()
 
   constructor() {
@@ -819,6 +828,10 @@ class AudioCapture {
       return
     }
 
+    if (originKind.startsWith('native-') && this.inputGainLinear !== 1) {
+      applyInputGainToStereoSamples(chunk.left, chunk.right, this.inputGainLinear)
+    }
+
     audioRouter.ingestChunk(chunk.left, chunk.right, {
       sessionId: this.sessionId,
       channelCount: chunk.channelCount,
@@ -828,7 +841,9 @@ class AudioCapture {
   }
 
   setInputGain(db: number): void {
-    this.electronRuntime.setInputGain(db)
+    this.inputGainDb = db
+    this.inputGainLinear = inputGainDbToLinear(this.inputGainDb)
+    this.electronRuntime.setInputGain(this.inputGainDb)
   }
 
   private emitStatus(): void {

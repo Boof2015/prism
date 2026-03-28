@@ -6,6 +6,10 @@ import {
   parseColorToRgb,
   resolveColorToRgb,
 } from '../src/renderer/utils/color'
+import {
+  applyInputGainToStereoSamples,
+  inputGainDbToLinear,
+} from '../src/renderer/audio/inputGain'
 import { moveDockedScopeOrder } from '../src/renderer/stores/settingsStore'
 import { SCOPE_KINDS, type ScopeKind } from '../src/types/scope'
 import type { ScopePopoutStateMap } from '../src/types/popout'
@@ -114,6 +118,39 @@ test('color helpers fall back predictably for invalid values', () => {
   assert.equal(colorToRgbChannels('nope'), null)
   assert.deepEqual(resolveColorToRgb('still-nope'), DEFAULT_VISUALIZER_TINT)
   assert.deepEqual(resolveColorToRgb('rgb(4, 5, 6)'), { r: 4, g: 5, b: 6 })
+})
+
+test('inputGainDbToLinear converts dB offsets to expected linear gain values', () => {
+  assert.equal(inputGainDbToLinear(0), 1)
+  assertAlmostEqual(inputGainDbToLinear(6), 1.9952623149688795, 1e-12, '+6 dB gain')
+  assertAlmostEqual(inputGainDbToLinear(-6), 0.5011872336272722, 1e-12, '-6 dB gain')
+})
+
+test('applyInputGainToStereoSamples scales both channels in place', () => {
+  const { left, right } = createFilledStereoChunk(0.25, -0.5, 3)
+  const linearGain = inputGainDbToLinear(6)
+
+  applyInputGainToStereoSamples(left, right, linearGain)
+
+  for (const sample of left) {
+    assertAlmostEqual(sample, 0.25 * linearGain, 1e-6, 'left channel scaled')
+  }
+
+  for (const sample of right) {
+    assertAlmostEqual(sample, -0.5 * linearGain, 1e-6, 'right channel scaled')
+  }
+})
+
+test('applyInputGainToStereoSamples is a no-op for unity gain', () => {
+  const left = new Float32Array([0.1, -0.2, 0.3])
+  const right = new Float32Array([-0.4, 0.5, -0.6])
+  const initialLeft = Array.from(left)
+  const initialRight = Array.from(right)
+
+  applyInputGainToStereoSamples(left, right, 1)
+
+  assert.deepEqual(Array.from(left), initialLeft)
+  assert.deepEqual(Array.from(right), initialRight)
 })
 
 test('VisualizerFrameLoop renders one invalidated frame while idle', () => {
