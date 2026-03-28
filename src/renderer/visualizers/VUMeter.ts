@@ -1,5 +1,8 @@
 import { audioRouter } from '../audio/AudioRouter'
+import { resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
+import { FrameScheduler } from './frameScheduler'
+import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
   DEFAULT_VU_METER_ORIENTATION,
   type VUMeterMode,
@@ -15,9 +18,10 @@ export interface VUMeterOptions {
   orientation?: VUMeterOrientation
   lineColor?: string
   dataSource?: VUMeterDataSource
+  frameScheduler?: FrameScheduler
 }
 
-type ResolvedVUMeterOptions = Required<Omit<VUMeterOptions, 'dataSource'>>
+type ResolvedVUMeterOptions = Required<Omit<VUMeterOptions, 'dataSource' | 'frameScheduler'>>
 
 const defaultOptions: ResolvedVUMeterOptions = {
   mode: 'bar',
@@ -39,17 +43,6 @@ const PEAK_DECAY_DB_PER_FRAME = 0.3
 const RMS_SMOOTHING = 0.85 // exponential smoothing factor
 const CORRELATION_SMOOTHING = 0.88
 
-// ---- Color utilities ----
-
-function parseHexColor(hex: string): [number, number, number] {
-  const h = hex.replace('#', '')
-  return [
-    parseInt(h.substring(0, 2), 16) || 56,
-    parseInt(h.substring(2, 4), 16) || 189,
-    parseInt(h.substring(4, 6), 16) || 248,
-  ]
-}
-
 function colorWithAlpha(r: number, g: number, b: number, a: number): string {
   return `rgba(${r}, ${g}, ${b}, ${a})`
 }
@@ -61,8 +54,7 @@ export class VUMeter {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedVUMeterOptions
   private dataSource: VUMeterDataSource
-  private animationId: number | null = null
-  private isRunning = false
+  private frameLoop: VisualizerFrameLoop
   private unsubscribeSessionChange: (() => void) | null = null
 
   // Meter state
@@ -80,9 +72,21 @@ export class VUMeter {
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
 
-    const { dataSource, ...optionOverrides } = options
+    const { dataSource, frameScheduler, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultVUMeterDataSource
+    this.frameLoop = new VisualizerFrameLoop({
+      frameScheduler,
+      shouldRun: () => this.dataSource.isPlaying(),
+      onFrame: this.drawFrame,
+    })
+    this.subscribeToSessionChanges()
+  }
+
+  private subscribeToSessionChanges(): void {
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+    }
     this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
       this.resetMeters()
     })
@@ -96,32 +100,35 @@ export class VUMeter {
     this.peakHoldL = 0
     this.peakHoldR = 0
     this.correlation = 0
+    this.invalidate()
   }
 
   setOptions(options: Partial<VUMeterOptions>): void {
-    const { dataSource, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
     this.options = { ...this.options, ...optionUpdates }
-    if (dataSource) {
+    if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
+      this.subscribeToSessionChanges()
+      this.resetMeters()
     }
+    this.invalidate()
   }
 
   start(): void {
-    if (this.isRunning) return
-    this.isRunning = true
-    this.draw()
+    this.frameLoop.start()
   }
 
   stop(): void {
-    this.isRunning = false
-    if (this.animationId !== null) {
-      cancelAnimationFrame(this.animationId)
-      this.animationId = null
-    }
+    this.frameLoop.stop()
+  }
+
+  invalidate(): void {
+    this.frameLoop.invalidate()
   }
 
   resize(): void {
     // Canvas resize handled externally
+    this.invalidate()
   }
 
   private processAudio(): void {
@@ -210,7 +217,7 @@ export class VUMeter {
 
   private drawHorizontalBarMode(width: number, height: number): void {
     const ctx = this.ctx
-    const [cr, cg, cb] = parseHexColor(this.options.lineColor)
+    const { r: cr, g: cg, b: cb } = resolveColorToRgb(this.options.lineColor)
 
     const meterHeight = Math.max(1, Math.floor(height * 0.28))
     const corrHeight = Math.max(1, Math.floor(height * 0.16))
@@ -244,7 +251,7 @@ export class VUMeter {
 
   private drawVerticalBarMode(width: number, height: number): void {
     const ctx = this.ctx
-    const [cr, cg, cb] = parseHexColor(this.options.lineColor)
+    const { r: cr, g: cg, b: cb } = resolveColorToRgb(this.options.lineColor)
 
     const sidePadding = Math.max(4, Math.floor(width * 0.08))
     const channelGap = Math.max(4, Math.floor(width * 0.08))
@@ -464,7 +471,7 @@ export class VUMeter {
 
   private drawNeedleMode(width: number, height: number): void {
     const ctx = this.ctx
-    const [cr, cg, cb] = parseHexColor(this.options.lineColor)
+    const { r: cr, g: cg, b: cb } = resolveColorToRgb(this.options.lineColor)
 
     // Layout: two meters side by side, correlation bar below
     const corrHeight = Math.max(1, Math.floor(height * 0.12))
@@ -581,15 +588,12 @@ export class VUMeter {
     ctx.fillText(dbText, centerX, y + h - 2)
   }
 
-  private draw = (): void => {
-    if (!this.isRunning) return
-
+  private drawFrame = (): void => {
     const { canvas, ctx, options } = this
     const width = canvas.width
     const height = canvas.height
 
     if (width <= 0 || height <= 0) {
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
@@ -602,12 +606,11 @@ export class VUMeter {
     } else {
       this.drawBarMode(width, height)
     }
-
-    this.animationId = requestAnimationFrame(this.draw)
   }
 
   dispose(): void {
     this.stop()
+    this.frameLoop.dispose()
     if (this.unsubscribeSessionChange) {
       this.unsubscribeSessionChange()
       this.unsubscribeSessionChange = null

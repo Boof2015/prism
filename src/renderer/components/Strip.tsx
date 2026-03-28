@@ -6,6 +6,7 @@ import type { WindowBounds } from '../../types/popout'
 import ScopeModule from './ScopeModule'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
 import { audioRouter } from '../audio/AudioRouter'
+import { FrameScheduler } from '../visualizers/frameScheduler'
 
 export default function Strip(): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -15,6 +16,7 @@ export default function Strip(): JSX.Element {
   const setScopeWidthWeight = useSettingsStore((s) => s.setScopeWidthWeight)
   const popOutScope = useSettingsStore((s) => s.popOutScope)
   const accent = useThemeStore((s) => s.accent)
+  const frameScheduler = useMemo(() => new FrameScheduler(), [])
   const stripRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const scopeRefs = useRef<Partial<Record<ScopeKind, HTMLDivElement | null>>>({})
@@ -214,6 +216,7 @@ export default function Strip(): JSX.Element {
             <ScopeModule
               scopeKind={kind}
               lineColor={accent}
+              frameScheduler={frameScheduler}
             />
           </div>
         ))}

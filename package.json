@@ -10,6 +10,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test:audio-router": "node scripts/run-audio-router-tests.mjs",
+    "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
     "build:native": "cd native && node-gyp rebuild",
     "rebuild:native": "node -e \"const e=require('electron/package.json').version;const a=process.arch;const{execSync}=require('child_process');execSync('node-gyp rebuild --target='+e+' --arch='+a+' --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native'})\"",
     "postinstall": "npm run rebuild:native || echo 'Native build failed, will use JS fallback'",

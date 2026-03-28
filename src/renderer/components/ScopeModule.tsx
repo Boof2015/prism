@@ -9,11 +9,13 @@ import { Spectrogram, type SpectrogramDataSource } from '../visualizers/Spectrog
 import { VUMeter, type VUMeterDataSource } from '../visualizers/VUMeter'
 import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
+import type { FrameScheduler } from '../visualizers/frameScheduler'
 
 interface ScopeModuleProps {
   scopeKind: ScopeKind
   lineColor?: string
   settings?: ScopeSettings[ScopeKind]
+  frameScheduler?: FrameScheduler
   dataSource?:
     | SpectrumAnalyzerDataSource
     | OscilloscopeDataSource
@@ -90,9 +92,10 @@ function createVisualizer(
   canvas: HTMLCanvasElement,
   mySettings: ScopeSettings[ScopeKind],
   lineColor: string,
+  frameScheduler?: FrameScheduler,
   dataSource?: ScopeModuleProps['dataSource'],
 ): Visualizer | null {
-  const opts = scopeSettingsToOptions(scopeKind, mySettings, lineColor)
+  const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, lineColor), frameScheduler }
   switch (scopeKind) {
     case 'spectrum':
       return new SpectrumAnalyzer(canvas, {
@@ -138,6 +141,7 @@ export default function ScopeModule({
   scopeKind,
   lineColor = '#38bdf8',
   settings,
+  frameScheduler,
   dataSource,
 }: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -154,7 +158,7 @@ export default function ScopeModule({
     if (!canvas) return
 
     initializedRef.current = false
-    const viz = createVisualizer(scopeKind, canvas, mySettings, lineColor, dataSource)
+    const viz = createVisualizer(scopeKind, canvas, mySettings, lineColor, frameScheduler, dataSource)
     if (!viz) return
 
     visualizerRef.current = viz
@@ -168,14 +172,18 @@ export default function ScopeModule({
       visualizerRef.current = null
       initializedRef.current = false
     }
-  }, [dataSource, scopeKind])
+  }, [dataSource, frameScheduler, scopeKind])
 
   // Push settings + lineColor changes to live visualizer (skip initial — constructor already handled it)
   useEffect(() => {
     if (!visualizerRef.current || !initializedRef.current) return
-    const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, lineColor), ...(dataSource ? { dataSource } : {}) }
+    const opts = {
+      ...scopeSettingsToOptions(scopeKind, mySettings, lineColor),
+      frameScheduler,
+      ...(dataSource ? { dataSource } : {}),
+    }
     visualizerRef.current.setOptions(opts)
-  }, [dataSource, lineColor, mySettings, scopeKind])
+  }, [dataSource, frameScheduler, lineColor, mySettings, scopeKind])
 
   // ResizeObserver for DPI-aware canvas sizing
   useEffect(() => {

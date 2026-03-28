@@ -5,7 +5,10 @@ import {
   isNativeAvailable
 } from '../audio/native'
 import { getNormalizedOscilloscopeDisplaySamples } from '../audio/native/oscilloscopeDisplaySamples'
+import { colorToRgbChannels } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
+import { FrameScheduler } from './frameScheduler'
+import { VisualizerFrameLoop } from './visualizerFrameLoop'
 
 export interface OscilloscopeDataSource extends VisualizerSessionSource {
   getPendingOscilloscopeSamples: () => Float32Array[]
@@ -20,9 +23,10 @@ export interface OscilloscopeOptions {
   pitchLock?: boolean
   underfillEnabled?: boolean
   dataSource?: OscilloscopeDataSource
+  frameScheduler?: FrameScheduler
 }
 
-type ResolvedOscilloscopeOptions = Required<Omit<OscilloscopeOptions, 'dataSource'>>
+type ResolvedOscilloscopeOptions = Required<Omit<OscilloscopeOptions, 'dataSource' | 'frameScheduler'>>
 
 const defaultOptions: ResolvedOscilloscopeOptions = {
   lineColor: '#00ffff',
@@ -31,7 +35,7 @@ const defaultOptions: ResolvedOscilloscopeOptions = {
   showGrid: true,
   gridColor: 'rgba(255, 255, 255, 0.1)',
   pitchLock: true,
-  underfillEnabled: false
+  underfillEnabled: false,
 }
 
 const defaultOscilloscopeDataSource: OscilloscopeDataSource = {
@@ -39,45 +43,9 @@ const defaultOscilloscopeDataSource: OscilloscopeDataSource = {
   ...defaultVisualizerSessionSource,
 }
 
-function parseRgbChannels(color: string): string | null {
-  const normalized = color.trim()
-
-  if (normalized.startsWith('#')) {
-    const hex = normalized.slice(1)
-    const expanded = hex.length === 3
-      ? hex.split('').map((ch) => `${ch}${ch}`).join('')
-      : hex
-
-    if (expanded.length === 6) {
-      const r = Number.parseInt(expanded.slice(0, 2), 16)
-      const g = Number.parseInt(expanded.slice(2, 4), 16)
-      const b = Number.parseInt(expanded.slice(4, 6), 16)
-      if (!Number.isNaN(r) && !Number.isNaN(g) && !Number.isNaN(b)) {
-        return `${r}, ${g}, ${b}`
-      }
-    }
-  }
-
-  const rgbMatch = /^rgba?\((.*)\)$/i.exec(normalized)
-  if (!rgbMatch) return null
-
-  const tokens = rgbMatch[1]
-    ?.split(',')
-    .map((token) => token.trim())
-    .filter(Boolean) ?? []
-  if (tokens.length < 3) return null
-
-  const r = Number.parseFloat(tokens[0])
-  const g = Number.parseFloat(tokens[1])
-  const b = Number.parseFloat(tokens[2])
-  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return null
-
-  return `${Math.max(0, Math.min(255, Math.round(r)))}, ${Math.max(0, Math.min(255, Math.round(g)))}, ${Math.max(0, Math.min(255, Math.round(b)))}`
-}
-
 function highContrastUnderfillColor(accentColor: string, alpha: number): string {
   const safeAlpha = Math.max(0, Math.min(1, alpha))
-  const channels = parseRgbChannels(accentColor)
+  const channels = colorToRgbChannels(accentColor)
   const nearWhite = { r: 245, g: 248, b: 252 }
   const tintAmount = 0.18
 
@@ -105,25 +73,43 @@ export class Oscilloscope {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedOscilloscopeOptions
   private dataSource: OscilloscopeDataSource
-  private animationId: number | null = null
-  private isRunning: boolean = false
-  private nativeInitialized: boolean = false
-  private samplesReceived: number = 0
-  private lastSampleRate: number = 0
+  private frameLoop: VisualizerFrameLoop
+  private nativeInitialized = false
+  private samplesReceived = 0
+  private lastSampleRate = 0
   private unsubscribeSessionChange: (() => void) | null = null
-  private static readonly WARMUP_SAMPLES = 4096 // Need ~4K samples before pitch detection is reliable
+  private staticLayerCanvas: HTMLCanvasElement
+  private staticLayerCtx: CanvasRenderingContext2D
+  private staticLayerKey = ''
+  private static readonly WARMUP_SAMPLES = 4096
 
   constructor(canvas: HTMLCanvasElement, options: OscilloscopeOptions = {}) {
     this.canvas = canvas
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
-    const { dataSource, ...optionOverrides } = options
+
+    const { dataSource, frameScheduler, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultOscilloscopeDataSource
+    this.frameLoop = new VisualizerFrameLoop({
+      frameScheduler,
+      shouldRun: () => this.dataSource.isPlaying(),
+      onFrame: this.drawFrame,
+    })
+    this.staticLayerCanvas = document.createElement('canvas')
+    const staticLayerCtx = this.staticLayerCanvas.getContext('2d')
+    if (!staticLayerCtx) throw new Error('Could not get offscreen 2D context')
+    this.staticLayerCtx = staticLayerCtx
 
-    // Initialize native module
     this.initNative()
+    this.subscribeToSessionChanges()
+  }
+
+  private subscribeToSessionChanges(): void {
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+    }
     this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
       this.reset()
     })
@@ -131,9 +117,6 @@ export class Oscilloscope {
 
   private initNative(): void {
     if (isNativeAvailable() && !this.nativeInitialized) {
-      // Initialize with current sample rate, but set lastSampleRate to 0 so
-      // updateSampleRateIfNeeded() always fires once the real capture rate is known.
-      // This prevents stale-rate issues when capture starts after initialization.
       const sampleRate = this.dataSource.getSampleRate()
       this.lastSampleRate = 0
       nativeOscilloscope.setSampleRate(sampleRate)
@@ -146,7 +129,6 @@ export class Oscilloscope {
     }
   }
 
-  // Update sample rate if AudioContext changes (called from draw loop)
   private updateSampleRateIfNeeded(): void {
     if (!isNativeAvailable()) return
     const currentRate = this.dataSource.getSampleRate()
@@ -159,123 +141,102 @@ export class Oscilloscope {
   }
 
   setOptions(options: Partial<OscilloscopeOptions>): void {
-    const { dataSource, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
     this.options = { ...this.options, ...optionUpdates }
-    if (dataSource) {
+    if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
+      this.subscribeToSessionChanges()
+      this.reset()
     }
 
-    // Update native module settings
     if (isNativeAvailable() && options.pitchLock !== undefined) {
       nativeOscilloscope.setPitchLock(options.pitchLock)
     }
+
+    this.staticLayerKey = ''
+    this.invalidate()
   }
 
   start(): void {
-    if (this.isRunning) return
-    this.isRunning = true
-    this.draw()
+    this.frameLoop.start()
   }
 
   stop(): void {
-    this.isRunning = false
-    if (this.animationId !== null) {
-      cancelAnimationFrame(this.animationId)
-      this.animationId = null
-    }
+    this.frameLoop.stop()
   }
 
-  resize(): void { }
+  invalidate(): void {
+    this.frameLoop.invalidate()
+  }
 
-  private draw = (): void => {
-    if (!this.isRunning) return
+  resize(): void {
+    this.staticLayerKey = ''
+    this.invalidate()
+  }
 
+  private drawFrame = (): void => {
     const { canvas, ctx, options } = this
     const width = canvas.width
     const height = canvas.height
     const dpr = window.devicePixelRatio || 1
 
-    ctx.clearRect(0, 0, width, height)
+    if (width <= 0 || height <= 0) return
 
-    if (options.backgroundColor !== 'transparent') {
-      ctx.fillStyle = options.backgroundColor
-      ctx.fillRect(0, 0, width, height)
-    }
+    this.renderStaticLayer()
 
-    if (options.showGrid) {
-      this.drawGrid()
-    }
-
-    // Native C++ is being fed continuously by AudioWorklet via AudioEngine
     if (!isNativeAvailable()) {
       console.error('Oscilloscope: Native DSP required')
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
-    // Check if sample rate needs updating (AudioContext may have initialized after us)
     this.updateSampleRateIfNeeded()
 
     if (!this.dataSource.isPlaying()) {
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
-    // Flush ALL pending samples to native C++ (prevents sample loss)
     const pendingSamples = this.dataSource.getPendingOscilloscopeSamples()
     for (const chunk of pendingSamples) {
       nativeOscilloscope.pushSamples(chunk)
       this.samplesReceived += chunk.length
     }
 
-    // Skip pitch-locked processing during warmup period.
-    // Bypass mode (pitchLock=false) should render immediately using a moving window.
     if (options.pitchLock && this.samplesReceived < Oscilloscope.WARMUP_SAMPLES) {
-      // During warmup, just show a static waveform or grid
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
-    // Process using circular buffer - searches backwards from writePos
     const result = nativeOscilloscope.processContinuous()
     if (!result) {
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
     const samplesToShow = result.samplesToShow
     let triggerIndex = result.triggerIndex
 
-    // In bypass mode, ignore trigger locking and follow the live write head.
-    // This produces free-running oscilloscope motion without touching pitch-lock behavior.
     if (!options.pitchLock) {
       const writePos = result.writePos
       triggerIndex = writePos - samplesToShow
       while (triggerIndex < 0) triggerIndex += OSCILLOSCOPE_BUFFER_SIZE
     }
 
-    // Get samples from circular buffer for rendering
     const renderData = nativeOscilloscope.getSamples(Math.floor(triggerIndex), samplesToShow)
     if (!renderData || renderData.length === 0) {
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
-    // Draw waveform (data already starts at trigger point)
     const sliceWidth = width / samplesToShow
     const centerY = height / 2
-    const VISUAL_GAIN = 1.8
+    const visualGain = 1.8
     const points: Array<{ x: number; y: number }> = []
 
     for (let i = 0; i < samplesToShow && i < renderData.length; i++) {
       const sample = renderData[i]
-      const y = ((1 - sample * VISUAL_GAIN) / 2) * height
+      const y = ((1 - sample * visualGain) / 2) * height
       const x = i * sliceWidth
       points.push({ x, y })
     }
 
     if (points.length < 2) {
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
@@ -312,11 +273,46 @@ export class Oscilloscope {
       ctx.lineTo(points[i].x, points[i].y)
     }
     ctx.stroke()
-    this.animationId = requestAnimationFrame(this.draw)
   }
 
-  private drawGrid(): void {
-    const { ctx, canvas, options } = this
+  private renderStaticLayer(): void {
+    this.ensureStaticLayer()
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+    this.ctx.drawImage(this.staticLayerCanvas, 0, 0)
+  }
+
+  private ensureStaticLayer(): void {
+    const { canvas, options } = this
+    const key = [
+      canvas.width,
+      canvas.height,
+      options.backgroundColor,
+      options.showGrid,
+      options.gridColor,
+    ].join(':')
+
+    if (this.staticLayerKey === key) {
+      return
+    }
+
+    this.staticLayerCanvas.width = canvas.width
+    this.staticLayerCanvas.height = canvas.height
+    this.staticLayerCtx.clearRect(0, 0, canvas.width, canvas.height)
+
+    if (options.backgroundColor !== 'transparent') {
+      this.staticLayerCtx.fillStyle = options.backgroundColor
+      this.staticLayerCtx.fillRect(0, 0, canvas.width, canvas.height)
+    }
+
+    if (options.showGrid) {
+      this.drawGrid(this.staticLayerCtx)
+    }
+
+    this.staticLayerKey = key
+  }
+
+  private drawGrid(ctx: CanvasRenderingContext2D): void {
+    const { canvas, options } = this
     const width = canvas.width
     const height = canvas.height
     const dpr = window.devicePixelRatio || 1
@@ -348,31 +344,29 @@ export class Oscilloscope {
     }
   }
 
-  // Reset state for new track (call on track change to re-enable fast pitch convergence)
   reset(): void {
-    // Reset JS warmup state
     this.samplesReceived = 0
 
-    // Reset native state (clears buffers, resets pitch tracking, re-enables fast smoothing)
     if (isNativeAvailable()) {
       nativeOscilloscope.reset()
     }
+
+    this.invalidate()
   }
 
   dispose(): void {
     this.stop()
+    this.frameLoop.dispose()
 
     if (this.unsubscribeSessionChange) {
       this.unsubscribeSessionChange()
       this.unsubscribeSessionChange = null
     }
 
-    // Reset native module state
     if (isNativeAvailable()) {
       nativeOscilloscope.reset()
     }
 
-    // Reset warmup state
     this.samplesReceived = 0
     this.lastSampleRate = 0
   }

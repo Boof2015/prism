@@ -6,6 +6,7 @@ import ScopeModule from '../components/ScopeModule'
 import ScopeSettingsSection from '../components/ScopeSettingsSection'
 import { applyAccentToDOM } from '../stores/themeStore'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
+import { FrameScheduler } from '../visualizers/frameScheduler'
 
 function PopInIcon(): JSX.Element {
   return (
@@ -47,6 +48,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
   const [miniSettingsOpen, setMiniSettingsOpen] = useState(false)
   const prevMiniSettingsOpenRef = useRef(false)
+  const frameScheduler = useMemo(() => new FrameScheduler(), [])
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
 
   useEffect(() => {
@@ -209,6 +211,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
               scopeKind={scopeKind}
               lineColor={effectiveAccent}
               settings={effectiveSettings}
+              frameScheduler={frameScheduler}
               dataSource={dataSource}
             />
           </div>

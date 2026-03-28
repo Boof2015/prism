@@ -1,5 +1,8 @@
 import { audioRouter } from '../audio/AudioRouter'
+import { resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
+import { FrameScheduler } from './frameScheduler'
+import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
   DEFAULT_SPECTROGRAM_CLARITY_MODE,
   DEFAULT_SPECTROGRAM_SCALE_MODE,
@@ -27,9 +30,10 @@ export interface SpectrogramOptions {
   colorScheme?: 'heat' | 'mono'
   lineColor?: string
   dataSource?: SpectrogramDataSource
+  frameScheduler?: FrameScheduler
 }
 
-type ResolvedSpectrogramOptions = Required<Omit<SpectrogramOptions, 'dataSource'>>
+type ResolvedSpectrogramOptions = Required<Omit<SpectrogramOptions, 'dataSource' | 'frameScheduler'>>
 
 interface SpectrogramClarityProfile {
   gamma: number      // contrast curve exponent
@@ -251,15 +255,6 @@ function buildHeatLUT(): Uint8Array {
 
 const HEAT_LUT = buildHeatLUT()
 
-function parseHexColor(hex: string): [number, number, number] {
-  const normalized = hex.replace('#', '')
-  return [
-    Number.parseInt(normalized.substring(0, 2), 16) || 56,
-    Number.parseInt(normalized.substring(2, 4), 16) || 189,
-    Number.parseInt(normalized.substring(4, 6), 16) || 248,
-  ]
-}
-
 // Zero-pad FFT for finer frequency resolution (visual interpolation)
 const FFT_PAD_FACTOR = 4
 
@@ -268,8 +263,7 @@ export class Spectrogram {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedSpectrogramOptions
   private dataSource: SpectrogramDataSource
-  private animationId: number | null = null
-  private isRunning = false
+  private frameLoop: VisualizerFrameLoop
 
   private fftRe: Float32Array
   private fftIm: Float32Array
@@ -293,6 +287,7 @@ export class Spectrogram {
   private lastMinFrequency = 0
   private lastMaxFrequency = 0
   private lastScaleMode: SpectrogramScaleMode | null = null
+  private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: SpectrogramOptions = {}) {
     this.canvas = canvas
@@ -300,9 +295,14 @@ export class Spectrogram {
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
 
-    const { dataSource, ...optionOverrides } = options
+    const { dataSource, frameScheduler, ...optionOverrides } = options
     this.options = resolveOptions(defaultOptions, optionOverrides)
     this.dataSource = dataSource ?? defaultSpectrogramDataSource
+    this.frameLoop = new VisualizerFrameLoop({
+      frameScheduler,
+      shouldRun: () => this.dataSource.isPlaying(),
+      onFrame: this.drawFrame,
+    })
 
     const windowSize = this.options.fftSize
     const paddedSize = windowSize * FFT_PAD_FACTOR
@@ -319,20 +319,34 @@ export class Spectrogram {
 
     this.ctx.imageSmoothingEnabled = false
     this.waterfallCtx.imageSmoothingEnabled = false
+
+    this.subscribeToSessionChanges()
+  }
+
+  private subscribeToSessionChanges(): void {
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+    }
+    this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
+      this.resetDisplay()
+    })
   }
 
   private resetDisplay(): void {
     this.sampleBufferPos = 0
     this.waterfallCtx.clearRect(0, 0, this.waterfallCanvas.width, this.waterfallCanvas.height)
+    this.invalidate()
   }
 
   setOptions(options: Partial<SpectrogramOptions>): void {
-    const { dataSource, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
     const previousOptions = this.options
     this.options = resolveOptions(previousOptions, optionUpdates)
 
-    if (dataSource) {
+    if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
+      this.subscribeToSessionChanges()
+      this.resetDisplay()
     }
 
     if (this.options.fftSize !== previousOptions.fftSize) {
@@ -347,25 +361,26 @@ export class Spectrogram {
     } else if (this.options.scaleMode !== previousOptions.scaleMode) {
       this.resetDisplay()
     }
+
+    this.invalidate()
   }
 
   start(): void {
-    if (this.isRunning) return
-    this.isRunning = true
-    this.draw()
+    this.frameLoop.start()
   }
 
   stop(): void {
-    this.isRunning = false
-    if (this.animationId !== null) {
-      cancelAnimationFrame(this.animationId)
-      this.animationId = null
-    }
+    this.frameLoop.stop()
+  }
+
+  invalidate(): void {
+    this.frameLoop.invalidate()
   }
 
   resize(): void {
     this.lastWidth = 0
     this.lastHeight = 0
+    this.invalidate()
   }
 
   private ensureColumnBuffers(height: number): void {
@@ -500,9 +515,9 @@ export class Spectrogram {
     if (!this.columnImageData) return
 
     const imageData = this.columnImageData.data
-    const [tintR, tintG, tintB] = this.options.colorScheme === 'mono'
-      ? parseHexColor(this.options.lineColor)
-      : [0, 0, 0]
+    const { r: tintR, g: tintG, b: tintB } = this.options.colorScheme === 'mono'
+      ? resolveColorToRgb(this.options.lineColor)
+      : { r: 0, g: 0, b: 0 }
 
     for (let row = 0; row < values.length; row += 1) {
       const intensity = Math.max(0, Math.min(1, values[row]))
@@ -600,13 +615,10 @@ export class Spectrogram {
     return values
   }
 
-  private draw = (): void => {
-    if (!this.isRunning) return
-
+  private drawFrame = (): void => {
     const width = this.canvas.width
     const height = this.canvas.height
     if (width <= 0 || height <= 0) {
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
@@ -648,7 +660,6 @@ export class Spectrogram {
       // Freeze waterfall in place instead of blanking
       this.ctx.clearRect(0, 0, width, height)
       this.ctx.drawImage(this.waterfallCanvas, 0, 0)
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
 
@@ -680,10 +691,14 @@ export class Spectrogram {
 
     this.ctx.clearRect(0, 0, width, height)
     this.ctx.drawImage(this.waterfallCanvas, 0, 0)
-    this.animationId = requestAnimationFrame(this.draw)
   }
 
   dispose(): void {
     this.stop()
+    this.frameLoop.dispose()
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+      this.unsubscribeSessionChange = null
+    }
   }
 }

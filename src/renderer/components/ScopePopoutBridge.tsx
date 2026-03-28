@@ -65,6 +65,7 @@ export default function ScopePopoutBridge(): null {
     [hiddenScopes, scopePopouts],
   )
   const activePopoutKindsRef = useRef<ScopeKind[]>(activePopoutKinds)
+  const sessionStateRef = useRef(audioRouter.getSessionState())
 
   useEffect(() => {
     activePopoutKindsRef.current = activePopoutKinds
@@ -155,23 +156,48 @@ export default function ScopePopoutBridge(): null {
     let frameId = 0
 
     const flushFrame = (): void => {
+      frameId = 0
+      if (!sessionStateRef.current.capturing || activePopoutKindsRef.current.length === 0) {
+        return
+      }
+
       for (const kind of activePopoutKindsRef.current) {
         const batch = flushScopeAudioBatch(kind)
         if (batch.length > 0) {
           window.electronAPI.sendScopePopoutAudio(kind, batch)
         }
       }
+
       frameId = window.requestAnimationFrame(flushFrame)
     }
 
-    if (activePopoutKinds.length > 0) {
-      frameId = window.requestAnimationFrame(flushFrame)
+    const syncFlushLoop = (): void => {
+      const shouldRun = sessionStateRef.current.capturing && activePopoutKindsRef.current.length > 0
+      if (!shouldRun) {
+        if (frameId) {
+          window.cancelAnimationFrame(frameId)
+          frameId = 0
+        }
+        return
+      }
+
+      if (!frameId) {
+        frameId = window.requestAnimationFrame(flushFrame)
+      }
     }
+
+    sessionStateRef.current = audioRouter.getSessionState()
+    const unsubscribeSession = audioRouter.subscribeToSessionChanges((state) => {
+      sessionStateRef.current = state
+      syncFlushLoop()
+    })
+    syncFlushLoop()
 
     return () => {
       if (frameId) {
         window.cancelAnimationFrame(frameId)
       }
+      unsubscribeSession()
     }
   }, [activePopoutKinds])
 

@@ -1,6 +1,9 @@
 import { audioRouter } from '../audio/AudioRouter'
 import type { LUFSMeterMode } from '../../types/lufsmeter'
+import { resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
+import { FrameScheduler } from './frameScheduler'
+import { VisualizerFrameLoop } from './visualizerFrameLoop'
 
 export interface LUFSMeterDataSource extends VisualizerSessionSource {
   getPendingLUFSMeterSamples: () => Array<{ left: Float32Array; right: Float32Array }>
@@ -10,9 +13,10 @@ export interface LUFSMeterOptions {
   mode?: LUFSMeterMode
   lineColor?: string
   dataSource?: LUFSMeterDataSource
+  frameScheduler?: FrameScheduler
 }
 
-type ResolvedLUFSMeterOptions = Required<Omit<LUFSMeterOptions, 'dataSource'>>
+type ResolvedLUFSMeterOptions = Required<Omit<LUFSMeterOptions, 'dataSource' | 'frameScheduler'>>
 
 const defaultOptions: ResolvedLUFSMeterOptions = {
   mode: 'bar',
@@ -97,17 +101,6 @@ function applyBiquad(coeffs: BiquadCoeffs, state: BiquadState, input: number): n
   return output
 }
 
-// ---- Color utilities ----
-
-function parseHexColor(hex: string): [number, number, number] {
-  const h = hex.replace('#', '')
-  return [
-    parseInt(h.substring(0, 2), 16) || 56,
-    parseInt(h.substring(2, 4), 16) || 189,
-    parseInt(h.substring(4, 6), 16) || 248,
-  ]
-}
-
 // ---- LUFS Meter class ----
 
 export class LUFSMeter {
@@ -115,8 +108,7 @@ export class LUFSMeter {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedLUFSMeterOptions
   private dataSource: LUFSMeterDataSource
-  private animationId: number | null = null
-  private isRunning = false
+  private frameLoop: VisualizerFrameLoop
 
   // K-weighting filter state (per channel, two stages)
   private preFilterL = createBiquadState()
@@ -143,6 +135,7 @@ export class LUFSMeter {
   private momentaryLUFS = METER_MIN_LUFS
   private shortTermLUFS = METER_MIN_LUFS
   private integratedLUFS = METER_MIN_LUFS
+  private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: LUFSMeterOptions = {}) {
     this.canvas = canvas
@@ -150,11 +143,26 @@ export class LUFSMeter {
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
 
-    const { dataSource, ...optionOverrides } = options
+    const { dataSource, frameScheduler, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultLUFSMeterDataSource
+    this.frameLoop = new VisualizerFrameLoop({
+      frameScheduler,
+      shouldRun: () => this.dataSource.isPlaying(),
+      onFrame: this.drawFrame,
+    })
 
     this.initRingBuffer(this.dataSource.getSampleRate())
+    this.subscribeToSessionChanges()
+  }
+
+  private subscribeToSessionChanges(): void {
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+    }
+    this.unsubscribeSessionChange = this.dataSource.subscribeToSessionChanges(() => {
+      this.resetMeters()
+    })
   }
 
   private initRingBuffer(sampleRate: number): void {
@@ -184,32 +192,36 @@ export class LUFSMeter {
     this.preFilterR = createBiquadState()
     this.rlbFilterL = createBiquadState()
     this.rlbFilterR = createBiquadState()
+    this.invalidate()
   }
 
   setOptions(options: Partial<LUFSMeterOptions>): void {
-    const { dataSource, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
     this.options = { ...this.options, ...optionUpdates }
-    if (dataSource) {
+    if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
+      this.subscribeToSessionChanges()
+      this.initRingBuffer(this.dataSource.getSampleRate())
+      this.resetMeters()
     }
+    this.invalidate()
   }
 
   start(): void {
-    if (this.isRunning) return
-    this.isRunning = true
-    this.draw()
+    this.frameLoop.start()
   }
 
   stop(): void {
-    this.isRunning = false
-    if (this.animationId !== null) {
-      cancelAnimationFrame(this.animationId)
-      this.animationId = null
-    }
+    this.frameLoop.stop()
+  }
+
+  invalidate(): void {
+    this.frameLoop.invalidate()
   }
 
   resize(): void {
     // Canvas resize handled externally
+    this.invalidate()
   }
 
   private processAudio(): void {
@@ -341,30 +353,25 @@ export class LUFSMeter {
     return Math.max(METER_MIN_LUFS, 10 * Math.log10(finalSum / afterRelative.length))
   }
 
-  private draw = (): void => {
-    if (!this.isRunning) return
-
-    this.processAudio()
-
+  private drawFrame = (): void => {
     const { canvas, ctx } = this
     const width = canvas.width
     const height = canvas.height
 
     if (width <= 0 || height <= 0) {
-      this.animationId = requestAnimationFrame(this.draw)
       return
     }
+
+    this.processAudio()
 
     ctx.clearRect(0, 0, width, height)
 
     this.drawBars(width, height)
-
-    this.animationId = requestAnimationFrame(this.draw)
   }
 
   private drawBars(width: number, height: number): void {
     const ctx = this.ctx
-    const [tintR, tintG, tintB] = parseHexColor(this.options.lineColor)
+    const { r: tintR, g: tintG, b: tintB } = resolveColorToRgb(this.options.lineColor)
     const dpr = window.devicePixelRatio || 1
 
     const padding = Math.round(8 * dpr)
@@ -461,5 +468,10 @@ export class LUFSMeter {
 
   dispose(): void {
     this.stop()
+    this.frameLoop.dispose()
+    if (this.unsubscribeSessionChange) {
+      this.unsubscribeSessionChange()
+      this.unsubscribeSessionChange = null
+    }
   }
 }
