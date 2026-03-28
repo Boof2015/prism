@@ -1,4 +1,4 @@
-import type { JSX, ReactNode } from 'react'
+import type { CSSProperties, JSX, ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
@@ -137,6 +137,10 @@ function RangeControl({
   disabled?: boolean
   onChange: (value: number) => void
 }): JSX.Element {
+  const percent = max > min
+    ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100))
+    : 0
+
   return (
     <label className={`settings-control ${fullWidth ? 'settings-control--full' : ''} ${disabled ? 'is-disabled' : ''}`.trim()}>
       <span className="settings-control__label">
@@ -150,6 +154,7 @@ function RangeControl({
         max={max}
         step={step}
         value={value}
+        style={{ '--range-percent': `${percent}%` } as CSSProperties}
         disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
       />

@@ -112,6 +112,8 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
         ? 'Capture Failed'
         : 'Idle'
 
+  const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
+
   return (
     <div className="bottom-bar" ref={rootRef}>
       <div className="bottom-bar__rail" aria-label="Global settings">
@@ -238,6 +240,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   max={12}
                   step={0.5}
                   value={inputGainDb}
+                  style={{ '--range-percent': `${trimPercent}%` } as CSSProperties}
                   onChange={(event) => setInputGain(Number(event.target.value))}
                   onDoubleClick={() => setInputGain(0)}
                 />

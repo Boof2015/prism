@@ -610,42 +610,101 @@ select {
 
 .settings-control__range {
   width: 100%;
-  height: 16px;
+  --range-percent: 50%;
+  height: 22px;
   margin: 0;
   appearance: none;
   background: transparent;
+  cursor: ew-resize;
 }
 
 .settings-control__range::-webkit-slider-runnable-track {
-  height: 2px;
+  height: 6px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.1) 28%, rgba(var(--accent-rgb), 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background:
+    linear-gradient(90deg, rgba(var(--accent-rgb), 0.82), rgba(var(--accent-rgb), 0.46)) 0 / var(--range-percent) 100% no-repeat,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(0, 0, 0, 0.22);
 }
 
 .settings-control__range::-webkit-slider-thumb {
   appearance: none;
-  width: 10px;
-  height: 10px;
-  margin-top: -4px;
-  border-radius: 50%;
-  border: 1px solid rgba(var(--accent-rgb), 0.72);
-  background: rgba(5, 7, 10, 0.98);
-  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.18);
+  width: 12px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 5px;
+  border: 1px solid rgba(var(--accent-rgb), 0.78);
+  background: linear-gradient(180deg, rgba(20, 26, 34, 0.98), rgba(7, 10, 15, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 0 2px rgba(var(--accent-rgb), 0.14),
+    0 3px 8px rgba(0, 0, 0, 0.35);
 }
 
 .settings-control__range::-moz-range-track {
-  height: 2px;
+  height: 6px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.1) 28%, rgba(var(--accent-rgb), 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(0, 0, 0, 0.22);
 }
 
 .settings-control__range::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1px solid rgba(var(--accent-rgb), 0.72);
-  background: rgba(5, 7, 10, 0.98);
-  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.18);
+  width: 12px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1px solid rgba(var(--accent-rgb), 0.78);
+  background: linear-gradient(180deg, rgba(20, 26, 34, 0.98), rgba(7, 10, 15, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 0 2px rgba(var(--accent-rgb), 0.14),
+    0 3px 8px rgba(0, 0, 0, 0.35);
+}
+
+.settings-control__range::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.02);
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.82), rgba(var(--accent-rgb), 0.46));
+}
+
+.settings-control__range:hover::-webkit-slider-runnable-track,
+.settings-control__range:focus-visible::-webkit-slider-runnable-track {
+  background:
+    linear-gradient(90deg, rgba(var(--accent-rgb), 0.92), rgba(var(--accent-rgb), 0.58)) 0 / var(--range-percent) 100% no-repeat,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
+}
+
+.settings-control__range:hover::-moz-range-progress,
+.settings-control__range:focus-visible::-moz-range-progress {
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.92), rgba(var(--accent-rgb), 0.58));
+}
+
+.settings-control__range:hover::-webkit-slider-thumb,
+.settings-control__range:focus-visible::-webkit-slider-thumb {
+  border-color: rgba(var(--accent-rgb), 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 0 0 3px rgba(var(--accent-rgb), 0.18),
+    0 3px 10px rgba(0, 0, 0, 0.4);
+}
+
+.settings-control__range:hover::-moz-range-thumb,
+.settings-control__range:focus-visible::-moz-range-thumb {
+  border-color: rgba(var(--accent-rgb), 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 0 0 3px rgba(var(--accent-rgb), 0.18),
+    0 3px 10px rgba(0, 0, 0, 0.4);
+}
+
+.settings-control__range:focus-visible {
+  outline: none;
 }
 
 .settings-chip-row {
