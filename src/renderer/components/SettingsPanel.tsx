@@ -1,10 +1,16 @@
-import { useMemo, type CSSProperties, type JSX } from 'react'
+import { useLayoutEffect, useMemo, useRef, type CSSProperties, type JSX } from 'react'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
 import ScopeSettingsSection from './ScopeSettingsSection'
 import { useSettingsStore } from '../stores/settingsStore'
 
-export default function SettingsPanel(): JSX.Element {
+interface SettingsPanelProps {
+  onHeightChange?: (height: number) => void
+}
+
+export default function SettingsPanel({ onHeightChange }: SettingsPanelProps): JSX.Element {
   const { scopeSettings, updateScopeSettings, hiddenScopes, scopeOrder, widthWeights, scopePopouts } = useSettingsStore()
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const scopeTrackRef = useRef<HTMLDivElement | null>(null)
 
   const dockedScopes = useMemo(
     () => scopeOrder.filter((kind) => !hiddenScopes.has(kind) && !scopePopouts[kind]?.poppedOut),
@@ -16,9 +22,39 @@ export default function SettingsPanel(): JSX.Element {
     return { gridTemplateColumns } as CSSProperties
   }, [dockedScopes, widthWeights])
 
+  useLayoutEffect(() => {
+    if (!onHeightChange || !panelRef.current) return
+
+    const panelElement = panelRef.current
+    let frameId = 0
+
+    const reportHeight = (): void => {
+      cancelAnimationFrame(frameId)
+      frameId = requestAnimationFrame(() => {
+        onHeightChange(Math.ceil(panelElement.scrollHeight))
+      })
+    }
+
+    reportHeight()
+
+    const resizeObserver = new ResizeObserver(() => {
+      reportHeight()
+    })
+
+    resizeObserver.observe(panelElement)
+    if (scopeTrackRef.current) {
+      resizeObserver.observe(scopeTrackRef.current)
+    }
+
+    return () => {
+      cancelAnimationFrame(frameId)
+      resizeObserver.disconnect()
+    }
+  }, [dockedScopes, onHeightChange, scopeTrackStyle])
+
   return (
-    <div className="settings-panel">
-      <div className="settings-panel__scope-track" style={scopeTrackStyle}>
+    <div className="settings-panel" ref={panelRef}>
+      <div className="settings-panel__scope-track" style={scopeTrackStyle} ref={scopeTrackRef}>
         {dockedScopes.map((kind) => (
           <ScopeSettingsSection
             key={kind}

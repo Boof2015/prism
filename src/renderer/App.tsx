@@ -8,13 +8,14 @@ import { useSettingsStore } from './stores/settingsStore'
 import { useAudioStore } from './stores/audioStore'
 import { SCOPE_KINDS } from '../types/scope'
 
-const SETTINGS_EXPAND_HEIGHT = 280
+const DEFAULT_SETTINGS_HEIGHT = 400
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
+  const [bottomBarHeight, setBottomBarHeight] = useState(0)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prevSettingsOpenRef = useRef(false)
   const startupBoundsAppliedRef = useRef(false)
 
   const toggleScope = useSettingsStore((s) => s.toggleScope)
@@ -40,15 +41,15 @@ export default function App(): JSX.Element {
     }
   }, [])
 
-  // Expand/collapse window by a fixed amount when settings toggle — no dynamic tracking
-  useEffect(() => {
-    if (settingsOpen && !prevSettingsOpenRef.current) {
-      window.electronAPI.expandSettings(SETTINGS_EXPAND_HEIGHT)
-    } else if (!settingsOpen && prevSettingsOpenRef.current) {
-      window.electronAPI.collapseSettings(SETTINGS_EXPAND_HEIGHT)
-    }
-    prevSettingsOpenRef.current = settingsOpen
-  }, [settingsOpen])
+  const measuredSettingsHeight = settingsPanelHeight > 0 && bottomBarHeight > 0
+    ? settingsPanelHeight + bottomBarHeight
+    : DEFAULT_SETTINGS_HEIGHT
+
+  const settingsHeight = settingsOpen ? measuredSettingsHeight : 0
+
+  useLayoutEffect(() => {
+    window.electronAPI.setSettingsHeight(settingsHeight)
+  }, [settingsHeight])
 
   const showToolbar = useCallback(() => {
     if (hideTimeoutRef.current) {
@@ -137,9 +138,9 @@ export default function App(): JSX.Element {
       <ScopePopoutBridge />
 
       {settingsOpen && (
-        <div className="prism-settings-region" style={{ height: SETTINGS_EXPAND_HEIGHT }}>
-          <SettingsPanel />
-          <BottomBar onClose={handleCloseSettings} />
+        <div className="prism-settings-region" style={{ height: settingsHeight }}>
+          <SettingsPanel onHeightChange={setSettingsPanelHeight} />
+          <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
         </div>
       )}
     </div>

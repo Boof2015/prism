@@ -74,6 +74,23 @@ function ToggleChip({
   )
 }
 
+function ToggleGroup({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <div className="settings-control settings-control--full settings-control--stack">
+      <span className="settings-control__label">{label}</span>
+      <div className="settings-chip-row">
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function SelectControl({
   label,
   value,
@@ -175,7 +192,7 @@ export default function ScopeSettingsSection({
                 ))}
               </SelectControl>
 
-              <div className="settings-chip-row settings-control--full">
+              <ToggleGroup label="Display">
                 <ToggleChip
                   label="Fill"
                   active={current.fillGradient}
@@ -191,7 +208,7 @@ export default function ScopeSettingsSection({
                   active={current.showGrid}
                   onClick={() => onUpdate('spectrum', { showGrid: !current.showGrid })}
                 />
-              </div>
+              </ToggleGroup>
 
               <RangeControl
                 label="Tilt"
@@ -234,7 +251,7 @@ export default function ScopeSettingsSection({
           const current = settings as ScopeSettings['oscilloscope']
           return (
             <>
-              <div className="settings-chip-row settings-control--full">
+              <ToggleGroup label="Options">
                 <ToggleChip
                   label="Pitch Lock"
                   active={current.pitchLock}
@@ -250,7 +267,7 @@ export default function ScopeSettingsSection({
                   active={current.showGrid}
                   onClick={() => onUpdate('oscilloscope', { showGrid: !current.showGrid })}
                 />
-              </div>
+              </ToggleGroup>
 
               <RangeControl
                 label="Line Width"
@@ -282,7 +299,7 @@ export default function ScopeSettingsSection({
                 <option value="linear-bipolar">Linear (Bi)</option>
               </SelectControl>
 
-              <div className="settings-chip-row settings-control--full">
+              <ToggleGroup label="Overlays">
                 <ToggleChip
                   label="RGB"
                   active={current.multiband}
@@ -293,7 +310,7 @@ export default function ScopeSettingsSection({
                   active={current.showGrid}
                   onClick={() => onUpdate('vectorscope', { showGrid: !current.showGrid })}
                 />
-              </div>
+              </ToggleGroup>
 
               <RangeControl
                 label="Persistence"
@@ -421,13 +438,13 @@ export default function ScopeSettingsSection({
           const current = settings as ScopeSettings['waveform']
           return (
             <>
-              <div className="settings-chip-row settings-control--full">
+              <ToggleGroup label="Bands">
                 <ToggleChip
                   label="Multiband"
                   active={current.multiband}
                   onClick={() => onUpdate('waveform', { multiband: !current.multiband })}
                 />
-              </div>
+              </ToggleGroup>
 
               <RangeControl
                 label="Gain"
