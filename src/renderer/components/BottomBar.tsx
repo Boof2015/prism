@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, type CSSProperties, type JSX } from 'react'
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type JSX, type WheelEvent } from 'react'
 import { useAudioStore } from '../stores/audioStore'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { SCOPE_KINDS } from '../../types/scope'
@@ -167,9 +168,31 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     setThemeId(useThemeStore.getState().activeThemeId)
   }
 
+  const handleRailWheel = (event: WheelEvent<HTMLDivElement>): void => {
+    const railElement = event.currentTarget
+    const target = event.target
+    const isTargetExcluded = target instanceof Element
+      && target.closest('input[type="range"], select, .settings-control__select') !== null
+
+    const scrollResult = getHorizontalWheelScrollResult({
+      clientWidth: railElement.clientWidth,
+      deltaMode: event.deltaMode,
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      isTargetExcluded,
+      scrollLeft: railElement.scrollLeft,
+      scrollWidth: railElement.scrollWidth,
+    })
+
+    if (!scrollResult) return
+
+    railElement.scrollLeft = scrollResult.nextScrollLeft
+    event.preventDefault()
+  }
+
   return (
     <div className="bottom-bar" ref={rootRef}>
-      <div className="bottom-bar__rail" aria-label="Global settings">
+      <div className="bottom-bar__rail" aria-label="Global settings" onWheel={handleRailWheel}>
         <div className="bottom-bar__rail-content">
           <section className="bottom-bar__section bottom-bar__section--modules">
             <div className="bottom-bar__section-title">Modules</div>

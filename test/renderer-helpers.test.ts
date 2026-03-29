@@ -7,6 +7,10 @@ import {
   resolveColorToRgb,
 } from '../src/renderer/utils/color'
 import {
+  getHorizontalWheelScrollResult,
+  normalizeWheelDelta,
+} from '../src/renderer/utils/horizontalWheelScroll'
+import {
   createDefaultProfile,
 } from '../src/shared/profileState'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
@@ -251,7 +255,7 @@ function installFakeLocalStorage(): {
   }
 }
 
-function installFakeElectronWindow(): {
+function installFakeElectronWindow(overrides: Record<string, unknown> = {}): {
   restore: () => void
 } {
   const globalWithWindow = globalThis as typeof globalThis & { window?: WindowWithTimers }
@@ -259,7 +263,10 @@ function installFakeElectronWindow(): {
 
   globalWithWindow.window = {
     ...globalThis,
-    electronAPI: { platform: 'darwin' },
+    electronAPI: {
+      platform: 'darwin',
+      ...overrides,
+    },
   } as WindowWithTimers
 
   return {
@@ -677,6 +684,127 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.lineColor, theme.spectrum.primary)
 })
 
+test('normalizeWheelDelta keeps pixel deltas unchanged', () => {
+  assert.equal(normalizeWheelDelta(24, 0, 320), 24)
+})
+
+test('normalizeWheelDelta converts line deltas to pixels', () => {
+  assert.equal(normalizeWheelDelta(3, 1, 320), 48)
+})
+
+test('normalizeWheelDelta scales page deltas to viewport width', () => {
+  assert.equal(normalizeWheelDelta(2, 2, 500), 900)
+})
+
+test('getHorizontalWheelScrollResult converts vertical wheel input into horizontal movement', () => {
+  assert.deepEqual(
+    getHorizontalWheelScrollResult({
+      clientWidth: 320,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: 60,
+      scrollLeft: 40,
+      scrollWidth: 960,
+    }),
+    {
+      appliedDelta: 60,
+      nextScrollLeft: 100,
+    },
+  )
+})
+
+test('getHorizontalWheelScrollResult leaves native horizontal wheel input alone', () => {
+  assert.equal(
+    getHorizontalWheelScrollResult({
+      clientWidth: 320,
+      deltaMode: 0,
+      deltaX: 8,
+      deltaY: 40,
+      scrollLeft: 40,
+      scrollWidth: 960,
+    }),
+    null,
+  )
+})
+
+test('getHorizontalWheelScrollResult is a no-op when the rail does not overflow', () => {
+  assert.equal(
+    getHorizontalWheelScrollResult({
+      clientWidth: 320,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: 40,
+      scrollLeft: 0,
+      scrollWidth: 320,
+    }),
+    null,
+  )
+})
+
+test('getHorizontalWheelScrollResult is a no-op for excluded interactive controls', () => {
+  assert.equal(
+    getHorizontalWheelScrollResult({
+      clientWidth: 320,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: 40,
+      isTargetExcluded: true,
+      scrollLeft: 0,
+      scrollWidth: 960,
+    }),
+    null,
+  )
+})
+
+test('getHorizontalWheelScrollResult moves scrollLeft left for negative deltas', () => {
+  assert.deepEqual(
+    getHorizontalWheelScrollResult({
+      clientWidth: 320,
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: -50,
+      scrollLeft: 120,
+      scrollWidth: 960,
+    }),
+    {
+      appliedDelta: -50,
+      nextScrollLeft: 70,
+    },
+  )
+})
+
+test('getHorizontalWheelScrollResult normalizes line and page delta modes', () => {
+  assert.deepEqual(
+    getHorizontalWheelScrollResult({
+      clientWidth: 400,
+      deltaMode: 1,
+      deltaX: 0,
+      deltaY: 2,
+      scrollLeft: 10,
+      scrollWidth: 1200,
+    }),
+    {
+      appliedDelta: 32,
+      nextScrollLeft: 42,
+    },
+  )
+
+  assert.deepEqual(
+    getHorizontalWheelScrollResult({
+      clientWidth: 400,
+      deltaMode: 2,
+      deltaX: 0,
+      deltaY: 1,
+      scrollLeft: 10,
+      scrollWidth: 1200,
+    }),
+    {
+      appliedDelta: 360,
+      nextScrollLeft: 370,
+    },
+  )
+})
+
 test('scopeSettingsToOptions wires waveform stereo mode into analyzer options', () => {
   const profile = createDefaultProfile('Default')
   profile.scopeSettings.waveform.mode = 'stereo'
@@ -805,6 +933,23 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   assert.equal(profilesMatch(baselineDraft, revertedDraft), true)
 })
 
+test('buildProfileDraft preserves unlinked themes instead of coercing the active theme', () => {
+  const profile = createDefaultProfile('Live Mix')
+  profile.themeId = null
+
+  const draft = buildProfileDraft({
+    themeId: profile.themeId,
+    scopeOrder: profile.scopeOrder,
+    hiddenScopes: profile.hiddenScopes,
+    widthWeights: profile.widthWeights,
+    scopeSettings: profile.scopeSettings,
+    scopePopouts: profile.scopePopouts,
+    windowBounds: profile.windowBounds,
+  }, profile.name)
+
+  assert.equal(draft.themeId, null)
+})
+
 test('main-window bounds updates stay in memory in Electron mode until save', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeStorage = installFakeLocalStorage()
@@ -813,6 +958,7 @@ test('main-window bounds updates stay in memory in Electron mode until save', ()
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
     profile.themeId = 'theme_default'
+    profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
     seedProfileDraftState(profile)
 
     useSettingsStore.getState().updateMainWindowBounds({ x: 10, y: 20, width: 900, height: 180 })
@@ -833,6 +979,191 @@ test('main-window bounds updates stay in memory in Electron mode until save', ()
   }
 })
 
+test('profiles without saved window bounds mark the first user move dirty after load sync completes', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const currentBounds = { x: 10, y: 20, width: 900, height: 180 }
+  const fakeWindow = installFakeElectronWindow({
+    getWindowBounds: async () => currentBounds,
+    setWindowBounds: () => {},
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    })
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.deepEqual(useSettingsStore.getState().savedProfileBaseline?.windowBounds, currentBounds)
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 24, y: 20, width: 900, height: 180 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, true)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+  }
+})
+
+test('loading a profile syncs the live window bounds without marking the draft dirty', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const currentBounds = { x: 52, y: 18, width: 940, height: 192 }
+  const fakeWindow = installFakeElectronWindow({
+    getWindowBounds: async () => currentBounds,
+    setWindowBounds: () => {},
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    })
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.deepEqual(useSettingsStore.getState().windowBounds, currentBounds)
+    assert.deepEqual(useSettingsStore.getState().savedProfileBaseline?.windowBounds, currentBounds)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+  }
+})
+
+test('switching to a non-default profile with an unlinked theme does not mark it dirty', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeWindow = installFakeElectronWindow({
+    getWindowBounds: async () => ({ x: 10, y: 20, width: 900, height: 180 }),
+    setWindowBounds: () => {},
+  })
+
+  try {
+    const defaultProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    defaultProfile.themeId = 'theme_default'
+
+    const liveMixProfile = createDefaultProfile('Live Mix')
+    liveMixProfile.themeId = null
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: 'profile_live_mix',
+      profiles: {
+        [DEFAULT_PROFILE_ID]: defaultProfile,
+        profile_live_mix: liveMixProfile,
+      },
+    })
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.equal(useSettingsStore.getState().themeId, null)
+    assert.equal(useSettingsStore.getState().savedProfileBaseline?.themeId, null)
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+  }
+})
+
+test('profile load absorbs immediate macOS-style window bound adjustments without marking dirty', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeWindow = installFakeElectronWindow({
+    getWindowBounds: async () => ({ x: 16, y: 18, width: 900, height: 180 }),
+    setWindowBounds: () => {},
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    })
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 16, y: 18, width: 900, height: 180 })
+    await Promise.resolve()
+    await Promise.resolve()
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+  }
+})
+
+test('profile load absorbs immediate popout bound adjustments without marking dirty', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeWindow = installFakeElectronWindow({
+    getWindowBounds: async () => ({ x: 10, y: 20, width: 900, height: 180 }),
+    setWindowBounds: () => {},
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    profile.scopePopouts.spectrum = {
+      poppedOut: true,
+      windowBounds: { x: 140, y: 60, width: 420, height: 240 },
+    }
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    })
+
+    useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 156, y: 58, width: 420, height: 240 })
+    await Promise.resolve()
+    await Promise.resolve()
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+  }
+})
+
+test('geometry sync window extends while load-time macOS bound updates continue', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeWindow = installFakeElectronWindow()
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    seedProfileDraftState(profile)
+
+    useSettingsStore.setState((state) => ({
+      ...state,
+      geometrySyncUntil: Date.now() + 50,
+    }))
+    const before = useSettingsStore.getState().geometrySyncUntil
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 24, y: 18, width: 900, height: 180 })
+
+    assert.ok(useSettingsStore.getState().geometrySyncUntil > before)
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+  }
+})
+
 test('popout bounds updates stay in memory in Electron mode until save', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeStorage = installFakeLocalStorage()
@@ -843,6 +1174,7 @@ test('popout bounds updates stay in memory in Electron mode until save', () => {
     profile.themeId = 'theme_default'
     profile.scopePopouts.spectrum = {
       poppedOut: true,
+      windowBounds: { x: 140, y: 60, width: 420, height: 240 },
     }
     seedProfileDraftState(profile)
 

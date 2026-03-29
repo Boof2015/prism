@@ -21,11 +21,10 @@ export interface ProfileDraftSource {
 export function buildProfileDraft(
   source: ProfileDraftSource,
   name: string,
-  fallbackThemeId: string | null = null,
 ): Profile {
   return normalizeProfile({
     name,
-    themeId: source.themeId ?? fallbackThemeId,
+    themeId: source.themeId,
     scopeOrder: [...source.scopeOrder],
     hiddenScopes: Array.from(source.hiddenScopes),
     widthWeights: { ...source.widthWeights },

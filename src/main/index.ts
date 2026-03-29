@@ -35,10 +35,12 @@ let mainWindowBoundsTimer: ReturnType<typeof setTimeout> | null = null
 let mainRendererReady = false
 let allowMainWindowClose = false
 let mainWindowClosePending = false
+let suppressNextMainWindowBoundsEvent = false
 
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
+const suppressNextPopoutBoundsEvents = new Set<ScopeKind>()
 const windowSettingsHeights = new Map<number, number>()
 const windowSettingsBottomAnchors = new Map<number, number>()
 const pendingProfileOpenPaths: string[] = []
@@ -189,6 +191,10 @@ function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
   mainWindowBoundsTimer = setTimeout(() => {
     mainWindowBoundsTimer = null
     if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (suppressNextMainWindowBoundsEvent) {
+      suppressNextMainWindowBoundsEvent = false
+      return
+    }
     window.webContents.send('window:bounds-changed', toLogicalBounds(window))
   }, 80)
 }
@@ -565,6 +571,10 @@ function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
     popoutBoundsTimers.delete(kind)
 
     if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed()) return
+    if (suppressNextPopoutBoundsEvents.has(kind)) {
+      suppressNextPopoutBoundsEvents.delete(kind)
+      return
+    }
     const bounds = toLogicalBounds(window)
     mainWindow.webContents.send('scope-popout:bounds-changed', kind, bounds)
   }, 80)
@@ -582,11 +592,13 @@ function destroyScopePopoutWindow(kind: ScopeKind): void {
     popoutBoundsTimers.delete(kind)
   }
 
+  suppressNextPopoutBoundsEvents.delete(kind)
   scopePopoutCloseAllowed.add(kind)
   scopePopoutWindows.delete(kind)
 
   if (!window.isDestroyed()) {
     window.close()
+    return
   }
 
   scopePopoutCloseAllowed.delete(kind)
@@ -608,6 +620,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     height: POPOUT_DEFAULTS.height,
   }
   const bounds = normalizeBounds(rawBounds, fallbackBounds)
+  suppressNextPopoutBoundsEvents.add(kind)
 
   const options: BrowserWindowConstructorOptions = {
     x: bounds.x,
@@ -697,6 +710,7 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
       || currentBounds.height !== nextBounds.height
 
     if (hasBoundsDelta) {
+      suppressNextPopoutBoundsEvents.add(kind)
       applyLogicalBounds(popoutWindow, nextBounds)
     }
   }
@@ -1044,6 +1058,9 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
 
+    if (isMainRendererWindow(targetWindow)) {
+      suppressNextMainWindowBoundsEvent = true
+    }
     applyLogicalBounds(targetWindow, bounds)
   })
 

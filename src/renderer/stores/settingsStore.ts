@@ -26,6 +26,7 @@ export type { ScopeSettings } from '../../types/settings'
 const STORAGE_KEY = 'prism:settings'
 const PROFILES_STORAGE_KEY = 'prism:profiles'
 const ACTIVE_PROFILE_KEY = 'prism:activeProfile'
+const PROFILE_GEOMETRY_SYNC_WINDOW_MS = 800
 
 interface PersistedSettingsState {
   themeId: string | null
@@ -53,6 +54,7 @@ interface SettingsState extends WorkingSettingsState {
   activeProfileId: string | null
   savedProfileBaseline: Profile | null
   hasUnsavedProfileChanges: boolean
+  geometrySyncUntil: number
   initializeProfiles: () => Promise<void>
   applyExternalProfileSnapshot: (snapshot: ProfileLibrarySnapshot) => void
   setThemeId: (themeId: string | null) => void
@@ -190,11 +192,7 @@ function buildActiveProfileDraft(state: SettingsState): Profile | null {
     return null
   }
 
-  return buildProfileDraft(
-    state,
-    activeProfileName,
-    useThemeStore.getState().activeThemeId,
-  )
+  return buildProfileDraft(state, activeProfileName)
 }
 
 export function hasProfileDraftChanges(state: SettingsState, baseline = state.savedProfileBaseline): boolean {
@@ -232,16 +230,32 @@ function commitWorkingState(
   return nextState
 }
 
+function nextGeometrySyncDeadline(): number {
+  return Date.now() + PROFILE_GEOMETRY_SYNC_WINDOW_MS
+}
+
+function isWithinGeometrySyncWindow(state: Pick<SettingsState, 'geometrySyncUntil'>): boolean {
+  return state.geometrySyncUntil > Date.now()
+}
+
 function syncMissingBaselineWindowBounds(state: SettingsState, bounds: WindowBounds): Profile | null {
   const baseline = state.savedProfileBaseline
-  if (!baseline || state.hasUnsavedProfileChanges || baseline.windowBounds) {
+  if (!baseline || state.hasUnsavedProfileChanges) {
     return baseline
   }
 
-  return normalizeProfile({
-    ...baseline,
-    windowBounds: bounds,
-  }, baseline.name)
+  if (isWithinGeometrySyncWindow(state)) {
+    return normalizeProfile({
+      ...baseline,
+      windowBounds: bounds,
+    }, baseline.name)
+  }
+
+  if (baseline.windowBounds) {
+    return baseline
+  }
+
+  return baseline
 }
 
 function syncMissingBaselinePopoutBounds(
@@ -251,20 +265,28 @@ function syncMissingBaselinePopoutBounds(
 ): Profile | null {
   const baseline = state.savedProfileBaseline
   const baselinePopout = baseline?.scopePopouts[kind]
-  if (!baseline || state.hasUnsavedProfileChanges || !baselinePopout?.poppedOut || baselinePopout.windowBounds) {
+  if (!baseline || state.hasUnsavedProfileChanges || !baselinePopout?.poppedOut) {
     return baseline
   }
 
-  return normalizeProfile({
-    ...baseline,
-    scopePopouts: {
-      ...baseline.scopePopouts,
-      [kind]: {
-        ...baselinePopout,
-        windowBounds: bounds,
+  if (isWithinGeometrySyncWindow(state)) {
+    return normalizeProfile({
+      ...baseline,
+      scopePopouts: {
+        ...baseline.scopePopouts,
+        [kind]: {
+          ...baselinePopout,
+          windowBounds: bounds,
+        },
       },
-    },
-  }, baseline.name)
+    }, baseline.name)
+  }
+
+  if (baselinePopout.windowBounds) {
+    return baseline
+  }
+
+  return baseline
 }
 
 function applyLoadedProfileEffects(profile: Profile | null): void {
@@ -280,6 +302,39 @@ function applyLoadedProfileEffects(profile: Profile | null): void {
   if (profile.windowBounds && canUseElectronAPI()) {
     window.electronAPI.setWindowBounds(profile.windowBounds)
   }
+}
+
+function syncCurrentMainWindowBounds(
+  set: (updater: (state: SettingsState) => SettingsState) => void,
+): void {
+  if (!canUseElectronAPI()) {
+    return
+  }
+
+  void window.electronAPI.getWindowBounds().then((bounds) => {
+    if (!bounds) {
+      return
+    }
+
+    set((state) => {
+      const baseline = state.savedProfileBaseline
+      if (!baseline || state.hasUnsavedProfileChanges) {
+        return state
+      }
+
+      const nextState = commitWorkingState(state, {
+        windowBounds: bounds,
+      }, normalizeProfile({
+        ...baseline,
+        windowBounds: bounds,
+      }, baseline.name))
+
+      return {
+        ...nextState,
+        geometrySyncUntil: 0,
+      }
+    })
+  })
 }
 
 function applyProfileSnapshot(
@@ -300,6 +355,7 @@ function applyProfileSnapshot(
         ...state,
         profiles: snapshot.profiles,
         activeProfileId: snapshot.activeProfileId,
+        geometrySyncUntil: 0,
       }, baselineProfile)
     }
 
@@ -309,6 +365,7 @@ function applyProfileSnapshot(
       ...nextWorkingState,
       profiles: snapshot.profiles,
       activeProfileId: snapshot.activeProfileId,
+      geometrySyncUntil: nextGeometrySyncDeadline(),
     }, baselineProfile)
 
     persistWorkingState(nextState)
@@ -317,6 +374,7 @@ function applyProfileSnapshot(
 
   if (options.loadActiveProfile) {
     applyLoadedProfileEffects(activeProfile)
+    syncCurrentMainWindowBounds(set)
   }
 }
 
@@ -386,11 +444,14 @@ async function restoreSavedProfileBaseline(
     const nextState = withProfileDraftState({
       ...state,
       ...nextWorkingState,
+      geometrySyncUntil: nextGeometrySyncDeadline(),
     }, baseline)
 
     persistWorkingState(nextState)
     return nextState
   })
+
+  syncCurrentMainWindowBounds(set)
 }
 
 const stored = canUseElectronAPI() ? {} : loadFromStorage()
@@ -414,6 +475,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   activeProfileId: null,
   savedProfileBaseline: null,
   hasUnsavedProfileChanges: false,
+  geometrySyncUntil: 0,
 
   visibleScopes: () => {
     const { scopeOrder, hiddenScopes } = get()
@@ -528,8 +590,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => {
     set((state) => {
+      const isSyncingGeometry = isWithinGeometrySyncWindow(state)
       const nextBaseline = syncMissingBaselinePopoutBounds(state, kind, bounds)
-      return commitWorkingState(state, {
+      const nextState = commitWorkingState(state, {
         scopePopouts: {
           ...state.scopePopouts,
           [kind]: {
@@ -538,13 +601,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           },
         },
       }, nextBaseline)
+      return isSyncingGeometry
+        ? {
+          ...nextState,
+          geometrySyncUntil: nextGeometrySyncDeadline(),
+        }
+        : nextState
     })
   },
 
   updateMainWindowBounds: (bounds: WindowBounds) => {
     set((state) => {
+      const isSyncingGeometry = isWithinGeometrySyncWindow(state)
       const nextBaseline = syncMissingBaselineWindowBounds(state, bounds)
-      return commitWorkingState(state, { windowBounds: bounds }, nextBaseline)
+      const nextState = commitWorkingState(state, { windowBounds: bounds }, nextBaseline)
+      return isSyncingGeometry
+        ? {
+          ...nextState,
+          geometrySyncUntil: nextGeometrySyncDeadline(),
+        }
+        : nextState
     })
   },
 
@@ -584,7 +660,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     const snapshot = await window.electronAPI.saveNewProfile(
       name,
-      buildProfileDraft(get(), name, useThemeStore.getState().activeThemeId),
+      buildProfileDraft(get(), name),
     )
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: false })
     return snapshot.activeProfileId
@@ -604,7 +680,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     const snapshot = await window.electronAPI.overwriteProfile(
       id,
-      buildProfileDraft(state, name, useThemeStore.getState().activeThemeId),
+      buildProfileDraft(state, name),
     )
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: false })
   },
