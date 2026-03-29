@@ -6,6 +6,7 @@ import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import WindowResizeOverlay from './components/WindowResizeOverlay'
 import { useSettingsStore } from './stores/settingsStore'
+import { useAstraStore } from './stores/astraStore'
 import { useAudioStore } from './stores/audioStore'
 import { useThemeStore } from './stores/themeStore'
 import { SCOPE_KINDS } from '../types/scope'
@@ -28,6 +29,7 @@ export default function App(): JSX.Element {
   const updateMainWindowBounds = useSettingsStore((s) => s.updateMainWindowBounds)
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
   const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
+  const initializeAstra = useAstraStore((s) => s.initialize)
 
   // Auto-capture on launch
   useEffect(() => {
@@ -43,6 +45,7 @@ export default function App(): JSX.Element {
     void (async () => {
       await initializeThemes()
       await initializeProfiles()
+      await initializeAstra()
       if (!isDisposed) {
         window.electronAPI.notifyRendererReady()
       }
@@ -95,6 +98,7 @@ export default function App(): JSX.Element {
     importProfileFromPath,
     initializeProfiles,
     initializeThemes,
+    initializeAstra,
     updateMainWindowBounds,
   ])
 

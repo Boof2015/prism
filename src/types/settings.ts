@@ -48,6 +48,14 @@ export interface ScopeSettings {
     gainDb: number
     multiband: boolean
   }
+  astra: {
+    showCoverArt: boolean
+    showTitle: boolean
+    showArtist: boolean
+    showProgress: boolean
+    showTime: boolean
+    showControls: boolean
+  }
 }
 
 export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
@@ -58,4 +66,12 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   vumeter: { mode: 'bar', orientation: 'horizontal' },
   lufsmeter: { mode: 'bar' },
   waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, gainDb: 0, multiband: false },
+  astra: {
+    showCoverArt: true,
+    showTitle: true,
+    showArtist: true,
+    showProgress: true,
+    showTime: true,
+    showControls: true,
+  },
 }

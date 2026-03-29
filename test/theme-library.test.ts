@@ -7,6 +7,7 @@ import { FileBackedThemeLibrary } from '../src/main/themeLibrary'
 import {
   createDefaultTheme,
   parseThemeFileContent,
+  resolveTheme,
   serializeThemeFile,
 } from '../src/shared/themeState'
 import {
@@ -45,6 +46,28 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.equal(parsed.name, DEFAULT_THEME_NAME)
   assert.equal(parsed.spectrum.heatMid, 'rgb(200, 50, 120)')
   assert.equal(parsed.interface.secondary, theme.interface.secondary)
+  assert.equal(parsed.astra.background, theme.astra.background)
+})
+
+test('astra theme falls back to [All] tokens until [Astra] overrides are provided', () => {
+  const theme = createDefaultTheme()
+  theme.all.primary = 'rgb(255, 159, 67)'
+  theme.all.background = 'rgb(5, 6, 7)'
+  theme.all.text = 'rgb(240, 244, 248)'
+
+  const fallbackResolved = resolveTheme(theme)
+  assert.equal(fallbackResolved.astra.accent, 'rgb(255, 159, 67)')
+  assert.equal(fallbackResolved.astra.background, 'rgb(5, 6, 7)')
+  assert.equal(fallbackResolved.astra.text, 'rgb(240, 244, 248)')
+
+  theme.astra.primary = 'rgb(129, 140, 248)'
+  theme.astra.background = 'rgba(12, 18, 32, 0.88)'
+  theme.astra.text = 'rgb(248, 250, 252)'
+
+  const overriddenResolved = resolveTheme(theme)
+  assert.equal(overriddenResolved.astra.accent, 'rgb(129, 140, 248)')
+  assert.match(overriddenResolved.astra.background, /^rgba\(12, 18, 32, 0\.87/)
+  assert.equal(overriddenResolved.astra.text, 'rgb(248, 250, 252)')
 })
 
 test('library seeds default themes and template file', async () => {

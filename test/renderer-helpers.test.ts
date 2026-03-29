@@ -11,6 +11,10 @@ import {
   normalizeWheelDelta,
 } from '../src/renderer/utils/horizontalWheelScroll'
 import {
+  formatAstraTime,
+  getAstraPlaybackProgress,
+} from '../src/renderer/utils/astra'
+import {
   createDefaultProfile,
 } from '../src/shared/profileState'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
@@ -669,6 +673,7 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'vumeter',
     'lufsmeter',
     'waveform',
+    'astra',
   ])
 })
 
@@ -682,6 +687,30 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.showSideLine, true)
   assert.equal(options.secondaryLineColor, theme.spectrum.secondary)
   assert.equal(options.lineColor, theme.spectrum.primary)
+})
+
+test('astra playback progress advances from updatedAt while playing', () => {
+  const progress = getAstraPlaybackProgress({
+    playbackState: 'playing',
+    currentTime: 12,
+    duration: 120,
+    queueLength: 4,
+    outputDeviceLabel: 'Built-in Output',
+    visualizerLineColor: '#38bdf8',
+    currentTrack: {
+      id: 'track-1',
+      title: 'Track',
+      artist: 'Artist',
+      album: 'Album',
+      isFavorite: false,
+      artworkDataUrl: null,
+    },
+    updatedAt: 1000,
+  }, 3500)
+
+  assertAlmostEqual(progress.currentTime, 14.5, 1e-6, 'current time advances')
+  assertAlmostEqual(progress.progress, 14.5 / 120, 1e-6, 'progress ratio advances')
+  assert.equal(formatAstraTime(progress.currentTime), '0:14')
 })
 
 test('normalizeWheelDelta keeps pixel deltas unchanged', () => {
@@ -831,6 +860,14 @@ test('scopeSummary includes Stereo for waveform only when stereo mode is enabled
   assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB · Stereo · RGB')
 })
 
+test('scopeSummary summarizes astra field visibility', () => {
+  const profile = createDefaultProfile('Default')
+  profile.scopeSettings.astra.showArtist = false
+  profile.scopeSettings.astra.showControls = false
+
+  assert.equal(scopeSummary('astra', profile.scopeSettings.astra), 'Cover · Title · Bar · Time')
+})
+
 test('ScopePopoutDataSource switches waveform batches between mono and stereo queues', () => {
   const dataSource = new ScopePopoutDataSource('waveform')
   const monoChunk = new Float32Array([0.1, 0.2, 0.3])
@@ -948,6 +985,27 @@ test('buildProfileDraft preserves unlinked themes instead of coercing the active
   }, profile.name)
 
   assert.equal(draft.themeId, null)
+})
+
+test('toggleScope appends astra to the scope order when it is enabled from an opt-in profile', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeWindow = installFakeElectronWindow()
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    seedProfileDraftState(profile)
+
+    assert.equal(useSettingsStore.getState().scopeOrder.includes('astra'), false)
+
+    useSettingsStore.getState().toggleScope('astra')
+
+    assert.equal(useSettingsStore.getState().scopeOrder.at(-1), 'astra')
+    assert.equal(useSettingsStore.getState().hiddenScopes.has('astra'), false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+  }
 })
 
 test('main-window bounds updates stay in memory in Electron mode until save', () => {
@@ -1204,7 +1262,7 @@ test('moveDockedScopeOrder is a no-op at the docked boundaries', () => {
     initialOrder,
   )
   assert.equal(
-    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'waveform', 'right'),
+    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'astra', 'right'),
     initialOrder,
   )
 })
@@ -1226,6 +1284,7 @@ test('moveDockedScopeOrder preserves hidden scope positions in the full order', 
     'vumeter',
     'lufsmeter',
     'waveform',
+    'astra',
   ])
 })
 
@@ -1246,6 +1305,7 @@ test('moveDockedScopeOrder preserves popped-out scope positions in the full orde
     'vumeter',
     'lufsmeter',
     'waveform',
+    'astra',
   ])
 })
 

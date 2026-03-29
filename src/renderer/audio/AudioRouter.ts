@@ -4,7 +4,7 @@
  * do not accumulate backlog and queue overflow never reallocates.
  */
 
-import { SCOPE_KINDS, type ScopeKind } from '../../types/scope'
+import { AUDIO_SCOPE_KINDS, type AudioScopeKind } from '../../types/scope'
 import type { CaptureBackendKind } from '../../types/capture'
 
 const MAX_PENDING_CHUNKS = 20
@@ -12,7 +12,7 @@ const MAX_PENDING_SPECTRUM_CHUNKS = 96
 const MAX_PENDING_VECTORSCOPE_CHUNKS = 20
 const LATENCY_SAMPLE_WINDOW = 240
 
-const SCOPE_RING_CAPACITY: Record<ScopeKind, number> = {
+const SCOPE_RING_CAPACITY: Record<AudioScopeKind, number> = {
   spectrum: MAX_PENDING_SPECTRUM_CHUNKS,
   oscilloscope: MAX_PENDING_CHUNKS,
   vectorscope: MAX_PENDING_VECTORSCOPE_CHUNKS,
@@ -57,7 +57,7 @@ export interface AudioRouterDiagnostics {
   notCapturingDrops: number
   staleSessionDrops: number
   undemandedChunks: number
-  scopes: Record<ScopeKind, AudioRouterScopeDiagnostics>
+  scopes: Record<AudioScopeKind, AudioRouterScopeDiagnostics>
 }
 
 export type NormalizedVisualizerConsumerDemand = Required<VisualizerConsumerDemand>
@@ -221,7 +221,7 @@ export class AudioRouter {
     waveform: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.waveform),
   }
 
-  private readonly scopeLatency: Record<ScopeKind, ScopeLatencyTracker> = {
+  private readonly scopeLatency: Record<AudioScopeKind, ScopeLatencyTracker> = {
     spectrum: createScopeLatencyTracker(),
     oscilloscope: createScopeLatencyTracker(),
     vectorscope: createScopeLatencyTracker(),
@@ -480,7 +480,7 @@ export class AudioRouter {
     let totalOverwriteCount = 0
     let overallP95CaptureToScopeMs: number | null = null
 
-    const scopes = SCOPE_KINDS.reduce<Record<ScopeKind, AudioRouterScopeDiagnostics>>((result, scope) => {
+    const scopes = AUDIO_SCOPE_KINDS.reduce<Record<AudioScopeKind, AudioRouterScopeDiagnostics>>((result, scope) => {
       const scopeTracker = this.scopeLatency[scope]
       const overwriteCount = this.getRing(scope).getOverwriteCount()
       totalOverwriteCount += overwriteCount
@@ -501,7 +501,7 @@ export class AudioRouter {
         lastSequence: scopeTracker.lastSequence,
       }
       return result
-    }, {} as Record<ScopeKind, AudioRouterScopeDiagnostics>)
+    }, {} as Record<AudioScopeKind, AudioRouterScopeDiagnostics>)
 
     return {
       updatedAt: performance.now(),
@@ -523,7 +523,7 @@ export class AudioRouter {
   private getActiveDemand(): NormalizedVisualizerConsumerDemand {
     const aggregated = createEmptyDemand()
     for (const demand of this.consumerDemand.values()) {
-      for (const scope of SCOPE_KINDS) {
+      for (const scope of AUDIO_SCOPE_KINDS) {
         if (demand[scope]) {
           aggregated[scope] = true
         }
@@ -541,7 +541,7 @@ export class AudioRouter {
 
   private pruneQueuesForDemand(): void {
     const activeDemand = this.getActiveDemand()
-    for (const scope of SCOPE_KINDS) {
+    for (const scope of AUDIO_SCOPE_KINDS) {
       if (!activeDemand[scope]) {
         this.getRing(scope).clear()
       }
@@ -549,13 +549,13 @@ export class AudioRouter {
   }
 
   private clearAllRings(): void {
-    for (const scope of SCOPE_KINDS) {
+    for (const scope of AUDIO_SCOPE_KINDS) {
       this.getRing(scope).clear()
     }
   }
 
   private resetLatencyTrackers(): void {
-    for (const scope of SCOPE_KINDS) {
+    for (const scope of AUDIO_SCOPE_KINDS) {
       const tracker = this.scopeLatency[scope]
       tracker.lastCaptureToScopeMs = null
       tracker.drainedChunks = 0
@@ -564,7 +564,7 @@ export class AudioRouter {
     }
   }
 
-  private recordScopeDrain(scope: ScopeKind, records: Array<MonoChunkRecord | StereoChunkRecord>): void {
+  private recordScopeDrain(scope: AudioScopeKind, records: Array<MonoChunkRecord | StereoChunkRecord>): void {
     if (records.length === 0) return
 
     const tracker = this.scopeLatency[scope]
@@ -578,7 +578,7 @@ export class AudioRouter {
     tracker.drainedChunks += records.length
   }
 
-  private getRing(scope: ScopeKind): FixedChunkRing<MonoChunkRecord> | FixedChunkRing<StereoChunkRecord> {
+  private getRing(scope: AudioScopeKind): FixedChunkRing<MonoChunkRecord> | FixedChunkRing<StereoChunkRecord> {
     return this.rings[scope]
   }
 }

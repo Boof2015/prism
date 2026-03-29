@@ -2,6 +2,7 @@ import type { CaptureBackendKind } from './capture'
 import type { ScopeKind } from './scope'
 import type { ScopeSettings } from './settings'
 import type {
+  ResolvedAstraTheme,
   ResolvedInterfaceTheme,
   ResolvedLUFSMeterTheme,
   ResolvedOscilloscopeTheme,
@@ -58,6 +59,7 @@ export type ScopePopoutResolvedScopeTheme =
   | ResolvedVUMeterTheme
   | ResolvedLUFSMeterTheme
   | ResolvedWaveformTheme
+  | ResolvedAstraTheme
 
 export interface ScopePopoutSnapshot<K extends ScopeKind = ScopeKind> {
   kind: K

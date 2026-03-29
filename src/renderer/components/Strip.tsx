@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
-import { SCOPE_LABELS, type ScopeKind } from '../../types/scope'
+import { SCOPE_LABELS, isAudioScopeKind, type ScopeKind } from '../../types/scope'
 import type { WindowBounds } from '../../types/popout'
 import ScopeModule from './ScopeModule'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
@@ -68,15 +68,15 @@ export default function Strip(): JSX.Element {
   }, [dockedScopes])
 
   useEffect(() => {
-    const visibleScopeSet = new Set(dockedScopes)
+    const visibleAudioScopeSet = new Set(dockedScopes.filter(isAudioScopeKind))
     audioRouter.setVisualizerConsumerDemand('docked-strip', {
-      spectrum: visibleScopeSet.has('spectrum'),
-      oscilloscope: visibleScopeSet.has('oscilloscope'),
-      vectorscope: visibleScopeSet.has('vectorscope'),
-      spectrogram: visibleScopeSet.has('spectrogram'),
-      vumeter: visibleScopeSet.has('vumeter'),
-      lufsmeter: visibleScopeSet.has('lufsmeter'),
-      waveform: visibleScopeSet.has('waveform'),
+      spectrum: visibleAudioScopeSet.has('spectrum'),
+      oscilloscope: visibleAudioScopeSet.has('oscilloscope'),
+      vectorscope: visibleAudioScopeSet.has('vectorscope'),
+      spectrogram: visibleAudioScopeSet.has('spectrogram'),
+      vumeter: visibleAudioScopeSet.has('vumeter'),
+      lufsmeter: visibleAudioScopeSet.has('lufsmeter'),
+      waveform: visibleAudioScopeSet.has('waveform'),
     })
 
     return () => {

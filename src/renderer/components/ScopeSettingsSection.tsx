@@ -19,6 +19,17 @@ function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): strin
   }
 }
 
+function astraVisibleLabels(settings: ScopeSettings['astra']): string[] {
+  const labels: string[] = []
+  if (settings.showCoverArt) labels.push('Cover')
+  if (settings.showTitle) labels.push('Title')
+  if (settings.showArtist) labels.push('Artist')
+  if (settings.showProgress) labels.push('Bar')
+  if (settings.showTime) labels.push('Time')
+  if (settings.showControls) labels.push('Controls')
+  return labels
+}
+
 export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]): string {
   switch (kind) {
     case 'spectrum': {
@@ -57,6 +68,10 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
         summary.push('RGB')
       }
       return summary.join(' · ')
+    }
+    case 'astra': {
+      const visible = astraVisibleLabels(settings as ScopeSettings['astra'])
+      return visible.length > 0 ? visible.join(' · ') : 'Hidden'
     }
   }
 }
@@ -497,6 +512,44 @@ export default function ScopeSettingsSection({
                 onChange={(value) => onUpdate('waveform', { scrollSpeed: value })}
               />
             </>
+          )
+        })()}
+
+        {kind === 'astra' && (() => {
+          const current = settings as ScopeSettings['astra']
+          return (
+            <ToggleGroup label="Visible Elements">
+              <ToggleChip
+                label="Cover"
+                active={current.showCoverArt}
+                onClick={() => onUpdate('astra', { showCoverArt: !current.showCoverArt })}
+              />
+              <ToggleChip
+                label="Title"
+                active={current.showTitle}
+                onClick={() => onUpdate('astra', { showTitle: !current.showTitle })}
+              />
+              <ToggleChip
+                label="Artist"
+                active={current.showArtist}
+                onClick={() => onUpdate('astra', { showArtist: !current.showArtist })}
+              />
+              <ToggleChip
+                label="Bar"
+                active={current.showProgress}
+                onClick={() => onUpdate('astra', { showProgress: !current.showProgress })}
+              />
+              <ToggleChip
+                label="Time"
+                active={current.showTime}
+                onClick={() => onUpdate('astra', { showTime: !current.showTime })}
+              />
+              <ToggleChip
+                label="Controls"
+                active={current.showControls}
+                onClick={() => onUpdate('astra', { showControls: !current.showControls })}
+              />
+            </ToggleGroup>
           )
         })()}
       </div>

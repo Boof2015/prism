@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, type CSSProperties, type JSX, type WheelEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type WheelEvent } from 'react'
+import { useAstraStore } from '../stores/astraStore'
 import { useAudioStore } from '../stores/audioStore'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -7,6 +8,7 @@ import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { SCOPE_KINDS } from '../../types/scope'
+import type { AstraIntegrationConfig } from '../../types/astra'
 import ThemedSelect from './ThemedSelect'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -17,6 +19,7 @@ const SCOPE_LABELS: Record<ScopeKind, string> = {
   vumeter: 'VU Meter',
   lufsmeter: 'LUFS Meter',
   waveform: 'Waveform',
+  astra: 'Astra',
 }
 
 interface BottomBarProps {
@@ -35,8 +38,11 @@ const FRAME_TARGET_LABELS: Record<VisualizerFrameTarget, string> = {
 
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const [astraBaseUrlInput, setAstraBaseUrlInput] = useState('')
+  const [astraTokenInput, setAstraTokenInput] = useState('')
 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
+  const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const toggleScope = useSettingsStore((s) => s.toggleScope)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
@@ -53,6 +59,8 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     importThemeFromDialog,
     showThemesFolder,
   } = useThemeStore()
+  const astraState = useAstraStore((s) => s.integrationState)
+  const saveAstraConfig = useAstraStore((s) => s.saveConfig)
 
   const {
     systemSources,
@@ -78,6 +86,11 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     void refreshSystemSources()
     void refreshDevices()
   }, [refreshBackendSupport, refreshSystemSources, refreshDevices])
+
+  useEffect(() => {
+    setAstraBaseUrlInput(astraState.config.baseUrl)
+    setAstraTokenInput(astraState.config.token)
+  }, [astraState.config.baseUrl, astraState.config.token])
 
   useLayoutEffect(() => {
     if (!onHeightChange || !rootRef.current) return
@@ -168,6 +181,14 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     setThemeId(useThemeStore.getState().activeThemeId)
   }
 
+  const handleSaveAstraConfig = async (): Promise<void> => {
+    const nextConfig: AstraIntegrationConfig = {
+      baseUrl: astraBaseUrlInput,
+      token: astraTokenInput,
+    }
+    await saveAstraConfig(nextConfig)
+  }
+
   const handleRailWheel = (event: WheelEvent<HTMLDivElement>): void => {
     const railElement = event.currentTarget
     const target = event.target
@@ -190,6 +211,14 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     event.preventDefault()
   }
 
+  const astraStatusLabel = astraState.connectionState === 'connected'
+    ? 'Connected'
+    : astraState.connectionState === 'connecting'
+      ? 'Connecting'
+      : astraState.connectionState === 'error'
+        ? 'Error'
+        : 'Off'
+
   return (
     <div className="bottom-bar" ref={rootRef}>
       <div className="bottom-bar__rail" aria-label="Global settings" onWheel={handleRailWheel}>
@@ -199,7 +228,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--chips">
                 {SCOPE_KINDS.map((kind) => {
-                  const active = !hiddenScopes.has(kind)
+                  const active = scopeOrder.includes(kind) && !hiddenScopes.has(kind)
                   return (
                     <button
                       key={kind}
@@ -292,6 +321,50 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   <span>{themeId ? 'Saved With Profile' : 'Not Linked'}</span>
                 </div>
               </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--astra">
+            <div className="bottom-bar__section-title">Astra</div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--theme">
+                <input
+                  className="bottom-bar__text-input bottom-bar__text-input--url"
+                  type="text"
+                  value={astraBaseUrlInput}
+                  placeholder="Astra Base URL"
+                  onChange={(event) => setAstraBaseUrlInput(event.target.value)}
+                />
+
+                <input
+                  className="bottom-bar__text-input bottom-bar__text-input--token"
+                  type="password"
+                  value={astraTokenInput}
+                  placeholder="Astra API Token"
+                  onChange={(event) => setAstraTokenInput(event.target.value)}
+                />
+
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void handleSaveAstraConfig()
+                  }}
+                >
+                  Save
+                </button>
+
+                <div className={`settings-status-pill ${astraState.connectionState === 'disabled' ? '' : `is-${astraState.connectionState}`}`.trim()}>
+                  <span className="settings-status-pill__dot" />
+                  <span>{astraStatusLabel}</span>
+                </div>
+              </div>
+
+              {astraState.lastError ? (
+                <div className="settings-error-text bottom-bar__error-text">{astraState.lastError}</div>
+              ) : null}
             </div>
           </section>
 

@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+import type {
+  AstraControlCommand,
+  AstraIntegrationConfig,
+  AstraIntegrationState,
+} from '../types/astra'
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
@@ -44,6 +49,11 @@ declare global {
       isAlwaysOnTop: () => Promise<boolean>
       getDesktopSources: () => Promise<{ id: string; name: string }[]>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
+      getAstraConfig: () => Promise<AstraIntegrationConfig>
+      saveAstraConfig: (config: AstraIntegrationConfig) => Promise<AstraIntegrationConfig>
+      getAstraState: () => Promise<AstraIntegrationState>
+      setAstraActive: (active: boolean) => Promise<AstraIntegrationState>
+      sendAstraControl: (command: AstraControlCommand) => Promise<AstraIntegrationState>
       getProfileSnapshot: () => Promise<ProfileLibrarySnapshot>
       saveNewProfile: (name: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
       overwriteProfile: (id: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
@@ -81,6 +91,7 @@ declare global {
       onToggleCapture: (callback: () => void) => () => void
       onToggleSettings: (callback: () => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
+      onAstraStateChanged: (callback: (state: AstraIntegrationState) => void) => () => void
       onMainCloseRequested: (callback: () => void) => () => void
       onProfileMenuClosed: (callback: () => void) => () => void
       onProfileMenuLoad: (callback: (id: string) => void) => () => void

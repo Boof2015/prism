@@ -7,6 +7,7 @@ import { FileBackedProfileLibrary } from '../src/main/profileLibrary'
 import {
   createDefaultProfile,
   extractLocalProfileMetadata,
+  normalizeScopeOrder,
   profileFileToProfile,
   profileToFileData,
 } from '../src/shared/profileState'
@@ -79,12 +80,16 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(JSON.stringify(file).includes('windowBounds'), false)
   assert.equal(JSON.stringify(file).includes('frameTarget'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
+  assert.equal(file.scopeOrder.includes('astra'), false)
+  assert.equal(file.hiddenScopes.includes('astra'), true)
+  assert.equal(file.widthWeights.astra, 1)
 
   const restored = profileFileToProfile(file, extractLocalProfileMetadata(profile))
   assert.deepEqual(restored.windowBounds, profile.windowBounds)
   assert.deepEqual(restored.scopePopouts.spectrum.windowBounds, profile.scopePopouts.spectrum.windowBounds)
   assert.equal(restored.scopeSettings.spectrum.showSideLine, true)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
+  assert.equal(restored.scopeSettings.astra.showControls, true)
 })
 
 test('library saves, renames, deletes, and resolves filename collisions', async () => {
@@ -119,6 +124,14 @@ test('library saves, renames, deletes, and resolves filename collisions', async 
   } finally {
     await harness.cleanup()
   }
+})
+
+test('astra stays opt-in for profile scope order normalization', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(profile.scopeOrder.includes('astra'), false)
+  assert.equal(normalizeScopeOrder(undefined).includes('astra'), false)
+  assert.equal(normalizeScopeOrder(['spectrum', 'astra']).includes('astra'), true)
 })
 
 test('default profile seeds with the current active theme when available', async () => {

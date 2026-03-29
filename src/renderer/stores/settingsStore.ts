@@ -510,6 +510,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   toggleScope: (kind: ScopeKind) => {
     set((state) => {
       const next = new Set(state.hiddenScopes)
+      if (!state.scopeOrder.includes(kind)) {
+        next.delete(kind)
+        return commitWorkingState(state, {
+          scopeOrder: [...state.scopeOrder, kind],
+          hiddenScopes: next,
+        })
+      }
+
       if (next.has(kind)) {
         next.delete(kind)
       } else {

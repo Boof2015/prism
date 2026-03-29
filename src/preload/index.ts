@@ -1,4 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  AstraControlCommand,
+  AstraIntegrationConfig,
+  AstraIntegrationState,
+} from '../types/astra'
 import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
@@ -48,6 +53,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       nativeBackend: resolveNativeCaptureSupport(support.nativeBackend),
     } satisfies CaptureBackendSupport
   },
+  getAstraConfig: () => ipcRenderer.invoke('astra:get-config') as Promise<AstraIntegrationConfig>,
+  saveAstraConfig: (config: AstraIntegrationConfig) => ipcRenderer.invoke('astra:save-config', config) as Promise<AstraIntegrationConfig>,
+  getAstraState: () => ipcRenderer.invoke('astra:get-state') as Promise<AstraIntegrationState>,
+  setAstraActive: (active: boolean) => ipcRenderer.invoke('astra:set-active', active) as Promise<AstraIntegrationState>,
+  sendAstraControl: (command: AstraControlCommand) => ipcRenderer.invoke('astra:send-control', command) as Promise<AstraIntegrationState>,
   getProfileSnapshot: () => ipcRenderer.invoke('profiles:get-snapshot') as Promise<ProfileLibrarySnapshot>,
   saveNewProfile: (name: string, profile: Profile) => ipcRenderer.invoke('profiles:save-new', name, profile) as Promise<ProfileLibrarySnapshot>,
   overwriteProfile: (id: string, profile: Profile) => ipcRenderer.invoke('profiles:overwrite', id, profile) as Promise<ProfileLibrarySnapshot>,
@@ -106,6 +116,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, bounds: WindowBounds): void => callback(bounds)
     ipcRenderer.on('window:bounds-changed', handler)
     return () => ipcRenderer.removeListener('window:bounds-changed', handler)
+  },
+  onAstraStateChanged: (callback: (state: AstraIntegrationState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: AstraIntegrationState): void => callback(state)
+    ipcRenderer.on('astra:state-changed', handler)
+    return () => ipcRenderer.removeListener('astra:state-changed', handler)
   },
   onMainCloseRequested: (callback: () => void) => {
     const handler = (): void => callback()

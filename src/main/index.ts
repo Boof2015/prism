@@ -1,6 +1,11 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { extname, join, resolve } from 'path'
+import type {
+  AstraControlCommand,
+  AstraIntegrationConfig,
+  AstraIntegrationState,
+} from '../types/astra'
 import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 import type {
   ScopePopoutAudioBatch,
@@ -20,6 +25,7 @@ import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
 import { normalizeProfile } from '../shared/profileState'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
+import { AstraIntegrationService } from './services/astraIntegration'
 import { FileBackedThemeLibrary } from './themeLibrary'
 
 let mainWindow: BrowserWindow | null = null
@@ -48,6 +54,7 @@ const pendingThemeOpenPaths: string[] = []
 
 let profileLibrary: FileBackedProfileLibrary | null = null
 let themeLibrary: FileBackedThemeLibrary | null = null
+let astraIntegrationService: AstraIntegrationService | null = null
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -84,6 +91,26 @@ function getThemeLibrary(): FileBackedThemeLibrary {
   }
 
   return themeLibrary
+}
+
+function broadcastAstraState(state: AstraIntegrationState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue
+    window.webContents.send('astra:state-changed', state)
+  }
+}
+
+function getAstraIntegrationService(): AstraIntegrationService {
+  if (!astraIntegrationService) {
+    astraIntegrationService = new AstraIntegrationService({
+      configPath: join(app.getPath('userData'), 'astra-integration.json'),
+    })
+    astraIntegrationService.subscribe((state) => {
+      broadcastAstraState(state)
+    })
+  }
+
+  return astraIntegrationService
 }
 
 function queueProfileOpenPath(filePath: string): void {
@@ -885,6 +912,27 @@ function setupIPC(): void {
     return getCaptureBackendSupport()
   })
 
+  ipcMain.handle('astra:get-config', async () => {
+    return getAstraIntegrationService().getConfig()
+  })
+
+  ipcMain.handle('astra:save-config', async (_event, rawConfig: AstraIntegrationConfig) => {
+    return getAstraIntegrationService().saveConfig(rawConfig)
+  })
+
+  ipcMain.handle('astra:get-state', async () => {
+    return getAstraIntegrationService().getState()
+  })
+
+  ipcMain.handle('astra:set-active', async (event, active: boolean) => {
+    return getAstraIntegrationService().setConsumerActive(event.sender.id, Boolean(active))
+  })
+
+  ipcMain.handle('astra:send-control', async (_event, command: AstraControlCommand) => {
+    await getAstraIntegrationService().sendControl(command)
+    return getAstraIntegrationService().getState()
+  })
+
   ipcMain.handle('profiles:get-snapshot', async () => {
     return getProfileLibrary().getSnapshot()
   })
@@ -1171,7 +1219,7 @@ function setupIPC(): void {
 function setupShortcuts(): void {
   if (!mainWindow) return
 
-  const scopeKeys = ['1', '2', '3', '4', '5', '6', '7']
+  const scopeKeys = ['1', '2', '3', '4', '5', '6', '7', '8']
   scopeKeys.forEach((key) => {
     mainWindow!.webContents.on('before-input-event', (_event, input) => {
       if (input.type === 'keyDown' && input.key === key && !input.alt && !input.control && !input.meta && !input.shift) {
@@ -1209,6 +1257,7 @@ if (!hasSingleInstanceLock) {
 } else {
   app.whenReady().then(() => {
     setupPermissions()
+    void getAstraIntegrationService().initialize()
     setupIPC()
     createMainWindow()
     setupShortcuts()
@@ -1240,5 +1289,6 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on('window-all-closed', () => {
+  void astraIntegrationService?.dispose()
   app.quit()
 })
