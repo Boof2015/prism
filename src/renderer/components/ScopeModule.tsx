@@ -3,6 +3,7 @@ import type { ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import type {
   PrismResolvedTheme,
+  ResolvedAstraTheme,
   ResolvedLUFSMeterTheme,
   ResolvedOscilloscopeTheme,
   ResolvedSpectrogramTheme,
@@ -13,6 +14,7 @@ import type {
 } from '../../types/theme'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import AstraScopeModule from './AstraScopeModule'
 import { SpectrumAnalyzer, type SpectrumAnalyzerDataSource } from '../visualizers/SpectrumAnalyzer'
 import { Oscilloscope, type OscilloscopeDataSource } from '../visualizers/Oscilloscope'
 import { Vectorscope, type VectorscopeDataSource } from '../visualizers/Vectorscope'
@@ -30,6 +32,7 @@ type ScopeModuleTheme =
   | ResolvedVUMeterTheme
   | ResolvedLUFSMeterTheme
   | ResolvedWaveformTheme
+  | ResolvedAstraTheme
 
 interface ScopeModuleProps {
   scopeKind: ScopeKind
@@ -172,6 +175,8 @@ export function scopeSettingsToOptions(
         multiband: s.multiband,
       }
     }
+    case 'astra':
+      return {}
     default:
       return {}
   }
@@ -222,6 +227,8 @@ function createVisualizer(
         ...opts,
         ...(dataSource ? { dataSource: dataSource as WaveformDataSource } : {}),
       })
+    case 'astra':
+      return null
     default:
       return null
   }
@@ -243,6 +250,15 @@ export default function ScopeModule({
   const activeTheme = useThemeStore((s) => s.activeTheme)
   const mySettings = settings ?? storeSettings
   const myTheme = theme ?? getScopeTheme(activeTheme, scopeKind)
+
+  if (scopeKind === 'astra') {
+    return (
+      <AstraScopeModule
+        theme={myTheme as ResolvedAstraTheme}
+        settings={mySettings as ScopeSettings['astra']}
+      />
+    )
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current

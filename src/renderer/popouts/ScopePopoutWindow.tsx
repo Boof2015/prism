@@ -5,6 +5,7 @@ import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings
 import { applyResolvedThemeToDocument, createDefaultTheme, resolveTheme } from '../../shared/themeState'
 import ScopeModule from '../components/ScopeModule'
 import ScopeSettingsSection from '../components/ScopeSettingsSection'
+import WindowResizeOverlay from '../components/WindowResizeOverlay'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
@@ -239,6 +240,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
           </div>
         </div>
       )}
+
+      <WindowResizeOverlay />
     </div>
   )
 }

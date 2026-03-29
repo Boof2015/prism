@@ -1,4 +1,14 @@
-export type ScopeKind = 'spectrum' | 'oscilloscope' | 'vectorscope' | 'spectrogram' | 'vumeter' | 'lufsmeter' | 'waveform'
+export type ScopeKind =
+  | 'spectrum'
+  | 'oscilloscope'
+  | 'vectorscope'
+  | 'spectrogram'
+  | 'vumeter'
+  | 'lufsmeter'
+  | 'waveform'
+  | 'astra'
+
+export type AudioScopeKind = Exclude<ScopeKind, 'astra'>
 
 export const SCOPE_KINDS: ScopeKind[] = [
   'spectrum',
@@ -8,7 +18,22 @@ export const SCOPE_KINDS: ScopeKind[] = [
   'vumeter',
   'lufsmeter',
   'waveform',
+  'astra',
 ]
+
+export const AUDIO_SCOPE_KINDS: AudioScopeKind[] = [
+  'spectrum',
+  'oscilloscope',
+  'vectorscope',
+  'spectrogram',
+  'vumeter',
+  'lufsmeter',
+  'waveform',
+]
+
+export function isAudioScopeKind(value: unknown): value is AudioScopeKind {
+  return typeof value === 'string' && AUDIO_SCOPE_KINDS.includes(value as AudioScopeKind)
+}
 
 export const SCOPE_LABELS: Record<ScopeKind, string> = {
   spectrum: 'Spectrum',
@@ -18,4 +43,5 @@ export const SCOPE_LABELS: Record<ScopeKind, string> = {
   vumeter: 'VU Meter',
   lufsmeter: 'LUFS Meter',
   waveform: 'Waveform',
+  astra: 'Astra',
 }

@@ -10,17 +10,24 @@ import type {
   ScopePopoutSnapshot,
   ScopePopoutSyncStateMap,
 } from '../../types/popout'
-import { SCOPE_KINDS, SCOPE_LABELS, type ScopeKind } from '../../types/scope'
+import {
+  AUDIO_SCOPE_KINDS,
+  SCOPE_KINDS,
+  SCOPE_LABELS,
+  isAudioScopeKind,
+  type AudioScopeKind,
+  type ScopeKind,
+} from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 
-function buildConsumerDemand(kind: ScopeKind): Record<ScopeKind, boolean> {
-  return SCOPE_KINDS.reduce((acc, currentKind) => {
+function buildConsumerDemand(kind: AudioScopeKind): Record<AudioScopeKind, boolean> {
+  return AUDIO_SCOPE_KINDS.reduce((acc, currentKind) => {
     acc[currentKind] = currentKind === kind
     return acc
-  }, {} as Record<ScopeKind, boolean>)
+  }, {} as Record<AudioScopeKind, boolean>)
 }
 
-function flushScopeAudioBatch(kind: ScopeKind, scopeSettings: ScopeSettings): ScopePopoutAudioBatch {
+function flushScopeAudioBatch(kind: AudioScopeKind, scopeSettings: ScopeSettings): ScopePopoutAudioBatch {
   switch (kind) {
     case 'spectrum':
       return scopeSettings.spectrum.showSideLine
@@ -111,6 +118,7 @@ export default function ScopePopoutBridge(): null {
   useEffect(() => {
     const sessionState = toPopoutSessionState(audioRouter.getSessionState())
     for (const kind of activePopoutKinds) {
+      if (!isAudioScopeKind(kind)) continue
       window.electronAPI.sendScopePopoutSession(kind, sessionState)
     }
   }, [activePopoutKinds])
@@ -138,7 +146,9 @@ export default function ScopePopoutBridge(): null {
         scopeTheme: useThemeStore.getState().activeTheme[kind],
         settings: useSettingsStore.getState().scopeSettings[kind],
       })
-      window.electronAPI.sendScopePopoutSession(kind, toPopoutSessionState(audioRouter.getSessionState()))
+      if (isAudioScopeKind(kind)) {
+        window.electronAPI.sendScopePopoutSession(kind, toPopoutSessionState(audioRouter.getSessionState()))
+      }
     })
 
     return () => {
@@ -150,7 +160,7 @@ export default function ScopePopoutBridge(): null {
   }, [popInScope, updatePopoutBounds, updateScopeSettings])
 
   useEffect(() => {
-    for (const kind of SCOPE_KINDS) {
+    for (const kind of AUDIO_SCOPE_KINDS) {
       const consumerId = `popout:${kind}`
       if (activePopoutKinds.includes(kind)) {
         audioRouter.setVisualizerConsumerDemand(consumerId, buildConsumerDemand(kind))
@@ -160,7 +170,7 @@ export default function ScopePopoutBridge(): null {
     }
 
     return () => {
-      for (const kind of SCOPE_KINDS) {
+      for (const kind of AUDIO_SCOPE_KINDS) {
         audioRouter.clearVisualizerConsumerDemand(`popout:${kind}`)
       }
     }
@@ -175,6 +185,7 @@ export default function ScopePopoutBridge(): null {
       }
 
       for (const kind of activePopoutKindsRef.current) {
+        if (!isAudioScopeKind(kind)) continue
         const batch = flushScopeAudioBatch(kind, useSettingsStore.getState().scopeSettings)
         if (batch.length > 0) {
           window.electronAPI.sendScopePopoutAudio(kind, batch)
@@ -216,6 +227,7 @@ export default function ScopePopoutBridge(): null {
     return audioRouter.subscribeToSessionChanges((state) => {
       const nextSessionState = toPopoutSessionState(state)
       for (const kind of activePopoutKindsRef.current) {
+        if (!isAudioScopeKind(kind)) continue
         window.electronAPI.sendScopePopoutSession(kind, nextSessionState)
       }
     })

@@ -202,3 +202,9 @@ test('publishes aggregated visualizer demand changes for downstream transports',
     waveform: false,
   })
 })
+
+test('audio diagnostics stay scoped to audio-only visualizers', () => {
+  const router = new AudioRouter()
+
+  assert.equal('astra' in router.getDiagnosticsSnapshot().scopes, false)
+})

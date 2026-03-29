@@ -10,6 +10,7 @@ import {
   type PrismResolvedTheme,
   type PrismTheme,
   type PrismThemeLocalStateV1,
+  type ResolvedAstraTheme,
   type ResolvedInterfaceTheme,
   type ResolvedLUFSMeterTheme,
   type ResolvedOscilloscopeTheme,
@@ -39,6 +40,7 @@ const MODULE_SECTION_ORDER: ThemeSectionName[] = [
   'vumeter',
   'lufsmeter',
   'waveform',
+  'astra',
 ]
 
 const COLOR_KEY_ORDER: Array<keyof ThemeTokens> = [
@@ -72,6 +74,7 @@ const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   vumeter: 'vumeter',
   lufsmeter: 'lufsmeter',
   waveform: 'waveform',
+  astra: 'astra',
 }
 
 const TOKEN_KEY_MAP: Record<string, keyof ThemeTokens> = {
@@ -328,6 +331,7 @@ function createEmptyTheme(): PrismTheme {
     vumeter: createEmptyThemeTokens(),
     lufsmeter: createEmptyThemeTokens(),
     waveform: createEmptyThemeTokens(),
+    astra: createEmptyThemeTokens(),
   }
 }
 
@@ -468,6 +472,7 @@ export function normalizeTheme(
   normalized.vumeter = normalizeTokens(parsed.vumeter)
   normalized.lufsmeter = normalizeTokens(parsed.lufsmeter)
   normalized.waveform = normalizeTokens(parsed.waveform)
+  normalized.astra = normalizeTokens(parsed.astra)
   return normalized
 }
 
@@ -635,6 +640,8 @@ export function serializeThemeFile(theme: PrismTheme): string {
           ? 'VUMeter'
           : section === 'lufsmeter'
             ? 'LUFSMeter'
+            : section === 'astra'
+              ? 'Astra'
             : `${section.charAt(0).toUpperCase()}${section.slice(1)}`
     output.push(serializeSection(label, tokens).join('\n'))
   }
@@ -643,7 +650,7 @@ export function serializeThemeFile(theme: PrismTheme): string {
 }
 
 export function createTemplateThemeFile(): string {
-  return `# Prism theme template\n#\n# Authoring rules:\n# - Colors use R, G, B or R, G, B, A (0-255)\n# - Omit sections or keys you do not want to override\n# - [All] sets the defaults for everything else\n# - [Interface] overrides the app window, controls, and menus\n# - Module sections only need the colors that should differ from [All]\n\n[Theme]\nformat = ${THEME_FILE_FORMAT}\nversion = ${THEME_FILE_VERSION}\nid = theme_template\nname = Template Theme\ncredit = Your Name\nwebsite = https://example.com\n\n[All]\nprimary = 56, 189, 248\nsecondary = 172, 192, 222\nguides = 255, 255, 255, 26\ntext = 255, 255, 255\nbackground = 0, 0, 0\nlow_band = 255, 68, 68\nmid_band = 68, 221, 68\nhigh_band = 68, 136, 255\nsuccess = 34, 197, 94\nwarning = 255, 191, 0\ndanger = 248, 113, 113\n\n[Interface]\nsecondary = 8, 11, 16, 235\nguides = 255, 255, 255, 23\nbackground = 0, 0, 0\n\n[Spectrum]\nsecondary = 56, 189, 248, 127\nheat_low = 15, 7, 33\nheat_mid = 163, 26, 121\nheat_high = 255, 241, 209\n\n[Oscilloscope]\nfill = 245, 248, 252, 46\n\n[VUMeter]\npeak = 255, 127, 0\nclip = 255, 120, 80, 230\n\n[LUFSMeter]\ntarget = 56, 189, 248, 64\n`
+  return `# Prism theme template\n#\n# Authoring rules:\n# - Colors use R, G, B or R, G, B, A (0-255)\n# - Omit sections or keys you do not want to override\n# - [All] sets the defaults for everything else\n# - [Interface] overrides the app window, controls, and menus\n# - Module sections only need the colors that should differ from [All]\n\n[Theme]\nformat = ${THEME_FILE_FORMAT}\nversion = ${THEME_FILE_VERSION}\nid = theme_template\nname = Template Theme\ncredit = Your Name\nwebsite = https://example.com\n\n[All]\nprimary = 56, 189, 248\nsecondary = 172, 192, 222\nguides = 255, 255, 255, 26\ntext = 255, 255, 255\nbackground = 0, 0, 0\nlow_band = 255, 68, 68\nmid_band = 68, 221, 68\nhigh_band = 68, 136, 255\nsuccess = 34, 197, 94\nwarning = 255, 191, 0\ndanger = 248, 113, 113\n\n[Interface]\nsecondary = 8, 11, 16, 235\nguides = 255, 255, 255, 23\nbackground = 0, 0, 0\n\n[Spectrum]\nsecondary = 56, 189, 248, 127\nheat_low = 15, 7, 33\nheat_mid = 163, 26, 121\nheat_high = 255, 241, 209\n\n[Oscilloscope]\nfill = 245, 248, 252, 46\n\n[VUMeter]\npeak = 255, 127, 0\nclip = 255, 120, 80, 230\n\n[LUFSMeter]\ntarget = 56, 189, 248, 64\n\n[Astra]\nsecondary = 10, 16, 24, 235\nguides = 255, 255, 255, 31\nbackground = 4, 8, 12, 230\n`
 }
 
 function getThemeFallbackSection(base: ThemeTokens): Required<ThemeTokens> {
@@ -807,6 +814,31 @@ function resolveWaveformTheme(theme: PrismTheme, all: Required<ThemeTokens>): Re
   }
 }
 
+function resolveAstraTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedAstraTheme {
+  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.astra))
+  const background = section.background
+  const surface = theme.astra.secondary ?? withAlpha(section.secondary, 0.16)
+  const guides = theme.astra.guides ?? all.guides
+
+  return {
+    accent: section.primary,
+    text: section.text,
+    subtext: withAlpha(section.text, 0.7),
+    background,
+    surface,
+    border: guides,
+    progressTrack: withAlpha(guides, 0.3),
+    progressFill: section.primary,
+    buttonBg: surface,
+    buttonBgHover: withAlpha(mixColors(surface, section.primary, 0.14), 0.94),
+    buttonBgActive: withAlpha(section.primary, 0.16),
+    buttonBorder: guides,
+    buttonText: section.text,
+    statusOk: section.success,
+    statusError: section.danger,
+  }
+}
+
 export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
   const normalized = normalizeTheme(theme, theme.id, theme.name)
   const baseAll = getThemeFallbackSection(mergeThemeTokens(createDefaultTheme().all, normalized.all))
@@ -825,6 +857,7 @@ export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
     vumeter: resolveVUMeterTheme(normalized, baseAll),
     lufsmeter: resolveLUFSMeterTheme(normalized, baseAll),
     waveform: resolveWaveformTheme(normalized, baseAll),
+    astra: resolveAstraTheme(normalized, baseAll),
   }
 }
 

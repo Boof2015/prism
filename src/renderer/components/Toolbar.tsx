@@ -79,6 +79,8 @@ function getErrorMessage(error: unknown, fallback: string): string {
 export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps): JSX.Element {
   const profiles = useSettingsStore((s) => s.profiles)
   const activeProfileId = useSettingsStore((s) => s.activeProfileId)
+  const hasUnsavedProfileChanges = useSettingsStore((s) => s.hasUnsavedProfileChanges)
+  const guardProfileTransition = useSettingsStore((s) => s.guardProfileTransition)
   const saveProfile = useSettingsStore((s) => s.saveProfile)
   const loadProfile = useSettingsStore((s) => s.loadProfile)
   const deleteProfile = useSettingsStore((s) => s.deleteProfile)
@@ -163,23 +165,27 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
 
   const handleLoadProfile = useCallback(async (id: string) => {
     try {
-      await loadProfile(id)
+      await guardProfileTransition(async () => {
+        await loadProfile(id)
+      })
     } catch (error) {
       window.alert(getErrorMessage(error, 'Could not load the profile.'))
     } finally {
       setIsProfileMenuOpen(false)
     }
-  }, [loadProfile])
+  }, [guardProfileTransition, loadProfile])
 
   const handleImportProfile = useCallback(async () => {
     try {
-      await importProfileFromDialog()
+      await guardProfileTransition(async () => {
+        await importProfileFromDialog()
+      })
     } catch (error) {
       window.alert(getErrorMessage(error, 'Could not import the profile file.'))
     } finally {
       setIsProfileMenuOpen(false)
     }
-  }, [importProfileFromDialog])
+  }, [guardProfileTransition, importProfileFromDialog])
 
   const handleShowProfilesFolder = useCallback(async () => {
     try {
@@ -314,6 +320,7 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           <span className="toolbar__profile-name">
             {activeProfile?.name ?? 'Profiles'}
           </span>
+          {hasUnsavedProfileChanges ? <span className="toolbar__profile-dirty-dot" aria-hidden="true" /> : null}
           <ChevronIcon />
         </button>
       </div>

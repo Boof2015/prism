@@ -1,6 +1,11 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { extname, join, resolve } from 'path'
+import type {
+  AstraControlCommand,
+  AstraIntegrationConfig,
+  AstraIntegrationState,
+} from '../types/astra'
 import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 import type {
   ScopePopoutAudioBatch,
@@ -10,25 +15,38 @@ import type {
   WindowBounds,
 } from '../types/popout'
 import type { ProfileMenuRequest } from '../types/profileMenu'
-import type { LegacyProfileMigrationPayload, Profile, ProfileLibrarySnapshot } from '../types/profile'
+import type { LegacyProfileMigrationPayload, Profile } from '../types/profile'
 import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
 import type {
   LegacyThemeMigrationPayload,
   ThemeLibrarySnapshot,
 } from '../types/theme'
+import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
 import { normalizeProfile } from '../shared/profileState'
+import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
+import { AstraIntegrationService } from './services/astraIntegration'
 import { FileBackedThemeLibrary } from './themeLibrary'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
 let moveStartCursor: { x: number; y: number } | null = null
 let moveStartPosition: number[] | null = null
+let resizeInterval: ReturnType<typeof setInterval> | null = null
+let resizeWindow: BrowserWindow | null = null
+let resizeStartCursor: { x: number; y: number } | null = null
+let resizeStartBounds: WindowBounds | null = null
+let resizeEdge: ResizeDirection | null = null
 let mainWindowBoundsTimer: ReturnType<typeof setTimeout> | null = null
+let mainRendererReady = false
+let allowMainWindowClose = false
+let mainWindowClosePending = false
+let suppressNextMainWindowBoundsEvent = false
 
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
+const suppressNextPopoutBoundsEvents = new Set<ScopeKind>()
 const windowSettingsHeights = new Map<number, number>()
 const windowSettingsBottomAnchors = new Map<number, number>()
 const pendingProfileOpenPaths: string[] = []
@@ -36,6 +54,7 @@ const pendingThemeOpenPaths: string[] = []
 
 let profileLibrary: FileBackedProfileLibrary | null = null
 let themeLibrary: FileBackedThemeLibrary | null = null
+let astraIntegrationService: AstraIntegrationService | null = null
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -72,6 +91,26 @@ function getThemeLibrary(): FileBackedThemeLibrary {
   }
 
   return themeLibrary
+}
+
+function broadcastAstraState(state: AstraIntegrationState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue
+    window.webContents.send('astra:state-changed', state)
+  }
+}
+
+function getAstraIntegrationService(): AstraIntegrationService {
+  if (!astraIntegrationService) {
+    astraIntegrationService = new AstraIntegrationService({
+      configPath: join(app.getPath('userData'), 'astra-integration.json'),
+    })
+    astraIntegrationService.subscribe((state) => {
+      broadcastAstraState(state)
+    })
+  }
+
+  return astraIntegrationService
 }
 
 function queueProfileOpenPath(filePath: string): void {
@@ -133,27 +172,15 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 async function processPendingProfileOpenPaths(): Promise<void> {
   if (pendingProfileOpenPaths.length === 0) return
+  if (!mainRendererReady || !mainWindow || mainWindow.isDestroyed()) return
 
   const paths = [...pendingProfileOpenPaths]
   pendingProfileOpenPaths.length = 0
-
-  let latestSnapshot: ProfileLibrarySnapshot | null = null
+  focusMainWindow()
 
   for (const filePath of paths) {
-    try {
-      latestSnapshot = await getProfileLibrary().importProfileFromPath(filePath)
-    } catch (error) {
-      dialog.showErrorBox(
-        'Could Not Open Profile',
-        getErrorMessage(error, `Prism could not open ${filePath}.`),
-      )
-    }
+    mainWindow.webContents.send('profiles:open-requested', filePath)
   }
-
-  if (!latestSnapshot || !mainWindow || mainWindow.isDestroyed()) return
-
-  focusMainWindow()
-  mainWindow.webContents.send('profiles:external-activated', latestSnapshot)
 }
 
 async function processPendingThemeOpenPaths(): Promise<void> {
@@ -182,7 +209,7 @@ async function processPendingThemeOpenPaths(): Promise<void> {
 }
 
 function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
-  if (!isMainRendererWindow(window)) return
+  if (!isMainRendererWindow(window) || !mainRendererReady) return
 
   if (mainWindowBoundsTimer) {
     clearTimeout(mainWindowBoundsTimer)
@@ -190,8 +217,12 @@ function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
 
   mainWindowBoundsTimer = setTimeout(() => {
     mainWindowBoundsTimer = null
-    if (window.isDestroyed()) return
-    void getProfileLibrary().updateActiveProfileWindowBounds(toLogicalBounds(window))
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (suppressNextMainWindowBoundsEvent) {
+      suppressNextMainWindowBoundsEvent = false
+      return
+    }
+    window.webContents.send('window:bounds-changed', toLogicalBounds(window))
   }, 80)
 }
 
@@ -307,6 +338,49 @@ function applySettingsHeight(window: BrowserWindow, rawNextHeight: number): void
 function sendToRenderer(sender: WebContents, channel: string, ...args: unknown[]): void {
   if (!sender.isDestroyed()) {
     sender.send(channel, ...args)
+  }
+}
+
+function isResizeDirection(value: unknown): value is ResizeDirection {
+  return typeof value === 'string' && RESIZE_DIRECTIONS.includes(value as ResizeDirection)
+}
+
+function stopWindowMoveController(): void {
+  if (moveInterval) {
+    clearInterval(moveInterval)
+    moveInterval = null
+  }
+  moveStartCursor = null
+  moveStartPosition = null
+}
+
+function stopWindowResizeController(): void {
+  if (resizeInterval) {
+    clearInterval(resizeInterval)
+    resizeInterval = null
+  }
+  resizeWindow = null
+  resizeStartCursor = null
+  resizeStartBounds = null
+  resizeEdge = null
+}
+
+function getFramelessWindowChromeOptions(): Pick<
+  BrowserWindowConstructorOptions,
+  'frame' | 'transparent' | 'backgroundColor' | 'roundedCorners' | 'hasShadow' | 'thickFrame' | 'backgroundMaterial'
+> {
+  return {
+    frame: false,
+    transparent: false,
+    backgroundColor: '#000000',
+    roundedCorners: false,
+    hasShadow: false,
+    ...(process.platform === 'win32'
+      ? {
+          thickFrame: false,
+          backgroundMaterial: 'none',
+        }
+      : {}),
   }
 }
 
@@ -438,11 +512,7 @@ function loadRendererTarget(window: BrowserWindow, query: Record<string, string>
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     ...WINDOW_DEFAULTS,
-    frame: false,
-    transparent: false,
-    backgroundColor: '#000000',
-    roundedCorners: false,
-    hasShadow: false,
+    ...getFramelessWindowChromeOptions(),
     alwaysOnTop: true,
     autoHideMenuBar: true,
     resizable: true,
@@ -458,7 +528,27 @@ function createMainWindow(): void {
     },
   })
 
+  mainWindow.on('close', (event) => {
+    if (allowMainWindowClose || !mainRendererReady || mainWindow?.webContents.isDestroyed()) {
+      allowMainWindowClose = false
+      mainWindowClosePending = false
+      return
+    }
+
+    event.preventDefault()
+    if (mainWindowClosePending) {
+      return
+    }
+
+    mainWindowClosePending = true
+    mainWindow?.webContents.send('window:close-requested')
+  })
+
   mainWindow.on('closed', () => {
+    if (resizeWindow === mainWindow) {
+      stopWindowResizeController()
+    }
+    stopWindowMoveController()
     if (mainWindowBoundsTimer) {
       clearTimeout(mainWindowBoundsTimer)
       mainWindowBoundsTimer = null
@@ -467,6 +557,9 @@ function createMainWindow(): void {
       windowSettingsHeights.delete(mainWindow.id)
       windowSettingsBottomAnchors.delete(mainWindow.id)
     }
+    mainRendererReady = false
+    allowMainWindowClose = false
+    mainWindowClosePending = false
     mainWindow = null
 
     for (const kind of SCOPE_KINDS) {
@@ -494,7 +587,7 @@ function setAllWindowsAlwaysOnTop(next: boolean): void {
 }
 
 function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
-  if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed()) return
+  if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed() || !mainRendererReady) return
 
   const existingTimer = popoutBoundsTimers.get(kind)
   if (existingTimer) {
@@ -505,8 +598,11 @@ function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
     popoutBoundsTimers.delete(kind)
 
     if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed()) return
+    if (suppressNextPopoutBoundsEvents.has(kind)) {
+      suppressNextPopoutBoundsEvents.delete(kind)
+      return
+    }
     const bounds = toLogicalBounds(window)
-    void getProfileLibrary().updateActiveProfilePopoutBounds(kind, bounds)
     mainWindow.webContents.send('scope-popout:bounds-changed', kind, bounds)
   }, 80)
 
@@ -523,11 +619,13 @@ function destroyScopePopoutWindow(kind: ScopeKind): void {
     popoutBoundsTimers.delete(kind)
   }
 
+  suppressNextPopoutBoundsEvents.delete(kind)
   scopePopoutCloseAllowed.add(kind)
   scopePopoutWindows.delete(kind)
 
   if (!window.isDestroyed()) {
     window.close()
+    return
   }
 
   scopePopoutCloseAllowed.delete(kind)
@@ -549,6 +647,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     height: POPOUT_DEFAULTS.height,
   }
   const bounds = normalizeBounds(rawBounds, fallbackBounds)
+  suppressNextPopoutBoundsEvents.add(kind)
 
   const options: BrowserWindowConstructorOptions = {
     x: bounds.x,
@@ -557,11 +656,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     height: bounds.height,
     minWidth: POPOUT_DEFAULTS.minWidth,
     minHeight: POPOUT_DEFAULTS.minHeight,
-    frame: false,
-    transparent: false,
-    backgroundColor: '#000000',
-    roundedCorners: false,
-    hasShadow: false,
+    ...getFramelessWindowChromeOptions(),
     resizable: true,
     fullscreenable: false,
     maximizable: false,
@@ -600,6 +695,9 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   })
 
   popoutWindow.on('closed', () => {
+    if (resizeWindow === popoutWindow) {
+      stopWindowResizeController()
+    }
     windowSettingsHeights.delete(popoutWindow.id)
     windowSettingsBottomAnchors.delete(popoutWindow.id)
     scopePopoutWindows.delete(kind)
@@ -639,6 +737,7 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
       || currentBounds.height !== nextBounds.height
 
     if (hasBoundsDelta) {
+      suppressNextPopoutBoundsEvents.add(kind)
       applyLogicalBounds(popoutWindow, nextBounds)
     }
   }
@@ -704,11 +803,12 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
 
+    stopWindowResizeController()
+    stopWindowMoveController()
     const cursor = screen.getCursorScreenPoint()
     moveStartCursor = { x: cursor.x, y: cursor.y }
     moveStartPosition = targetWindow.getPosition()
 
-    if (moveInterval) clearInterval(moveInterval)
     moveInterval = setInterval(() => {
       if (!targetWindow || targetWindow.isDestroyed() || !moveStartCursor || !moveStartPosition) return
       const current = screen.getCursorScreenPoint()
@@ -719,16 +819,69 @@ function setupIPC(): void {
   })
 
   ipcMain.on('window:stop-move', () => {
-    if (moveInterval) {
-      clearInterval(moveInterval)
-      moveInterval = null
-    }
-    moveStartCursor = null
-    moveStartPosition = null
+    stopWindowMoveController()
+  })
+
+  ipcMain.on('window:start-resize', (event, rawEdge: unknown) => {
+    if (process.platform !== 'win32' || !isResizeDirection(rawEdge)) return
+
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || targetWindow.isDestroyed()) return
+
+    stopWindowMoveController()
+    stopWindowResizeController()
+
+    resizeWindow = targetWindow
+    resizeEdge = rawEdge
+    resizeStartCursor = screen.getCursorScreenPoint()
+    resizeStartBounds = targetWindow.getBounds()
+
+    resizeInterval = setInterval(() => {
+      if (
+        !resizeWindow
+        || resizeWindow.isDestroyed()
+        || !resizeStartCursor
+        || !resizeStartBounds
+        || !resizeEdge
+      ) {
+        stopWindowResizeController()
+        return
+      }
+
+      const currentCursor = screen.getCursorScreenPoint()
+      const [minWidth, minHeight] = resizeWindow.getMinimumSize()
+      const nextBounds = calculateResizedWindowBounds({
+        edge: resizeEdge,
+        startBounds: resizeStartBounds,
+        startCursor: resizeStartCursor,
+        cursor: currentCursor,
+        minWidth,
+        minHeight,
+      })
+
+      resizeWindow.setBounds(nextBounds)
+    }, 16)
+  })
+
+  ipcMain.on('window:stop-resize', () => {
+    stopWindowResizeController()
   })
 
   ipcMain.on('window:close', (event) => {
     getWindowFromSender(event.sender)?.close()
+  })
+
+  ipcMain.on('window:close-response', (event, shouldClose: boolean) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
+
+    mainWindowClosePending = false
+    if (!shouldClose) {
+      return
+    }
+
+    allowMainWindowClose = true
+    targetWindow.close()
   })
 
   ipcMain.on('window:toggle-always-on-top', (event) => {
@@ -737,7 +890,7 @@ function setupIPC(): void {
 
     const current = targetWindow.isAlwaysOnTop()
     const next = !current
-    if (isMainRendererWindow(targetWindow)) {
+    if (mainWindow && targetWindow === mainWindow) {
       setAllWindowsAlwaysOnTop(next)
       mainWindow?.webContents.send('window:always-on-top-changed', next)
       return
@@ -757,6 +910,27 @@ function setupIPC(): void {
 
   ipcMain.handle('capture:get-backend-support', () => {
     return getCaptureBackendSupport()
+  })
+
+  ipcMain.handle('astra:get-config', async () => {
+    return getAstraIntegrationService().getConfig()
+  })
+
+  ipcMain.handle('astra:save-config', async (_event, rawConfig: AstraIntegrationConfig) => {
+    return getAstraIntegrationService().saveConfig(rawConfig)
+  })
+
+  ipcMain.handle('astra:get-state', async () => {
+    return getAstraIntegrationService().getState()
+  })
+
+  ipcMain.handle('astra:set-active', async (event, active: boolean) => {
+    return getAstraIntegrationService().setConsumerActive(event.sender.id, Boolean(active))
+  })
+
+  ipcMain.handle('astra:send-control', async (_event, command: AstraControlCommand) => {
+    await getAstraIntegrationService().sendControl(command)
+    return getAstraIntegrationService().getState()
   })
 
   ipcMain.handle('profiles:get-snapshot', async () => {
@@ -803,6 +977,49 @@ function setupIPC(): void {
     }
 
     return getProfileLibrary().importProfileFromPath(result.filePaths[0])
+  })
+
+  ipcMain.handle('profiles:import-path', async (_event, path: string) => {
+    return getProfileLibrary().importProfileFromPath(path)
+  })
+
+  ipcMain.handle('profiles:prompt-unsaved', async (event, profileName: string | null) => {
+    const targetWindow = getWindowFromSender(event.sender) ?? mainWindow ?? undefined
+    const { response } = targetWindow
+      ? await dialog.showMessageBox(targetWindow, {
+        type: 'warning',
+        title: 'Unsaved Profile Changes',
+        message: profileName
+          ? `Save changes to "${profileName}"?`
+          : 'Save unsaved profile changes?',
+        detail: 'Your profile changes will be lost if you continue without saving.',
+        buttons: ['Save', 'Discard', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      })
+      : await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Unsaved Profile Changes',
+        message: profileName
+          ? `Save changes to "${profileName}"?`
+          : 'Save unsaved profile changes?',
+        detail: 'Your profile changes will be lost if you continue without saving.',
+        buttons: ['Save', 'Discard', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      })
+
+    if (response === 0) {
+      return 'save'
+    }
+
+    if (response === 1) {
+      return 'discard'
+    }
+
+    return 'cancel'
   })
 
   ipcMain.handle('profiles:reveal-folder', async () => {
@@ -889,6 +1106,9 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
 
+    if (isMainRendererWindow(targetWindow)) {
+      suppressNextMainWindowBoundsEvent = true
+    }
     applyLogicalBounds(targetWindow, bounds)
   })
 
@@ -934,6 +1154,14 @@ function setupIPC(): void {
     if (!targetWindow) return
 
     applySettingsHeight(targetWindow, panelHeight)
+  })
+
+  ipcMain.on('renderer:ready', (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow)) return
+
+    mainRendererReady = true
+    void processPendingProfileOpenPaths()
   })
 
   ipcMain.on('scope-popout:sync', (event, state: ScopePopoutSyncStateMap) => {
@@ -991,7 +1219,7 @@ function setupIPC(): void {
 function setupShortcuts(): void {
   if (!mainWindow) return
 
-  const scopeKeys = ['1', '2', '3', '4', '5', '6', '7']
+  const scopeKeys = ['1', '2', '3', '4', '5', '6', '7', '8']
   scopeKeys.forEach((key) => {
     mainWindow!.webContents.on('before-input-event', (_event, input) => {
       if (input.type === 'keyDown' && input.key === key && !input.alt && !input.control && !input.meta && !input.shift) {
@@ -1029,6 +1257,7 @@ if (!hasSingleInstanceLock) {
 } else {
   app.whenReady().then(() => {
     setupPermissions()
+    void getAstraIntegrationService().initialize()
     setupIPC()
     createMainWindow()
     setupShortcuts()
@@ -1060,5 +1289,6 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on('window-all-closed', () => {
+  void astraIntegrationService?.dispose()
   app.quit()
 })

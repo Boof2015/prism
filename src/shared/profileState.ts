@@ -12,10 +12,11 @@ import {
   type PrismProfileFileV2,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
-import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
+import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, type ScopeKind } from '../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
+export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
 
 export const DEFAULT_SCOPE_WIDTH_WEIGHTS: Record<ScopeKind, number> = {
   spectrum: 1,
@@ -25,6 +26,7 @@ export const DEFAULT_SCOPE_WIDTH_WEIGHTS: Record<ScopeKind, number> = {
   vumeter: 0.5,
   lufsmeter: 0.5,
   waveform: 1,
+  astra: 1,
 }
 
 export function isScopeKind(value: unknown): value is ScopeKind {
@@ -68,7 +70,7 @@ export function normalizeWindowBounds(
 }
 
 export function normalizeScopeOrder(raw: unknown): ScopeKind[] {
-  if (!Array.isArray(raw)) return [...SCOPE_KINDS]
+  if (!Array.isArray(raw)) return [...DEFAULT_SCOPE_ORDER]
 
   const valid = raw.filter(isScopeKind)
   const seen = new Set<ScopeKind>()
@@ -80,7 +82,7 @@ export function normalizeScopeOrder(raw: unknown): ScopeKind[] {
     normalized.push(kind)
   }
 
-  for (const kind of SCOPE_KINDS) {
+  for (const kind of DEFAULT_SCOPE_ORDER) {
     if (!seen.has(kind)) {
       normalized.push(kind)
     }
@@ -124,6 +126,7 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
     vumeter: { ...DEFAULT_SCOPE_SETTINGS.vumeter, ...(parsed.vumeter ?? {}) },
     lufsmeter: { ...DEFAULT_SCOPE_SETTINGS.lufsmeter, ...(parsed.lufsmeter ?? {}) },
     waveform: { ...DEFAULT_SCOPE_SETTINGS.waveform, ...(parsed.waveform ?? {}) },
+    astra: { ...DEFAULT_SCOPE_SETTINGS.astra, ...(parsed.astra ?? {}) },
   }
 }
 
@@ -154,7 +157,7 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): Profile {
   return {
     name,
     themeId: null,
-    scopeOrder: [...SCOPE_KINDS],
+    scopeOrder: [...DEFAULT_SCOPE_ORDER],
     hiddenScopes: SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind)),
     widthWeights: { ...DEFAULT_SCOPE_WIDTH_WEIGHTS },
     scopeSettings: cloneScopeSettings(DEFAULT_SCOPE_SETTINGS),

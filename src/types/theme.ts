@@ -49,6 +49,7 @@ export interface PrismTheme {
   vumeter: ThemeTokens
   lufsmeter: ThemeTokens
   waveform: ThemeTokens
+  astra: ThemeTokens
 }
 
 export interface PrismThemeLocalStateV1 {
@@ -182,6 +183,24 @@ export interface ResolvedWaveformTheme {
   highBand: string
 }
 
+export interface ResolvedAstraTheme {
+  accent: string
+  text: string
+  subtext: string
+  background: string
+  surface: string
+  border: string
+  progressTrack: string
+  progressFill: string
+  buttonBg: string
+  buttonBgHover: string
+  buttonBgActive: string
+  buttonBorder: string
+  buttonText: string
+  statusOk: string
+  statusError: string
+}
+
 export interface PrismResolvedTheme {
   id: string
   name: string
@@ -196,4 +215,5 @@ export interface PrismResolvedTheme {
   vumeter: ResolvedVUMeterTheme
   lufsmeter: ResolvedLUFSMeterTheme
   waveform: ResolvedWaveformTheme
+  astra: ResolvedAstraTheme
 }
