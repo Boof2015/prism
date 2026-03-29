@@ -20,10 +20,12 @@ function buildConsumerDemand(kind: ScopeKind): Record<ScopeKind, boolean> {
   }, {} as Record<ScopeKind, boolean>)
 }
 
-function flushScopeAudioBatch(kind: ScopeKind): ScopePopoutAudioBatch {
+function flushScopeAudioBatch(kind: ScopeKind, scopeSettings: ScopeSettings): ScopePopoutAudioBatch {
   switch (kind) {
     case 'spectrum':
-      return audioRouter.flushPendingSpectrumSamples()
+      return scopeSettings.spectrum.showSideLine
+        ? audioRouter.flushPendingSpectrumStereoSamples()
+        : audioRouter.flushPendingSpectrumSamples()
     case 'oscilloscope':
       return audioRouter.flushPendingOscilloscopeSamples()
     case 'vectorscope':
@@ -35,7 +37,9 @@ function flushScopeAudioBatch(kind: ScopeKind): ScopePopoutAudioBatch {
     case 'lufsmeter':
       return audioRouter.flushPendingLUFSMeterSamples()
     case 'waveform':
-      return audioRouter.flushPendingWaveformSamples()
+      return scopeSettings.waveform.mode === 'stereo'
+        ? audioRouter.flushPendingWaveformStereoSamples()
+        : audioRouter.flushPendingWaveformSamples()
   }
 }
 
@@ -171,7 +175,7 @@ export default function ScopePopoutBridge(): null {
       }
 
       for (const kind of activePopoutKindsRef.current) {
-        const batch = flushScopeAudioBatch(kind)
+        const batch = flushScopeAudioBatch(kind, useSettingsStore.getState().scopeSettings)
         if (batch.length > 0) {
           window.electronAPI.sendScopePopoutAudio(kind, batch)
         }

@@ -215,7 +215,33 @@ type ColorStop = {
   color: [number, number, number]
 }
 
+const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
+  'rgb(15, 7, 33)',
+  'rgb(163, 26, 121)',
+  'rgb(255, 241, 209)',
+]
+
+function isLegacyDefaultHeatColors(colors: [string, string, string]): boolean {
+  return colors.every((color, index) => {
+    const left = resolveColorToRgb(color)
+    const right = resolveColorToRgb(LEGACY_DEFAULT_HEAT_COLORS[index])
+    return left.r === right.r && left.g === right.g && left.b === right.b
+  })
+}
+
 function buildHeatStops(colors: [string, string, string]): ColorStop[] {
+  if (isLegacyDefaultHeatColors(colors)) {
+    return [
+      { at: 0, color: [0, 0, 0] },
+      { at: 0.14, color: [15, 7, 33] },
+      { at: 0.32, color: [61, 11, 94] },
+      { at: 0.54, color: [163, 26, 121] },
+      { at: 0.74, color: [255, 82, 87] },
+      { at: 0.9, color: [255, 166, 63] },
+      { at: 1, color: [255, 241, 209] },
+    ]
+  }
+
   const low = resolveColorToRgb(colors[0])
   const mid = resolveColorToRgb(colors[1])
   const high = resolveColorToRgb(colors[2])

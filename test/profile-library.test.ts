@@ -64,6 +64,7 @@ function createProfile(name: string): Profile {
     windowBounds: { x: 120, y: 40, width: 420, height: 240 },
   }
   profile.windowBounds = { x: 10, y: 20, width: 840, height: 180 }
+  profile.scopeSettings.spectrum.showSideLine = true
   profile.scopeSettings.spectrogram.colorScheme = 'mono'
   return profile
 }
@@ -82,6 +83,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   const restored = profileFileToProfile(file, extractLocalProfileMetadata(profile))
   assert.deepEqual(restored.windowBounds, profile.windowBounds)
   assert.deepEqual(restored.scopePopouts.spectrum.windowBounds, profile.scopePopouts.spectrum.windowBounds)
+  assert.equal(restored.scopeSettings.spectrum.showSideLine, true)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
 })
 
@@ -195,6 +197,7 @@ test('partial files normalize, unsupported versions fail, and import does not ch
 
     const partialSnapshot = await harness.library.importProfileFromPath(partialPath)
     assert.equal(partialSnapshot.activeProfileId, 'profile_partial')
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.showSideLine, false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrogram.colorScheme, 'heat')
     assert.equal(partialSnapshot.profiles.profile_partial.scopePopouts.spectrogram.poppedOut, true)
     assert.equal(partialSnapshot.profiles.profile_partial.widthWeights.spectrum, 1)

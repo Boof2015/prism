@@ -1,3 +1,5 @@
+export type WaveformMode = 'mono' | 'stereo'
+
 export const MIN_WAVEFORM_SCROLL_SPEED = 0.5
 export const MAX_WAVEFORM_SCROLL_SPEED = 8
 export const WAVEFORM_SCROLL_SPEED_STEP = 0.5
@@ -6,6 +8,7 @@ export const MIN_WAVEFORM_GAIN_DB = -12
 export const MAX_WAVEFORM_GAIN_DB = 18
 export const WAVEFORM_GAIN_DB_STEP = 0.5
 export const DEFAULT_WAVEFORM_GAIN_DB = 0
+export const DEFAULT_WAVEFORM_MODE: WaveformMode = 'mono'
 
 export function clampWaveformScrollSpeed(value: unknown): number {
   const numeric = Number(value)

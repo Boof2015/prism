@@ -22,7 +22,8 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
   switch (kind) {
     case 'spectrum': {
       const scopeSettings = settings as ScopeSettings['spectrum']
-      return `${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
+      const summary = `${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
+      return scopeSettings.showSideLine ? `${summary} · Side` : summary
     }
     case 'oscilloscope': {
       const scopeSettings = settings as ScopeSettings['oscilloscope']
@@ -47,9 +48,14 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       return 'Bar Meter'
     case 'waveform': {
       const scopeSettings = settings as ScopeSettings['waveform']
-      return scopeSettings.multiband
-        ? `${scopeSettings.gainDb > 0 ? '+' : ''}${scopeSettings.gainDb} dB · RGB`
-        : `${scopeSettings.gainDb > 0 ? '+' : ''}${scopeSettings.gainDb} dB`
+      const summary = [`${scopeSettings.gainDb > 0 ? '+' : ''}${scopeSettings.gainDb} dB`]
+      if (scopeSettings.mode === 'stereo') {
+        summary.push('Stereo')
+      }
+      if (scopeSettings.multiband) {
+        summary.push('RGB')
+      }
+      return summary.join(' · ')
     }
   }
 }
@@ -212,6 +218,11 @@ export default function ScopeSettingsSection({
                   label="Grid"
                   active={current.showGrid}
                   onClick={() => onUpdate('spectrum', { showGrid: !current.showGrid })}
+                />
+                <ToggleChip
+                  label="Side"
+                  active={current.showSideLine}
+                  onClick={() => onUpdate('spectrum', { showSideLine: !current.showSideLine })}
                 />
               </ToggleGroup>
 
@@ -443,6 +454,19 @@ export default function ScopeSettingsSection({
           const current = settings as ScopeSettings['waveform']
           return (
             <>
+              <ToggleGroup label="Mode">
+                <ToggleChip
+                  label="Mono"
+                  active={current.mode === 'mono'}
+                  onClick={() => onUpdate('waveform', { mode: 'mono' })}
+                />
+                <ToggleChip
+                  label="Stereo"
+                  active={current.mode === 'stereo'}
+                  onClick={() => onUpdate('waveform', { mode: 'stereo' })}
+                />
+              </ToggleGroup>
+
               <ToggleGroup label="Bands">
                 <ToggleChip
                   label="Multiband"

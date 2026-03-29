@@ -58,7 +58,7 @@ function getScopeTheme(theme: PrismResolvedTheme, kind: ScopeKind): ScopeModuleT
   return theme[kind] as ScopeModuleTheme
 }
 
-function scopeSettingsToOptions(
+export function scopeSettingsToOptions(
   kind: ScopeKind,
   settings: ScopeSettings[ScopeKind],
   theme: ScopeModuleTheme,
@@ -69,6 +69,7 @@ function scopeSettingsToOptions(
       const t = theme as ResolvedSpectrumTheme
       return {
         lineColor: t.primary,
+        secondaryLineColor: t.secondary,
         gradientColors: t.fillGradient,
         heatColors: t.heatColors,
         backgroundColor: t.background,
@@ -80,6 +81,7 @@ function scopeSettingsToOptions(
         showGrid: s.showGrid,
         fillGradient: s.fillGradient,
         smoothing: s.smoothing,
+        showSideLine: s.showSideLine,
       }
     }
     case 'oscilloscope': {
@@ -164,6 +166,7 @@ function scopeSettingsToOptions(
           mid: t.midBand,
           high: t.highBand,
         },
+        mode: s.mode,
         scrollSpeed: s.scrollSpeed,
         gainDb: s.gainDb,
         multiband: s.multiband,
