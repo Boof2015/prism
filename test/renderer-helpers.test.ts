@@ -9,8 +9,10 @@ import {
 import {
   createDefaultProfile,
 } from '../src/shared/profileState'
+import { calculateResizedWindowBounds } from '../src/shared/windowResize'
 import { createDefaultTheme, resolveTheme } from '../src/shared/themeState'
 import { usePerformanceStore } from '../src/renderer/stores/performanceStore'
+import { buildProfileDraft, profilesMatch } from '../src/renderer/stores/profileDraft'
 import {
   moveDockedScopeOrder,
   useSettingsStore,
@@ -22,7 +24,8 @@ import {
   inputGainDbToLinear,
 } from '../src/renderer/audio/inputGain'
 import { SCOPE_KINDS, type ScopeKind } from '../src/types/scope'
-import type { ScopePopoutStateMap } from '../src/types/popout'
+import type { ScopePopoutStateMap, WindowBounds } from '../src/types/popout'
+import { RESIZE_DIRECTIONS } from '../src/types/windowResize'
 import { ScopePopoutDataSource } from '../src/renderer/popouts/ScopePopoutDataSource'
 import {
   VUMeterBallistics,
@@ -36,12 +39,20 @@ import {
   NativeVisualizerTransport,
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
+import {
+  DEFAULT_PROFILE_ID,
+  DEFAULT_PROFILE_NAME,
+  type Profile,
+} from '../src/types/profile'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
 type WindowWithTimers = typeof globalThis & Pick<Window, 'setTimeout' | 'clearTimeout'> & {
   electronAPI: {
     platform: string
   }
+}
+type GlobalWithStorage = typeof globalThis & {
+  localStorage?: Storage
 }
 
 function installFakeAnimationFrame(): {
@@ -196,6 +207,112 @@ function createScopePopouts(poppedOutScopes: ScopeKind[] = []): ScopePopoutState
   }, {} as ScopePopoutStateMap)
 }
 
+function installFakeLocalStorage(): {
+  getSetCount: () => number
+  restore: () => void
+} {
+  const storage = new Map<string, string>()
+  let setCount = 0
+  const globalWithStorage = globalThis as GlobalWithStorage
+  const previousLocalStorage = globalWithStorage.localStorage
+
+  globalWithStorage.localStorage = {
+    getItem(key: string): string | null {
+      return storage.get(key) ?? null
+    },
+    setItem(key: string, value: string): void {
+      setCount += 1
+      storage.set(key, value)
+    },
+    removeItem(key: string): void {
+      storage.delete(key)
+    },
+    clear(): void {
+      storage.clear()
+    },
+    key(index: number): string | null {
+      return [...storage.keys()][index] ?? null
+    },
+    get length(): number {
+      return storage.size
+    },
+  } as Storage
+
+  return {
+    getSetCount: () => setCount,
+    restore(): void {
+      if (previousLocalStorage === undefined) {
+        delete globalWithStorage.localStorage
+        return
+      }
+
+      globalWithStorage.localStorage = previousLocalStorage
+    },
+  }
+}
+
+function installFakeElectronWindow(): {
+  restore: () => void
+} {
+  const globalWithWindow = globalThis as typeof globalThis & { window?: WindowWithTimers }
+  const previousWindow = globalWithWindow.window
+
+  globalWithWindow.window = {
+    ...globalThis,
+    electronAPI: { platform: 'darwin' },
+  } as WindowWithTimers
+
+  return {
+    restore(): void {
+      if (previousWindow === undefined) {
+        delete globalWithWindow.window
+        return
+      }
+
+      globalWithWindow.window = previousWindow
+    },
+  }
+}
+
+function seedProfileDraftState(profile: Profile): void {
+  useSettingsStore.setState({
+    themeId: profile.themeId,
+    scopeOrder: [...profile.scopeOrder],
+    hiddenScopes: new Set(profile.hiddenScopes),
+    widthWeights: { ...profile.widthWeights },
+    scopeSettings: JSON.parse(JSON.stringify(profile.scopeSettings)) as Profile['scopeSettings'],
+    scopePopouts: JSON.parse(JSON.stringify(profile.scopePopouts)) as Profile['scopePopouts'],
+    windowBounds: profile.windowBounds,
+    profiles: {
+      [DEFAULT_PROFILE_ID]: JSON.parse(JSON.stringify(profile)) as Profile,
+    },
+    activeProfileId: DEFAULT_PROFILE_ID,
+    savedProfileBaseline: JSON.parse(JSON.stringify(profile)) as Profile,
+    hasUnsavedProfileChanges: false,
+  })
+}
+
+function resizeBounds(
+  edge: (typeof RESIZE_DIRECTIONS)[number],
+  cursor: { x: number; y: number },
+  minWidth = 120,
+  minHeight = 90,
+): WindowBounds {
+  return calculateResizedWindowBounds({
+    edge,
+    startBounds: {
+      x: 100,
+      y: 200,
+      width: 300,
+      height: 180,
+    },
+    startCursor: { x: 0, y: 0 },
+    cursor,
+    minWidth,
+    minHeight,
+  })
+}
+
 function createFakeTransportBridge(): {
   bridge: NativeVisualizerTransportBridge
   calls: {
@@ -280,6 +397,51 @@ test('color helpers fall back predictably for invalid values', () => {
   assert.equal(colorToRgbChannels('nope'), null)
   assert.deepEqual(resolveColorToRgb('still-nope'), DEFAULT_VISUALIZER_TINT)
   assert.deepEqual(resolveColorToRgb('rgb(4, 5, 6)'), { r: 4, g: 5, b: 6 })
+})
+
+test('calculateResizedWindowBounds supports every resize direction', () => {
+  const expectedByDirection: Record<(typeof RESIZE_DIRECTIONS)[number], WindowBounds> = {
+    n: { x: 100, y: 220, width: 300, height: 160 },
+    s: { x: 100, y: 200, width: 300, height: 200 },
+    e: { x: 100, y: 200, width: 340, height: 180 },
+    w: { x: 140, y: 200, width: 260, height: 180 },
+    ne: { x: 100, y: 220, width: 340, height: 160 },
+    nw: { x: 140, y: 220, width: 260, height: 160 },
+    se: { x: 100, y: 200, width: 340, height: 200 },
+    sw: { x: 140, y: 200, width: 260, height: 200 },
+  }
+
+  for (const edge of RESIZE_DIRECTIONS) {
+    assert.deepEqual(
+      resizeBounds(edge, { x: 40, y: 20 }),
+      expectedByDirection[edge],
+      `expected ${edge} resize bounds to match`,
+    )
+  }
+})
+
+test('calculateResizedWindowBounds clamps east and south resizes to minimum size', () => {
+  assert.deepEqual(
+    resizeBounds('e', { x: -220, y: 0 }, 140, 90),
+    { x: 100, y: 200, width: 140, height: 180 },
+  )
+
+  assert.deepEqual(
+    resizeBounds('s', { x: 0, y: -140 }, 120, 100),
+    { x: 100, y: 200, width: 300, height: 100 },
+  )
+})
+
+test('calculateResizedWindowBounds keeps north and west edges anchored when clamped', () => {
+  assert.deepEqual(
+    resizeBounds('w', { x: 220, y: 0 }, 140, 90),
+    { x: 260, y: 200, width: 140, height: 180 },
+  )
+
+  assert.deepEqual(
+    resizeBounds('nw', { x: 220, y: 140 }, 140, 100),
+    { x: 260, y: 280, width: 140, height: 100 },
+  )
 })
 
 test('inputGainDbToLinear converts dB offsets to expected linear gain values', () => {
@@ -591,6 +753,114 @@ test('applying a profile snapshot does not change the machine-local frame target
       dockedRenderFps: previousPerformanceState.dockedRenderFps,
     })
     useSettingsStore.setState(previousSettingsState)
+  }
+})
+
+test('profile draft comparisons return to clean after reverting a change', () => {
+  const baselineProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+  baselineProfile.themeId = 'theme_default'
+  baselineProfile.windowBounds = { x: 24, y: 48, width: 900, height: 180 }
+  baselineProfile.scopePopouts.spectrum = {
+    poppedOut: true,
+    windowBounds: { x: 160, y: 90, width: 420, height: 240 },
+  }
+
+  const baselineDraft = buildProfileDraft({
+    themeId: baselineProfile.themeId,
+    scopeOrder: baselineProfile.scopeOrder,
+    hiddenScopes: baselineProfile.hiddenScopes,
+    widthWeights: baselineProfile.widthWeights,
+    scopeSettings: baselineProfile.scopeSettings,
+    scopePopouts: baselineProfile.scopePopouts,
+    windowBounds: baselineProfile.windowBounds,
+  }, baselineProfile.name)
+
+  const changedDraft = buildProfileDraft({
+    themeId: baselineProfile.themeId,
+    scopeOrder: baselineProfile.scopeOrder,
+    hiddenScopes: baselineProfile.hiddenScopes,
+    widthWeights: baselineProfile.widthWeights,
+    scopeSettings: {
+      ...baselineProfile.scopeSettings,
+      waveform: {
+        ...baselineProfile.scopeSettings.waveform,
+        gainDb: baselineProfile.scopeSettings.waveform.gainDb + 3,
+      },
+    },
+    scopePopouts: baselineProfile.scopePopouts,
+    windowBounds: baselineProfile.windowBounds,
+  }, baselineProfile.name)
+
+  const revertedDraft = buildProfileDraft({
+    themeId: baselineProfile.themeId,
+    scopeOrder: baselineProfile.scopeOrder,
+    hiddenScopes: baselineProfile.hiddenScopes,
+    widthWeights: baselineProfile.widthWeights,
+    scopeSettings: baselineProfile.scopeSettings,
+    scopePopouts: baselineProfile.scopePopouts,
+    windowBounds: baselineProfile.windowBounds,
+  }, baselineProfile.name)
+
+  assert.equal(profilesMatch(baselineDraft, changedDraft), false)
+  assert.equal(profilesMatch(baselineDraft, revertedDraft), true)
+})
+
+test('main-window bounds updates stay in memory in Electron mode until save', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const fakeWindow = installFakeElectronWindow()
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 10, y: 20, width: 900, height: 180 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.equal(fakeStorage.getSetCount(), 0)
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 24, y: 20, width: 900, height: 180 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, true)
+    assert.equal(fakeStorage.getSetCount(), 0)
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 10, y: 20, width: 900, height: 180 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.equal(fakeStorage.getSetCount(), 0)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('popout bounds updates stay in memory in Electron mode until save', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const fakeWindow = installFakeElectronWindow()
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    profile.scopePopouts.spectrum = {
+      poppedOut: true,
+    }
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 140, y: 60, width: 420, height: 240 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.equal(fakeStorage.getSetCount(), 0)
+
+    useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 180, y: 60, width: 420, height: 240 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, true)
+    assert.equal(fakeStorage.getSetCount(), 0)
+
+    useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 140, y: 60, width: 420, height: 240 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.equal(fakeStorage.getSetCount(), 0)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
   }
 })
 

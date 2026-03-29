@@ -2,6 +2,7 @@ import type { CSSProperties, JSX, ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import ThemedSelect from './ThemedSelect'
 
 function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): string {
   switch (mode) {
@@ -111,13 +112,12 @@ function SelectControl({
   return (
     <label className="settings-control">
       <span className="settings-control__label">{label}</span>
-      <select
-        className="settings-control__select"
+      <ThemedSelect
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
         {children}
-      </select>
+      </ThemedSelect>
     </label>
   )
 }

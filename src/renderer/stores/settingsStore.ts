@@ -10,7 +10,6 @@ import {
 import type { ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import {
-  cloneScopeSettings,
   createDefaultProfile,
   mergeScopeSettings,
   normalizeHiddenScopes,
@@ -20,6 +19,7 @@ import {
   normalizeWidthWeights,
 } from '../../shared/profileState'
 import { useThemeStore } from './themeStore'
+import { buildProfileDraft, profilesMatch } from './profileDraft'
 
 export type { ScopeSettings } from '../../types/settings'
 
@@ -34,6 +34,7 @@ interface PersistedSettingsState {
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
   scopePopouts: ScopePopoutStateMap
+  windowBounds?: WindowBounds
 }
 
 interface WorkingSettingsState {
@@ -43,12 +44,15 @@ interface WorkingSettingsState {
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
   scopePopouts: ScopePopoutStateMap
+  windowBounds?: WindowBounds
 }
 
 interface SettingsState extends WorkingSettingsState {
   visibleScopes: () => ScopeKind[]
   profiles: Record<string, Profile>
   activeProfileId: string | null
+  savedProfileBaseline: Profile | null
+  hasUnsavedProfileChanges: boolean
   initializeProfiles: () => Promise<void>
   applyExternalProfileSnapshot: (snapshot: ProfileLibrarySnapshot) => void
   setThemeId: (themeId: string | null) => void
@@ -59,6 +63,9 @@ interface SettingsState extends WorkingSettingsState {
   popOutScope: (kind: ScopeKind, bounds?: WindowBounds) => void
   popInScope: (kind: ScopeKind) => void
   updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => void
+  updateMainWindowBounds: (bounds: WindowBounds) => void
+  discardUnsavedProfileChanges: () => Promise<void>
+  guardProfileTransition: (transition: () => Promise<void>) => Promise<boolean>
   saveProfile: (name: string) => Promise<string | null>
   saveProfileAs: (name: string) => Promise<string | null>
   updateActiveProfile: () => Promise<void>
@@ -66,6 +73,7 @@ interface SettingsState extends WorkingSettingsState {
   deleteProfile: (id: string) => Promise<void>
   renameProfile: (id: string, name: string) => Promise<void>
   importProfileFromDialog: () => Promise<void>
+  importProfileFromPath: (path: string) => Promise<void>
   showProfilesFolder: () => Promise<void>
 }
 
@@ -73,11 +81,19 @@ function canUseElectronAPI(): boolean {
   return typeof window !== 'undefined' && typeof window.electronAPI !== 'undefined'
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : fallback
+}
+
 function loadFromStorage(): Partial<PersistedSettingsState> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) return JSON.parse(raw) as Partial<PersistedSettingsState>
-  } catch { /* ignore */ }
+  } catch {
+    // Ignore localStorage read failures.
+  }
   return {}
 }
 
@@ -90,8 +106,17 @@ function saveToStorage(state: WorkingSettingsState): void {
       widthWeights: state.widthWeights,
       scopeSettings: state.scopeSettings,
       scopePopouts: state.scopePopouts,
+      windowBounds: state.windowBounds,
     }))
-  } catch { /* ignore */ }
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+function persistWorkingState(state: WorkingSettingsState): void {
+  if (!canUseElectronAPI()) {
+    saveToStorage(state)
+  }
 }
 
 function loadLegacyProfileMigrationPayload(): LegacyProfileMigrationPayload | null {
@@ -119,7 +144,22 @@ function clearLegacyProfileStorage(): void {
   try {
     localStorage.removeItem(PROFILES_STORAGE_KEY)
     localStorage.removeItem(ACTIVE_PROFILE_KEY)
-  } catch { /* ignore */ }
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+function normalizeLoadedProfileForBaseline(profile: Profile, activeProfileId: string | null): Profile {
+  const normalizedProfile = normalizeProfile(profile, profile.name)
+  if (activeProfileId !== DEFAULT_PROFILE_ID || normalizedProfile.themeId) {
+    return normalizedProfile
+  }
+
+  const activeThemeId = useThemeStore.getState().activeThemeId
+  return normalizeProfile({
+    ...normalizedProfile,
+    themeId: activeThemeId,
+  }, normalizedProfile.name)
 }
 
 function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
@@ -132,67 +172,152 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
     widthWeights: normalizeWidthWeights(normalizedProfile.widthWeights),
     scopeSettings: mergeScopeSettings(normalizedProfile.scopeSettings),
     scopePopouts: normalizeScopePopouts(normalizedProfile.scopePopouts),
+    windowBounds: normalizedProfile.windowBounds,
+  }
+}
+
+function getActiveProfileName(state: Pick<SettingsState, 'activeProfileId' | 'profiles'>): string | null {
+  if (!state.activeProfileId) {
+    return null
+  }
+
+  return state.profiles[state.activeProfileId]?.name ?? null
+}
+
+function buildActiveProfileDraft(state: SettingsState): Profile | null {
+  const activeProfileName = getActiveProfileName(state)
+  if (!activeProfileName) {
+    return null
+  }
+
+  return buildProfileDraft(
+    state,
+    activeProfileName,
+    useThemeStore.getState().activeThemeId,
+  )
+}
+
+export function hasProfileDraftChanges(state: SettingsState, baseline = state.savedProfileBaseline): boolean {
+  if (!baseline) {
+    return false
+  }
+
+  const draft = buildActiveProfileDraft(state)
+  if (!draft) {
+    return false
+  }
+
+  return !profilesMatch(draft, baseline)
+}
+
+function withProfileDraftState(state: SettingsState, baseline = state.savedProfileBaseline): SettingsState {
+  return {
+    ...state,
+    savedProfileBaseline: baseline,
+    hasUnsavedProfileChanges: hasProfileDraftChanges(state, baseline),
+  }
+}
+
+function commitWorkingState(
+  state: SettingsState,
+  patch: Partial<WorkingSettingsState>,
+  baseline = state.savedProfileBaseline,
+): SettingsState {
+  const nextState = withProfileDraftState({
+    ...state,
+    ...patch,
+  }, baseline)
+
+  persistWorkingState(nextState)
+  return nextState
+}
+
+function syncMissingBaselineWindowBounds(state: SettingsState, bounds: WindowBounds): Profile | null {
+  const baseline = state.savedProfileBaseline
+  if (!baseline || state.hasUnsavedProfileChanges || baseline.windowBounds) {
+    return baseline
+  }
+
+  return normalizeProfile({
+    ...baseline,
+    windowBounds: bounds,
+  }, baseline.name)
+}
+
+function syncMissingBaselinePopoutBounds(
+  state: SettingsState,
+  kind: ScopeKind,
+  bounds: WindowBounds,
+): Profile | null {
+  const baseline = state.savedProfileBaseline
+  const baselinePopout = baseline?.scopePopouts[kind]
+  if (!baseline || state.hasUnsavedProfileChanges || !baselinePopout?.poppedOut || baselinePopout.windowBounds) {
+    return baseline
+  }
+
+  return normalizeProfile({
+    ...baseline,
+    scopePopouts: {
+      ...baseline.scopePopouts,
+      [kind]: {
+        ...baselinePopout,
+        windowBounds: bounds,
+      },
+    },
+  }, baseline.name)
+}
+
+function applyLoadedProfileEffects(profile: Profile | null): void {
+  if (!profile) {
+    return
+  }
+
+  const { activeThemeId, themes, loadTheme } = useThemeStore.getState()
+  if (profile.themeId && profile.themeId !== activeThemeId && themes[profile.themeId]) {
+    void loadTheme(profile.themeId)
+  }
+
+  if (profile.windowBounds && canUseElectronAPI()) {
+    window.electronAPI.setWindowBounds(profile.windowBounds)
   }
 }
 
 function applyProfileSnapshot(
-  set: (partial: Partial<SettingsState>) => void,
+  set: (updater: (state: SettingsState) => SettingsState) => void,
   snapshot: ProfileLibrarySnapshot,
   options: { loadActiveProfile: boolean },
 ): void {
   const activeProfile = snapshot.activeProfileId
     ? snapshot.profiles[snapshot.activeProfileId] ?? null
     : null
+  const baselineProfile = activeProfile
+    ? normalizeLoadedProfileForBaseline(activeProfile, snapshot.activeProfileId)
+    : null
 
-  if (!options.loadActiveProfile || !activeProfile) {
-    set({
+  set((state) => {
+    if (!options.loadActiveProfile || !baselineProfile) {
+      return withProfileDraftState({
+        ...state,
+        profiles: snapshot.profiles,
+        activeProfileId: snapshot.activeProfileId,
+      }, baselineProfile)
+    }
+
+    const nextWorkingState = createWorkingStateFromProfile(baselineProfile)
+    const nextState = withProfileDraftState({
+      ...state,
+      ...nextWorkingState,
       profiles: snapshot.profiles,
       activeProfileId: snapshot.activeProfileId,
-    })
-    return
-  }
+    }, baselineProfile)
 
-  const nextState = createWorkingStateFromProfile(activeProfile)
-  if (!nextState.themeId && snapshot.activeProfileId === DEFAULT_PROFILE_ID) {
-    nextState.themeId = useThemeStore.getState().activeThemeId
-  }
-  saveToStorage(nextState)
-  set({
-    ...nextState,
-    profiles: snapshot.profiles,
-    activeProfileId: snapshot.activeProfileId,
+    persistWorkingState(nextState)
+    return nextState
   })
 
-  if (activeProfile.themeId && useThemeStore.getState().themes[activeProfile.themeId]) {
-    void useThemeStore.getState().loadTheme(activeProfile.themeId)
+  if (options.loadActiveProfile) {
+    applyLoadedProfileEffects(activeProfile)
   }
-
-  if (activeProfile.windowBounds && canUseElectronAPI()) {
-    window.electronAPI.setWindowBounds(activeProfile.windowBounds)
-  }
-}
-
-async function buildProfileFromState(state: SettingsState, name: string): Promise<Profile> {
-  const profile = normalizeProfile({
-    name,
-    themeId: state.themeId ?? useThemeStore.getState().activeThemeId,
-    scopeOrder: [...state.scopeOrder],
-    hiddenScopes: Array.from(state.hiddenScopes),
-    widthWeights: { ...state.widthWeights },
-    scopeSettings: cloneScopeSettings(state.scopeSettings),
-    scopePopouts: normalizeScopePopouts(state.scopePopouts),
-  }, name)
-
-  if (!canUseElectronAPI()) {
-    return profile
-  }
-
-  const bounds = await window.electronAPI.getWindowBounds()
-  if (bounds) {
-    profile.windowBounds = bounds
-  }
-
-  return profile
 }
 
 function isDockedScope(
@@ -238,7 +363,37 @@ export function moveDockedScopeOrder(
   return didChange ? mergedOrder : scopeOrder
 }
 
-const stored = loadFromStorage()
+async function restoreSavedProfileBaseline(
+  set: (updater: (state: SettingsState) => SettingsState) => void,
+  get: () => SettingsState,
+): Promise<void> {
+  const baseline = get().savedProfileBaseline
+  if (!baseline) {
+    return
+  }
+
+  const currentThemeId = useThemeStore.getState().activeThemeId
+  if (baseline.themeId && baseline.themeId !== currentThemeId && useThemeStore.getState().themes[baseline.themeId]) {
+    await useThemeStore.getState().loadTheme(baseline.themeId)
+  }
+
+  if (baseline.windowBounds && canUseElectronAPI()) {
+    window.electronAPI.setWindowBounds(baseline.windowBounds)
+  }
+
+  set((state) => {
+    const nextWorkingState = createWorkingStateFromProfile(baseline)
+    const nextState = withProfileDraftState({
+      ...state,
+      ...nextWorkingState,
+    }, baseline)
+
+    persistWorkingState(nextState)
+    return nextState
+  })
+}
+
+const stored = canUseElectronAPI() ? {} : loadFromStorage()
 const initialWorkingState: WorkingSettingsState = {
   themeId: typeof stored.themeId === 'string' && stored.themeId.trim()
     ? stored.themeId.trim()
@@ -248,6 +403,7 @@ const initialWorkingState: WorkingSettingsState = {
   widthWeights: normalizeWidthWeights(stored.widthWeights),
   scopeSettings: mergeScopeSettings(stored.scopeSettings),
   scopePopouts: normalizeScopePopouts(stored.scopePopouts),
+  windowBounds: stored.windowBounds,
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -256,6 +412,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     [DEFAULT_PROFILE_ID]: createDefaultProfile(DEFAULT_PROFILE_NAME),
   },
   activeProfileId: null,
+  savedProfileBaseline: null,
+  hasUnsavedProfileChanges: false,
 
   visibleScopes: () => {
     const { scopeOrder, hiddenScopes } = get()
@@ -284,14 +442,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setThemeId: (themeId: string | null) => {
-    set((state) => {
-      const nextState = {
-        ...state,
-        themeId,
-      }
-      saveToStorage(nextState)
-      return nextState
-    })
+    set((state) => commitWorkingState(state, { themeId }))
   },
 
   toggleScope: (kind: ScopeKind) => {
@@ -301,13 +452,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         next.delete(kind)
       } else {
         const visibleCount = state.scopeOrder.filter((scope) => !next.has(scope)).length
-        if (visibleCount <= 1) return state
+        if (visibleCount <= 1) {
+          return state
+        }
         next.add(kind)
       }
 
-      const nextState = { ...state, hiddenScopes: next }
-      saveToStorage(nextState)
-      return nextState
+      return commitWorkingState(state, { hiddenScopes: next })
     })
   },
 
@@ -320,43 +471,36 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         kind,
         direction,
       )
-      if (nextOrder === state.scopeOrder) return state
+      if (nextOrder === state.scopeOrder) {
+        return state
+      }
 
-      const nextState = { ...state, scopeOrder: nextOrder }
-      saveToStorage(nextState)
-      return nextState
+      return commitWorkingState(state, { scopeOrder: nextOrder })
     })
   },
 
   setScopeWidthWeight: (kind: ScopeKind, weight: number) => {
     set((state) => {
-      const nextState = {
-        ...state,
+      return commitWorkingState(state, {
         widthWeights: { ...state.widthWeights, [kind]: Math.max(0.1, weight) },
-      }
-      saveToStorage(nextState)
-      return nextState
+      })
     })
   },
 
   updateScopeSettings: <K extends ScopeKind>(kind: K, settings: Partial<ScopeSettings[K]>) => {
     set((state) => {
-      const nextState = {
-        ...state,
+      return commitWorkingState(state, {
         scopeSettings: {
           ...state.scopeSettings,
           [kind]: { ...state.scopeSettings[kind], ...settings },
         },
-      }
-      saveToStorage(nextState)
-      return nextState
+      })
     })
   },
 
   popOutScope: (kind: ScopeKind, bounds?: WindowBounds) => {
     set((state) => {
-      const nextState = {
-        ...state,
+      return commitWorkingState(state, {
         scopePopouts: {
           ...state.scopePopouts,
           [kind]: {
@@ -364,16 +508,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             windowBounds: bounds ?? state.scopePopouts[kind]?.windowBounds,
           },
         },
-      }
-      saveToStorage(nextState)
-      return nextState
+      })
     })
   },
 
   popInScope: (kind: ScopeKind) => {
     set((state) => {
-      const nextState = {
-        ...state,
+      return commitWorkingState(state, {
         scopePopouts: {
           ...state.scopePopouts,
           [kind]: {
@@ -381,16 +522,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             poppedOut: false,
           },
         },
-      }
-      saveToStorage(nextState)
-      return nextState
+      })
     })
   },
 
   updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => {
     set((state) => {
-      const nextState = {
-        ...state,
+      const nextBaseline = syncMissingBaselinePopoutBounds(state, kind, bounds)
+      return commitWorkingState(state, {
         scopePopouts: {
           ...state.scopePopouts,
           [kind]: {
@@ -398,16 +537,55 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             windowBounds: bounds,
           },
         },
-      }
-      saveToStorage(nextState)
-      return nextState
+      }, nextBaseline)
     })
+  },
+
+  updateMainWindowBounds: (bounds: WindowBounds) => {
+    set((state) => {
+      const nextBaseline = syncMissingBaselineWindowBounds(state, bounds)
+      return commitWorkingState(state, { windowBounds: bounds }, nextBaseline)
+    })
+  },
+
+  discardUnsavedProfileChanges: async () => {
+    await restoreSavedProfileBaseline(set, get)
+  },
+
+  guardProfileTransition: async (transition) => {
+    const state = get()
+    if (!canUseElectronAPI() || !state.hasUnsavedProfileChanges || !state.savedProfileBaseline) {
+      await transition()
+      return true
+    }
+
+    const choice = await window.electronAPI.promptUnsavedProfileChanges(getActiveProfileName(state))
+    if (choice === 'cancel') {
+      return false
+    }
+
+    if (choice === 'save') {
+      try {
+        await get().updateActiveProfile()
+      } catch (error) {
+        window.alert(getErrorMessage(error, 'Could not save the profile.'))
+        return false
+      }
+    } else {
+      await get().discardUnsavedProfileChanges()
+    }
+
+    await transition()
+    return true
   },
 
   saveProfile: async (name: string) => {
     if (!canUseElectronAPI()) return null
 
-    const snapshot = await window.electronAPI.saveNewProfile(name, await buildProfileFromState(get(), name))
+    const snapshot = await window.electronAPI.saveNewProfile(
+      name,
+      buildProfileDraft(get(), name, useThemeStore.getState().activeThemeId),
+    )
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: false })
     return snapshot.activeProfileId
   },
@@ -421,11 +599,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     const state = get()
     const id = state.activeProfileId
-    if (!id || !state.profiles[id]) return
+    const name = getActiveProfileName(state)
+    if (!id || !name) return
 
     const snapshot = await window.electronAPI.overwriteProfile(
       id,
-      await buildProfileFromState(state, state.profiles[id].name),
+      buildProfileDraft(state, name, useThemeStore.getState().activeThemeId),
     )
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: false })
   },
@@ -456,6 +635,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     const snapshot = await window.electronAPI.importProfileDialog()
     if (!snapshot) return
+    applyProfileSnapshot(set, snapshot, { loadActiveProfile: true })
+  },
+
+  importProfileFromPath: async (path: string) => {
+    if (!canUseElectronAPI()) return
+
+    const snapshot = await window.electronAPI.importProfileFromPath(path)
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: true })
   },
 

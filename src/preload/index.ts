@@ -21,6 +21,7 @@ import type {
   LegacyThemeMigrationResult,
   ThemeLibrarySnapshot,
 } from '../types/theme'
+import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
@@ -32,6 +33,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   close: () => ipcRenderer.send('window:close'),
   startWindowMove: () => ipcRenderer.send('window:start-move'),
   stopWindowMove: () => ipcRenderer.send('window:stop-move'),
+  startWindowResize: (edge: ResizeDirection) => ipcRenderer.send('window:start-resize', edge),
+  stopWindowResize: () => ipcRenderer.send('window:stop-resize'),
   setWindowBounds: (bounds: WindowBounds) => ipcRenderer.send('window:set-bounds', bounds),
   getWindowBounds: () => ipcRenderer.invoke('window:get-bounds') as Promise<WindowBounds | null>,
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
@@ -52,6 +55,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteProfile: (id: string) => ipcRenderer.invoke('profiles:delete', id) as Promise<ProfileLibrarySnapshot>,
   renameProfile: (id: string, name: string) => ipcRenderer.invoke('profiles:rename', id, name) as Promise<ProfileLibrarySnapshot>,
   importProfileDialog: () => ipcRenderer.invoke('profiles:import-dialog') as Promise<ProfileLibrarySnapshot | null>,
+  importProfileFromPath: (path: string) => ipcRenderer.invoke('profiles:import-path', path) as Promise<ProfileLibrarySnapshot>,
+  promptUnsavedProfileChanges: (profileName: string | null) => {
+    return ipcRenderer.invoke('profiles:prompt-unsaved', profileName) as Promise<'save' | 'discard' | 'cancel'>
+  },
   revealProfilesFolder: () => ipcRenderer.invoke('profiles:reveal-folder') as Promise<void>,
   migrateLegacyProfiles: (payload: LegacyProfileMigrationPayload) => ipcRenderer.invoke('profiles:migrate-legacy', payload) as Promise<LegacyProfileMigrationResult>,
   getThemeSnapshot: () => ipcRenderer.invoke('themes:get-snapshot') as Promise<ThemeLibrarySnapshot>,
@@ -65,6 +72,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),
+  notifyRendererReady: () => ipcRenderer.send('renderer:ready'),
+  respondToCloseRequest: (shouldClose: boolean) => ipcRenderer.send('window:close-response', shouldClose),
   openProfileMenu: (request: ProfileMenuRequest) => ipcRenderer.send('profile-menu:open', request),
   syncScopePopouts: (state: ScopePopoutSyncStateMap) => ipcRenderer.send('scope-popout:sync', state),
   sendScopePopoutSnapshot: (snapshot: ScopePopoutSnapshot) => ipcRenderer.send('scope-popout:snapshot', snapshot),
@@ -92,6 +101,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (): void => callback()
     ipcRenderer.on('shortcut:toggle-settings', handler)
     return () => ipcRenderer.removeListener('shortcut:toggle-settings', handler)
+  },
+  onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, bounds: WindowBounds): void => callback(bounds)
+    ipcRenderer.on('window:bounds-changed', handler)
+    return () => ipcRenderer.removeListener('window:bounds-changed', handler)
+  },
+  onMainCloseRequested: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('window:close-requested', handler)
+    return () => ipcRenderer.removeListener('window:close-requested', handler)
   },
   onProfileMenuClosed: (callback: () => void) => {
     const handler = (): void => callback()
@@ -132,6 +151,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (): void => callback()
     ipcRenderer.on('profile-menu:show-folder', handler)
     return () => ipcRenderer.removeListener('profile-menu:show-folder', handler)
+  },
+  onExternalProfileOpenRequested: (callback: (path: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, path: string): void => callback(path)
+    ipcRenderer.on('profiles:open-requested', handler)
+    return () => ipcRenderer.removeListener('profiles:open-requested', handler)
   },
   onExternalProfileActivated: (callback: (snapshot: ProfileLibrarySnapshot) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: ProfileLibrarySnapshot): void => callback(snapshot)

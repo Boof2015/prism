@@ -23,6 +23,7 @@ import type {
   LegacyThemeMigrationResult,
   ThemeLibrarySnapshot,
 } from '../types/theme'
+import type { ResizeDirection } from '../types/windowResize'
 
 declare global {
   interface Window {
@@ -34,6 +35,8 @@ declare global {
       close: () => void
       startWindowMove: () => void
       stopWindowMove: () => void
+      startWindowResize: (edge: ResizeDirection) => void
+      stopWindowResize: () => void
       setWindowBounds: (bounds: WindowBounds) => void
       getWindowBounds: () => Promise<WindowBounds | null>
       repositionWindow: (position: 'top' | 'bottom') => void
@@ -48,6 +51,8 @@ declare global {
       deleteProfile: (id: string) => Promise<ProfileLibrarySnapshot>
       renameProfile: (id: string, name: string) => Promise<ProfileLibrarySnapshot>
       importProfileDialog: () => Promise<ProfileLibrarySnapshot | null>
+      importProfileFromPath: (path: string) => Promise<ProfileLibrarySnapshot>
+      promptUnsavedProfileChanges: (profileName: string | null) => Promise<'save' | 'discard' | 'cancel'>
       revealProfilesFolder: () => Promise<void>
       migrateLegacyProfiles: (payload: LegacyProfileMigrationPayload) => Promise<LegacyProfileMigrationResult>
       getThemeSnapshot: () => Promise<ThemeLibrarySnapshot>
@@ -61,6 +66,8 @@ declare global {
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
       setSettingsHeight: (panelHeight: number) => void
+      notifyRendererReady: () => void
+      respondToCloseRequest: (shouldClose: boolean) => void
       openProfileMenu: (request: ProfileMenuRequest) => void
       syncScopePopouts: (state: ScopePopoutSyncStateMap) => void
       sendScopePopoutSnapshot: (snapshot: ScopePopoutSnapshot) => void
@@ -73,6 +80,8 @@ declare global {
       onToggleScope: (callback: (index: number) => void) => () => void
       onToggleCapture: (callback: () => void) => () => void
       onToggleSettings: (callback: () => void) => () => void
+      onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
+      onMainCloseRequested: (callback: () => void) => () => void
       onProfileMenuClosed: (callback: () => void) => () => void
       onProfileMenuLoad: (callback: (id: string) => void) => () => void
       onProfileMenuSaveNew: (callback: () => void) => () => void
@@ -81,6 +90,7 @@ declare global {
       onProfileMenuDeleteActive: (callback: (id: string) => void) => () => void
       onProfileMenuImport: (callback: () => void) => () => void
       onProfileMenuShowFolder: (callback: () => void) => () => void
+      onExternalProfileOpenRequested: (callback: (path: string) => void) => () => void
       onExternalProfileActivated: (callback: (snapshot: ProfileLibrarySnapshot) => void) => () => void
       onExternalThemeActivated: (callback: (snapshot: ThemeLibrarySnapshot) => void) => () => void
       onScopePopoutReady: (callback: (kind: ScopeKind) => void) => () => void

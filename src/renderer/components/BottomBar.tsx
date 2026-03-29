@@ -6,6 +6,7 @@ import { useThemeStore } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { SCOPE_KINDS } from '../../types/scope'
+import ThemedSelect from './ThemedSelect'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   spectrum: 'Spectrum',
@@ -198,19 +199,19 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
             <div className="bottom-bar__section-title">Theme</div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--theme">
-                <select
-                  className="settings-control__select"
+                <ThemedSelect
                   value={activeThemeId ?? ''}
                   onChange={(event) => {
                     void handleThemeChange(event.target.value)
                   }}
+                  className="bottom-bar__select"
                 >
                   {themeEntries.map(([id, theme]) => (
                     <option key={id} value={id}>
                       {theme.name}
                     </option>
                   ))}
-                </select>
+                </ThemedSelect>
                 <button
                   type="button"
                   className="settings-chip"
@@ -277,12 +278,12 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
             <div className="bottom-bar__section-title">Audio Source</div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline">
-                <select
-                  className="settings-control__select"
+                <ThemedSelect
                   value={selectedSourceValue}
                   onChange={(event) => {
                     void handleSourceChange(event.target.value)
                   }}
+                  className="bottom-bar__select"
                 >
                   <optgroup label="Output Devices">
                     {visibleSystemSources.map((source) => (
@@ -300,7 +301,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                       ))}
                     </optgroup>
                   ) : null}
-                </select>
+                </ThemedSelect>
 
                 <div className={`settings-status-pill is-${captureStatus}`.trim()}>
                   <span className="settings-status-pill__dot" />

@@ -4,6 +4,7 @@ import Toolbar from './components/Toolbar'
 import SettingsPanel from './components/SettingsPanel'
 import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
+import WindowResizeOverlay from './components/WindowResizeOverlay'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAudioStore } from './stores/audioStore'
 import { useThemeStore } from './stores/themeStore'
@@ -17,10 +18,14 @@ export default function App(): JSX.Element {
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const externalProfileOpenQueueRef = useRef(Promise.resolve())
 
   const toggleScope = useSettingsStore((s) => s.toggleScope)
   const initializeProfiles = useSettingsStore((s) => s.initializeProfiles)
   const applyExternalProfileSnapshot = useSettingsStore((s) => s.applyExternalProfileSnapshot)
+  const guardProfileTransition = useSettingsStore((s) => s.guardProfileTransition)
+  const importProfileFromPath = useSettingsStore((s) => s.importProfileFromPath)
+  const updateMainWindowBounds = useSettingsStore((s) => s.updateMainWindowBounds)
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
   const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
 
@@ -33,9 +38,14 @@ export default function App(): JSX.Element {
   }, [])
 
   useEffect(() => {
+    let isDisposed = false
+
     void (async () => {
       await initializeThemes()
       await initializeProfiles()
+      if (!isDisposed) {
+        window.electronAPI.notifyRendererReady()
+      }
     })()
 
     const unsubscribeProfile = window.electronAPI.onExternalProfileActivated((snapshot) => {
@@ -44,12 +54,49 @@ export default function App(): JSX.Element {
     const unsubscribeTheme = window.electronAPI.onExternalThemeActivated((snapshot) => {
       applyExternalThemeSnapshot(snapshot)
     })
+    const unsubscribeBounds = window.electronAPI.onMainWindowBoundsChanged((bounds) => {
+      updateMainWindowBounds(bounds)
+    })
+    const unsubscribeExternalOpenRequested = window.electronAPI.onExternalProfileOpenRequested((path) => {
+      externalProfileOpenQueueRef.current = externalProfileOpenQueueRef.current
+        .then(async () => {
+          const didComplete = await guardProfileTransition(async () => {
+            await importProfileFromPath(path)
+          })
+          if (!didComplete) {
+            return
+          }
+        })
+        .catch((error: unknown) => {
+          window.alert(error instanceof Error && error.message
+            ? error.message
+            : `Prism could not open ${path}.`)
+        })
+    })
+    const unsubscribeCloseRequested = window.electronAPI.onMainCloseRequested(() => {
+      void (async () => {
+        const shouldClose = await guardProfileTransition(async () => {})
+        window.electronAPI.respondToCloseRequest(shouldClose)
+      })()
+    })
 
     return () => {
+      isDisposed = true
       unsubscribeProfile()
       unsubscribeTheme()
+      unsubscribeBounds()
+      unsubscribeExternalOpenRequested()
+      unsubscribeCloseRequested()
     }
-  }, [applyExternalProfileSnapshot, applyExternalThemeSnapshot, initializeProfiles, initializeThemes])
+  }, [
+    applyExternalProfileSnapshot,
+    applyExternalThemeSnapshot,
+    guardProfileTransition,
+    importProfileFromPath,
+    initializeProfiles,
+    initializeThemes,
+    updateMainWindowBounds,
+  ])
 
   const measuredSettingsHeight = settingsPanelHeight > 0 && bottomBarHeight > 0
     ? settingsPanelHeight + bottomBarHeight
@@ -153,6 +200,8 @@ export default function App(): JSX.Element {
           <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
         </div>
       )}
+
+      <WindowResizeOverlay />
     </div>
   )
 }
