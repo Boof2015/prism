@@ -43,8 +43,27 @@ interface AstraIntegrationServiceOptions {
   clearTimeoutImpl?: typeof clearTimeout
 }
 
+function cloneTrackSnapshot(track: AstraTrackSnapshot | null): AstraTrackSnapshot | null {
+  if (!track) return null
+  return { ...track }
+}
+
+function cloneSnapshot(snapshot: AstraNowPlayingSnapshot | null): AstraNowPlayingSnapshot | null {
+  if (!snapshot) return null
+  return {
+    ...snapshot,
+    currentTrack: cloneTrackSnapshot(snapshot.currentTrack),
+  }
+}
+
 function cloneState(state: AstraIntegrationState): AstraIntegrationState {
-  return JSON.parse(JSON.stringify(state)) as AstraIntegrationState
+  return {
+    config: { ...state.config },
+    connectionState: state.connectionState,
+    lastError: state.lastError,
+    lastControlError: state.lastControlError,
+    snapshot: cloneSnapshot(state.snapshot),
+  }
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -74,6 +93,11 @@ function toOptionalString(value: unknown): string | null {
 
 function bufferToDataUrl(bytes: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${bytes.toString('base64')}`
+}
+
+function getArtworkKey(trackId: string | null, artworkUrl: string | null): string | null {
+  if (!trackId || !artworkUrl) return null
+  return `${trackId}\n${artworkUrl}`
 }
 
 function normalizeBaseUrl(value: unknown): string {
@@ -215,8 +239,9 @@ export class AstraIntegrationService {
 
   private state = createDefaultState()
   private remoteSnapshot: RemoteNowPlayingSnapshot | null = null
-  private currentArtworkTrackId: string | null = null
+  private currentArtworkKey: string | null = null
   private currentArtworkDataUrl: string | null = null
+  private failedArtworkKey: string | null = null
   private streamAbortController: AbortController | null = null
   private reconnectTimer: TimerHandle | null = null
   private reconnectAttempt = 0
@@ -362,8 +387,9 @@ export class AstraIntegrationService {
 
     if (!this.isScopeActive() || this.disposed) {
       this.remoteSnapshot = null
-      this.currentArtworkTrackId = null
+      this.currentArtworkKey = null
       this.currentArtworkDataUrl = null
+      this.failedArtworkKey = null
       this.state = {
         ...this.state,
         connectionState: 'disabled',
@@ -390,6 +416,7 @@ export class AstraIntegrationService {
       connectionState: 'connecting',
       lastError: null,
     }
+    this.failedArtworkKey = null
     this.emitState()
 
     try {
@@ -577,7 +604,10 @@ export class AstraIntegrationService {
 
   private applyRemoteSnapshot(snapshot: RemoteNowPlayingSnapshot): void {
     this.remoteSnapshot = snapshot
-    const artworkDataUrl = snapshot.currentTrack?.id === this.currentArtworkTrackId
+    const artworkDataUrl = getArtworkKey(
+      snapshot.currentTrack?.id ?? null,
+      snapshot.currentTrack?.artworkUrl ?? null,
+    ) === this.currentArtworkKey
       ? this.currentArtworkDataUrl
       : null
 
@@ -589,42 +619,41 @@ export class AstraIntegrationService {
   }
 
   private async refreshArtwork(trackId: string | null, artworkUrl: string | null): Promise<void> {
-    if (!trackId || !artworkUrl || !this.remoteSnapshot?.currentTrack || this.remoteSnapshot.currentTrack.id !== trackId) {
-      this.currentArtworkTrackId = trackId
+    const artworkKey = getArtworkKey(trackId, artworkUrl)
+    const remoteArtworkKey = getArtworkKey(
+      this.remoteSnapshot?.currentTrack?.id ?? null,
+      this.remoteSnapshot?.currentTrack?.artworkUrl ?? null,
+    )
+
+    if (!artworkKey || remoteArtworkKey !== artworkKey) {
+      this.currentArtworkKey = null
       this.currentArtworkDataUrl = null
-      if (this.remoteSnapshot) {
-        this.state = {
-          ...this.state,
-          snapshot: toRendererSnapshot(this.remoteSnapshot, null),
-        }
-        this.emitState()
-      }
+      this.failedArtworkKey = null
       return
     }
 
-    if (this.currentArtworkTrackId === trackId && this.currentArtworkDataUrl) {
-      this.state = {
-        ...this.state,
-        snapshot: toRendererSnapshot(this.remoteSnapshot, this.currentArtworkDataUrl),
-      }
-      this.emitState()
+    if (this.currentArtworkKey === artworkKey && this.currentArtworkDataUrl) {
       return
     }
 
-    const response = await this.fetchImpl(artworkUrl, {
+    if (this.failedArtworkKey === artworkKey) {
+      return
+    }
+
+    this.currentArtworkKey = null
+    this.currentArtworkDataUrl = null
+
+    if (artworkUrl === null) {
+      return
+    }
+
+    const resolvedArtworkUrl = artworkUrl
+    const response = await this.fetchImpl(resolvedArtworkUrl, {
       headers: this.buildAuthHeaders(),
     }).catch(() => null)
 
     if (!response || !response.ok) {
-      this.currentArtworkTrackId = trackId
-      this.currentArtworkDataUrl = null
-      if (this.remoteSnapshot?.currentTrack?.id === trackId) {
-        this.state = {
-          ...this.state,
-          snapshot: toRendererSnapshot(this.remoteSnapshot, null),
-        }
-        this.emitState()
-      }
+      this.failedArtworkKey = artworkKey
       return
     }
 
@@ -632,15 +661,20 @@ export class AstraIntegrationService {
     const bytes = Buffer.from(await response.arrayBuffer())
     const artworkDataUrl = bufferToDataUrl(bytes, mimeType)
 
-    if (this.remoteSnapshot?.currentTrack?.id !== trackId) {
+    const remoteSnapshot = this.remoteSnapshot
+    if (!remoteSnapshot || getArtworkKey(
+      remoteSnapshot.currentTrack?.id ?? null,
+      remoteSnapshot.currentTrack?.artworkUrl ?? null,
+    ) !== artworkKey) {
       return
     }
 
-    this.currentArtworkTrackId = trackId
+    this.currentArtworkKey = artworkKey
     this.currentArtworkDataUrl = artworkDataUrl
+    this.failedArtworkKey = null
     this.state = {
       ...this.state,
-      snapshot: toRendererSnapshot(this.remoteSnapshot, artworkDataUrl),
+      snapshot: toRendererSnapshot(remoteSnapshot, artworkDataUrl),
     }
     this.emitState()
   }
