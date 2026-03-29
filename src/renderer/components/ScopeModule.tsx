@@ -1,7 +1,18 @@
 import { useEffect, useRef, type JSX } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import type {
+  PrismResolvedTheme,
+  ResolvedLUFSMeterTheme,
+  ResolvedOscilloscopeTheme,
+  ResolvedSpectrogramTheme,
+  ResolvedSpectrumTheme,
+  ResolvedVectorscopeTheme,
+  ResolvedVUMeterTheme,
+  ResolvedWaveformTheme,
+} from '../../types/theme'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useThemeStore } from '../stores/themeStore'
 import { SpectrumAnalyzer, type SpectrumAnalyzerDataSource } from '../visualizers/SpectrumAnalyzer'
 import { Oscilloscope, type OscilloscopeDataSource } from '../visualizers/Oscilloscope'
 import { Vectorscope, type VectorscopeDataSource } from '../visualizers/Vectorscope'
@@ -11,9 +22,18 @@ import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
 import type { FrameScheduler } from '../visualizers/frameScheduler'
 
+type ScopeModuleTheme =
+  | ResolvedSpectrumTheme
+  | ResolvedOscilloscopeTheme
+  | ResolvedVectorscopeTheme
+  | ResolvedSpectrogramTheme
+  | ResolvedVUMeterTheme
+  | ResolvedLUFSMeterTheme
+  | ResolvedWaveformTheme
+
 interface ScopeModuleProps {
   scopeKind: ScopeKind
-  lineColor?: string
+  theme?: ScopeModuleTheme
   settings?: ScopeSettings[ScopeKind]
   frameScheduler?: FrameScheduler
   dataSource?:
@@ -34,14 +54,26 @@ interface Visualizer {
   setOptions(options: Record<string, unknown>): void
 }
 
-/** Maps settingsStore scope settings to the visualizer's setOptions format */
-function scopeSettingsToOptions(kind: ScopeKind, settings: ScopeSettings[ScopeKind], lineColor: string): Record<string, unknown> {
-  const base = { lineColor }
+function getScopeTheme(theme: PrismResolvedTheme, kind: ScopeKind): ScopeModuleTheme {
+  return theme[kind] as ScopeModuleTheme
+}
+
+export function scopeSettingsToOptions(
+  kind: ScopeKind,
+  settings: ScopeSettings[ScopeKind],
+  theme: ScopeModuleTheme,
+): Record<string, unknown> {
   switch (kind) {
     case 'spectrum': {
       const s = settings as ScopeSettings['spectrum']
+      const t = theme as ResolvedSpectrumTheme
       return {
-        ...base,
+        lineColor: t.primary,
+        secondaryLineColor: t.secondary,
+        gradientColors: t.fillGradient,
+        heatColors: t.heatColors,
+        backgroundColor: t.background,
+        gridColor: t.guides,
         fftSize: s.fftSize,
         tiltDbPerOctave: s.tiltDbPerOctave,
         heatmapFill: s.heatmap,
@@ -49,16 +81,35 @@ function scopeSettingsToOptions(kind: ScopeKind, settings: ScopeSettings[ScopeKi
         showGrid: s.showGrid,
         fillGradient: s.fillGradient,
         smoothing: s.smoothing,
+        showSideLine: s.showSideLine,
       }
     }
     case 'oscilloscope': {
       const s = settings as ScopeSettings['oscilloscope']
-      return { ...base, pitchLock: s.pitchLock, underfillEnabled: s.underfillEnabled, showGrid: s.showGrid, lineWidth: s.lineWidth }
+      const t = theme as ResolvedOscilloscopeTheme
+      return {
+        lineColor: t.primary,
+        backgroundColor: t.background,
+        gridColor: t.guides,
+        underfillColor: t.fill,
+        pitchLock: s.pitchLock,
+        underfillEnabled: s.underfillEnabled,
+        showGrid: s.showGrid,
+        lineWidth: s.lineWidth,
+      }
     }
     case 'vectorscope': {
       const s = settings as ScopeSettings['vectorscope']
+      const t = theme as ResolvedVectorscopeTheme
       return {
-        ...base,
+        lineColor: t.primary,
+        backgroundColor: t.background,
+        gridColor: t.guides,
+        bandColors: {
+          low: t.lowBand,
+          mid: t.midBand,
+          high: t.highBand,
+        },
         mode: s.mode,
         multiband: s.multiband,
         showGrid: s.showGrid,
@@ -68,22 +119,61 @@ function scopeSettingsToOptions(kind: ScopeKind, settings: ScopeSettings[ScopeKi
     }
     case 'spectrogram': {
       const s = settings as ScopeSettings['spectrogram']
-      return { ...base, fftSize: s.fftSize, scrollSpeed: s.scrollSpeed, clarityMode: s.clarityMode, scaleMode: s.scaleMode, colorScheme: s.colorScheme }
+      const t = theme as ResolvedSpectrogramTheme
+      return {
+        lineColor: t.primary,
+        heatColors: t.heatColors,
+        fftSize: s.fftSize,
+        scrollSpeed: s.scrollSpeed,
+        clarityMode: s.clarityMode,
+        scaleMode: s.scaleMode,
+        colorScheme: s.colorScheme,
+      }
     }
     case 'vumeter': {
       const s = settings as ScopeSettings['vumeter']
-      return { ...base, mode: s.mode, orientation: s.orientation }
+      const t = theme as ResolvedVUMeterTheme
+      return {
+        lineColor: t.primary,
+        peakColor: t.peak,
+        clipColor: t.clip,
+        scaleColor: t.guides,
+        labelColor: t.text,
+        mode: s.mode,
+        orientation: s.orientation,
+      }
     }
     case 'lufsmeter': {
       const s = settings as ScopeSettings['lufsmeter']
-      return { ...base, mode: s.mode }
+      const t = theme as ResolvedLUFSMeterTheme
+      return {
+        lineColor: t.primary,
+        targetColor: t.target,
+        scaleColor: t.guides,
+        labelColor: t.text,
+        mode: s.mode,
+      }
     }
     case 'waveform': {
       const s = settings as ScopeSettings['waveform']
-      return { ...base, scrollSpeed: s.scrollSpeed, gainDb: s.gainDb, multiband: s.multiband }
+      const t = theme as ResolvedWaveformTheme
+      return {
+        lineColor: t.primary,
+        gridMajorColor: t.guides,
+        gridMinorColor: t.guides,
+        bandColors: {
+          low: t.lowBand,
+          mid: t.midBand,
+          high: t.highBand,
+        },
+        mode: s.mode,
+        scrollSpeed: s.scrollSpeed,
+        gainDb: s.gainDb,
+        multiband: s.multiband,
+      }
     }
     default:
-      return base
+      return {}
   }
 }
 
@@ -91,11 +181,11 @@ function createVisualizer(
   scopeKind: ScopeKind,
   canvas: HTMLCanvasElement,
   mySettings: ScopeSettings[ScopeKind],
-  lineColor: string,
+  theme: ScopeModuleTheme,
   frameScheduler?: FrameScheduler,
   dataSource?: ScopeModuleProps['dataSource'],
 ): Visualizer | null {
-  const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, lineColor), frameScheduler }
+  const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, theme), frameScheduler }
   switch (scopeKind) {
     case 'spectrum':
       return new SpectrumAnalyzer(canvas, {
@@ -139,7 +229,7 @@ function createVisualizer(
 
 export default function ScopeModule({
   scopeKind,
-  lineColor = '#38bdf8',
+  theme,
   settings,
   frameScheduler,
   dataSource,
@@ -150,42 +240,42 @@ export default function ScopeModule({
   const initializedRef = useRef(false)
 
   const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
+  const activeTheme = useThemeStore((s) => s.activeTheme)
   const mySettings = settings ?? storeSettings
+  const myTheme = theme ?? getScopeTheme(activeTheme, scopeKind)
 
-  // Initialize visualizer
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
     initializedRef.current = false
-    const viz = createVisualizer(scopeKind, canvas, mySettings, lineColor, frameScheduler, dataSource)
+    const viz = createVisualizer(scopeKind, canvas, mySettings, myTheme, frameScheduler, dataSource)
     if (!viz) return
 
     visualizerRef.current = viz
     viz.start()
 
-    // Mark as initialized after a frame so the settings effect skips the first run
-    requestAnimationFrame(() => { initializedRef.current = true })
+    requestAnimationFrame(() => {
+      initializedRef.current = true
+    })
 
     return () => {
       viz.dispose()
       visualizerRef.current = null
       initializedRef.current = false
     }
-  }, [dataSource, frameScheduler, scopeKind])
+  }, [dataSource, frameScheduler, myTheme, mySettings, scopeKind])
 
-  // Push settings + lineColor changes to live visualizer (skip initial — constructor already handled it)
   useEffect(() => {
     if (!visualizerRef.current || !initializedRef.current) return
     const opts = {
-      ...scopeSettingsToOptions(scopeKind, mySettings, lineColor),
+      ...scopeSettingsToOptions(scopeKind, mySettings, myTheme),
       frameScheduler,
       ...(dataSource ? { dataSource } : {}),
     }
     visualizerRef.current.setOptions(opts)
-  }, [dataSource, frameScheduler, lineColor, mySettings, scopeKind])
+  }, [dataSource, frameScheduler, mySettings, myTheme, scopeKind])
 
-  // ResizeObserver for DPI-aware canvas sizing
   useEffect(() => {
     const container = containerRef.current
     const canvas = canvasRef.current

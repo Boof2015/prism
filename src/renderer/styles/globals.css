@@ -19,12 +19,29 @@
   --text-tertiary: rgba(255, 255, 255, 0.42);
   --text-muted: rgba(255, 255, 255, 0.3);
   --danger: #f87171;
+  --warning: #ffbf00;
   --success: #22c55e;
 
   --accent: #38bdf8;
   --accent-hover: #7dd3fc;
   --accent-glow: rgba(56, 189, 248, 0.3);
   --accent-rgb: 56, 189, 248;
+  --toolbar-bg: rgba(0, 0, 0, 0.74);
+  --settings-bg-top: rgba(8, 10, 14, 0.94);
+  --settings-bg-bottom: rgba(4, 6, 9, 0.98);
+  --bottom-bar-bg: rgba(2, 4, 7, 0.98);
+  --menu-bg: rgba(8, 11, 16, 0.96);
+  --menu-border: rgba(255, 255, 255, 0.1);
+  --control-bg: rgba(255, 255, 255, 0.03);
+  --control-bg-hover: rgba(255, 255, 255, 0.06);
+  --control-bg-active: rgba(var(--accent-rgb), 0.12);
+  --control-border: rgba(255, 255, 255, 0.08);
+  --control-border-active: rgba(var(--accent-rgb), 0.28);
+  --input-bg: rgba(10, 14, 20, 0.96);
+  --input-bg-focus: rgba(12, 17, 24, 0.98);
+  --input-border: rgba(255, 255, 255, 0.09);
+  --input-border-focus: rgba(var(--accent-rgb), 0.26);
+  --divider: rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -86,9 +103,9 @@ select {
   flex-direction: column;
   overflow: hidden;
   background:
-    linear-gradient(180deg, rgba(8, 10, 14, 0.94), rgba(4, 6, 9, 0.98)),
+    linear-gradient(180deg, var(--settings-bg-top), var(--settings-bg-bottom)),
     rgba(0, 0, 0, 0.96);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--divider);
   box-shadow: 0 -16px 34px rgba(0, 0, 0, 0.34);
 }
 
@@ -99,7 +116,7 @@ select {
   min-height: 38px;
   padding: 4px 10px 0;
   gap: 10px;
-  background: rgba(0, 0, 0, 0.74);
+  background: var(--toolbar-bg);
   backdrop-filter: blur(16px) saturate(1.05);
   -webkit-backdrop-filter: blur(16px) saturate(1.05);
 }
@@ -113,7 +130,7 @@ select {
   padding: 0;
   border: 0;
   background: transparent;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--text-muted);
   cursor: grab;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
@@ -136,8 +153,8 @@ select {
   min-height: 28px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--control-border);
+  background: var(--glass-bg);
 }
 
 .toolbar__brand-mark {
@@ -164,7 +181,7 @@ select {
 }
 
 .toolbar__brand-text {
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--text-secondary);
   font-size: 10px;
 }
 
@@ -181,7 +198,7 @@ select {
   min-height: 28px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--control-border);
   background: transparent;
   color: var(--text-secondary);
   font-family: 'JetBrains Mono', monospace;
@@ -195,8 +212,8 @@ select {
 
 .toolbar__profile-button:hover,
 .toolbar__profile-button.is-active {
-  color: rgba(255, 255, 255, 0.78);
-  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--text-primary);
+  border-color: var(--control-border-active);
 }
 
 .toolbar__profile-name {
@@ -224,8 +241,8 @@ select {
   margin-top: 4px;
   display: flex;
   flex-direction: column;
-  background: rgba(8, 11, 16, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border);
   border-radius: 8px;
   overflow: hidden;
   z-index: 20;
@@ -248,7 +265,7 @@ select {
 
 .toolbar__reposition-option:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--control-bg-hover);
 }
 
 .toolbar__chip {
@@ -578,12 +595,12 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  color: rgba(255, 255, 255, 0.56);
+  color: var(--text-secondary);
   font-size: 9px;
 }
 
 .settings-control__value {
-  color: rgba(255, 255, 255, 0.82);
+  color: var(--text-primary);
   letter-spacing: 0.08em;
 }
 
@@ -592,10 +609,10 @@ select {
   min-height: 34px;
   padding: 0 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  background: linear-gradient(180deg, rgba(10, 14, 20, 0.96), rgba(5, 8, 12, 0.96));
+  border: 1px solid var(--input-border);
+  background: linear-gradient(180deg, var(--input-bg), var(--settings-bg-bottom));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text-primary);
   font-size: 11px;
   outline: none;
   transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
@@ -603,8 +620,8 @@ select {
 
 .settings-control__select:hover,
 .settings-control__select:focus {
-  border-color: rgba(var(--accent-rgb), 0.26);
-  background: linear-gradient(180deg, rgba(12, 17, 24, 0.98), rgba(7, 10, 15, 0.98));
+  border-color: var(--input-border-focus);
+  background: linear-gradient(180deg, var(--input-bg-focus), var(--settings-bg-bottom));
   color: var(--text-primary);
 }
 
@@ -718,8 +735,8 @@ select {
   padding: 0 11px;
   border-radius: 9px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.015);
-  color: rgba(255, 255, 255, 0.5);
+  background: var(--control-bg);
+  color: var(--text-secondary);
   font-size: 10px;
   white-space: nowrap;
   cursor: pointer;
@@ -730,9 +747,9 @@ select {
 }
 
 .settings-chip:hover {
-  color: rgba(255, 255, 255, 0.86);
-  border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  border-color: var(--control-border);
+  background: var(--control-bg-hover);
 }
 
 .settings-chip.is-active {
@@ -749,9 +766,9 @@ select {
   min-height: 32px;
   padding: 0 10px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(180deg, rgba(10, 14, 19, 0.94), rgba(7, 10, 14, 0.94));
-  color: rgba(255, 255, 255, 0.62);
+  border: 1px solid var(--control-border);
+  background: linear-gradient(180deg, var(--input-bg), var(--settings-bg-bottom));
+  color: var(--text-secondary);
   font-size: 10px;
   white-space: nowrap;
 }
@@ -760,7 +777,7 @@ select {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.26);
+  background: var(--text-muted);
 }
 
 .settings-status-pill.is-connecting .settings-status-pill__dot {
@@ -780,7 +797,7 @@ select {
 
 .settings-error-text {
   margin-top: 8px;
-  color: rgba(248, 113, 113, 0.88);
+  color: var(--danger);
   font-size: 11px;
   line-height: 1.4;
 }
@@ -840,9 +857,9 @@ select {
   min-height: 34px;
   padding: 0 14px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(180deg, rgba(10, 14, 20, 0.96), rgba(5, 8, 12, 0.96));
-  color: rgba(255, 255, 255, 0.66);
+  border: 1px solid var(--control-border);
+  background: linear-gradient(180deg, var(--input-bg), var(--settings-bg-bottom));
+  color: var(--text-secondary);
   font-size: 9px;
   cursor: pointer;
   transition:
@@ -852,9 +869,9 @@ select {
 }
 
 .settings-panel__close:hover {
-  color: rgba(255, 255, 255, 0.88);
-  border-color: rgba(var(--accent-rgb), 0.24);
-  background: linear-gradient(180deg, rgba(12, 17, 24, 0.98), rgba(7, 10, 15, 0.98));
+  color: var(--text-primary);
+  border-color: var(--control-border-active);
+  background: linear-gradient(180deg, var(--input-bg-focus), var(--settings-bg-bottom));
 }
 
 .bottom-bar {
@@ -863,8 +880,8 @@ select {
   gap: 0;
   min-height: 92px;
   padding: 0;
-  background: rgba(2, 4, 7, 0.98);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--bottom-bar-bg);
+  border-top: 1px solid var(--divider);
   flex-shrink: 0;
 }
 
@@ -925,7 +942,7 @@ select {
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.54);
+  color: var(--text-secondary);
   font-size: 9px;
   white-space: nowrap;
 }
@@ -942,8 +959,8 @@ select {
   gap: 4px;
   padding: 4px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--control-border);
+  background: var(--glass-bg);
 }
 
 .bottom-bar__inline--theme {
@@ -958,14 +975,14 @@ select {
   width: 1px;
   align-self: stretch;
   margin: 0 16px 0 0;
-  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.14) 18%, rgba(255, 255, 255, 0.04) 82%, transparent);
+  background: linear-gradient(180deg, transparent, var(--divider) 18%, rgba(255, 255, 255, 0.04) 82%, transparent);
   flex-shrink: 0;
 }
 
 .bottom-bar__trim-value {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--text-primary);
   letter-spacing: 0.08em;
   min-width: 56px;
   text-align: right;
@@ -985,7 +1002,7 @@ select {
 .bottom-bar__fps-pill {
   min-width: 84px;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.84);
+  color: var(--text-primary);
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.08em;
 }
@@ -1000,8 +1017,8 @@ select {
   align-items: center;
   flex: 0 0 auto;
   padding: 10px 14px 10px 16px;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(90deg, rgba(2, 4, 7, 0.76), rgba(2, 4, 7, 0.98) 24%, rgba(2, 4, 7, 1));
+  border-left: 1px solid var(--divider);
+  background: linear-gradient(90deg, rgba(2, 4, 7, 0.76), var(--bottom-bar-bg) 24%, var(--bottom-bar-bg));
 }
 
 .bottom-bar__close {
@@ -1015,7 +1032,7 @@ select {
   flex-direction: column;
   position: relative;
   overflow: hidden;
-  background: #000000;
+  background: var(--bg-primary);
   color: var(--text-primary);
 }
 
@@ -1055,7 +1072,7 @@ select {
   gap: 10px;
   min-height: 42px;
   padding: 8px 10px;
-  background: rgba(7, 10, 14, 0.92);
+  background: var(--toolbar-bg);
 }
 
 .scope-popout__drag {
@@ -1092,7 +1109,7 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.32);
+  color: var(--text-muted);
 }
 
 .scope-popout__drag-icon svg {
@@ -1134,9 +1151,9 @@ select {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(255, 255, 255, 0.64);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
 }
@@ -1149,8 +1166,8 @@ select {
 .scope-popout__button:hover,
 .scope-popout__button.is-active {
   color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.28);
-  background: rgba(var(--accent-rgb), 0.1);
+  border-color: var(--control-border-active);
+  background: var(--control-bg-active);
   transform: translateY(-1px);
 }
 
@@ -1158,7 +1175,7 @@ select {
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  background: rgba(5, 7, 10, 0.98);
+  background: var(--settings-bg-bottom);
   padding: 12px 0 10px;
 }
 

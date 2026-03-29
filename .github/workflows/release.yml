@@ -1,0 +1,79 @@
+name: Build Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_label:
+        description: Optional label appended to the artifact name
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            dist_cmd: dist:mac
+            artifact_name: prism-macos
+          - os: windows-latest
+            dist_cmd: dist:win
+            artifact_name: prism-windows
+
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      ELECTRON_CACHE: ${{ runner.temp }}/electron-cache
+      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ELECTRON_CACHE }}
+            ${{ env.ELECTRON_BUILDER_CACHE }}
+          key: ${{ runner.os }}-electron-cache-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build native module
+        run: npm run rebuild:native
+
+      - name: Verify native module exists
+        shell: bash
+        run: |
+          if [ ! -f native/build/Release/visualizer_dsp.node ]; then
+            echo "ERROR: native DSP module was not built"
+            exit 1
+          fi
+          echo "Native module built successfully:"
+          ls -lh native/build/Release/visualizer_dsp.node
+
+      - name: Build distributable
+        run: npm run ${{ matrix.dist_cmd }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}${{ inputs.artifact_label && format('-{0}', inputs.artifact_label) || '' }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: error
+          retention-days: 30

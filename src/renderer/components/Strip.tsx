@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
-import { useThemeStore } from '../stores/themeStore'
 import { SCOPE_LABELS, type ScopeKind } from '../../types/scope'
 import type { WindowBounds } from '../../types/popout'
 import ScopeModule from './ScopeModule'
@@ -17,7 +16,6 @@ export default function Strip(): JSX.Element {
   const moveDockedScope = useSettingsStore((s) => s.moveDockedScope)
   const setScopeWidthWeight = useSettingsStore((s) => s.setScopeWidthWeight)
   const popOutScope = useSettingsStore((s) => s.popOutScope)
-  const accent = useThemeStore((s) => s.accent)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const setDockedRenderFps = usePerformanceStore((s) => s.setDockedRenderFps)
   const frameScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
@@ -262,7 +260,6 @@ export default function Strip(): JSX.Element {
             </button>
             <ScopeModule
               scopeKind={kind}
-              lineColor={accent}
               frameScheduler={frameScheduler}
             />
           </div>

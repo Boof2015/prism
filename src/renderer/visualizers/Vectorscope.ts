@@ -1,7 +1,7 @@
 import { audioRouter } from '../audio/AudioRouter'
 import { vectorscope as nativeVectorscope, isNativeAvailable } from '../audio/native'
 import { transformPoint, drawVectorscopeGridForMode, getVectorscopeLayout } from './vectorscopeGrids'
-import { MultibandSplitter, MultibandBuffer, BAND_COLORS } from './multibandSplitter'
+import { MultibandSplitter, MultibandBuffer } from './multibandSplitter'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
@@ -18,6 +18,11 @@ export interface VectorscopeOptions {
   backgroundColor?: string
   showGrid?: boolean
   gridColor?: string
+  bandColors?: {
+    low: string
+    mid: string
+    high: string
+  }
   persistence?: number
   displayPoints?: number
   mode?: VectorscopeMode
@@ -34,6 +39,11 @@ const defaultOptions: ResolvedVectorscopeOptions = {
   backgroundColor: 'transparent',
   showGrid: true,
   gridColor: 'rgba(255, 255, 255, 0.1)',
+  bandColors: {
+    low: '#ff4444',
+    mid: '#44dd44',
+    high: '#4488ff',
+  },
   persistence: 0.10,
   displayPoints: 4096,
   mode: 'lissajous',
@@ -370,7 +380,7 @@ export class Vectorscope {
 
       for (const band of BAND_ORDER) {
         const bandData = result.bands[band]
-        ctx.fillStyle = BAND_COLORS[band]
+        ctx.fillStyle = options.bandColors[band]
 
         for (let i = startIdx; i < endIdx; i++) {
           const point = transformPoint(bandData.left[i], bandData.right[i], mode)

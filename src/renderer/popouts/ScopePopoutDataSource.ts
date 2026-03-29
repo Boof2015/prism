@@ -67,6 +67,34 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
       return
     }
 
+    if (this.scopeKind === 'spectrum' || this.scopeKind === 'waveform') {
+      if (isStereoBatch(batch)) {
+        this.monoQueue = []
+        this.stereoQueue.push(...batch)
+        if (this.scopeKind === 'spectrum') {
+          for (const chunk of batch) {
+            this.nativeVisualizerTransport.handleChunk(chunk.left, chunk.right, {
+              sessionId: this.sessionState.sessionId,
+              channelCount: this.sessionState.channelCount,
+            })
+          }
+        }
+        return
+      }
+
+      this.stereoQueue = []
+      this.monoQueue.push(...batch)
+      if (this.scopeKind === 'spectrum') {
+        for (const chunk of batch) {
+          this.nativeVisualizerTransport.handleChunk(chunk, chunk, {
+            sessionId: this.sessionState.sessionId,
+            channelCount: 1,
+          })
+        }
+      }
+      return
+    }
+
     if (isStereoBatch(batch)) return
     this.monoQueue.push(...batch)
     for (const chunk of batch) {
@@ -116,6 +144,12 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     return this.scopeKind === 'spectrum' ? batch : []
   }
 
+  getPendingSpectrumStereoSamples(): ScopePopoutStereoBatch {
+    const batch = this.stereoQueue
+    this.stereoQueue = []
+    return this.scopeKind === 'spectrum' ? batch : []
+  }
+
   getPendingOscilloscopeSamples(): Float32Array[] {
     const batch = this.monoQueue
     this.monoQueue = []
@@ -131,6 +165,12 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
   getPendingWaveformSamples(): Float32Array[] {
     const batch = this.monoQueue
     this.monoQueue = []
+    return this.scopeKind === 'waveform' ? batch : []
+  }
+
+  getPendingWaveformStereoSamples(): ScopePopoutStereoBatch {
+    const batch = this.stereoQueue
+    this.stereoQueue = []
     return this.scopeKind === 'waveform' ? batch : []
   }
 

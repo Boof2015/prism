@@ -47,6 +47,69 @@ test('routes chunks only to demanded scopes and prunes queues when demand is rem
 
   assert.equal(router.flushPendingSpectrumSamples().length, 0)
   assert.equal(router.flushPendingWaveformSamples().length, 0)
+  assert.equal(router.flushPendingWaveformStereoSamples().length, 0)
+})
+
+test('spectrum keeps stereo chunks for the side overlay path and still exposes mono downmixes', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'electron-system')
+  router.setVisualizerConsumerDemand('test-consumer', { spectrum: true })
+
+  router.ingestChunk(createChunk(2), createChunk(4), {
+    sessionId,
+    channelCount: 2,
+    sequence: 1,
+    capturedAt: performance.now() - 5,
+  })
+
+  const stereoChunks = router.flushPendingSpectrumStereoSamples()
+  assert.equal(stereoChunks.length, 1)
+  assert.deepEqual(Array.from(stereoChunks[0]?.left ?? []), [2, 2, 2, 2])
+  assert.deepEqual(Array.from(stereoChunks[0]?.right ?? []), [4, 4, 4, 4])
+  assert.equal(router.flushPendingSpectrumSamples().length, 0)
+
+  router.ingestChunk(createChunk(6), createChunk(10), {
+    sessionId,
+    channelCount: 2,
+    sequence: 2,
+    capturedAt: performance.now() - 5,
+  })
+
+  const monoChunks = router.flushPendingSpectrumSamples()
+  assert.equal(monoChunks.length, 1)
+  assert.deepEqual(Array.from(monoChunks[0] ?? []), [8, 8, 8, 8])
+  assert.equal(router.flushPendingSpectrumStereoSamples().length, 0)
+})
+
+test('waveform keeps stereo chunks for stereo mode while mono flushes still expose the left channel', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'electron-system')
+  router.setVisualizerConsumerDemand('test-consumer', { waveform: true })
+
+  router.ingestChunk(createChunk(2), createChunk(4), {
+    sessionId,
+    channelCount: 2,
+    sequence: 1,
+    capturedAt: performance.now() - 5,
+  })
+
+  const stereoChunks = router.flushPendingWaveformStereoSamples()
+  assert.equal(stereoChunks.length, 1)
+  assert.deepEqual(Array.from(stereoChunks[0]?.left ?? []), [2, 2, 2, 2])
+  assert.deepEqual(Array.from(stereoChunks[0]?.right ?? []), [4, 4, 4, 4])
+  assert.equal(router.flushPendingWaveformSamples().length, 0)
+
+  router.ingestChunk(createChunk(6), createChunk(10), {
+    sessionId,
+    channelCount: 2,
+    sequence: 2,
+    capturedAt: performance.now() - 5,
+  })
+
+  const monoChunks = router.flushPendingWaveformSamples()
+  assert.equal(monoChunks.length, 1)
+  assert.deepEqual(Array.from(monoChunks[0] ?? []), [6, 6, 6, 6])
+  assert.equal(router.flushPendingWaveformStereoSamples().length, 0)
 })
 
 test('keeps the newest chunks when a fixed-capacity ring overflows', () => {

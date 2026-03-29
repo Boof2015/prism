@@ -9,17 +9,21 @@ import {
 import {
   createDefaultProfile,
 } from '../src/shared/profileState'
+import { createDefaultTheme, resolveTheme } from '../src/shared/themeState'
 import { usePerformanceStore } from '../src/renderer/stores/performanceStore'
 import {
   moveDockedScopeOrder,
   useSettingsStore,
 } from '../src/renderer/stores/settingsStore'
+import { scopeSettingsToOptions } from '../src/renderer/components/ScopeModule'
+import { scopeSummary } from '../src/renderer/components/ScopeSettingsSection'
 import {
   applyInputGainToStereoSamples,
   inputGainDbToLinear,
 } from '../src/renderer/audio/inputGain'
 import { SCOPE_KINDS, type ScopeKind } from '../src/types/scope'
 import type { ScopePopoutStateMap } from '../src/types/popout'
+import { ScopePopoutDataSource } from '../src/renderer/popouts/ScopePopoutDataSource'
 import {
   VUMeterBallistics,
   VU_INTEGRATION_WINDOW_MS,
@@ -497,6 +501,67 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'lufsmeter',
     'waveform',
   ])
+})
+
+test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer options', () => {
+  const profile = createDefaultProfile('Default')
+  profile.scopeSettings.spectrum.showSideLine = true
+  const theme = resolveTheme(createDefaultTheme())
+
+  const options = scopeSettingsToOptions('spectrum', profile.scopeSettings.spectrum, theme.spectrum)
+
+  assert.equal(options.showSideLine, true)
+  assert.equal(options.secondaryLineColor, theme.spectrum.secondary)
+  assert.equal(options.lineColor, theme.spectrum.primary)
+})
+
+test('scopeSettingsToOptions wires waveform stereo mode into analyzer options', () => {
+  const profile = createDefaultProfile('Default')
+  profile.scopeSettings.waveform.mode = 'stereo'
+  profile.scopeSettings.waveform.multiband = true
+  const theme = resolveTheme(createDefaultTheme())
+
+  const options = scopeSettingsToOptions('waveform', profile.scopeSettings.waveform, theme.waveform)
+
+  assert.equal(options.mode, 'stereo')
+  assert.equal(options.multiband, true)
+  assert.equal(options.lineColor, theme.waveform.primary)
+})
+
+test('scopeSummary includes Stereo for waveform only when stereo mode is enabled', () => {
+  const profile = createDefaultProfile('Default')
+  profile.scopeSettings.waveform.gainDb = 6
+
+  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB')
+
+  profile.scopeSettings.waveform.mode = 'stereo'
+  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB · Stereo')
+
+  profile.scopeSettings.waveform.multiband = true
+  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB · Stereo · RGB')
+})
+
+test('ScopePopoutDataSource switches waveform batches between mono and stereo queues', () => {
+  const dataSource = new ScopePopoutDataSource('waveform')
+  const monoChunk = new Float32Array([0.1, 0.2, 0.3])
+  const stereoLeft = new Float32Array([0.4, 0.5])
+  const stereoRight = new Float32Array([0.6, 0.7])
+  const nextMonoChunk = new Float32Array([0.8])
+
+  dataSource.pushAudioBatch([monoChunk])
+  assert.equal(dataSource.getPendingWaveformSamples()[0], monoChunk)
+  assert.equal(dataSource.getPendingWaveformStereoSamples().length, 0)
+
+  dataSource.pushAudioBatch([{ left: stereoLeft, right: stereoRight }])
+  assert.equal(dataSource.getPendingWaveformSamples().length, 0)
+  const stereoBatch = dataSource.getPendingWaveformStereoSamples()
+  assert.equal(stereoBatch.length, 1)
+  assert.equal(stereoBatch[0]?.left, stereoLeft)
+  assert.equal(stereoBatch[0]?.right, stereoRight)
+
+  dataSource.pushAudioBatch([nextMonoChunk])
+  assert.equal(dataSource.getPendingWaveformStereoSamples().length, 0)
+  assert.equal(dataSource.getPendingWaveformSamples()[0], nextMonoChunk)
 })
 
 test('applying a profile snapshot does not change the machine-local frame target', () => {

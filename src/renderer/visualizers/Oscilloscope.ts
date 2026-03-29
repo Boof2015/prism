@@ -20,6 +20,7 @@ export interface OscilloscopeOptions {
   backgroundColor?: string
   showGrid?: boolean
   gridColor?: string
+  underfillColor?: string
   pitchLock?: boolean
   underfillEnabled?: boolean
   dataSource?: OscilloscopeDataSource
@@ -34,6 +35,7 @@ const defaultOptions: ResolvedOscilloscopeOptions = {
   backgroundColor: 'transparent',
   showGrid: true,
   gridColor: 'rgba(255, 255, 255, 0.1)',
+  underfillColor: 'rgba(245, 248, 252, 0.18)',
   pitchLock: true,
   underfillEnabled: false,
 }
@@ -255,13 +257,13 @@ export class Oscilloscope {
       const shoulderAlpha = peakAlpha * 0.74
       const centerlineAlpha = 0.09
       const fillGradient = ctx.createLinearGradient(0, 0, 0, height)
-      fillGradient.addColorStop(0, highContrastUnderfillColor(options.lineColor, peakAlpha))
-      fillGradient.addColorStop(0.44, highContrastUnderfillColor(options.lineColor, peakAlpha * 0.94))
-      fillGradient.addColorStop(0.48, highContrastUnderfillColor(options.lineColor, shoulderAlpha))
-      fillGradient.addColorStop(0.5, highContrastUnderfillColor(options.lineColor, centerlineAlpha))
-      fillGradient.addColorStop(0.52, highContrastUnderfillColor(options.lineColor, shoulderAlpha))
-      fillGradient.addColorStop(0.56, highContrastUnderfillColor(options.lineColor, peakAlpha * 0.94))
-      fillGradient.addColorStop(1, highContrastUnderfillColor(options.lineColor, peakAlpha))
+      fillGradient.addColorStop(0, options.underfillColor || highContrastUnderfillColor(options.lineColor, peakAlpha))
+      fillGradient.addColorStop(0.44, options.underfillColor || highContrastUnderfillColor(options.lineColor, peakAlpha * 0.94))
+      fillGradient.addColorStop(0.48, options.underfillColor || highContrastUnderfillColor(options.lineColor, shoulderAlpha))
+      fillGradient.addColorStop(0.5, options.underfillColor || highContrastUnderfillColor(options.lineColor, centerlineAlpha))
+      fillGradient.addColorStop(0.52, options.underfillColor || highContrastUnderfillColor(options.lineColor, shoulderAlpha))
+      fillGradient.addColorStop(0.56, options.underfillColor || highContrastUnderfillColor(options.lineColor, peakAlpha * 0.94))
+      fillGradient.addColorStop(1, options.underfillColor || highContrastUnderfillColor(options.lineColor, peakAlpha))
       ctx.fillStyle = fillGradient
       ctx.fill()
     }

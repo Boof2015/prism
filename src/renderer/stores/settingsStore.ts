@@ -19,6 +19,7 @@ import {
   normalizeScopePopouts,
   normalizeWidthWeights,
 } from '../../shared/profileState'
+import { useThemeStore } from './themeStore'
 
 export type { ScopeSettings } from '../../types/settings'
 
@@ -27,6 +28,7 @@ const PROFILES_STORAGE_KEY = 'prism:profiles'
 const ACTIVE_PROFILE_KEY = 'prism:activeProfile'
 
 interface PersistedSettingsState {
+  themeId: string | null
   scopeOrder: ScopeKind[]
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>
@@ -35,6 +37,7 @@ interface PersistedSettingsState {
 }
 
 interface WorkingSettingsState {
+  themeId: string | null
   scopeOrder: ScopeKind[]
   hiddenScopes: Set<ScopeKind>
   widthWeights: Record<ScopeKind, number>
@@ -48,6 +51,7 @@ interface SettingsState extends WorkingSettingsState {
   activeProfileId: string | null
   initializeProfiles: () => Promise<void>
   applyExternalProfileSnapshot: (snapshot: ProfileLibrarySnapshot) => void
+  setThemeId: (themeId: string | null) => void
   toggleScope: (kind: ScopeKind) => void
   moveDockedScope: (kind: ScopeKind, direction: 'left' | 'right') => void
   setScopeWidthWeight: (kind: ScopeKind, weight: number) => void
@@ -80,6 +84,7 @@ function loadFromStorage(): Partial<PersistedSettingsState> {
 function saveToStorage(state: WorkingSettingsState): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      themeId: state.themeId,
       scopeOrder: state.scopeOrder,
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: state.widthWeights,
@@ -121,6 +126,7 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
   const normalizedProfile = normalizeProfile(profile, profile.name)
 
   return {
+    themeId: normalizedProfile.themeId,
     scopeOrder: normalizeScopeOrder(normalizedProfile.scopeOrder),
     hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(normalizedProfile.hiddenScopes)),
     widthWeights: normalizeWidthWeights(normalizedProfile.widthWeights),
@@ -147,12 +153,19 @@ function applyProfileSnapshot(
   }
 
   const nextState = createWorkingStateFromProfile(activeProfile)
+  if (!nextState.themeId && snapshot.activeProfileId === DEFAULT_PROFILE_ID) {
+    nextState.themeId = useThemeStore.getState().activeThemeId
+  }
   saveToStorage(nextState)
   set({
     ...nextState,
     profiles: snapshot.profiles,
     activeProfileId: snapshot.activeProfileId,
   })
+
+  if (activeProfile.themeId && useThemeStore.getState().themes[activeProfile.themeId]) {
+    void useThemeStore.getState().loadTheme(activeProfile.themeId)
+  }
 
   if (activeProfile.windowBounds && canUseElectronAPI()) {
     window.electronAPI.setWindowBounds(activeProfile.windowBounds)
@@ -162,6 +175,7 @@ function applyProfileSnapshot(
 async function buildProfileFromState(state: SettingsState, name: string): Promise<Profile> {
   const profile = normalizeProfile({
     name,
+    themeId: state.themeId ?? useThemeStore.getState().activeThemeId,
     scopeOrder: [...state.scopeOrder],
     hiddenScopes: Array.from(state.hiddenScopes),
     widthWeights: { ...state.widthWeights },
@@ -226,6 +240,9 @@ export function moveDockedScopeOrder(
 
 const stored = loadFromStorage()
 const initialWorkingState: WorkingSettingsState = {
+  themeId: typeof stored.themeId === 'string' && stored.themeId.trim()
+    ? stored.themeId.trim()
+    : null,
   scopeOrder: normalizeScopeOrder(stored.scopeOrder),
   hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(stored.hiddenScopes)),
   widthWeights: normalizeWidthWeights(stored.widthWeights),
@@ -264,6 +281,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   applyExternalProfileSnapshot: (snapshot: ProfileLibrarySnapshot) => {
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: true })
+  },
+
+  setThemeId: (themeId: string | null) => {
+    set((state) => {
+      const nextState = {
+        ...state,
+        themeId,
+      }
+      saveToStorage(nextState)
+      return nextState
+    })
   },
 
   toggleScope: (kind: ScopeKind) => {

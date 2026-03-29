@@ -29,6 +29,7 @@ export interface SpectrogramOptions {
   scaleMode?: SpectrogramScaleMode
   colorScheme?: 'heat' | 'mono'
   lineColor?: string
+  heatColors?: [string, string, string]
   dataSource?: SpectrogramDataSource
   frameScheduler?: FrameScheduler
 }
@@ -52,6 +53,7 @@ const defaultOptions: ResolvedSpectrogramOptions = {
   scaleMode: DEFAULT_SPECTROGRAM_SCALE_MODE,
   colorScheme: 'heat',
   lineColor: '#38bdf8',
+  heatColors: ['rgb(15, 7, 33)', 'rgb(163, 26, 121)', 'rgb(255, 241, 209)'],
 }
 
 const defaultSpectrogramDataSource: SpectrogramDataSource = {
@@ -92,6 +94,7 @@ function resolveOptions(base: ResolvedSpectrogramOptions, overrides: Partial<Spe
     scaleMode: resolveScaleMode(overrides.scaleMode, base.scaleMode),
     colorScheme: overrides.colorScheme ?? base.colorScheme,
     lineColor: overrides.lineColor ?? base.lineColor,
+    heatColors: overrides.heatColors ?? base.heatColors,
   }
 }
 
@@ -212,32 +215,63 @@ type ColorStop = {
   color: [number, number, number]
 }
 
-const HEAT_STOPS: readonly ColorStop[] = [
-  { at: 0, color: [0, 0, 0] },
-  { at: 0.14, color: [15, 7, 33] },
-  { at: 0.32, color: [61, 11, 94] },
-  { at: 0.54, color: [163, 26, 121] },
-  { at: 0.74, color: [255, 82, 87] },
-  { at: 0.9, color: [255, 166, 63] },
-  { at: 1, color: [255, 241, 209] },
+const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
+  'rgb(15, 7, 33)',
+  'rgb(163, 26, 121)',
+  'rgb(255, 241, 209)',
 ]
+
+function isLegacyDefaultHeatColors(colors: [string, string, string]): boolean {
+  return colors.every((color, index) => {
+    const left = resolveColorToRgb(color)
+    const right = resolveColorToRgb(LEGACY_DEFAULT_HEAT_COLORS[index])
+    return left.r === right.r && left.g === right.g && left.b === right.b
+  })
+}
+
+function buildHeatStops(colors: [string, string, string]): ColorStop[] {
+  if (isLegacyDefaultHeatColors(colors)) {
+    return [
+      { at: 0, color: [0, 0, 0] },
+      { at: 0.14, color: [15, 7, 33] },
+      { at: 0.32, color: [61, 11, 94] },
+      { at: 0.54, color: [163, 26, 121] },
+      { at: 0.74, color: [255, 82, 87] },
+      { at: 0.9, color: [255, 166, 63] },
+      { at: 1, color: [255, 241, 209] },
+    ]
+  }
+
+  const low = resolveColorToRgb(colors[0])
+  const mid = resolveColorToRgb(colors[1])
+  const high = resolveColorToRgb(colors[2])
+
+  return [
+    { at: 0, color: [0, 0, 0] },
+    { at: 0.2, color: [Math.round(low.r * 0.5), Math.round(low.g * 0.5), Math.round(low.b * 0.5)] },
+    { at: 0.48, color: [low.r, low.g, low.b] },
+    { at: 0.76, color: [mid.r, mid.g, mid.b] },
+    { at: 1, color: [high.r, high.g, high.b] },
+  ]
+}
 
 function lerpChannel(start: number, end: number, amount: number): number {
   return Math.round(start + ((end - start) * amount))
 }
 
-function buildHeatLUT(): Uint8Array {
+function buildHeatLUT(colors: [string, string, string]): Uint8Array {
+  const heatStops = buildHeatStops(colors)
   const lut = new Uint8Array(256 * 3)
 
   for (let index = 0; index < 256; index += 1) {
     const t = index / 255
-    let start = HEAT_STOPS[0]
-    let end = HEAT_STOPS[HEAT_STOPS.length - 1]
+    let start = heatStops[0]
+    let end = heatStops[heatStops.length - 1]
 
-    for (let stopIndex = 0; stopIndex < HEAT_STOPS.length - 1; stopIndex += 1) {
-      const nextStop = HEAT_STOPS[stopIndex + 1]
+    for (let stopIndex = 0; stopIndex < heatStops.length - 1; stopIndex += 1) {
+      const nextStop = heatStops[stopIndex + 1]
       if (t <= nextStop.at) {
-        start = HEAT_STOPS[stopIndex]
+        start = heatStops[stopIndex]
         end = nextStop
         break
       }
@@ -252,8 +286,6 @@ function buildHeatLUT(): Uint8Array {
 
   return lut
 }
-
-const HEAT_LUT = buildHeatLUT()
 
 // Zero-pad FFT for finer frequency resolution (visual interpolation)
 const FFT_PAD_FACTOR = 4
@@ -279,6 +311,7 @@ export class Spectrogram {
   private columnValues = new Float32Array(0)
   private rawColumnValues = new Float32Array(0)
   private columnImageData: ImageData | null = null
+  private heatLut: Uint8Array
 
   private lastWidth = 0
   private lastHeight = 0
@@ -298,6 +331,7 @@ export class Spectrogram {
     const { dataSource, frameScheduler, ...optionOverrides } = options
     this.options = resolveOptions(defaultOptions, optionOverrides)
     this.dataSource = dataSource ?? defaultSpectrogramDataSource
+    this.heatLut = buildHeatLUT(this.options.heatColors)
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
@@ -342,6 +376,7 @@ export class Spectrogram {
     const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
     const previousOptions = this.options
     this.options = resolveOptions(previousOptions, optionUpdates)
+    this.heatLut = buildHeatLUT(this.options.heatColors)
 
     if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
@@ -525,9 +560,9 @@ export class Spectrogram {
       const dataIndex = row * 4
 
       if (this.options.colorScheme === 'heat') {
-        imageData[dataIndex] = HEAT_LUT[lutIndex * 3]
-        imageData[dataIndex + 1] = HEAT_LUT[(lutIndex * 3) + 1]
-        imageData[dataIndex + 2] = HEAT_LUT[(lutIndex * 3) + 2]
+        imageData[dataIndex] = this.heatLut[lutIndex * 3]
+        imageData[dataIndex + 1] = this.heatLut[(lutIndex * 3) + 1]
+        imageData[dataIndex + 2] = this.heatLut[(lutIndex * 3) + 2]
       } else {
         imageData[dataIndex] = Math.round(tintR * intensity)
         imageData[dataIndex + 1] = Math.round(tintG * intensity)

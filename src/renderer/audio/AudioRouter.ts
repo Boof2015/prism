@@ -90,13 +90,13 @@ interface ScopeLatencyTracker {
 }
 
 type ScopeRingMap = {
-  spectrum: FixedChunkRing<MonoChunkRecord>
+  spectrum: FixedChunkRing<StereoChunkRecord>
   oscilloscope: FixedChunkRing<MonoChunkRecord>
   vectorscope: FixedChunkRing<StereoChunkRecord>
   spectrogram: FixedChunkRing<MonoChunkRecord>
   vumeter: FixedChunkRing<StereoChunkRecord>
   lufsmeter: FixedChunkRing<StereoChunkRecord>
-  waveform: FixedChunkRing<MonoChunkRecord>
+  waveform: FixedChunkRing<StereoChunkRecord>
 }
 
 class FixedChunkRing<T> {
@@ -212,13 +212,13 @@ function createScopeLatencyTracker(): ScopeLatencyTracker {
 
 export class AudioRouter {
   private readonly rings: ScopeRingMap = {
-    spectrum: new FixedChunkRing<MonoChunkRecord>(SCOPE_RING_CAPACITY.spectrum),
+    spectrum: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.spectrum),
     oscilloscope: new FixedChunkRing<MonoChunkRecord>(SCOPE_RING_CAPACITY.oscilloscope),
     vectorscope: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.vectorscope),
     spectrogram: new FixedChunkRing<MonoChunkRecord>(SCOPE_RING_CAPACITY.spectrogram),
     vumeter: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.vumeter),
     lufsmeter: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.lufsmeter),
-    waveform: new FixedChunkRing<MonoChunkRecord>(SCOPE_RING_CAPACITY.waveform),
+    waveform: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.waveform),
   }
 
   private readonly scopeLatency: Record<ScopeKind, ScopeLatencyTracker> = {
@@ -362,11 +362,12 @@ export class AudioRouter {
     if (len === 0) return
 
     const activeDemand = this.getActiveDemand()
-    const needsMono = Boolean(activeDemand.spectrum || activeDemand.spectrogram)
-    const needsStereo = Boolean(activeDemand.vectorscope || activeDemand.vumeter || activeDemand.lufsmeter)
-    const needsLeft = Boolean(activeDemand.oscilloscope || activeDemand.waveform)
+    const needsSpectrum = Boolean(activeDemand.spectrum)
+    const needsMono = Boolean(activeDemand.spectrogram)
+    const needsStereo = Boolean(activeDemand.vectorscope || activeDemand.vumeter || activeDemand.lufsmeter || activeDemand.waveform)
+    const needsLeft = Boolean(activeDemand.oscilloscope)
 
-    if (!needsMono && !needsStereo && !needsLeft) {
+    if (!needsSpectrum && !needsMono && !needsStereo && !needsLeft) {
       this.undemandedChunks += 1
       return
     }
@@ -388,8 +389,8 @@ export class AudioRouter {
       this.rings.oscilloscope.push({ samples: leftSamples, capturedAt, sequence })
     }
 
-    if (activeDemand.spectrum && mono) {
-      this.rings.spectrum.push({ samples: mono, capturedAt, sequence })
+    if (activeDemand.spectrum) {
+      this.rings.spectrum.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
     }
 
     if (activeDemand.spectrogram && mono) {
@@ -409,7 +410,7 @@ export class AudioRouter {
     }
 
     if (activeDemand.waveform) {
-      this.rings.waveform.push({ samples: leftSamples, capturedAt, sequence })
+      this.rings.waveform.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
     }
   }
 
@@ -422,7 +423,20 @@ export class AudioRouter {
   flushPendingSpectrumSamples(): Float32Array[] {
     const records = this.rings.spectrum.drain()
     this.recordScopeDrain('spectrum', records)
-    return records.map((record) => record.samples)
+    return records.map((record) => {
+      const length = Math.min(record.left.length, record.right.length)
+      const mono = new Float32Array(length)
+      for (let index = 0; index < length; index += 1) {
+        mono[index] = (record.left[index] + record.right[index]) * 0.5
+      }
+      return mono
+    })
+  }
+
+  flushPendingSpectrumStereoSamples(): { left: Float32Array; right: Float32Array }[] {
+    const records = this.rings.spectrum.drain()
+    this.recordScopeDrain('spectrum', records)
+    return records.map((record) => ({ left: record.left, right: record.right }))
   }
 
   flushPendingSpectrogramSamples(): Float32Array[] {
@@ -452,7 +466,13 @@ export class AudioRouter {
   flushPendingWaveformSamples(): Float32Array[] {
     const records = this.rings.waveform.drain()
     this.recordScopeDrain('waveform', records)
-    return records.map((record) => record.samples)
+    return records.map((record) => record.left)
+  }
+
+  flushPendingWaveformStereoSamples(): { left: Float32Array; right: Float32Array }[] {
+    const records = this.rings.waveform.drain()
+    this.recordScopeDrain('waveform', records)
+    return records.map((record) => ({ left: record.left, right: record.right }))
   }
 
   getDiagnosticsSnapshot(): AudioRouterDiagnostics {

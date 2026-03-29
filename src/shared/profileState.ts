@@ -7,8 +7,9 @@ import {
   PROFILE_LOCAL_STATE_VERSION,
   type Profile,
   type ProfileLocalMetadata,
+  type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV1,
+  type PrismProfileFileV2,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
@@ -152,6 +153,7 @@ export function normalizeProfileName(value: unknown, fallback = DEFAULT_PROFILE_
 export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): Profile {
   return {
     name,
+    themeId: null,
     scopeOrder: [...SCOPE_KINDS],
     hiddenScopes: SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind)),
     widthWeights: { ...DEFAULT_SCOPE_WIDTH_WEIGHTS },
@@ -167,6 +169,9 @@ export function normalizeProfile(raw: unknown, fallbackName = DEFAULT_PROFILE_NA
 
   return {
     name: normalizeProfileName(parsed.name, fallbackName),
+    themeId: typeof parsed.themeId === 'string' && parsed.themeId.trim()
+      ? parsed.themeId.trim()
+      : null,
     scopeOrder: normalizeScopeOrder(parsed.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
@@ -187,13 +192,21 @@ export function normalizeProfileFileScopePopouts(raw: unknown): PrismProfileFile
   }, {} as PrismProfileFileScopePopoutMap)
 }
 
+function readProfileFileThemeId(file: Partial<PrismProfileFile> | PrismProfileFile): string | null {
+  if (!('themeId' in file)) return null
+  const { themeId } = file
+  return typeof themeId === 'string' && themeId.trim()
+    ? themeId.trim()
+    : null
+}
+
 export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-): PrismProfileFileV1 {
+) : PrismProfileFileV2 {
   const parsed = typeof raw === 'object' && raw !== null
-    ? raw as Partial<PrismProfileFileV1>
+    ? raw as Partial<PrismProfileFile>
     : {}
 
   const id = typeof parsed.id === 'string' && parsed.id.trim()
@@ -207,6 +220,7 @@ export function normalizeProfileFile(
     version: PROFILE_FILE_VERSION,
     id,
     name,
+    themeId: readProfileFileThemeId(parsed),
     scopeOrder: normalizeScopeOrder(parsed.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
@@ -215,7 +229,7 @@ export function normalizeProfileFile(
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV1 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV2 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {
@@ -223,6 +237,7 @@ export function profileToFileData(id: string, profile: Profile): PrismProfileFil
     version: PROFILE_FILE_VERSION,
     id,
     name: normalized.name,
+    themeId: normalized.themeId,
     scopeOrder: [...normalized.scopeOrder],
     hiddenScopes: [...normalized.hiddenScopes],
     widthWeights: { ...normalized.widthWeights },
@@ -308,13 +323,14 @@ export function extractLocalProfileMetadata(profile: Profile): ProfileLocalMetad
 }
 
 export function profileFileToProfile(
-  file: PrismProfileFileV1,
+  file: PrismProfileFile,
   localMetadata?: ProfileLocalMetadata,
 ): Profile {
   const metadata = normalizeProfileLocalMetadata(localMetadata)
 
   return {
     name: normalizeProfileName(file.name, DEFAULT_PROFILE_NAME),
+    themeId: readProfileFileThemeId(file),
     scopeOrder: normalizeScopeOrder(file.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(file.hiddenScopes),
     widthWeights: normalizeWidthWeights(file.widthWeights),

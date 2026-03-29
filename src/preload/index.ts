@@ -16,6 +16,11 @@ import type {
   ProfileLibrarySnapshot,
 } from '../types/profile'
 import type { ScopeKind } from '../types/scope'
+import type {
+  LegacyThemeMigrationPayload,
+  LegacyThemeMigrationResult,
+  ThemeLibrarySnapshot,
+} from '../types/theme'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
@@ -49,6 +54,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importProfileDialog: () => ipcRenderer.invoke('profiles:import-dialog') as Promise<ProfileLibrarySnapshot | null>,
   revealProfilesFolder: () => ipcRenderer.invoke('profiles:reveal-folder') as Promise<void>,
   migrateLegacyProfiles: (payload: LegacyProfileMigrationPayload) => ipcRenderer.invoke('profiles:migrate-legacy', payload) as Promise<LegacyProfileMigrationResult>,
+  getThemeSnapshot: () => ipcRenderer.invoke('themes:get-snapshot') as Promise<ThemeLibrarySnapshot>,
+  loadTheme: (id: string) => ipcRenderer.invoke('themes:load', id) as Promise<ThemeLibrarySnapshot>,
+  renameTheme: (id: string, name: string) => ipcRenderer.invoke('themes:rename', id, name) as Promise<ThemeLibrarySnapshot>,
+  deleteTheme: (id: string) => ipcRenderer.invoke('themes:delete', id) as Promise<ThemeLibrarySnapshot>,
+  reloadThemes: () => ipcRenderer.invoke('themes:reload') as Promise<ThemeLibrarySnapshot>,
+  importThemeDialog: () => ipcRenderer.invoke('themes:import-dialog') as Promise<ThemeLibrarySnapshot | null>,
+  revealThemesFolder: () => ipcRenderer.invoke('themes:reveal-folder') as Promise<void>,
+  migrateLegacyTheme: (payload: LegacyThemeMigrationPayload) => ipcRenderer.invoke('themes:migrate-legacy', payload) as Promise<LegacyThemeMigrationResult>,
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),
@@ -124,6 +137,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: ProfileLibrarySnapshot): void => callback(snapshot)
     ipcRenderer.on('profiles:external-activated', handler)
     return () => ipcRenderer.removeListener('profiles:external-activated', handler)
+  },
+  onExternalThemeActivated: (callback: (snapshot: ThemeLibrarySnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: ThemeLibrarySnapshot): void => callback(snapshot)
+    ipcRenderer.on('themes:external-activated', handler)
+    return () => ipcRenderer.removeListener('themes:external-activated', handler)
   },
   onScopePopoutReady: (callback: (kind: ScopeKind) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind): void => callback(kind)

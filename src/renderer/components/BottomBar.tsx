@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, type CSSProperties, type JSX } from
 import { useAudioStore } from '../stores/audioStore'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { useThemeStore, PRESETS, PRESET_IDS } from '../stores/themeStore'
+import { useThemeStore } from '../stores/themeStore'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { SCOPE_KINDS } from '../../types/scope'
@@ -39,7 +39,18 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
   const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
-  const { presetId, accent, setPreset, setCustomAccent, customAccent } = useThemeStore()
+  const themeId = useSettingsStore((s) => s.themeId)
+  const setThemeId = useSettingsStore((s) => s.setThemeId)
+  const {
+    themes,
+    activeThemeId,
+    loadTheme,
+    renameTheme,
+    deleteTheme,
+    reloadThemes,
+    importThemeFromDialog,
+    showThemesFolder,
+  } = useThemeStore()
 
   const {
     systemSources,
@@ -128,6 +139,32 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
 
   const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
   const roundedDockedRenderFps = Math.max(0, Math.round(dockedRenderFps))
+  const themeEntries = Object.entries(themes)
+
+  const handleThemeChange = async (value: string): Promise<void> => {
+    await loadTheme(value)
+    setThemeId(value)
+  }
+
+  const handleRenameTheme = async (): Promise<void> => {
+    if (!activeThemeId || activeThemeId === 'theme_default') return
+    const activeTheme = themes[activeThemeId]
+    if (!activeTheme) return
+
+    const nextName = window.prompt('Rename theme', activeTheme.name)?.trim()
+    if (!nextName) return
+    await renameTheme(activeThemeId, nextName)
+  }
+
+  const handleDeleteTheme = async (): Promise<void> => {
+    if (!activeThemeId || activeThemeId === 'theme_default') return
+    const activeTheme = themes[activeThemeId]
+    if (!activeTheme) return
+    if (!window.confirm(`Delete "${activeTheme.name}"?`)) return
+
+    await deleteTheme(activeThemeId)
+    setThemeId(useThemeStore.getState().activeThemeId)
+  }
 
   return (
     <div className="bottom-bar" ref={rootRef}>
@@ -161,37 +198,75 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
             <div className="bottom-bar__section-title">Theme</div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--theme">
-                {PRESET_IDS.map((id) => {
-                  const preset = PRESETS[id]
-                  const active = presetId === id && !customAccent
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      className={`settings-swatch ${active ? 'is-active' : ''}`.trim()}
-                      style={{ '--swatch-color': preset.accent } as CSSProperties}
-                      onClick={() => setPreset(id)}
-                      title={preset.name}
-                      aria-label={preset.name}
-                    />
-                  )
-                })}
-                <input
-                  className="settings-accent-input"
-                  type="color"
-                  value={accent}
-                  onChange={(event) => setCustomAccent(event.target.value)}
-                  title="Custom accent color"
-                />
-                {customAccent && (
+                <select
+                  className="settings-control__select"
+                  value={activeThemeId ?? ''}
+                  onChange={(event) => {
+                    void handleThemeChange(event.target.value)
+                  }}
+                >
+                  {themeEntries.map(([id, theme]) => (
+                    <option key={id} value={id}>
+                      {theme.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void (async () => {
+                      await importThemeFromDialog()
+                      setThemeId(useThemeStore.getState().activeThemeId)
+                    })()
+                  }}
+                >
+                  Import
+                </button>
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void reloadThemes()
+                  }}
+                >
+                  Reload
+                </button>
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void showThemesFolder()
+                  }}
+                >
+                  Folder
+                </button>
+                {activeThemeId && activeThemeId !== 'theme_default' ? (
                   <button
                     type="button"
                     className="settings-chip"
-                    onClick={() => setCustomAccent(null)}
+                    onClick={() => {
+                      void handleRenameTheme()
+                    }}
                   >
-                    Reset
+                    Rename
                   </button>
-                )}
+                ) : null}
+                {activeThemeId && activeThemeId !== 'theme_default' ? (
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      void handleDeleteTheme()
+                    }}
+                  >
+                    Delete
+                  </button>
+                ) : null}
+                <div className="settings-status-pill">
+                  <span className="settings-status-pill__dot" />
+                  <span>{themeId ? 'Saved With Profile' : 'Not Linked'}</span>
+                </div>
               </div>
             </div>
           </section>

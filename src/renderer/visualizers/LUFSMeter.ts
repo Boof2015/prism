@@ -12,6 +12,9 @@ export interface LUFSMeterDataSource extends VisualizerSessionSource {
 export interface LUFSMeterOptions {
   mode?: LUFSMeterMode
   lineColor?: string
+  targetColor?: string
+  scaleColor?: string
+  labelColor?: string
   dataSource?: LUFSMeterDataSource
   frameScheduler?: FrameScheduler
 }
@@ -21,6 +24,9 @@ type ResolvedLUFSMeterOptions = Required<Omit<LUFSMeterOptions, 'dataSource' | '
 const defaultOptions: ResolvedLUFSMeterOptions = {
   mode: 'bar',
   lineColor: '#38bdf8',
+  targetColor: 'rgba(56, 189, 248, 0.25)',
+  scaleColor: 'rgba(255, 255, 255, 0.35)',
+  labelColor: 'rgba(255, 255, 255, 0.8)',
 }
 
 const defaultLUFSMeterDataSource: LUFSMeterDataSource = {
@@ -404,7 +410,7 @@ export class LUFSMeter {
 
       // Bar label
       ctx.font = `600 ${fontSize}px "Inter", system-ui, sans-serif`
-      ctx.fillStyle = `rgba(${tintR}, ${tintG}, ${tintB}, 0.7)`
+      ctx.fillStyle = this.options.labelColor
       ctx.fillText(labels[i], x + barWidth / 2, padding)
 
       // Bar background
@@ -430,14 +436,14 @@ export class LUFSMeter {
       // LUFS readout below bar
       const displayLufs = lufs <= METER_MIN_LUFS + 1 ? '-∞' : lufs.toFixed(1)
       ctx.font = `500 ${Math.max(Math.round(8 * dpr), fontSize - Math.round(2 * dpr))}px "JetBrains Mono", "SF Mono", monospace`
-      ctx.fillStyle = `rgba(${tintR}, ${tintG}, ${tintB}, 0.8)`
+      ctx.fillStyle = this.options.labelColor
       ctx.fillText(displayLufs, x + barWidth / 2, barAreaBottom + Math.round(4 * dpr))
     }
 
     // Target reference line (-14 LUFS)
     const targetNorm = Math.max(0, Math.min(1, (TARGET_LUFS - METER_MIN_LUFS) / dbRange))
     const targetY = Math.round(barAreaBottom - targetNorm * barAreaHeight)
-    ctx.strokeStyle = `rgba(${tintR}, ${tintG}, ${tintB}, 0.25)`
+    ctx.strokeStyle = this.options.targetColor
     ctx.lineWidth = Math.max(1, dpr)
     ctx.setLineDash([Math.round(4 * dpr), Math.round(3 * dpr)])
     ctx.beginPath()
@@ -451,7 +457,7 @@ export class LUFSMeter {
     ctx.font = `400 ${scaleFont}px "JetBrains Mono", "SF Mono", monospace`
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
-    ctx.fillStyle = `rgba(${tintR}, ${tintG}, ${tintB}, 0.35)`
+    ctx.fillStyle = this.options.scaleColor
 
     const tickValues = [-60, -48, -36, -24, -18, -14, -9, -6, -3, 0]
     for (const tick of tickValues) {

@@ -5,18 +5,34 @@ import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
   DEFAULT_WAVEFORM_GAIN_DB,
+  DEFAULT_WAVEFORM_MODE,
   DEFAULT_WAVEFORM_SCROLL_SPEED,
   clampWaveformGainDb,
   clampWaveformScrollSpeed,
+  type WaveformMode,
 } from '../../types/waveform'
 import { MultibandSplitter } from './multibandSplitter'
 
+export interface WaveformStereoChunk {
+  left: Float32Array
+  right: Float32Array
+}
+
 export interface WaveformDataSource extends VisualizerSessionSource {
   getPendingWaveformSamples: () => Float32Array[]
+  getPendingWaveformStereoSamples: () => WaveformStereoChunk[]
 }
 
 export interface WaveformOptions {
   lineColor?: string
+  gridMajorColor?: string
+  gridMinorColor?: string
+  bandColors?: {
+    low: string
+    mid: string
+    high: string
+  }
+  mode?: WaveformMode
   scrollSpeed?: number
   gainDb?: number
   multiband?: boolean
@@ -28,29 +44,32 @@ type ResolvedWaveformOptions = Required<Omit<WaveformOptions, 'dataSource' | 'fr
 
 const defaultOptions: ResolvedWaveformOptions = {
   lineColor: '#38bdf8',
+  gridMajorColor: 'rgba(255, 255, 255, 0.08)',
+  gridMinorColor: 'rgba(255, 255, 255, 0.04)',
+  bandColors: {
+    low: '#ff4444',
+    mid: '#44dd44',
+    high: '#4488ff',
+  },
+  mode: DEFAULT_WAVEFORM_MODE,
   scrollSpeed: DEFAULT_WAVEFORM_SCROLL_SPEED,
   gainDb: DEFAULT_WAVEFORM_GAIN_DB,
   multiband: false,
 }
 
-// Band colors for multiband mode — same hues as vectorscope RGB
-const BAND_LOW:  [number, number, number] = [255, 68, 68]   // red — bass
-const BAND_MID:  [number, number, number] = [68, 221, 68]   // green — mids
-const BAND_HIGH: [number, number, number] = [68, 136, 255]  // blue — highs
 const MULTIBAND_WEIGHT_EMPHASIS = 2.6
 const MULTIBAND_DOMINANCE_SENSITIVITY = 5
 const MULTIBAND_FOCUSED_BLEND = 0.68
 const MULTIBAND_FILL_ALPHA = 0.72
 const MULTIBAND_EDGE_ALPHA = 1.0
+const BASE_PIXELS_PER_SECOND = 64
+const DISPLAY_MARGIN = 0.95
 
 const defaultWaveformDataSource: WaveformDataSource = {
   getPendingWaveformSamples: () => audioRouter.flushPendingWaveformSamples(),
+  getPendingWaveformStereoSamples: () => audioRouter.flushPendingWaveformStereoSamples(),
   ...defaultVisualizerSessionSource,
 }
-
-// Calibrate 1.0x to the prior 8s window at roughly 512px wide,
-// while keeping scroll speed independent from panel width.
-const BASE_PIXELS_PER_SECOND = 64
 
 export class Waveform {
   private canvas: HTMLCanvasElement
@@ -59,24 +78,25 @@ export class Waveform {
   private dataSource: WaveformDataSource
   private frameLoop: VisualizerFrameLoop
 
-  // Offscreen canvas for scrolling content
   private waterfallCanvas: HTMLCanvasElement
   private waterfallCtx: CanvasRenderingContext2D
   private staticLayerCanvas: HTMLCanvasElement
   private staticLayerCtx: CanvasRenderingContext2D
   private staticLayerKey = ''
 
-  // Sample accumulator for current pixel column
-  private columnAccumulator: Float32Array = new Float32Array(0)
+  private leftColumnAccumulator: Float32Array = new Float32Array(0)
+  private rightColumnAccumulator: Float32Array = new Float32Array(0)
   private columnAccumulatorPos = 0
   private samplesPerColumn = 0
   private lastSampleRate = 0
 
-  // Multiband analysis
   private splitter = new MultibandSplitter()
-  private bandLowAcc: Float32Array = new Float32Array(0)
-  private bandMidAcc: Float32Array = new Float32Array(0)
-  private bandHighAcc: Float32Array = new Float32Array(0)
+  private leftBandLowAcc: Float32Array = new Float32Array(0)
+  private leftBandMidAcc: Float32Array = new Float32Array(0)
+  private leftBandHighAcc: Float32Array = new Float32Array(0)
+  private rightBandLowAcc: Float32Array = new Float32Array(0)
+  private rightBandMidAcc: Float32Array = new Float32Array(0)
+  private rightBandHighAcc: Float32Array = new Float32Array(0)
   private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: WaveformOptions = {}) {
@@ -90,6 +110,7 @@ export class Waveform {
     this.options = {
       ...defaultOptions,
       ...optionOverrides,
+      mode: optionOverrides.mode ?? defaultOptions.mode,
       scrollSpeed: clampWaveformScrollSpeed(optionOverrides.scrollSpeed ?? defaultOptions.scrollSpeed),
       gainDb: clampWaveformGainDb(optionOverrides.gainDb ?? defaultOptions.gainDb),
       multiband: optionOverrides.multiband ?? defaultOptions.multiband,
@@ -108,6 +129,7 @@ export class Waveform {
     if (!waterfallCtx) throw new Error('Could not get waterfall 2D context')
     this.waterfallCtx = waterfallCtx
     this.waterfallCtx.imageSmoothingEnabled = false
+
     this.staticLayerCanvas = document.createElement('canvas')
     const staticLayerCtx = this.staticLayerCanvas.getContext('2d')
     if (!staticLayerCtx) throw new Error('Could not get static 2D context')
@@ -139,10 +161,14 @@ export class Waveform {
     const next = Math.max(1, Math.round(sampleRate / pixelsPerSecond))
     if (next !== this.samplesPerColumn) {
       this.samplesPerColumn = next
-      this.columnAccumulator = new Float32Array(next)
-      this.bandLowAcc = new Float32Array(next)
-      this.bandMidAcc = new Float32Array(next)
-      this.bandHighAcc = new Float32Array(next)
+      this.leftColumnAccumulator = new Float32Array(next)
+      this.rightColumnAccumulator = new Float32Array(next)
+      this.leftBandLowAcc = new Float32Array(next)
+      this.leftBandMidAcc = new Float32Array(next)
+      this.leftBandHighAcc = new Float32Array(next)
+      this.rightBandLowAcc = new Float32Array(next)
+      this.rightBandMidAcc = new Float32Array(next)
+      this.rightBandHighAcc = new Float32Array(next)
       this.columnAccumulatorPos = 0
     }
     this.lastSampleRate = sampleRate
@@ -154,6 +180,7 @@ export class Waveform {
     const nextOptions: ResolvedWaveformOptions = {
       ...this.options,
       ...optionUpdates,
+      mode: optionUpdates.mode ?? this.options.mode,
       lineColor: optionUpdates.lineColor ?? this.options.lineColor,
       scrollSpeed: clampWaveformScrollSpeed(optionUpdates.scrollSpeed ?? this.options.scrollSpeed),
       gainDb: clampWaveformGainDb(optionUpdates.gainDb ?? this.options.gainDb),
@@ -161,20 +188,26 @@ export class Waveform {
     }
     const speedChanged = nextOptions.scrollSpeed !== this.options.scrollSpeed
     const multibandChanged = nextOptions.multiband !== this.options.multiband
+    const modeChanged = nextOptions.mode !== this.options.mode
+    const dataSourceChanged = Boolean(dataSource && dataSource !== this.dataSource)
 
     this.options = nextOptions
-    if (dataSource && dataSource !== this.dataSource) {
+
+    if (dataSourceChanged && dataSource) {
       this.dataSource = dataSource
       this.subscribeToSessionChanges()
-      this.recomputeSamplesPerColumn()
-      this.resetDisplay()
     }
-    if (speedChanged) {
+
+    if (dataSourceChanged || speedChanged) {
       this.recomputeSamplesPerColumn()
-      this.resetDisplay()
     }
-    if (multibandChanged) {
+
+    if (multibandChanged || modeChanged) {
       this.splitter.reset()
+    }
+
+    this.staticLayerKey = ''
+    if (dataSourceChanged || speedChanged || multibandChanged || modeChanged) {
       this.resetDisplay()
     }
 
@@ -194,37 +227,46 @@ export class Waveform {
   }
 
   resize(): void {
-    // Resize handled in draw loop
     this.staticLayerKey = ''
     this.invalidate()
   }
 
-  private computeMinMax(): { min: number; max: number } {
-    let min = this.columnAccumulator[0]
-    let max = this.columnAccumulator[0]
+  private computeMinMax(samples: Float32Array): { min: number; max: number } {
+    if (this.columnAccumulatorPos === 0) {
+      return { min: 0, max: 0 }
+    }
+
+    let min = samples[0]
+    let max = samples[0]
     for (let i = 1; i < this.columnAccumulatorPos; i++) {
-      const s = this.columnAccumulator[i]
-      if (s < min) min = s
-      if (s > max) max = s
+      const sample = samples[i]
+      if (sample < min) min = sample
+      if (sample > max) max = sample
     }
     return { min, max }
   }
 
-  private computeBandColor(): [number, number, number] {
+  private computeBandColor(
+    lowBandSamples: Float32Array,
+    midBandSamples: Float32Array,
+    highBandSamples: Float32Array,
+  ): [number, number, number] {
+    const lowBand = this.toBandColorTuple(this.options.bandColors.low)
+    const midBand = this.toBandColorTuple(this.options.bandColors.mid)
+    const highBand = this.toBandColorTuple(this.options.bandColors.high)
     const n = this.columnAccumulatorPos
-    if (n === 0) return BAND_MID
+    if (n === 0) return midBand
 
-    // Compute RMS energy for each band
     let lowSum = 0
     let midSum = 0
     let highSum = 0
     for (let i = 0; i < n; i++) {
-      const l = this.bandLowAcc[i]
-      const m = this.bandMidAcc[i]
-      const h = this.bandHighAcc[i]
-      lowSum += l * l
-      midSum += m * m
-      highSum += h * h
+      const low = lowBandSamples[i]
+      const mid = midBandSamples[i]
+      const high = highBandSamples[i]
+      lowSum += low * low
+      midSum += mid * mid
+      highSum += high * high
     }
 
     const lowRms = Math.sqrt(lowSum / n)
@@ -232,7 +274,7 @@ export class Waveform {
     const highRms = Math.sqrt(highSum / n)
     const total = lowRms + midRms + highRms
 
-    if (total < 1e-10) return BAND_MID
+    if (total < 1e-10) return midBand
 
     const emphasizedWeights = [
       Math.pow(lowRms / total, MULTIBAND_WEIGHT_EMPHASIS),
@@ -240,12 +282,12 @@ export class Waveform {
       Math.pow(highRms / total, MULTIBAND_WEIGHT_EMPHASIS),
     ] as const
     const emphasizedTotal = emphasizedWeights[0] + emphasizedWeights[1] + emphasizedWeights[2]
-    if (emphasizedTotal < 1e-10) return BAND_MID
+    if (emphasizedTotal < 1e-10) return midBand
 
     const normalizedBands = [
-      { color: BAND_LOW, weight: emphasizedWeights[0] / emphasizedTotal },
-      { color: BAND_MID, weight: emphasizedWeights[1] / emphasizedTotal },
-      { color: BAND_HIGH, weight: emphasizedWeights[2] / emphasizedTotal },
+      { color: lowBand, weight: emphasizedWeights[0] / emphasizedTotal },
+      { color: midBand, weight: emphasizedWeights[1] / emphasizedTotal },
+      { color: highBand, weight: emphasizedWeights[2] / emphasizedTotal },
     ] as const
 
     const blended: [number, number, number] = [
@@ -272,40 +314,54 @@ export class Waveform {
     ]
   }
 
-  private shiftAndPaintColumn(min: number, max: number, width: number, height: number): void {
-    // Shift existing content left by 1 pixel — use 'copy' to avoid
-    // alpha accumulation from source-over compositing on semi-transparent pixels
+  private toBandColorTuple(color: string): [number, number, number] {
+    const { r, g, b } = resolveColorToRgb(color)
+    return [r, g, b]
+  }
+
+  private resolveColumnColor(
+    lowBandSamples: Float32Array,
+    midBandSamples: Float32Array,
+    highBandSamples: Float32Array,
+  ): [number, number, number] {
+    if (this.options.multiband) {
+      return this.computeBandColor(lowBandSamples, midBandSamples, highBandSamples)
+    }
+
+    const lineColor = resolveColorToRgb(this.options.lineColor)
+    return [lineColor.r, lineColor.g, lineColor.b]
+  }
+
+  private shiftWaterfall(): void {
     this.waterfallCtx.globalCompositeOperation = 'copy'
     this.waterfallCtx.drawImage(this.waterfallCanvas, -1, 0)
     this.waterfallCtx.globalCompositeOperation = 'source-over'
+  }
 
-    const centerY = height / 2
+  private paintColumn(
+    min: number,
+    max: number,
+    width: number,
+    laneTop: number,
+    laneHeight: number,
+    color: [number, number, number],
+  ): void {
     const amplitudeGain = Math.pow(10, this.options.gainDb / 20)
     const scaledMin = Math.max(-1, Math.min(1, min * amplitudeGain))
     const scaledMax = Math.max(-1, Math.min(1, max * amplitudeGain))
-    const displayMargin = 0.95 // slight margin so full-scale doesn't clip at edge
-    const yTop = Math.round(centerY - scaledMax * centerY * displayMargin)
-    const yBottom = Math.round(centerY - scaledMin * centerY * displayMargin)
+    const centerY = laneTop + (laneHeight / 2)
+    const displayHalfHeight = (laneHeight / 2) * DISPLAY_MARGIN
+    const yTop = Math.round(centerY - scaledMax * displayHalfHeight)
+    const yBottom = Math.round(centerY - scaledMin * displayHalfHeight)
     const lineHeight = Math.max(1, yBottom - yTop)
-
-    let r: number, g: number, b: number
-    if (this.options.multiband) {
-      ;[r, g, b] = this.computeBandColor()
-    } else {
-      const lineColor = resolveColorToRgb(this.options.lineColor)
-      r = lineColor.r
-      g = lineColor.g
-      b = lineColor.b
-    }
 
     const fillAlpha = this.options.multiband ? MULTIBAND_FILL_ALPHA : 0.55
     const edgeAlpha = this.options.multiband ? MULTIBAND_EDGE_ALPHA : 0.9
+    const [r, g, b] = color
 
-    // Draw the amplitude column — brighter at the edges, dimmer in the middle
     this.waterfallCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${fillAlpha})`
     this.waterfallCtx.fillRect(width - 1, yTop, 1, lineHeight)
 
-    // Bright edge pixels at min/max
     this.waterfallCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${edgeAlpha})`
     this.waterfallCtx.fillRect(width - 1, yTop, 1, 1)
     if (lineHeight > 1) {
@@ -320,7 +376,7 @@ export class Waveform {
   }
 
   private ensureStaticLayer(width: number, height: number): void {
-    const key = `${width}:${height}`
+    const key = `${width}:${height}:${this.options.mode}`
     if (this.staticLayerKey === key) {
       return
     }
@@ -333,18 +389,25 @@ export class Waveform {
   }
 
   private drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    if (this.options.mode === 'stereo') {
+      this.drawStereoGrid(ctx, width, height)
+      return
+    }
+
+    this.drawMonoGrid(ctx, width, height)
+  }
+
+  private drawMonoGrid(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     const centerY = height / 2
 
-    // Center line (zero crossing)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'
+    ctx.strokeStyle = this.options.gridMajorColor
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, centerY)
     ctx.lineTo(width, centerY)
     ctx.stroke()
 
-    // ±0.5 guide lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)'
+    ctx.strokeStyle = this.options.gridMinorColor
     const quarterY = centerY * 0.5
     ctx.beginPath()
     ctx.moveTo(0, quarterY)
@@ -352,6 +415,124 @@ export class Waveform {
     ctx.moveTo(0, height - quarterY)
     ctx.lineTo(width, height - quarterY)
     ctx.stroke()
+  }
+
+  private drawStereoGrid(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const laneHeight = height / 2
+
+    ctx.strokeStyle = this.options.gridMajorColor
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(0, laneHeight * 0.5)
+    ctx.lineTo(width, laneHeight * 0.5)
+    ctx.moveTo(0, laneHeight)
+    ctx.lineTo(width, laneHeight)
+    ctx.moveTo(0, laneHeight * 1.5)
+    ctx.lineTo(width, laneHeight * 1.5)
+    ctx.stroke()
+
+    ctx.strokeStyle = this.options.gridMinorColor
+    ctx.beginPath()
+    ctx.moveTo(0, laneHeight * 0.25)
+    ctx.lineTo(width, laneHeight * 0.25)
+    ctx.moveTo(0, laneHeight * 0.75)
+    ctx.lineTo(width, laneHeight * 0.75)
+    ctx.moveTo(0, laneHeight * 1.25)
+    ctx.lineTo(width, laneHeight * 1.25)
+    ctx.moveTo(0, laneHeight * 1.75)
+    ctx.lineTo(width, laneHeight * 1.75)
+    ctx.stroke()
+  }
+
+  private drainPendingSamples(): void {
+    if (this.options.mode === 'stereo') {
+      this.dataSource.getPendingWaveformStereoSamples()
+      return
+    }
+
+    this.dataSource.getPendingWaveformSamples()
+  }
+
+  private processMonoChunk(chunk: Float32Array, width: number, height: number): void {
+    let lowBand: Float32Array | null = null
+    let midBand: Float32Array | null = null
+    let highBand: Float32Array | null = null
+    if (this.options.multiband) {
+      const bands = this.splitter.split(chunk, chunk)
+      lowBand = bands.low.left
+      midBand = bands.mid.left
+      highBand = bands.high.left
+    }
+
+    for (let i = 0; i < chunk.length; i++) {
+      this.leftColumnAccumulator[this.columnAccumulatorPos] = chunk[i]
+      if (lowBand && midBand && highBand) {
+        this.leftBandLowAcc[this.columnAccumulatorPos] = lowBand[i]
+        this.leftBandMidAcc[this.columnAccumulatorPos] = midBand[i]
+        this.leftBandHighAcc[this.columnAccumulatorPos] = highBand[i]
+      }
+      this.columnAccumulatorPos += 1
+
+      if (this.columnAccumulatorPos >= this.samplesPerColumn) {
+        const { min, max } = this.computeMinMax(this.leftColumnAccumulator)
+        const color = this.resolveColumnColor(this.leftBandLowAcc, this.leftBandMidAcc, this.leftBandHighAcc)
+        this.shiftWaterfall()
+        this.paintColumn(min, max, width, 0, height, color)
+        this.columnAccumulatorPos = 0
+      }
+    }
+  }
+
+  private processStereoChunk(chunk: WaveformStereoChunk, width: number, height: number): void {
+    const length = Math.min(chunk.left.length, chunk.right.length)
+    if (length === 0) {
+      return
+    }
+
+    const leftSamples = chunk.left.length === length ? chunk.left : chunk.left.subarray(0, length)
+    const rightSamples = chunk.right.length === length ? chunk.right : chunk.right.subarray(0, length)
+
+    let lowLeft: Float32Array | null = null
+    let midLeft: Float32Array | null = null
+    let highLeft: Float32Array | null = null
+    let lowRight: Float32Array | null = null
+    let midRight: Float32Array | null = null
+    let highRight: Float32Array | null = null
+    if (this.options.multiband) {
+      const bands = this.splitter.split(leftSamples, rightSamples)
+      lowLeft = bands.low.left
+      midLeft = bands.mid.left
+      highLeft = bands.high.left
+      lowRight = bands.low.right
+      midRight = bands.mid.right
+      highRight = bands.high.right
+    }
+
+    const laneHeight = height / 2
+    for (let i = 0; i < length; i++) {
+      this.leftColumnAccumulator[this.columnAccumulatorPos] = leftSamples[i]
+      this.rightColumnAccumulator[this.columnAccumulatorPos] = rightSamples[i]
+      if (lowLeft && midLeft && highLeft && lowRight && midRight && highRight) {
+        this.leftBandLowAcc[this.columnAccumulatorPos] = lowLeft[i]
+        this.leftBandMidAcc[this.columnAccumulatorPos] = midLeft[i]
+        this.leftBandHighAcc[this.columnAccumulatorPos] = highLeft[i]
+        this.rightBandLowAcc[this.columnAccumulatorPos] = lowRight[i]
+        this.rightBandMidAcc[this.columnAccumulatorPos] = midRight[i]
+        this.rightBandHighAcc[this.columnAccumulatorPos] = highRight[i]
+      }
+      this.columnAccumulatorPos += 1
+
+      if (this.columnAccumulatorPos >= this.samplesPerColumn) {
+        const leftMinMax = this.computeMinMax(this.leftColumnAccumulator)
+        const rightMinMax = this.computeMinMax(this.rightColumnAccumulator)
+        const leftColor = this.resolveColumnColor(this.leftBandLowAcc, this.leftBandMidAcc, this.leftBandHighAcc)
+        const rightColor = this.resolveColumnColor(this.rightBandLowAcc, this.rightBandMidAcc, this.rightBandHighAcc)
+        this.shiftWaterfall()
+        this.paintColumn(leftMinMax.min, leftMinMax.max, width, 0, laneHeight, leftColor)
+        this.paintColumn(rightMinMax.min, rightMinMax.max, width, laneHeight, laneHeight, rightColor)
+        this.columnAccumulatorPos = 0
+      }
+    }
   }
 
   private drawFrame = (): void => {
@@ -364,7 +545,6 @@ export class Waveform {
 
     this.ctx.imageSmoothingEnabled = false
 
-    // Handle resize: preserve existing content anchored to right edge
     if (this.waterfallCanvas.width !== width || this.waterfallCanvas.height !== height) {
       const previousCanvas = document.createElement('canvas')
       previousCanvas.width = this.waterfallCanvas.width
@@ -385,7 +565,7 @@ export class Waveform {
         this.waterfallCtx.drawImage(
           previousCanvas,
           srcX, 0, srcW, previousCanvas.height,
-          dstX, 0, srcW, height
+          dstX, 0, srcW, height,
         )
       }
 
@@ -393,52 +573,27 @@ export class Waveform {
       this.staticLayerKey = ''
     }
 
-    // Handle sample rate changes
     const sampleRate = this.dataSource.getSampleRate()
     if (Math.abs(sampleRate - this.lastSampleRate) > 100) {
       this.recomputeSamplesPerColumn()
     }
 
     if (!this.dataSource.isPlaying()) {
-      this.dataSource.getPendingWaveformSamples() // drain
-      // Freeze display — show last waveform
+      this.drainPendingSamples()
       this.renderStaticLayer(width, height)
       this.ctx.drawImage(this.waterfallCanvas, 0, 0)
       return
     }
 
-    const pending = this.dataSource.getPendingWaveformSamples()
-    const samplesPerCol = this.samplesPerColumn
-    const multiband = this.options.multiband
-
-    if (samplesPerCol > 0) {
+    if (this.options.mode === 'stereo') {
+      const pending = this.dataSource.getPendingWaveformStereoSamples()
       for (const chunk of pending) {
-        // When multiband is enabled, split each chunk through the crossover filters
-        let lowBand: Float32Array | null = null
-        let midBand: Float32Array | null = null
-        let highBand: Float32Array | null = null
-        if (multiband) {
-          const bands = this.splitter.split(chunk, chunk)
-          lowBand = bands.low.left
-          midBand = bands.mid.left
-          highBand = bands.high.left
-        }
-
-        for (let i = 0; i < chunk.length; i++) {
-          this.columnAccumulator[this.columnAccumulatorPos] = chunk[i]
-          if (multiband && lowBand && midBand && highBand) {
-            this.bandLowAcc[this.columnAccumulatorPos] = lowBand[i]
-            this.bandMidAcc[this.columnAccumulatorPos] = midBand[i]
-            this.bandHighAcc[this.columnAccumulatorPos] = highBand[i]
-          }
-          this.columnAccumulatorPos++
-
-          if (this.columnAccumulatorPos >= samplesPerCol) {
-            const { min, max } = this.computeMinMax()
-            this.shiftAndPaintColumn(min, max, width, height)
-            this.columnAccumulatorPos = 0
-          }
-        }
+        this.processStereoChunk(chunk, width, height)
+      }
+    } else {
+      const pending = this.dataSource.getPendingWaveformSamples()
+      for (const chunk of pending) {
+        this.processMonoChunk(chunk, width, height)
       }
     }
 
