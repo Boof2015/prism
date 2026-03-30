@@ -65,6 +65,18 @@ export const oscilloscope = {
     return nativeModule?.oscilloscope.getWritePos() ?? 0
   },
 
+  fillSamples: (startPos: number, output: Float32Array): number => {
+    if (!nativeModule) return 0
+    // `visualizerAPI` crosses Electron's context bridge, so mutating a renderer-owned
+    // typed array in preload/native does not write back into the caller's buffer.
+    const samples = nativeModule.oscilloscope.getSamples(startPos, output.length)
+    const count = Math.min(output.length, samples.length)
+    if (count > 0) {
+      output.set(samples.subarray(0, count), 0)
+    }
+    return count
+  },
+
   // Get samples from circular buffer for rendering
   getSamples: (startPos: number, count: number): Float32Array | null => {
     if (!nativeModule) return null
@@ -97,6 +109,16 @@ export const spectrum = {
     nativeModule?.spectrum.pushSamples(audioData)
   },
 
+  fillMagnitudes: (output: Float32Array): number => {
+    if (!nativeModule) return 0
+    const magnitudes = nativeModule.spectrum.getMagnitudes()
+    const count = Math.min(output.length, magnitudes.length)
+    if (count > 0) {
+      output.set(magnitudes.subarray(0, count), 0)
+    }
+    return count
+  },
+
   getMagnitudes: (): Float32Array | null => {
     if (!nativeModule) return null
     return nativeModule.spectrum.getMagnitudes()
@@ -123,6 +145,17 @@ export const vectorscope = {
 
   pushSamples: (leftChannel: Float32Array, rightChannel: Float32Array): void => {
     nativeModule?.vectorscope.pushSamples(leftChannel, rightChannel)
+  },
+
+  fillPoints: (xOut: Float32Array, yOut: Float32Array): number => {
+    if (!nativeModule) return 0
+    const result = nativeModule.vectorscope.getPoints(Math.min(xOut.length, yOut.length))
+    const count = Math.min(xOut.length, yOut.length, result.count, result.x.length, result.y.length)
+    if (count > 0) {
+      xOut.set(result.x.subarray(0, count), 0)
+      yOut.set(result.y.subarray(0, count), 0)
+    }
+    return count
   },
 
   getPoints: (maxPoints: number): VectorscopePointsResult | null => {

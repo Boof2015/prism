@@ -98,6 +98,19 @@ Napi::Value OscilloscopeGetSamples(const Napi::CallbackInfo& info) {
     return output;
 }
 
+Napi::Value OscilloscopeFillSamples(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected startPos (float) and output Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    float startPos = info[0].As<Napi::Number>().FloatValue();
+    Napi::Float32Array output = info[1].As<Napi::Float32Array>();
+    const size_t count = output.ElementLength();
+    oscilloscope.getSamplesInterpolated(output.Data(), startPos, count);
+    return Napi::Number::New(env, static_cast<double>(count));
+}
+
 Napi::Value OscilloscopeReset(const Napi::CallbackInfo& info) {
     oscilloscope.reset();
     return info.Env().Undefined();
@@ -156,6 +169,22 @@ Napi::Value SpectrumGetMagnitudes(const Napi::CallbackInfo& info) {
     Napi::Float32Array result = Napi::Float32Array::New(env, magnitudes.size());
     memcpy(result.Data(), magnitudes.data(), magnitudes.size() * sizeof(float));
     return result;
+}
+
+Napi::Value SpectrumFillMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected output Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array output = info[0].As<Napi::Float32Array>();
+    const auto& magnitudes = spectrum.getMagnitudes();
+    const size_t count = std::min(output.ElementLength(), magnitudes.size());
+    if (count > 0) {
+        memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
+    }
+    return Napi::Number::New(env, static_cast<double>(count));
 }
 
 Napi::Value SpectrumProcess(const Napi::CallbackInfo& info) {
@@ -236,6 +265,20 @@ Napi::Value VectorscopeGetPoints(const Napi::CallbackInfo& info) {
     return result;
 }
 
+Napi::Value VectorscopeFillPoints(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected output x/y Float32Arrays").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array xArray = info[0].As<Napi::Float32Array>();
+    Napi::Float32Array yArray = info[1].As<Napi::Float32Array>();
+    const size_t maxPoints = std::min(xArray.ElementLength(), yArray.ElementLength());
+    const size_t actual = vectorscope.getPoints(xArray.Data(), yArray.Data(), maxPoints);
+    return Napi::Number::New(env, static_cast<double>(actual));
+}
+
 Napi::Value VectorscopeSetBufferSize(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsNumber()) {
@@ -289,6 +332,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     oscExports.Set("pushSamples", Napi::Function::New(env, OscilloscopePushSamples));
     oscExports.Set("processContinuous", Napi::Function::New(env, OscilloscopeProcessContinuous));
     oscExports.Set("getWritePos", Napi::Function::New(env, OscilloscopeGetWritePos));
+    oscExports.Set("fillSamples", Napi::Function::New(env, OscilloscopeFillSamples));
     oscExports.Set("getSamples", Napi::Function::New(env, OscilloscopeGetSamples));
     oscExports.Set("reset", Napi::Function::New(env, OscilloscopeReset));
     exports.Set("oscilloscope", oscExports);
@@ -300,6 +344,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("setSampleRate", Napi::Function::New(env, SpectrumSetSampleRate));
     specExports.Set("setSmoothing", Napi::Function::New(env, SpectrumSetSmoothing));
     specExports.Set("pushSamples", Napi::Function::New(env, SpectrumPushSamples));
+    specExports.Set("fillMagnitudes", Napi::Function::New(env, SpectrumFillMagnitudes));
     specExports.Set("getMagnitudes", Napi::Function::New(env, SpectrumGetMagnitudes));
     specExports.Set("process", Napi::Function::New(env, SpectrumProcess));
     specExports.Set("binToFrequency", Napi::Function::New(env, SpectrumBinToFrequency));
@@ -310,6 +355,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     Napi::Object vecExports = Napi::Object::New(env);
     vecExports.Set("setSampleRate", Napi::Function::New(env, VectorscopeSetSampleRate));
     vecExports.Set("pushSamples", Napi::Function::New(env, VectorscopePushSamples));
+    vecExports.Set("fillPoints", Napi::Function::New(env, VectorscopeFillPoints));
     vecExports.Set("getPoints", Napi::Function::New(env, VectorscopeGetPoints));
     vecExports.Set("setBufferSize", Napi::Function::New(env, VectorscopeSetBufferSize));
     vecExports.Set("getBufferSize", Napi::Function::New(env, VectorscopeGetBufferSize));

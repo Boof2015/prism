@@ -46,6 +46,12 @@ const ABSOLUTE_GATE_LUFS = -70
 const RELATIVE_GATE_OFFSET = -10
 const TARGET_LUFS = -14
 const SMOOTHING = 0.7
+const INTEGRATED_HISTOGRAM_MIN_LUFS = ABSOLUTE_GATE_LUFS
+const INTEGRATED_HISTOGRAM_MAX_LUFS = 10
+const INTEGRATED_HISTOGRAM_BIN_WIDTH = 0.1
+const INTEGRATED_HISTOGRAM_BIN_COUNT = Math.round(
+  (INTEGRATED_HISTOGRAM_MAX_LUFS - INTEGRATED_HISTOGRAM_MIN_LUFS) / INTEGRATED_HISTOGRAM_BIN_WIDTH
+) + 1
 
 // ---- K-weighting filter coefficients (ITU-R BS.1770) ----
 
@@ -107,6 +113,15 @@ function applyBiquad(coeffs: BiquadCoeffs, state: BiquadState, input: number): n
   return output
 }
 
+function histogramIndexFromLufs(lufs: number): number {
+  const normalized = (lufs - INTEGRATED_HISTOGRAM_MIN_LUFS) / INTEGRATED_HISTOGRAM_BIN_WIDTH
+  return Math.max(0, Math.min(INTEGRATED_HISTOGRAM_BIN_COUNT - 1, Math.round(normalized)))
+}
+
+function histogramLufsAtIndex(index: number): number {
+  return INTEGRATED_HISTOGRAM_MIN_LUFS + (index * INTEGRATED_HISTOGRAM_BIN_WIDTH)
+}
+
 // ---- LUFS Meter class ----
 
 export class LUFSMeter {
@@ -135,7 +150,8 @@ export class LUFSMeter {
   private integratedBlockSumR = 0
   private integratedBlockSamples = 0
   private integratedHopCounter = 0
-  private integratedBlockLoudness: number[] = []  // LUFS per block
+  private integratedHistogramCounts = new Uint32Array(INTEGRATED_HISTOGRAM_BIN_COUNT)
+  private integratedHistogramPowerSums = new Float64Array(INTEGRATED_HISTOGRAM_BIN_COUNT)
 
   // Smoothed display values
   private momentaryLUFS = METER_MIN_LUFS
@@ -193,7 +209,8 @@ export class LUFSMeter {
     this.integratedBlockSumR = 0
     this.integratedBlockSamples = 0
     this.integratedHopCounter = 0
-    this.integratedBlockLoudness = []
+    this.integratedHistogramCounts.fill(0)
+    this.integratedHistogramPowerSums.fill(0)
     this.preFilterL = createBiquadState()
     this.preFilterR = createBiquadState()
     this.rlbFilterL = createBiquadState()
@@ -281,8 +298,13 @@ export class LUFSMeter {
           if (this.integratedHopCounter >= hopSamples && this.integratedBlockSamples >= blockSamples) {
             const meanSqL = this.integratedBlockSumL / this.integratedBlockSamples
             const meanSqR = this.integratedBlockSumR / this.integratedBlockSamples
-            const blockLUFS = -0.691 + 10 * Math.log10(Math.max(meanSqL + meanSqR, 1e-10))
-            this.integratedBlockLoudness.push(blockLUFS)
+            const blockPower = Math.max(meanSqL + meanSqR, 1e-10)
+            const blockLUFS = -0.691 + 10 * Math.log10(blockPower)
+            if (blockLUFS > ABSOLUTE_GATE_LUFS) {
+              const histogramIndex = histogramIndexFromLufs(blockLUFS)
+              this.integratedHistogramCounts[histogramIndex] += 1
+              this.integratedHistogramPowerSums[histogramIndex] += blockPower
+            }
 
             // Slide the block window: remove oldest hop worth of samples
             // Approximate by keeping a running sum and subtracting the hop fraction
@@ -336,27 +358,41 @@ export class LUFSMeter {
   }
 
   private computeGatedIntegratedLoudness(): number {
-    const blocks = this.integratedBlockLoudness
-    if (blocks.length === 0) return METER_MIN_LUFS
+    let absoluteCount = 0
+    let absolutePowerSum = 0
+    for (let index = 0; index < this.integratedHistogramCounts.length; index += 1) {
+      const count = this.integratedHistogramCounts[index]
+      if (count === 0) {
+        continue
+      }
+      absoluteCount += count
+      absolutePowerSum += this.integratedHistogramPowerSums[index]
+    }
+    if (absoluteCount === 0 || absolutePowerSum <= 0) {
+      return METER_MIN_LUFS
+    }
 
-    // Absolute gate: remove blocks below -70 LUFS
-    const afterAbsolute = blocks.filter(l => l > ABSOLUTE_GATE_LUFS)
-    if (afterAbsolute.length === 0) return METER_MIN_LUFS
-
-    // Compute mean of blocks passing absolute gate
-    let sum = 0
-    for (const l of afterAbsolute) sum += Math.pow(10, l / 10)
-    const ungatedMean = 10 * Math.log10(sum / afterAbsolute.length)
-
-    // Relative gate: remove blocks below (ungatedMean - 10) LUFS
+    const ungatedMean = -0.691 + 10 * Math.log10(absolutePowerSum / absoluteCount)
     const relativeThreshold = ungatedMean + RELATIVE_GATE_OFFSET
-    const afterRelative = afterAbsolute.filter(l => l > relativeThreshold)
-    if (afterRelative.length === 0) return METER_MIN_LUFS
 
-    // Final integrated loudness
-    let finalSum = 0
-    for (const l of afterRelative) finalSum += Math.pow(10, l / 10)
-    return Math.max(METER_MIN_LUFS, 10 * Math.log10(finalSum / afterRelative.length))
+    let relativeCount = 0
+    let relativePowerSum = 0
+    for (let index = 0; index < this.integratedHistogramCounts.length; index += 1) {
+      const count = this.integratedHistogramCounts[index]
+      if (count === 0) {
+        continue
+      }
+      if (histogramLufsAtIndex(index) <= relativeThreshold) {
+        continue
+      }
+      relativeCount += count
+      relativePowerSum += this.integratedHistogramPowerSums[index]
+    }
+    if (relativeCount === 0 || relativePowerSum <= 0) {
+      return METER_MIN_LUFS
+    }
+
+    return Math.max(METER_MIN_LUFS, -0.691 + 10 * Math.log10(relativePowerSum / relativeCount))
   }
 
   private drawFrame = (): void => {

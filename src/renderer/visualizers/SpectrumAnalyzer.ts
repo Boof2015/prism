@@ -16,12 +16,6 @@ type SpectrumStereoChunk = {
   right: Float32Array
 }
 
-type SpectrumPoint = {
-  x: number
-  y: number
-  heatmapIntensity: number
-}
-
 export interface SpectrumAnalyzerDataSource extends VisualizerSessionSource {
   getPendingSpectrumSamples: () => Float32Array[]
   getPendingSpectrumStereoSamples: () => SpectrumStereoChunk[]
@@ -249,6 +243,12 @@ export class SpectrumAnalyzer {
   private jsFftIm = new Float32Array(defaultOptions.fftSize)
   private jsBufferedSamples = 0
   private jsHasSpectrumData = false
+  private nativeMagnitudeBuffer = new Float32Array(0)
+  private primaryPointX = new Float32Array(0)
+  private primaryPointY = new Float32Array(0)
+  private primaryPointHeatmap = new Float32Array(0)
+  private secondaryPointX = new Float32Array(0)
+  private secondaryPointY = new Float32Array(0)
 
   constructor(canvas: HTMLCanvasElement, options: SpectrumAnalyzerOptions = {}) {
     this.canvas = canvas
@@ -476,23 +476,30 @@ export class SpectrumAnalyzer {
     return db + tiltDbPerOctave * octaves
   }
 
-  private mergePendingSpectrumChunks(pendingSpectrum: Float32Array[]): Float32Array | null {
-    if (pendingSpectrum.length === 0) return null
-    if (pendingSpectrum.length === 1) return pendingSpectrum[0]
-
-    let totalLength = 0
-    for (const chunk of pendingSpectrum) {
-      totalLength += chunk.length
+  private ensureNativeMagnitudeBuffer(): Float32Array {
+    const length = Math.max(1, Math.floor(this.options.fftSize / 2))
+    if (this.nativeMagnitudeBuffer.length !== length) {
+      this.nativeMagnitudeBuffer = new Float32Array(length)
     }
+    return this.nativeMagnitudeBuffer
+  }
 
-    const monoData = new Float32Array(totalLength)
-    let offset = 0
-    for (const chunk of pendingSpectrum) {
-      monoData.set(chunk, offset)
-      offset += chunk.length
+  private ensurePointBuffers(pointCount: number): void {
+    if (this.primaryPointX.length !== pointCount) {
+      this.primaryPointX = new Float32Array(pointCount)
+      this.primaryPointY = new Float32Array(pointCount)
+      this.primaryPointHeatmap = new Float32Array(pointCount)
+      this.secondaryPointX = new Float32Array(pointCount)
+      this.secondaryPointY = new Float32Array(pointCount)
     }
+  }
 
-    return monoData
+  private pushPendingSpectrumChunks(pendingSpectrum: Float32Array[]): void {
+    for (const chunk of pendingSpectrum) {
+      if (chunk.length > 0) {
+        nativeSpectrum.pushSamples(chunk)
+      }
+    }
   }
 
   private clearPendingSpectrumQueues(): void {
@@ -578,17 +585,23 @@ export class SpectrumAnalyzer {
     this.jsHasSpectrumData = true
   }
 
-  private buildSpectrumPoints(
+  private fillSpectrumPoints(
     frequencyData: Float32Array,
+    dataLength: number,
     width: number,
     height: number,
     minFrequency: number,
     maxFrequency: number,
     nyquist: number,
-  ): SpectrumPoint[] {
-    const bufferLength = frequencyData.length
+    xOut: Float32Array,
+    yOut: Float32Array,
+    heatmapIntensityOut: Float32Array | null,
+  ): number {
+    const bufferLength = Math.min(dataLength, frequencyData.length)
+    if (bufferLength <= 0) {
+      return 0
+    }
     const binWidth = nyquist / bufferLength
-    const points: SpectrumPoint[] = []
     const numPoints = Math.max(2, Math.floor(width))
 
     for (let index = 0; index < numPoints; index += 1) {
@@ -612,28 +625,28 @@ export class SpectrumAnalyzer {
       const normalized = (db - this.options.minDecibels) / (this.options.maxDecibels - this.options.minDecibels)
       const heatmapNormalized = (heatmapDb - this.options.minDecibels) / (this.options.maxDecibels - this.options.minDecibels)
 
-      points.push({
-        x,
-        y: height - Math.max(0, Math.min(1, normalized)) * height,
-        heatmapIntensity: Math.pow(Math.max(0, Math.min(1, heatmapNormalized)), HEATMAP_GAMMA),
-      })
+      xOut[index] = x
+      yOut[index] = height - Math.max(0, Math.min(1, normalized)) * height
+      if (heatmapIntensityOut) {
+        heatmapIntensityOut[index] = Math.pow(Math.max(0, Math.min(1, heatmapNormalized)), HEATMAP_GAMMA)
+      }
     }
 
-    return points
+    return numPoints
   }
 
-  private renderHeatmap(points: SpectrumPoint[], width: number, height: number): void {
-    for (let index = 0; index < points.length; index += 1) {
-      const x = Math.floor(points[index].x)
-      const y = points[index].y
-      const nextX = index < points.length - 1 ? Math.floor(points[index + 1].x) : width
+  private renderHeatmap(xPoints: Float32Array, yPoints: Float32Array, heatmapIntensity: Float32Array, pointCount: number, width: number, height: number): void {
+    for (let index = 0; index < pointCount; index += 1) {
+      const x = Math.floor(xPoints[index])
+      const y = yPoints[index]
+      const nextX = index < pointCount - 1 ? Math.floor(xPoints[index + 1]) : width
       const columnWidth = Math.max(1, nextX - x)
       const fillHeight = height - y
       if (fillHeight <= 0) {
         continue
       }
 
-      const lutIndex = Math.round(points[index].heatmapIntensity * 255)
+      const lutIndex = Math.round(heatmapIntensity[index] * 255)
       const r = this.heatLut[lutIndex * 3]
       const g = this.heatLut[lutIndex * 3 + 1]
       const b = this.heatLut[lutIndex * 3 + 2]
@@ -643,12 +656,12 @@ export class SpectrumAnalyzer {
     }
   }
 
-  private renderGradientFill(points: SpectrumPoint[], width: number, height: number): void {
+  private renderGradientFill(xPoints: Float32Array, yPoints: Float32Array, pointCount: number, width: number, height: number): void {
     this.ctx.beginPath()
-    this.ctx.moveTo(points[0].x, points[0].y)
+    this.ctx.moveTo(xPoints[0], yPoints[0])
 
-    for (let index = 1; index < points.length; index += 1) {
-      this.ctx.lineTo(points[index].x, points[index].y)
+    for (let index = 1; index < pointCount; index += 1) {
+      this.ctx.lineTo(xPoints[index], yPoints[index])
     }
 
     this.ctx.lineTo(width, height)
@@ -665,15 +678,15 @@ export class SpectrumAnalyzer {
     this.ctx.fill()
   }
 
-  private renderStroke(points: SpectrumPoint[], color: string, lineWidth: number): void {
-    if (points.length === 0) {
+  private renderStroke(xPoints: Float32Array, yPoints: Float32Array, pointCount: number, color: string, lineWidth: number): void {
+    if (pointCount === 0) {
       return
     }
 
     this.ctx.beginPath()
-    this.ctx.moveTo(points[0].x, points[0].y)
-    for (let index = 1; index < points.length; index += 1) {
-      this.ctx.lineTo(points[index].x, points[index].y)
+    this.ctx.moveTo(xPoints[0], yPoints[0])
+    for (let index = 1; index < pointCount; index += 1) {
+      this.ctx.lineTo(xPoints[index], yPoints[index])
     }
 
     this.ctx.lineWidth = lineWidth
@@ -710,11 +723,15 @@ export class SpectrumAnalyzer {
 
     let primaryData: Float32Array | null = null
     let secondaryData: Float32Array | null = null
+    let primaryDataLength = 0
+    let secondaryDataLength = 0
 
     if (options.showSideLine) {
       this.processJsSpectrumChunks(this.dataSource.getPendingSpectrumStereoSamples())
       primaryData = this.jsHasSpectrumData ? this.jsMidMagnitudes : null
       secondaryData = this.jsHasSpectrumData ? this.jsSideMagnitudes : null
+      primaryDataLength = primaryData?.length ?? 0
+      secondaryDataLength = secondaryData?.length ?? 0
     } else {
       if (!isNativeAvailable()) {
         console.error('SpectrumAnalyzer: Native DSP required')
@@ -725,39 +742,62 @@ export class SpectrumAnalyzer {
       const nativeTransport = this.dataSource.getNativeVisualizerTransport?.() ?? null
       const pendingSpectrum = this.dataSource.getPendingSpectrumSamples()
       if (!nativeTransport) {
-        const monoData = this.mergePendingSpectrumChunks(pendingSpectrum)
-        if (monoData) {
-          nativeSpectrum.pushSamples(monoData)
-        }
+        this.pushPendingSpectrumChunks(pendingSpectrum)
       }
 
-      primaryData = nativeTransport
-        ? nativeTransport.getLatestSpectrumMagnitudes()
-        : nativeSpectrum.getMagnitudes()
+      const nativeMagnitudes = this.ensureNativeMagnitudeBuffer()
+      primaryData = nativeMagnitudes
+      primaryDataLength = nativeTransport
+        ? nativeTransport.fillLatestSpectrumMagnitudes(nativeMagnitudes)
+        : nativeSpectrum.fillMagnitudes(nativeMagnitudes)
     }
 
-    if (!primaryData || primaryData.length === 0) {
+    if (!primaryData || primaryDataLength === 0) {
       this.renderStaticLayer(minFrequency, maxFrequency)
       return
     }
 
-    const primaryPoints = this.buildSpectrumPoints(primaryData, width, height, minFrequency, maxFrequency, nyquist)
-    const secondaryPoints = secondaryData && secondaryData.length > 0
-      ? this.buildSpectrumPoints(secondaryData, width, height, minFrequency, maxFrequency, nyquist)
-      : null
+    const pointCount = Math.max(2, Math.floor(width))
+    this.ensurePointBuffers(pointCount)
+    const primaryPointCount = this.fillSpectrumPoints(
+      primaryData,
+      primaryDataLength,
+      width,
+      height,
+      minFrequency,
+      maxFrequency,
+      nyquist,
+      this.primaryPointX,
+      this.primaryPointY,
+      this.primaryPointHeatmap,
+    )
+    const secondaryPointCount = secondaryData && secondaryDataLength > 0
+      ? this.fillSpectrumPoints(
+        secondaryData,
+        secondaryDataLength,
+        width,
+        height,
+        minFrequency,
+        maxFrequency,
+        nyquist,
+        this.secondaryPointX,
+        this.secondaryPointY,
+        null,
+      )
+      : 0
 
     this.renderStaticLayer(minFrequency, maxFrequency)
 
-    if (options.heatmapFill && primaryPoints.length > 0) {
-      this.renderHeatmap(primaryPoints, width, height)
-    } else if (options.fillGradient && primaryPoints.length > 0) {
-      this.renderGradientFill(primaryPoints, width, height)
+    if (options.heatmapFill && primaryPointCount > 0) {
+      this.renderHeatmap(this.primaryPointX, this.primaryPointY, this.primaryPointHeatmap, primaryPointCount, width, height)
+    } else if (options.fillGradient && primaryPointCount > 0) {
+      this.renderGradientFill(this.primaryPointX, this.primaryPointY, primaryPointCount, width, height)
     }
 
-    this.renderStroke(primaryPoints, options.lineColor, options.lineWidth * dpr)
-    if (secondaryPoints && secondaryPoints.length > 0) {
+    this.renderStroke(this.primaryPointX, this.primaryPointY, primaryPointCount, options.lineColor, options.lineWidth * dpr)
+    if (secondaryPointCount > 0) {
       const secondaryLineWidth = Math.max(dpr, options.lineWidth * SIDE_LINE_WIDTH_RATIO * dpr)
-      this.renderStroke(secondaryPoints, options.secondaryLineColor, secondaryLineWidth)
+      this.renderStroke(this.secondaryPointX, this.secondaryPointY, secondaryPointCount, options.secondaryLineColor, secondaryLineWidth)
     }
   }
 

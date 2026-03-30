@@ -11,7 +11,7 @@ import {
   clampWaveformScrollSpeed,
   type WaveformMode,
 } from '../../types/waveform'
-import { MultibandSplitter } from './multibandSplitter'
+import { MultibandSplitter, createMultibandChunk, type MultibandChunk } from './multibandSplitter'
 
 export interface WaveformStereoChunk {
   left: Float32Array
@@ -97,6 +97,7 @@ export class Waveform {
   private rightBandLowAcc: Float32Array = new Float32Array(0)
   private rightBandMidAcc: Float32Array = new Float32Array(0)
   private rightBandHighAcc: Float32Array = new Float32Array(0)
+  private multibandScratch: MultibandChunk = createMultibandChunk(0)
   private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: WaveformOptions = {}) {
@@ -458,7 +459,8 @@ export class Waveform {
     let midBand: Float32Array | null = null
     let highBand: Float32Array | null = null
     if (this.options.multiband) {
-      const bands = this.splitter.split(chunk, chunk)
+      const bands = this.ensureMultibandScratch(chunk.length)
+      this.splitter.splitInto(chunk, chunk, bands)
       lowBand = bands.low.left
       midBand = bands.mid.left
       highBand = bands.high.left
@@ -499,7 +501,8 @@ export class Waveform {
     let midRight: Float32Array | null = null
     let highRight: Float32Array | null = null
     if (this.options.multiband) {
-      const bands = this.splitter.split(leftSamples, rightSamples)
+      const bands = this.ensureMultibandScratch(length)
+      this.splitter.splitInto(leftSamples, rightSamples, bands)
       lowLeft = bands.low.left
       midLeft = bands.mid.left
       highLeft = bands.high.left
@@ -533,6 +536,13 @@ export class Waveform {
         this.columnAccumulatorPos = 0
       }
     }
+  }
+
+  private ensureMultibandScratch(length: number): MultibandChunk {
+    if (this.multibandScratch.low.left.length < length) {
+      this.multibandScratch = createMultibandChunk(length)
+    }
+    return this.multibandScratch
   }
 
   private drawFrame = (): void => {

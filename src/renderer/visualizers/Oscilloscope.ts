@@ -83,6 +83,7 @@ export class Oscilloscope {
   private staticLayerCanvas: HTMLCanvasElement
   private staticLayerCtx: CanvasRenderingContext2D
   private staticLayerKey = ''
+  private renderBuffer = new Float32Array(0)
   private static readonly WARMUP_SAMPLES = 4096
 
   constructor(canvas: HTMLCanvasElement, options: OscilloscopeOptions = {}) {
@@ -176,6 +177,13 @@ export class Oscilloscope {
     this.invalidate()
   }
 
+  private ensureRenderBuffer(size: number): Float32Array {
+    if (this.renderBuffer.length !== size) {
+      this.renderBuffer = new Float32Array(size)
+    }
+    return this.renderBuffer
+  }
+
   private drawFrame = (): void => {
     const { canvas, ctx, options } = this
     const width = canvas.width
@@ -224,34 +232,25 @@ export class Oscilloscope {
       while (triggerIndex < 0) triggerIndex += OSCILLOSCOPE_BUFFER_SIZE
     }
 
-    const renderData = nativeOscilloscope.getSamples(Math.floor(triggerIndex), samplesToShow)
-    if (!renderData || renderData.length === 0) {
+    const renderData = this.ensureRenderBuffer(samplesToShow)
+    const sampleCount = nativeOscilloscope.fillSamples(triggerIndex, renderData)
+    if (sampleCount < 2) {
       return
     }
 
-    const sliceWidth = width / samplesToShow
+    const sliceWidth = width / sampleCount
     const centerY = height / 2
     const visualGain = 1.8
-    const points: Array<{ x: number; y: number }> = []
-
-    for (let i = 0; i < samplesToShow && i < renderData.length; i++) {
-      const sample = renderData[i]
-      const y = ((1 - sample * visualGain) / 2) * height
-      const x = i * sliceWidth
-      points.push({ x, y })
-    }
-
-    if (points.length < 2) {
-      return
-    }
 
     if (options.underfillEnabled) {
       ctx.beginPath()
-      ctx.moveTo(points[0].x, centerY)
-      for (const point of points) {
-        ctx.lineTo(point.x, point.y)
+      ctx.moveTo(0, centerY)
+      for (let i = 0; i < sampleCount; i += 1) {
+        const x = i * sliceWidth
+        const y = ((1 - renderData[i] * visualGain) / 2) * height
+        ctx.lineTo(x, y)
       }
-      ctx.lineTo(points[points.length - 1].x, centerY)
+      ctx.lineTo((sampleCount - 1) * sliceWidth, centerY)
       ctx.closePath()
       const peakAlpha = 0.28
       const shoulderAlpha = peakAlpha * 0.74
@@ -273,9 +272,11 @@ export class Oscilloscope {
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.beginPath()
-    ctx.moveTo(points[0].x, points[0].y)
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y)
+    ctx.moveTo(0, ((1 - renderData[0] * visualGain) / 2) * height)
+    for (let i = 1; i < sampleCount; i += 1) {
+      const x = i * sliceWidth
+      const y = ((1 - renderData[i] * visualGain) / 2) * height
+      ctx.lineTo(x, y)
     }
     ctx.stroke()
   }
