@@ -40,6 +40,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [astraBaseUrlInput, setAstraBaseUrlInput] = useState('')
   const [astraTokenInput, setAstraTokenInput] = useState('')
+  const [memoryLogPath, setMemoryLogPath] = useState('')
 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -94,6 +95,26 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     setAstraBaseUrlInput(astraState.config.baseUrl)
     setAstraTokenInput(astraState.config.token)
   }, [astraState.config.baseUrl, astraState.config.token])
+
+  useEffect(() => {
+    let disposed = false
+    void (async () => {
+      try {
+        const path = await window.electronAPI.getPerformanceMemoryLogPath()
+        if (!disposed) {
+          setMemoryLogPath(path)
+        }
+      } catch {
+        if (!disposed) {
+          setMemoryLogPath('')
+        }
+      }
+    })()
+
+    return () => {
+      disposed = true
+    }
+  }, [])
 
   useLayoutEffect(() => {
     if (!onHeightChange || !rootRef.current) return
@@ -440,6 +461,17 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 <div className="settings-status-pill bottom-bar__fps-pill" title="Docked visualizer render FPS">
                   <span>{roundedDockedRenderFps} FPS</span>
                 </div>
+
+                <button
+                  type="button"
+                  className="settings-chip"
+                  title={memoryLogPath || 'Reveal the latest memory trace CSV'}
+                  onClick={() => {
+                    void window.electronAPI.revealPerformanceMemoryLog()
+                  }}
+                >
+                  Log File
+                </button>
               </div>
 
               {memorySample ? (

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   isVisualizerFrameTarget,
+  type PerformanceMemoryLogRecord,
   type PerformanceMemorySnapshot,
   type VisualizerFrameTarget,
 } from '../../types/performance'
@@ -88,6 +89,17 @@ interface ChromiumPerformanceMemory {
 let memoryMonitorTimer: ReturnType<typeof setInterval> | null = null
 let memoryMonitorRefCount = 0
 let memoryMonitorInFlight = false
+let contextStoreAccessorsPromise: Promise<{
+  getAudioState: () => {
+    isCapturing: boolean
+    captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
+  }
+  getSettingsState: () => {
+    scopeOrder: string[]
+    hiddenScopes: Set<string>
+    scopePopouts: Record<string, { poppedOut?: boolean }>
+  }
+}> | null = null
 
 function isMainWindowContext(): boolean {
   if (typeof window === 'undefined') {
@@ -117,6 +129,34 @@ async function collectMemorySnapshot(): Promise<PerformanceMemorySnapshot | null
   }
 }
 
+async function getContextStoreAccessors(): Promise<{
+  getAudioState: () => {
+    isCapturing: boolean
+    captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
+  }
+  getSettingsState: () => {
+    scopeOrder: string[]
+    hiddenScopes: Set<string>
+    scopePopouts: Record<string, { poppedOut?: boolean }>
+  }
+} | null> {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  if (!contextStoreAccessorsPromise) {
+    contextStoreAccessorsPromise = Promise.all([
+      import('./audioStore'),
+      import('./settingsStore'),
+    ]).then(([audioStoreModule, settingsStoreModule]) => ({
+      getAudioState: () => audioStoreModule.useAudioStore.getState(),
+      getSettingsState: () => settingsStoreModule.useSettingsStore.getState(),
+    }))
+  }
+
+  return contextStoreAccessorsPromise
+}
+
 async function sampleMemory(): Promise<void> {
   if (memoryMonitorInFlight) {
     return
@@ -129,6 +169,8 @@ async function sampleMemory(): Promise<void> {
       return
     }
 
+    const contextStoreAccessors = await getContextStoreAccessors()
+    let logRecord: PerformanceMemoryLogRecord | null = null
     usePerformanceStore.setState((state) => {
       const baseline = state.memoryHistory[0] ?? snapshot
       const nextHistory = [...state.memoryHistory, snapshot]
@@ -138,14 +180,41 @@ async function sampleMemory(): Promise<void> {
 
       const baselineRendererMb = baseline.rendererPrivateMb ?? baseline.rendererMb
       const currentRendererMb = snapshot.rendererPrivateMb ?? snapshot.rendererMb
+      const rendererDeltaMb = Math.round((currentRendererMb - baselineRendererMb) * 10) / 10
+      const appDeltaMb = Math.round((snapshot.appMb - baseline.appMb) * 10) / 10
+      const settingsState = contextStoreAccessors?.getSettingsState()
+      const audioState = contextStoreAccessors?.getAudioState()
+      const visibleScopes = settingsState
+        ? settingsState.scopeOrder.filter((kind) => !settingsState.hiddenScopes.has(kind))
+        : []
+      const poppedOutScopes = settingsState
+        ? settingsState.scopeOrder.filter((kind) => settingsState.scopePopouts[kind]?.poppedOut)
+        : []
+
+      logRecord = {
+        ...snapshot,
+        elapsedSeconds: Math.round(((snapshot.capturedAt - baseline.capturedAt) / 100)) / 10,
+        rendererDeltaMb,
+        appDeltaMb,
+        frameTarget: state.frameTarget,
+        dockedRenderFps: state.dockedRenderFps,
+        isCapturing: audioState?.isCapturing ?? false,
+        captureStatus: audioState?.captureStatus ?? 'idle',
+        visibleScopes,
+        poppedOutScopes,
+      }
 
       return {
         memorySample: snapshot,
         memoryHistory: nextHistory,
-        rendererMemoryDeltaMb: Math.round((currentRendererMb - baselineRendererMb) * 10) / 10,
-        appMemoryDeltaMb: Math.round((snapshot.appMb - baseline.appMb) * 10) / 10,
+        rendererMemoryDeltaMb: rendererDeltaMb,
+        appMemoryDeltaMb: appDeltaMb,
       }
     })
+
+    if (logRecord && typeof window !== 'undefined' && typeof window.electronAPI?.appendPerformanceMemoryLog === 'function') {
+      void window.electronAPI.appendPerformanceMemoryLog(logRecord)
+    }
   } finally {
     memoryMonitorInFlight = false
   }

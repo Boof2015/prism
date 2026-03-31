@@ -14,6 +14,18 @@ export interface PerformanceMemorySnapshot {
   jsHeapLimitMb: number | null
 }
 
+export interface PerformanceMemoryLogRecord extends PerformanceMemorySnapshot {
+  elapsedSeconds: number
+  rendererDeltaMb: number
+  appDeltaMb: number
+  frameTarget: VisualizerFrameTarget
+  dockedRenderFps: number
+  isCapturing: boolean
+  captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
+  visibleScopes: string[]
+  poppedOutScopes: string[]
+}
+
 export function isVisualizerFrameTarget(value: unknown): value is VisualizerFrameTarget {
   return VISUALIZER_FRAME_TARGETS.includes(value as VisualizerFrameTarget)
 }

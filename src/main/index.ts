@@ -1,5 +1,6 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
+import { appendFile, mkdir, writeFile } from 'node:fs/promises'
 import { extname, join, resolve } from 'path'
 import type {
   AstraControlCommand,
@@ -22,7 +23,7 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
-import type { PerformanceMemorySnapshot } from '../types/performance'
+import type { PerformanceMemoryLogRecord, PerformanceMemorySnapshot } from '../types/performance'
 import { normalizeProfile } from '../shared/profileState'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
@@ -70,6 +71,12 @@ const POPOUT_DEFAULTS = {
   minWidth: 220,
   minHeight: 160,
 }
+const MEMORY_LOG_DIRECTORY_NAME = 'Prism Logs'
+const MEMORY_LOG_FILE_NAME = 'memory-trace-latest.csv'
+const memoryLogSessionStartedAt = Date.now()
+let memoryLogInitialized = false
+let memoryLogInitialization: Promise<void> | null = null
+let memoryLogWriteQueue: Promise<void> = Promise.resolve()
 
 function kilobytesToMegabytes(value: number | undefined): number {
   return Math.round((((value ?? 0) / 1024) * 10)) / 10
@@ -88,6 +95,101 @@ function sumWorkingSet(metrics: Electron.ProcessMetric[], predicate: (metric: El
     totalKilobytes += metric.memory.workingSetSize
   }
   return kilobytesToMegabytes(totalKilobytes)
+}
+
+function getMemoryLogDirectory(): string {
+  return join(app.getPath('documents'), MEMORY_LOG_DIRECTORY_NAME)
+}
+
+function getMemoryLogPath(): string {
+  return join(getMemoryLogDirectory(), MEMORY_LOG_FILE_NAME)
+}
+
+function escapeCsvField(value: string | number | boolean | null): string {
+  if (value === null) {
+    return ''
+  }
+
+  const text = String(value)
+  if (!/[",\n]/.test(text)) {
+    return text
+  }
+
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+async function ensureMemoryLogFile(): Promise<void> {
+  if (memoryLogInitialized) {
+    return
+  }
+
+  if (!memoryLogInitialization) {
+    memoryLogInitialization = (async () => {
+      await mkdir(getMemoryLogDirectory(), { recursive: true })
+      const header = [
+        'session_started_at_iso',
+        'captured_at_iso',
+        'elapsed_s',
+        'app_mb',
+        'main_mb',
+        'renderer_mb',
+        'renderer_private_mb',
+        'gpu_mb',
+        'utility_mb',
+        'js_heap_used_mb',
+        'js_heap_limit_mb',
+        'renderer_delta_mb',
+        'app_delta_mb',
+        'frame_target',
+        'docked_render_fps',
+        'is_capturing',
+        'capture_status',
+        'visible_scopes',
+        'popped_out_scopes',
+      ].join(',')
+      await writeFile(getMemoryLogPath(), `${header}\n`, 'utf8')
+      memoryLogInitialized = true
+    })().finally(() => {
+      memoryLogInitialization = null
+    })
+  }
+
+  await memoryLogInitialization
+}
+
+function queueMemoryLogWrite(record: PerformanceMemoryLogRecord): void {
+  const line = [
+    new Date(memoryLogSessionStartedAt).toISOString(),
+    new Date(record.capturedAt).toISOString(),
+    record.elapsedSeconds.toFixed(1),
+    record.appMb.toFixed(1),
+    record.mainMb.toFixed(1),
+    record.rendererMb.toFixed(1),
+    record.rendererPrivateMb === null ? '' : record.rendererPrivateMb.toFixed(1),
+    record.gpuMb.toFixed(1),
+    record.utilityMb.toFixed(1),
+    record.jsHeapUsedMb === null ? '' : record.jsHeapUsedMb.toFixed(1),
+    record.jsHeapLimitMb === null ? '' : record.jsHeapLimitMb.toFixed(1),
+    record.rendererDeltaMb.toFixed(1),
+    record.appDeltaMb.toFixed(1),
+    record.frameTarget,
+    Math.round(record.dockedRenderFps),
+    record.isCapturing,
+    record.captureStatus,
+    record.visibleScopes.join('|'),
+    record.poppedOutScopes.join('|'),
+  ]
+    .map((field) => escapeCsvField(field))
+    .join(',')
+
+  memoryLogWriteQueue = memoryLogWriteQueue
+    .then(async () => {
+      await ensureMemoryLogFile()
+      await appendFile(getMemoryLogPath(), `${line}\n`, 'utf8')
+    })
+    .catch((error: unknown) => {
+      console.error('Failed to write memory trace log:', error)
+    })
 }
 
 function getProfileLibrary(): FileBackedProfileLibrary {
@@ -923,6 +1025,16 @@ function setupIPC(): void {
     return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? true
   })
 
+  ipcMain.handle('performance:get-memory-log-path', async () => {
+    await ensureMemoryLogFile()
+    return getMemoryLogPath()
+  })
+
+  ipcMain.handle('performance:reveal-memory-log', async () => {
+    await ensureMemoryLogFile()
+    shell.showItemInFolder(getMemoryLogPath())
+  })
+
   ipcMain.handle('performance:get-memory-snapshot', async (event): Promise<PerformanceMemorySnapshot> => {
     const metrics = app.getAppMetrics()
     const senderPid = event.sender.getOSProcessId()
@@ -940,6 +1052,10 @@ function setupIPC(): void {
       jsHeapUsedMb: null,
       jsHeapLimitMb: null,
     }
+  })
+
+  ipcMain.handle('performance:append-memory-log', async (_event, record: PerformanceMemoryLogRecord) => {
+    queueMemoryLogWrite(record)
   })
 
   ipcMain.handle('audio:get-desktop-sources', async () => {

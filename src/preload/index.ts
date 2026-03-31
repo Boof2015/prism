@@ -28,7 +28,7 @@ import type {
 } from '../types/theme'
 import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
-import type { PerformanceMemorySnapshot } from '../types/performance'
+import type { PerformanceMemoryLogRecord, PerformanceMemorySnapshot } from '../types/performance'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
 
@@ -50,6 +50,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
+  getPerformanceMemoryLogPath: () => ipcRenderer.invoke('performance:get-memory-log-path') as Promise<string>,
+  revealPerformanceMemoryLog: () => ipcRenderer.invoke('performance:reveal-memory-log') as Promise<void>,
+  appendPerformanceMemoryLog: (record: PerformanceMemoryLogRecord) => {
+    return ipcRenderer.invoke('performance:append-memory-log', record) as Promise<void>
+  },
   getPerformanceMemorySnapshot: async () => {
     const snapshot = await ipcRenderer.invoke('performance:get-memory-snapshot') as PerformanceMemorySnapshot
     try {
