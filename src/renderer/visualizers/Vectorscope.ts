@@ -1,7 +1,7 @@
 import { audioRouter } from '../audio/AudioRouter'
 import { vectorscope as nativeVectorscope, isNativeAvailable } from '../audio/native'
-import { transformPoint, drawVectorscopeGridForMode, getVectorscopeLayout } from './vectorscopeGrids'
-import { MultibandSplitter, MultibandBuffer } from './multibandSplitter'
+import { drawVectorscopeGridForMode, getVectorscopeLayout } from './vectorscopeGrids'
+import { MultibandSplitter, MultibandBuffer, createMultibandChunk, type MultibandChunk } from './multibandSplitter'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
@@ -56,6 +56,7 @@ const defaultVectorscopeDataSource: VectorscopeDataSource = {
 }
 
 const BAND_ORDER = ['low', 'mid', 'high'] as const
+const INV_SQRT2 = 1 / Math.sqrt(2)
 
 export class Vectorscope {
   private canvas: HTMLCanvasElement
@@ -72,6 +73,10 @@ export class Vectorscope {
   private unsubscribeSessionChange: (() => void) | null = null
   private splitter: MultibandSplitter = new MultibandSplitter()
   private multibandBuffer: MultibandBuffer = new MultibandBuffer()
+  private multibandScratch: MultibandChunk = createMultibandChunk(0)
+  private multibandPointScratch: MultibandChunk = createMultibandChunk(0)
+  private nativePointX = new Float32Array(0)
+  private nativePointY = new Float32Array(0)
   private staticLayerKey = ''
 
   constructor(canvas: HTMLCanvasElement, options: VectorscopeOptions = {}) {
@@ -217,9 +222,9 @@ export class Vectorscope {
         }
       }
 
-      const pointsResult = nativeVectorscope.getPoints(options.displayPoints)
-      if (pointsResult && pointsResult.count > 0) {
-        this.drawPoints(offscreenCtx, pointsResult.x, pointsResult.y, pointsResult.count, centerX, centerY, scale)
+      const count = this.fillNativePoints(options.displayPoints)
+      if (count > 0) {
+        this.drawPoints(offscreenCtx, this.nativePointX, this.nativePointY, count, centerX, centerY, scale)
       }
     } else {
       this.drawFallbackPoints(offscreenCtx, pendingSamples, centerX, centerY, scale)
@@ -295,12 +300,7 @@ export class Vectorscope {
       ctx.globalAlpha = alpha
 
       for (let i = startIdx; i < endIdx; i++) {
-        const point = transformPoint(y[i], x[i], mode)
-        if (!point) continue
-
-        const px = centerX + point.dx * scale
-        const py = centerY - point.dy * scale
-        ctx.fillRect(px - dotSize / 2, py - dotSize / 2, dotSize, dotSize)
+        this.drawProjectedDot(ctx, y[i], x[i], mode, centerX, centerY, scale, dotSize)
       }
     }
     ctx.globalAlpha = 1.0
@@ -325,12 +325,7 @@ export class Vectorscope {
 
     for (const chunk of pendingSamples) {
       for (let i = 0; i < chunk.left.length; i++) {
-        const point = transformPoint(chunk.left[i], chunk.right[i], mode)
-        if (!point) continue
-
-        const px = centerX + point.dx * scale
-        const py = centerY - point.dy * scale
-        ctx.fillRect(px - dotSize / 2, py - dotSize / 2, dotSize, dotSize)
+        this.drawProjectedDot(ctx, chunk.left[i], chunk.right[i], mode, centerX, centerY, scale, dotSize)
       }
     }
     ctx.globalAlpha = 1.0
@@ -353,46 +348,112 @@ export class Vectorscope {
       this.splitter.configure(sampleRate)
     }
 
-    if (isNativeAvailable()) {
-      for (const chunk of pendingSamples) {
-        nativeVectorscope.pushSamples(chunk.left, chunk.right)
-      }
-    }
-
     for (const chunk of pendingSamples) {
-      const bands = this.splitter.split(chunk.left, chunk.right)
-      this.multibandBuffer.push(bands)
+      const bands = this.ensureMultibandScratch(chunk.left.length, chunk.right.length)
+      const count = this.splitter.splitInto(chunk.left, chunk.right, bands)
+      this.multibandBuffer.push(bands, count)
     }
 
-    const result = this.multibandBuffer.getPoints(options.displayPoints)
-    if (result.count === 0) return
+    const result = this.ensureMultibandPointScratch(options.displayPoints)
+    const count = this.multibandBuffer.fillPointsInto(result, options.displayPoints)
+    if (count === 0) return
 
     const segments = 8
-    const pointsPerSegment = Math.ceil(result.count / segments)
+    const pointsPerSegment = Math.ceil(count / segments)
 
     for (let seg = 0; seg < segments; seg++) {
       const startIdx = seg * pointsPerSegment
-      const endIdx = Math.min((seg + 1) * pointsPerSegment, result.count)
-      if (startIdx >= result.count) break
+      const endIdx = Math.min((seg + 1) * pointsPerSegment, count)
+      if (startIdx >= count) break
 
       const alpha = 0.15 + 0.85 * (seg / Math.max(segments - 1, 1))
       ctx.globalAlpha = alpha
 
       for (const band of BAND_ORDER) {
-        const bandData = result.bands[band]
+        const bandData = result[band]
         ctx.fillStyle = options.bandColors[band]
 
         for (let i = startIdx; i < endIdx; i++) {
-          const point = transformPoint(bandData.left[i], bandData.right[i], mode)
-          if (!point) continue
-
-          const px = centerX + point.dx * scale
-          const py = centerY - point.dy * scale
-          ctx.fillRect(px - dotSize / 2, py - dotSize / 2, dotSize, dotSize)
+          this.drawProjectedDot(ctx, bandData.left[i], bandData.right[i], mode, centerX, centerY, scale, dotSize)
         }
       }
     }
     ctx.globalAlpha = 1.0
+  }
+
+  private ensureNativePointBuffers(displayPoints: number): void {
+    if (this.nativePointX.length !== displayPoints) {
+      this.nativePointX = new Float32Array(displayPoints)
+      this.nativePointY = new Float32Array(displayPoints)
+    }
+  }
+
+  private fillNativePoints(displayPoints: number): number {
+    this.ensureNativePointBuffers(displayPoints)
+    return nativeVectorscope.fillPoints(this.nativePointX, this.nativePointY)
+  }
+
+  private ensureMultibandScratch(leftLength: number, rightLength: number): MultibandChunk {
+    const length = Math.min(leftLength, rightLength)
+    if (this.multibandScratch.low.left.length < length) {
+      this.multibandScratch = createMultibandChunk(length)
+    }
+    return this.multibandScratch
+  }
+
+  private ensureMultibandPointScratch(displayPoints: number): MultibandChunk {
+    if (this.multibandPointScratch.low.left.length !== displayPoints) {
+      this.multibandPointScratch = createMultibandChunk(displayPoints)
+    }
+    return this.multibandPointScratch
+  }
+
+  private drawProjectedDot(
+    ctx: CanvasRenderingContext2D,
+    left: number,
+    right: number,
+    mode: VectorscopeMode,
+    centerX: number,
+    centerY: number,
+    scale: number,
+    dotSize: number,
+  ): void {
+    let dx: number
+    let dy: number
+
+    if (mode === 'lissajous') {
+      dx = right
+      dy = left
+    } else {
+      const mid = (left + right) * INV_SQRT2
+      const side = (right - left) * INV_SQRT2
+      const isUnipolar = mode === 'polar-unipolar' || mode === 'linear-unipolar'
+      if (isUnipolar && mid < 0) {
+        return
+      }
+
+      const isPolar = mode === 'polar-unipolar' || mode === 'polar-bipolar'
+      if (isPolar) {
+        const amplitudeSquared = (mid * mid) + (side * side)
+        if (amplitudeSquared < 1e-12) {
+          dx = 0
+          dy = 0
+        } else {
+          const amplitude = Math.sqrt(amplitudeSquared)
+          const scaledAmplitude = Math.pow(amplitude, 0.35)
+          const factor = scaledAmplitude / amplitude
+          dx = side * factor
+          dy = mid * factor
+        }
+      } else {
+        dx = side
+        dy = mid
+      }
+    }
+
+    const px = centerX + dx * scale
+    const py = centerY - dy * scale
+    ctx.fillRect(px - dotSize / 2, py - dotSize / 2, dotSize, dotSize)
   }
 
   dispose(): void {

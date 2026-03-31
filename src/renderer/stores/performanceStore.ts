@@ -1,5 +1,8 @@
 import { create } from 'zustand'
-import { isVisualizerFrameTarget, type VisualizerFrameTarget } from '../../types/performance'
+import {
+  isVisualizerFrameTarget,
+  type VisualizerFrameTarget,
+} from '../../types/performance'
 
 const STORAGE_KEY = 'prism:performance'
 const SYNC_CHANNEL_NAME = 'prism:performance'

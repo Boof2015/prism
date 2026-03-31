@@ -23,7 +23,7 @@ export interface NativeVisualizerTransportBridge {
   spectrum: {
     setSampleRate: (sampleRate: number) => void
     pushSamples: (samples: Float32Array) => void
-    getMagnitudes: () => Float32Array | null
+    fillMagnitudes: (output: Float32Array) => number
     reset: () => void
   }
   vectorscope: {
@@ -53,7 +53,7 @@ const defaultBridge: NativeVisualizerTransportBridge = {
   spectrum: {
     setSampleRate: (sampleRate) => spectrum.setSampleRate(sampleRate),
     pushSamples: (samples) => spectrum.pushSamples(samples),
-    getMagnitudes: () => spectrum.getMagnitudes(),
+    fillMagnitudes: (output) => spectrum.fillMagnitudes(output),
     reset: () => spectrum.reset(),
   },
   vectorscope: {
@@ -82,9 +82,17 @@ export class NativeVisualizerTransport {
   private sampleRate = 48000
   private capturing = false
   private hasSpectrumData = false
+  private spectrumMonoScratch = new Float32Array(0)
 
   constructor(bridge: NativeVisualizerTransportBridge = defaultBridge) {
     this.bridge = bridge
+  }
+
+  private ensureSpectrumMonoScratch(length: number): Float32Array {
+    if (this.spectrumMonoScratch.length !== length) {
+      this.spectrumMonoScratch = new Float32Array(length)
+    }
+    return this.spectrumMonoScratch
   }
 
   setDemand(demand: VisualizerConsumerDemand): void {
@@ -159,7 +167,7 @@ export class NativeVisualizerTransport {
     }
 
     if (this.demand.spectrum) {
-      const mono = new Float32Array(length)
+      const mono = this.ensureSpectrumMonoScratch(length)
       for (let index = 0; index < length; index += 1) {
         mono[index] = (leftSamples[index] + rightSamples[index]) * 0.5
       }
@@ -197,12 +205,12 @@ export class NativeVisualizerTransport {
     }
   }
 
-  getLatestSpectrumMagnitudes(): Float32Array | null {
+  fillLatestSpectrumMagnitudes(output: Float32Array): number {
     if (!this.bridge.isAvailable() || !this.demand.spectrum || !this.hasSpectrumData) {
-      return null
+      return 0
     }
 
-    return this.bridge.spectrum.getMagnitudes()
+    return this.bridge.spectrum.fillMagnitudes(output)
   }
 }
 

@@ -47,6 +47,12 @@ import {
   NativeVisualizerTransport,
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
+import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
+import {
+  MultibandBuffer,
+  MultibandSplitter,
+  createMultibandChunk,
+} from '../src/renderer/visualizers/multibandSplitter'
 import {
   DEFAULT_PROFILE_ID,
   DEFAULT_PROFILE_NAME,
@@ -373,7 +379,16 @@ function createFakeTransportBridge(): {
           calls.spectrumPushes.push(samples)
           latestSpectrumMagnitudes = new Float32Array([samples[0] ?? 0, samples[samples.length - 1] ?? 0])
         },
-        getMagnitudes: () => latestSpectrumMagnitudes,
+        fillMagnitudes: (output) => {
+          if (!latestSpectrumMagnitudes) {
+            return 0
+          }
+          const count = Math.min(output.length, latestSpectrumMagnitudes.length)
+          for (let index = 0; index < count; index += 1) {
+            output[index] = latestSpectrumMagnitudes[index]
+          }
+          return count
+        },
         reset: () => {
           calls.spectrumResets += 1
           latestSpectrumMagnitudes = null
@@ -393,6 +408,51 @@ function createFakeTransportBridge(): {
     },
     calls,
   }
+}
+
+function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8): number[] {
+  const output = new Float32Array(size)
+  const count = transport.fillLatestSpectrumMagnitudes(output)
+  return Array.from(output.subarray(0, count))
+}
+
+function createFakeCanvasContext(): CanvasRenderingContext2D {
+  return {
+    clearRect() {},
+    fillRect() {},
+    fillText() {},
+    beginPath() {},
+    moveTo() {},
+    lineTo() {},
+    stroke() {},
+    save() {},
+    restore() {},
+    translate() {},
+    rotate() {},
+    createLinearGradient() {
+      return {
+        addColorStop() {},
+      } as CanvasGradient
+    },
+    measureText() {
+      return { width: 0 } as TextMetrics
+    },
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 1,
+    font: '',
+    textAlign: 'left',
+    textBaseline: 'top',
+  } as unknown as CanvasRenderingContext2D
+}
+
+function createFakeCanvas(): HTMLCanvasElement {
+  const context = createFakeCanvasContext()
+  return {
+    width: 320,
+    height: 180,
+    getContext: (kind: string) => kind === '2d' ? context : null,
+  } as unknown as HTMLCanvasElement
 }
 
 test('parseColorToRgb handles hex, rgb, rgba, and percentage formats', () => {
@@ -1406,7 +1466,7 @@ test('NativeVisualizerTransport feeds native scope state from chunk arrival with
   assert.equal(calls.vectorscopePushes[0]?.left, left)
   assert.equal(calls.vectorscopePushes[0]?.right, right)
   assert.deepEqual(Array.from(calls.spectrumPushes[0]), [0.5, 0.5, 0.5])
-  assert.deepEqual(Array.from(transport.getLatestSpectrumMagnitudes() ?? []), [0.5, 0.5])
+  assert.deepEqual(readSpectrumMagnitudes(transport), [0.5, 0.5])
 })
 
 test('NativeVisualizerTransport resets cached state on session changes and sample-rate updates', () => {
@@ -1424,7 +1484,7 @@ test('NativeVisualizerTransport resets cached state on session changes and sampl
     sessionId: 7,
     channelCount: 2,
   })
-  assert.deepEqual(Array.from(transport.getLatestSpectrumMagnitudes() ?? []), [1, 1])
+  assert.deepEqual(readSpectrumMagnitudes(transport), [1, 1])
 
   transport.reset({
     sessionId: 8,
@@ -1439,7 +1499,7 @@ test('NativeVisualizerTransport resets cached state on session changes and sampl
   assert.equal(calls.oscilloscopeResets >= 2, true)
   assert.equal(calls.spectrumResets >= 2, true)
   assert.equal(calls.vectorscopeResets >= 2, true)
-  assert.equal(transport.getLatestSpectrumMagnitudes(), null)
+  assert.equal(transport.fillLatestSpectrumMagnitudes(new Float32Array(4)), 0)
 })
 
 test('NativeVisualizerTransport stops feeding scopes when demand is removed', () => {
@@ -1467,7 +1527,71 @@ test('NativeVisualizerTransport stops feeding scopes when demand is removed', ()
 
   assert.equal(calls.spectrumPushes.length, 1)
   assert.equal(calls.spectrumResets >= 1, true)
-  assert.equal(transport.getLatestSpectrumMagnitudes(), null)
+  assert.equal(transport.fillLatestSpectrumMagnitudes(new Float32Array(4)), 0)
+})
+
+test('MultibandSplitter and MultibandBuffer reuse caller-owned buffers', () => {
+  const splitter = new MultibandSplitter()
+  splitter.configure(48000)
+
+  const splitTarget = createMultibandChunk(8)
+  const leftRef = splitTarget.low.left
+  const rightRef = splitTarget.high.right
+  const left = new Float32Array([1, 0.75, 0.25, -0.25, -0.75, -1, -0.5, 0.5])
+  const right = new Float32Array([0.5, 0.25, -0.5, -1, -0.5, 0.25, 0.75, 1])
+
+  const splitCount = splitter.splitInto(left, right, splitTarget)
+  assert.equal(splitCount, 8)
+  assert.equal(splitTarget.low.left, leftRef)
+  assert.equal(splitTarget.high.right, rightRef)
+
+  const buffer = new MultibandBuffer(16)
+  buffer.push(splitTarget, splitCount)
+
+  const pointTarget = createMultibandChunk(8)
+  const pointRef = pointTarget.mid.left
+  const pointCount = buffer.fillPointsInto(pointTarget, 8)
+  assert.equal(pointCount, 8)
+  assert.equal(pointTarget.mid.left, pointRef)
+  assert.notEqual(pointTarget.low.left[0], 0)
+})
+
+test('LUFSMeter keeps integrated history bounded over long runs', () => {
+  const chunkQueue: Array<{ left: Float32Array; right: Float32Array }> = []
+  const dataSource = {
+    getPendingLUFSMeterSamples: () => {
+      const drained = chunkQueue.slice()
+      chunkQueue.length = 0
+      return drained
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const meter = new LUFSMeter(createFakeCanvas(), { dataSource })
+  const processAudio = (meter as unknown as { processAudio: () => void }).processAudio.bind(meter)
+  const leftChunk = new Float32Array(4800)
+  const rightChunk = new Float32Array(4800)
+  for (let index = 0; index < leftChunk.length; index += 1) {
+    const sample = index % 2 === 0 ? 0.35 : -0.35
+    leftChunk[index] = sample
+    rightChunk[index] = sample
+  }
+
+  for (let iteration = 0; iteration < 400; iteration += 1) {
+    chunkQueue.push({
+      left: leftChunk,
+      right: rightChunk,
+    })
+    processAudio()
+  }
+
+  const histogramCounts = (meter as unknown as { integratedHistogramCounts: Uint32Array }).integratedHistogramCounts
+  const storedBlocks = histogramCounts.reduce((total, count) => total + count, 0)
+  assert.equal(Object.prototype.hasOwnProperty.call(meter, 'integratedBlockLoudness'), false)
+  assert.equal(histogramCounts.length > 0, true)
+  assert.equal(storedBlocks > 100, true)
+  assert.equal(Number.isFinite((meter as unknown as { integratedLUFS: number }).integratedLUFS), true)
 })
 
 test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-document polls and cancels on stop', async () => {

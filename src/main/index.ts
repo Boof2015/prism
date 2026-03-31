@@ -1219,35 +1219,48 @@ function setupIPC(): void {
 function setupShortcuts(): void {
   if (!mainWindow) return
 
-  const scopeKeys = ['1', '2', '3', '4', '5', '6', '7', '8']
-  scopeKeys.forEach((key) => {
-    mainWindow!.webContents.on('before-input-event', (_event, input) => {
-      if (input.type === 'keyDown' && input.key === key && !input.alt && !input.control && !input.meta && !input.shift) {
-        mainWindow?.webContents.send('shortcut:toggle-scope', parseInt(key) - 1)
+  const shortcutWindow = mainWindow
+  const scopeKeys = new Map([
+    ['1', 0],
+    ['2', 1],
+    ['3', 2],
+    ['4', 3],
+    ['5', 4],
+    ['6', 5],
+    ['7', 6],
+    ['8', 7],
+  ])
+  const beforeInputHandler = (_event: Electron.Event, input: Electron.Input) => {
+    if (input.type !== 'keyDown') {
+      return
+    }
+
+    if (!input.alt && !input.control && !input.meta && !input.shift) {
+      const scopeIndex = scopeKeys.get(input.key)
+      if (scopeIndex !== undefined) {
+        shortcutWindow.webContents.send('shortcut:toggle-scope', scopeIndex)
+        return
       }
-    })
-  })
 
-  mainWindow.webContents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown' && input.key === 't' && !input.alt && !input.control && !input.meta && !input.shift) {
-      const current = mainWindow!.isAlwaysOnTop()
-      const next = !current
-      setAllWindowsAlwaysOnTop(next)
-      mainWindow!.webContents.send('window:always-on-top-changed', next)
-    }
-  })
+      if (input.key === 't') {
+        const next = !shortcutWindow.isAlwaysOnTop()
+        setAllWindowsAlwaysOnTop(next)
+        shortcutWindow.webContents.send('window:always-on-top-changed', next)
+        return
+      }
 
-  mainWindow.webContents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown' && input.key === ' ' && !input.alt && !input.control && !input.meta && !input.shift) {
-      mainWindow?.webContents.send('shortcut:toggle-capture')
+      if (input.key === ' ') {
+        shortcutWindow.webContents.send('shortcut:toggle-capture')
+        return
+      }
     }
-  })
 
-  mainWindow.webContents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown' && input.key === ',' && input.meta && !input.alt && !input.control && !input.shift) {
-      mainWindow?.webContents.send('shortcut:toggle-settings')
+    if (input.key === ',' && input.meta && !input.alt && !input.control && !input.shift) {
+      shortcutWindow.webContents.send('shortcut:toggle-settings')
     }
-  })
+  }
+
+  shortcutWindow.webContents.on('before-input-event', beforeInputHandler)
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()

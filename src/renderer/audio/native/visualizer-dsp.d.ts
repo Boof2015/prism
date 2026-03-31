@@ -38,6 +38,9 @@ export interface OscilloscopeModule {
   // Get current write position in circular buffer
   getWritePos(): number;
 
+  // Fill a caller-owned buffer with rendered samples, returning the number written.
+  fillSamples(startPos: number, output: Float32Array): number;
+
   // Get samples from circular buffer for rendering
   getSamples(startPos: number, count: number): Float32Array;
 
@@ -50,6 +53,7 @@ export interface SpectrumModule {
   setSampleRate(sampleRate: number): void;
   setSmoothing(smoothing: number): void;
   pushSamples(audioData: Float32Array): void;
+  fillMagnitudes(output: Float32Array): number;
   getMagnitudes(): Float32Array;
   process(audioData: Float32Array): Float32Array;
   binToFrequency(bin: number): number;
@@ -59,6 +63,7 @@ export interface SpectrumModule {
 export interface VectorscopeModule {
   setSampleRate(sampleRate: number): void;
   pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void;
+  fillPoints(xOut: Float32Array, yOut: Float32Array): number;
   getPoints(maxPoints: number): VectorscopePointsResult;
   setBufferSize(size: number): void;
   getBufferSize(): number;

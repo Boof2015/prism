@@ -1414,6 +1414,12 @@ select {
   gap: 10px;
 }
 
+.bottom-bar__inline--memory {
+  gap: 6px;
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
 .bottom-bar__divider {
   width: 1px;
   align-self: stretch;

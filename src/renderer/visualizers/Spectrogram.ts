@@ -299,6 +299,7 @@ export class Spectrogram {
 
   private fftRe: Float32Array
   private fftIm: Float32Array
+  private fftMagnitudes: Float32Array
   private sampleBuffer: Float32Array
   private sampleBufferPos = 0
 
@@ -342,6 +343,7 @@ export class Spectrogram {
     const paddedSize = windowSize * FFT_PAD_FACTOR
     this.fftRe = new Float32Array(paddedSize)
     this.fftIm = new Float32Array(paddedSize)
+    this.fftMagnitudes = new Float32Array(paddedSize / 2)
     this.sampleBuffer = new Float32Array(windowSize)
 
     this.waterfallCanvas = document.createElement('canvas')
@@ -389,6 +391,7 @@ export class Spectrogram {
       const paddedSize = windowSize * FFT_PAD_FACTOR
       this.fftRe = new Float32Array(paddedSize)
       this.fftIm = new Float32Array(paddedSize)
+      this.fftMagnitudes = new Float32Array(paddedSize / 2)
       this.sampleBuffer = new Float32Array(windowSize)
       this.sampleBufferPos = 0
       this.lastFftSize = 0
@@ -533,7 +536,7 @@ export class Spectrogram {
     fft(this.fftRe, this.fftIm)
 
     const numBins = paddedSize / 2
-    const magnitudes = new Float32Array(numBins)
+    const magnitudes = this.fftMagnitudes
     const scale = 2 / windowSize  // normalize by window size, not padded size
 
     for (let index = 0; index < numBins; index += 1) {
