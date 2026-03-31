@@ -6,13 +6,12 @@ import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import WindowResizeOverlay from './components/WindowResizeOverlay'
 import AppBanner from './components/AppBanner'
+import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAstraStore } from './stores/astraStore'
 import { useAudioStore } from './stores/audioStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
-
-const DEFAULT_SETTINGS_HEIGHT = 400
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -136,11 +135,12 @@ export default function App(): JSX.Element {
     updateMainWindowBounds,
   ])
 
-  const measuredSettingsHeight = settingsPanelHeight > 0 && bottomBarHeight > 0
-    ? settingsPanelHeight + bottomBarHeight
-    : DEFAULT_SETTINGS_HEIGHT
-
-  const settingsHeight = settingsOpen ? measuredSettingsHeight : 0
+  const settingsHeight = resolveMainWindowSettingsHeight(
+    settingsOpen,
+    settingsPanelHeight,
+    bottomBarHeight,
+  )
+  const settingsVisible = settingsOpen && settingsHeight > 0
 
   useLayoutEffect(() => {
     window.electronAPI.setSettingsHeight(settingsHeight)
@@ -211,12 +211,14 @@ export default function App(): JSX.Element {
 
       <AppBanner />
 
-      {settingsOpen && (
-        <div className="prism-settings-region" style={{ height: settingsHeight }}>
-          <SettingsPanel onHeightChange={setSettingsPanelHeight} />
-          <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
-        </div>
-      )}
+      <div
+        className={`prism-settings-region ${settingsVisible ? '' : 'is-hidden'}`.trim()}
+        style={{ height: settingsHeight }}
+        aria-hidden={!settingsVisible}
+      >
+        <SettingsPanel onHeightChange={setSettingsPanelHeight} />
+        <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
+      </div>
 
       <WindowResizeOverlay />
     </div>

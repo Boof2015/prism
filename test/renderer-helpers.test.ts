@@ -10,6 +10,7 @@ import {
   getHorizontalWheelScrollResult,
   normalizeWheelDelta,
 } from '../src/renderer/utils/horizontalWheelScroll'
+import { resolveMainWindowSettingsHeight } from '../src/renderer/mainWindowSettings'
 import {
   formatAstraTime,
   getAstraPlaybackProgress,
@@ -17,6 +18,11 @@ import {
 import {
   createDefaultProfile,
 } from '../src/shared/profileState'
+import {
+  clampDraggedMainWindowBounds,
+  raiseWindowAboveNormalPopouts,
+  resolveExpandedMainWindowBounds,
+} from '../src/shared/windowGeometry'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
 import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../src/shared/themeState'
 import { usePerformanceStore } from '../src/renderer/stores/performanceStore'
@@ -415,6 +421,28 @@ function createFakeTransportBridge(): {
       },
     },
     calls,
+  }
+}
+
+function createFakeStackableWindow(alwaysOnTop = false): {
+  getMoveTopCalls: () => number
+  window: {
+    isDestroyed: () => boolean
+    isAlwaysOnTop: () => boolean
+    moveTop: () => void
+  }
+} {
+  let moveTopCalls = 0
+
+  return {
+    getMoveTopCalls: () => moveTopCalls,
+    window: {
+      isDestroyed: () => false,
+      isAlwaysOnTop: () => alwaysOnTop,
+      moveTop: () => {
+        moveTopCalls += 1
+      },
+    },
   }
 }
 
@@ -1139,6 +1167,78 @@ test('toggleScope appends astra to the scope order when it is enabled from an op
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()
   }
+})
+
+test('resolveMainWindowSettingsHeight waits for real measurements instead of using a placeholder height', () => {
+  assert.equal(resolveMainWindowSettingsHeight(false, 312, 96), 0)
+  assert.equal(resolveMainWindowSettingsHeight(true, 0, 96), 0)
+  assert.equal(resolveMainWindowSettingsHeight(true, 312, 0), 0)
+  assert.equal(resolveMainWindowSettingsHeight(true, 312, 96), 408)
+})
+
+test('expanded main-window bounds can push upward into an overlapping display above', () => {
+  const resolved = resolveExpandedMainWindowBounds(
+    { x: 700, y: 1110, width: 900, height: 180 },
+    400,
+    [
+      { x: 0, y: 0, width: 1920, height: 1080 },
+      { x: 600, y: 1080, width: 720, height: 260 },
+    ],
+  )
+
+  assert.equal(resolved.x, 700)
+  assert.equal(resolved.y, 760)
+  assert.equal(resolved.height, 580)
+})
+
+test('expanded main-window bounds can span into a taller side display instead of clamping to one display', () => {
+  const resolved = resolveExpandedMainWindowBounds(
+    { x: 650, y: 650, width: 400, height: 180 },
+    300,
+    [
+      { x: 0, y: 0, width: 800, height: 800 },
+      { x: 800, y: 0, width: 800, height: 1200 },
+    ],
+  )
+
+  assert.equal(resolved.x, 650)
+  assert.equal(resolved.y, 650)
+  assert.equal(resolved.height, 480)
+})
+
+test('dragged main-window bounds keep a visible grab margin without sticking at a display seam', () => {
+  const clamped = clampDraggedMainWindowBounds(
+    { x: 760, y: 120, width: 400, height: 220 },
+    [
+      { x: 0, y: 0, width: 800, height: 900 },
+      { x: 800, y: 0, width: 800, height: 900 },
+    ],
+    64,
+  )
+
+  assert.equal(clamped.x, 760)
+  assert.equal(clamped.y, 120)
+})
+
+test('raiseWindowAboveNormalPopouts raises the main window when an unpinned popout exists', () => {
+  const main = createFakeStackableWindow()
+  const normalPopout = createFakeStackableWindow(false)
+  const pinnedPopout = createFakeStackableWindow(true)
+
+  const raised = raiseWindowAboveNormalPopouts(main.window, [normalPopout.window, pinnedPopout.window])
+
+  assert.equal(raised, true)
+  assert.equal(main.getMoveTopCalls(), 1)
+})
+
+test('raiseWindowAboveNormalPopouts leaves pinned popouts above the main window', () => {
+  const main = createFakeStackableWindow()
+  const pinnedPopout = createFakeStackableWindow(true)
+
+  const raised = raiseWindowAboveNormalPopouts(main.window, [pinnedPopout.window])
+
+  assert.equal(raised, false)
+  assert.equal(main.getMoveTopCalls(), 0)
 })
 
 test('main-window bounds updates persist working state in Electron mode', () => {

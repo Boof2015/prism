@@ -207,6 +207,13 @@ select {
   box-shadow: 0 -16px 34px rgba(0, 0, 0, 0.34);
 }
 
+.prism-settings-region.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+  border-top-color: transparent;
+  box-shadow: none;
+}
+
 .app-banner-layer {
   position: absolute;
   top: 10px;
