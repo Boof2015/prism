@@ -575,52 +575,6 @@ function setWindowAlwaysOnTop(window: BrowserWindow, next: boolean): void {
   })
 }
 
-function attachWindowShortcuts(window: BrowserWindow): void {
-  const scopeKeys = new Map([
-    ['1', 0],
-    ['2', 1],
-    ['3', 2],
-    ['4', 3],
-    ['5', 4],
-    ['6', 5],
-    ['7', 6],
-    ['8', 7],
-  ])
-
-  window.webContents.on('before-input-event', (_event, input: Electron.Input) => {
-    if (input.type !== 'keyDown') {
-      return
-    }
-
-    const isMainWindow = isMainRendererWindow(window)
-
-    if (!input.alt && !input.control && !input.meta && !input.shift) {
-      if (isMainWindow) {
-        const scopeIndex = scopeKeys.get(input.key)
-        if (scopeIndex !== undefined) {
-          window.webContents.send('shortcut:toggle-scope', scopeIndex)
-          return
-        }
-
-        if (input.key === ' ') {
-          window.webContents.send('shortcut:toggle-capture')
-          return
-        }
-      }
-
-      if (input.key === 't') {
-        setWindowAlwaysOnTop(window, !window.isAlwaysOnTop())
-      }
-
-      return
-    }
-
-    if (isMainWindow && input.key === ',' && input.meta && !input.alt && !input.control && !input.shift) {
-      window.webContents.send('shortcut:toggle-settings')
-    }
-  })
-}
-
 function loadRendererTarget(window: BrowserWindow, query: Record<string, string>): void {
   if (process.env.ELECTRON_RENDERER_URL) {
     const url = new URL(process.env.ELECTRON_RENDERER_URL)
@@ -746,7 +700,6 @@ function createMainWindow(): void {
     scheduleMainWindowBoundsSave(mainWindow)
   })
 
-  attachWindowShortcuts(mainWindow)
   loadRendererTarget(mainWindow, { window: 'main' })
 }
 
@@ -877,7 +830,6 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   popoutWindow.on('move', () => emitPopoutBoundsChanged(kind, popoutWindow))
   popoutWindow.on('resize', () => emitPopoutBoundsChanged(kind, popoutWindow))
 
-  attachWindowShortcuts(popoutWindow)
   loadRendererTarget(popoutWindow, { window: 'scope-popout', scope: kind })
   return popoutWindow
 }

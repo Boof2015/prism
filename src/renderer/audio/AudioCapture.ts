@@ -114,7 +114,7 @@ function toDeviceSourceDescriptor(device: MediaDeviceInfo): CaptureSourceDescrip
 function getDefaultSystemSourceDescriptor(): CaptureSourceDescriptor {
   return {
     id: DEFAULT_SYSTEM_SOURCE_ID,
-    label: 'System Output',
+    label: 'Default Output',
     kind: 'system',
     isDefault: true,
   }
@@ -702,7 +702,8 @@ class AudioCapture {
 
     const activeSystemBackend = this.resolveCandidateBackends(this.backendSupport ?? DEFAULT_BACKEND_SUPPORT, 'system')[0]
     const sources = await activeSystemBackend.listSources()
-    return sources.length ? sources : [getDefaultSystemSourceDescriptor()]
+    const dedupedSources = sources.filter((source) => source.id !== DEFAULT_SYSTEM_SOURCE_ID)
+    return [getDefaultSystemSourceDescriptor(), ...dedupedSources]
   }
 
   async listDevices(): Promise<MediaDeviceInfo[]> {

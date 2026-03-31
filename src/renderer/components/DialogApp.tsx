@@ -23,6 +23,11 @@ export default function DialogApp(): JSX.Element {
 
   const submit = useCallback((buttonIndex: number) => {
     if (!config) return
+    const isPrimaryPromptSubmit = config.type === 'prompt' && buttonIndex === (config.defaultId ?? 0)
+    if (isPrimaryPromptSubmit && !inputValue.trim()) {
+      return
+    }
+
     const result: DialogResult = { buttonIndex }
     if (config.type === 'prompt') {
       result.value = inputValue
@@ -47,6 +52,7 @@ export default function DialogApp(): JSX.Element {
 
   const primaryIndex = config.defaultId ?? 0
   const cancelId = config.cancelId ?? config.buttons.length - 1
+  const isPromptPrimaryDisabled = config.type === 'prompt' && !inputValue.trim()
 
   return (
     <div className="dialog-root" onKeyDown={handleKeyDown} tabIndex={-1}>
@@ -63,6 +69,7 @@ export default function DialogApp(): JSX.Element {
               type="text"
               className="dialog-input"
               value={inputValue}
+              placeholder={config.placeholder}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -88,6 +95,7 @@ export default function DialogApp(): JSX.Element {
               ].filter(Boolean).join(' ')}
               onClick={() => submit(i)}
               autoFocus={i === primaryIndex && config.type !== 'prompt'}
+              disabled={i === primaryIndex && isPromptPrimaryDisabled}
             >
               {label}
             </button>

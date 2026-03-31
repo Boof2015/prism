@@ -2,11 +2,18 @@ import { useEffect, useMemo, useState, type CSSProperties, type JSX } from 'reac
 import type { ScopeSettings } from '../../types/settings'
 import type { ResolvedAstraTheme } from '../../types/theme'
 import { useAstraStore } from '../stores/astraStore'
+import { useUiStore } from '../stores/uiStore'
 import { formatAstraTime, getAstraPlaybackProgress } from '../utils/astra'
 
 interface AstraScopeModuleProps {
   theme: ResolvedAstraTheme
   settings: ScopeSettings['astra']
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : fallback
 }
 
 function hasVisibleFields(settings: ScopeSettings['astra']): boolean {
@@ -53,6 +60,9 @@ export default function AstraScopeModule({
   const integrationState = useAstraStore((s) => s.integrationState)
   const isSendingControl = useAstraStore((s) => s.isSendingControl)
   const sendControl = useAstraStore((s) => s.sendControl)
+  const saveConfig = useAstraStore((s) => s.saveConfig)
+  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
+  const showBanner = useUiStore((s) => s.showBanner)
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
@@ -212,11 +222,37 @@ export default function AstraScopeModule({
           )}
 
           {errorMessage && (
-            <div
-              className="astra-scope__status is-error"
-            >
-              {errorMessage}
-            </div>
+            <>
+              <div
+                className="astra-scope__status is-error"
+              >
+                {errorMessage}
+              </div>
+              <div className="astra-scope__status-actions">
+                <button
+                  type="button"
+                  className="astra-scope__control"
+                  onClick={() => {
+                    void saveConfig(integrationState.config).catch((error) => {
+                      showBanner({
+                        tone: 'error',
+                        message: getErrorMessage(error, 'Could not reconnect to Astra.'),
+                        actions: [],
+                      })
+                    })
+                  }}
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  className="astra-scope__control"
+                  onClick={() => setSettingsOpen(true)}
+                >
+                  Open Settings
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>

@@ -88,9 +88,6 @@ declare global {
       requestScopePopIn: (kind: ScopeKind) => void
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
-      onToggleScope: (callback: (index: number) => void) => () => void
-      onToggleCapture: (callback: () => void) => () => void
-      onToggleSettings: (callback: () => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
       onAstraStateChanged: (callback: (state: AstraIntegrationState) => void) => () => void
       onMainCloseRequested: (callback: () => void) => () => void

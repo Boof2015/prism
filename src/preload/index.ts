@@ -98,21 +98,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('window:always-on-top-changed', handler)
     return () => ipcRenderer.removeListener('window:always-on-top-changed', handler)
   },
-  onToggleScope: (callback: (index: number) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, index: number): void => callback(index)
-    ipcRenderer.on('shortcut:toggle-scope', handler)
-    return () => ipcRenderer.removeListener('shortcut:toggle-scope', handler)
-  },
-  onToggleCapture: (callback: () => void) => {
-    const handler = (): void => callback()
-    ipcRenderer.on('shortcut:toggle-capture', handler)
-    return () => ipcRenderer.removeListener('shortcut:toggle-capture', handler)
-  },
-  onToggleSettings: (callback: () => void) => {
-    const handler = (): void => callback()
-    ipcRenderer.on('shortcut:toggle-settings', handler)
-    return () => ipcRenderer.removeListener('shortcut:toggle-settings', handler)
-  },
   onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, bounds: WindowBounds): void => callback(bounds)
     ipcRenderer.on('window:bounds-changed', handler)

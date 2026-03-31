@@ -7,6 +7,7 @@ export interface DialogOptions {
   defaultId?: number
   cancelId?: number
   defaultValue?: string
+  placeholder?: string
 }
 
 export interface DialogResult {

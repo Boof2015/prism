@@ -207,6 +207,77 @@ select {
   box-shadow: 0 -16px 34px rgba(0, 0, 0, 0.34);
 }
 
+.app-banner-layer {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  right: 12px;
+  z-index: 18;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+}
+
+.app-banner {
+  width: min(520px, 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--control-border);
+  background: linear-gradient(180deg, var(--panel-surface), var(--panel-surface-soft));
+  box-shadow: var(--panel-shadow);
+  pointer-events: auto;
+}
+
+.app-banner--error {
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.app-banner--info {
+  border-color: rgba(var(--accent-rgb), 0.24);
+}
+
+.app-banner__message {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.app-banner__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.app-banner__action,
+.app-banner__dismiss {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.app-banner__action:hover,
+.app-banner__dismiss:hover,
+.app-banner__action:focus-visible,
+.app-banner__dismiss:focus-visible {
+  outline: none;
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-active);
+  color: var(--text-primary);
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -793,6 +864,13 @@ select {
   border-color: var(--astra-status-error);
 }
 
+.astra-scope__status-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 @container (max-width: 420px) {
   .astra-scope {
     --astra-cover-size: clamp(44px, min(28cqi, 60cqb), 132px);
@@ -1254,6 +1332,14 @@ select {
   color: var(--text-tertiary);
   font-size: 11px;
   line-height: 1.4;
+}
+
+.settings-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
 }
 
 .settings-theme-swatches {

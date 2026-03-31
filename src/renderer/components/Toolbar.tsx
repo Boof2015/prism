@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useUiStore } from '../stores/uiStore'
 
 function SettingsIcon(): JSX.Element {
   return (
@@ -101,10 +102,36 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const updateActiveProfile = useSettingsStore((s) => s.updateActiveProfile)
   const importProfileFromDialog = useSettingsStore((s) => s.importProfileFromDialog)
   const showProfilesFolder = useSettingsStore((s) => s.showProfilesFolder)
+  const showBanner = useUiStore((s) => s.showBanner)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
   const [showReposition, setShowReposition] = useState(false)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const profileButtonRef = useRef<HTMLButtonElement>(null)
+
+  const showProfileErrorBanner = useCallback((error: unknown, fallback: string, includeOpenFolder = false) => {
+    const actions = includeOpenFolder
+      ? [{
+          label: 'Open Folder',
+          onSelect: async () => {
+            try {
+              await showProfilesFolder()
+            } catch (folderError) {
+              showBanner({
+                tone: 'error',
+                message: getErrorMessage(folderError, 'Could not open the profiles folder.'),
+                actions: [],
+              })
+            }
+          },
+        }]
+      : []
+
+    showBanner({
+      tone: 'error',
+      message: getErrorMessage(error, fallback),
+      actions,
+    })
+  }, [showBanner, showProfilesFolder])
 
   useEffect(() => {
     void window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
@@ -114,33 +141,33 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
 
   const handleSaveNew = useCallback(async () => {
     setIsProfileMenuOpen(false)
-    const count = Object.keys(useSettingsStore.getState().profiles).length
     const result = await window.electronAPI.showDialog({
       type: 'prompt',
       title: 'Save as New Profile',
-      message: 'Profile name',
+      message: 'Enter a name for the new profile.',
       buttons: ['Save', 'Cancel'],
       defaultId: 0,
       cancelId: 1,
-      defaultValue: `Profile ${count}`,
+      defaultValue: '',
+      placeholder: 'Profile name',
     })
     if (result.buttonIndex !== 0 || !result.value?.trim()) return
     try {
       await saveProfile(result.value.trim())
     } catch (error) {
-      window.alert(getErrorMessage(error, 'Could not save the profile.'))
+      showProfileErrorBanner(error, 'Could not save the profile.')
     }
-  }, [saveProfile])
+  }, [saveProfile, showProfileErrorBanner])
 
   const handleSaveOverwrite = useCallback(async () => {
     try {
       await updateActiveProfile()
     } catch (error) {
-      window.alert(getErrorMessage(error, 'Could not update the active profile.'))
+      showProfileErrorBanner(error, 'Could not update the active profile.')
     } finally {
       setIsProfileMenuOpen(false)
     }
-  }, [updateActiveProfile])
+  }, [showProfileErrorBanner, updateActiveProfile])
 
   const handleRenameActive = useCallback(async (id: string) => {
     const profile = useSettingsStore.getState().profiles[id]
@@ -164,9 +191,9 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     try {
       await renameProfile(id, result.value.trim())
     } catch (error) {
-      window.alert(getErrorMessage(error, 'Could not rename the profile.'))
+      showProfileErrorBanner(error, 'Could not rename the profile.')
     }
-  }, [renameProfile])
+  }, [renameProfile, showProfileErrorBanner])
 
   const handleDeleteActive = useCallback(async (id: string) => {
     const profile = useSettingsStore.getState().profiles[id]
@@ -190,9 +217,9 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     try {
       await deleteProfile(id)
     } catch (error) {
-      window.alert(getErrorMessage(error, 'Could not delete the profile.'))
+      showProfileErrorBanner(error, 'Could not delete the profile.')
     }
-  }, [deleteProfile])
+  }, [deleteProfile, showProfileErrorBanner])
 
   const handleLoadProfile = useCallback(async (id: string) => {
     try {
@@ -200,11 +227,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         await loadProfile(id)
       })
     } catch (error) {
-      window.alert(getErrorMessage(error, 'Could not load the profile.'))
+      showProfileErrorBanner(error, 'Could not load the profile.', true)
     } finally {
       setIsProfileMenuOpen(false)
     }
-  }, [guardProfileTransition, loadProfile])
+  }, [guardProfileTransition, loadProfile, showProfileErrorBanner])
 
   const handleImportProfile = useCallback(async () => {
     try {
@@ -212,21 +239,21 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         await importProfileFromDialog()
       })
     } catch (error) {
-      window.alert(getErrorMessage(error, 'Could not import the profile file.'))
+      showProfileErrorBanner(error, 'Could not import the profile file.', true)
     } finally {
       setIsProfileMenuOpen(false)
     }
-  }, [guardProfileTransition, importProfileFromDialog])
+  }, [guardProfileTransition, importProfileFromDialog, showProfileErrorBanner])
 
   const handleShowProfilesFolder = useCallback(async () => {
     try {
       await showProfilesFolder()
     } catch (error) {
-      window.alert(getErrorMessage(error, 'Could not open the profiles folder.'))
+      showProfileErrorBanner(error, 'Could not open the profiles folder.')
     } finally {
       setIsProfileMenuOpen(false)
     }
-  }, [showProfilesFolder])
+  }, [showProfileErrorBanner, showProfilesFolder])
 
   useEffect(() => {
     const offClosed = window.electronAPI.onProfileMenuClosed(() => {

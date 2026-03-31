@@ -4,6 +4,7 @@ import { useAudioStore } from '../stores/audioStore'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useUiStore } from '../stores/uiStore'
 import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
@@ -36,6 +37,14 @@ const FRAME_TARGET_LABELS: Record<VisualizerFrameTarget, string> = {
   'display-sync': 'Sync',
 }
 
+const DEFAULT_INPUT_DEVICE_ID = '__default_input__'
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : fallback
+}
+
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [astraBaseUrlInput, setAstraBaseUrlInput] = useState('')
@@ -66,7 +75,9 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     isCapturing,
     captureStatus,
     captureError,
+    captureNotice,
     inputGainDb,
+    clearCaptureNotice,
     refreshSystemSources,
     refreshDevices,
     refreshBackendSupport,
@@ -75,6 +86,8 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     startCapture,
     setInputGain,
   } = useAudioStore()
+  const showBanner = useUiStore((s) => s.showBanner)
+  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
 
   useEffect(() => {
     void refreshBackendSupport()
@@ -124,20 +137,19 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
 
     if (value.startsWith('device:')) {
       const deviceId = value.slice('device:'.length)
-      await selectDevice(deviceId)
+      await selectDevice(deviceId === DEFAULT_INPUT_DEVICE_ID ? null : deviceId)
       await startCapture()
     }
   }
 
-  const selectedSourceValue = captureMode === 'system'
-    ? `system:${selectedSystemSourceId ?? systemSources[0]?.id ?? '__default_system_output__'}`
-    : `device:${selectedDeviceId ?? ''}`
-
   const visibleSystemSources = systemSources.length
     ? systemSources
-    : [{ id: '__default_system_output__', label: 'System Output', kind: 'system', isDefault: true }]
+    : [{ id: '__default_system_output__', label: 'Default Output', kind: 'system', isDefault: true }]
+  const defaultSystemSourceId = visibleSystemSources[0]?.id ?? '__default_system_output__'
 
-  const showInputDevices = devices.length > 0
+  const selectedSourceValue = captureMode === 'system'
+    ? `system:${selectedSystemSourceId ?? defaultSystemSourceId}`
+    : `device:${selectedDeviceId ?? DEFAULT_INPUT_DEVICE_ID}`
 
   const indicatorLabel = isCapturing
     ? 'Capturing'
@@ -161,7 +173,46 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       baseUrl: astraBaseUrlInput,
       token: astraTokenInput,
     }
-    await saveAstraConfig(nextConfig)
+    try {
+      await saveAstraConfig(nextConfig)
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not save the Astra settings.'),
+        actions: [],
+      })
+    }
+  }
+
+  const handleRetryCapture = async (): Promise<void> => {
+    clearCaptureNotice()
+    await startCapture()
+  }
+
+  const handleUseDefaultSource = async (): Promise<void> => {
+    clearCaptureNotice()
+    if (captureMode === 'system') {
+      await selectSystemSource(defaultSystemSourceId)
+    } else {
+      await selectDevice(null)
+    }
+    await startCapture()
+  }
+
+  const handleRetryAstra = async (): Promise<void> => {
+    await handleSaveAstraConfig()
+  }
+
+  const handleShowThemesFolder = async (): Promise<void> => {
+    try {
+      await showThemesFolder()
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not open the themes folder.'),
+        actions: [],
+      })
+    }
   }
 
   const handleRailWheel = (event: WheelEvent<HTMLDivElement>): void => {
@@ -193,6 +244,11 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       : astraState.connectionState === 'error'
         ? 'Error'
         : 'Off'
+  const captureMessage = captureError ?? captureNotice
+  const astraErrorMessage = astraState.lastError ?? astraState.lastControlError
+  const canUseDefaultSource = captureMode === 'system'
+    ? selectedSystemSourceId !== defaultSystemSourceId
+    : selectedDeviceId !== null
 
   return (
     <div className="bottom-bar" ref={rootRef}>
@@ -243,7 +299,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   type="button"
                   className="settings-chip"
                   onClick={() => {
-                    void showThemesFolder()
+                    void handleShowThemesFolder()
                   }}
                 >
                   Folder
@@ -290,8 +346,28 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 </div>
               </div>
 
-              {astraState.lastError ? (
-                <div className="settings-error-text bottom-bar__error-text">{astraState.lastError}</div>
+              {astraErrorMessage ? (
+                <>
+                  <div className="settings-error-text bottom-bar__error-text">{astraErrorMessage}</div>
+                  <div className="settings-inline-actions">
+                    <button
+                      type="button"
+                      className="settings-chip"
+                      onClick={() => {
+                        void handleRetryAstra()
+                      }}
+                    >
+                      Retry
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-chip"
+                      onClick={() => setSettingsOpen(true)}
+                    >
+                      Open Settings
+                    </button>
+                  </div>
+                </>
               ) : null}
             </div>
           </section>
@@ -312,19 +388,20 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   <optgroup label="Output Devices">
                     {visibleSystemSources.map((source) => (
                       <option key={source.id} value={`system:${source.id}`}>
-                        {source.isDefault ? `${source.label} (Default)` : source.label}
+                        {source.isDefault && !source.label.toLowerCase().includes('default')
+                          ? `${source.label} (Default)`
+                          : source.label}
                       </option>
                     ))}
                   </optgroup>
-                  {showInputDevices ? (
-                    <optgroup label="Input Devices">
-                      {devices.map((device) => (
-                        <option key={device.deviceId} value={`device:${device.deviceId}`}>
-                          {device.label || `Input ${device.deviceId.slice(0, 8)}`}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null}
+                  <optgroup label="Input Devices">
+                    <option value={`device:${DEFAULT_INPUT_DEVICE_ID}`}>Default Input</option>
+                    {devices.map((device) => (
+                      <option key={device.deviceId} value={`device:${device.deviceId}`}>
+                        {device.label || `Input ${device.deviceId.slice(0, 8)}`}
+                      </option>
+                    ))}
+                  </optgroup>
                 </ThemedSelect>
 
                 <div className={`settings-status-pill is-${captureStatus}`.trim()}>
@@ -333,8 +410,43 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 </div>
               </div>
 
-              {captureError ? (
-                <div className="settings-error-text bottom-bar__error-text">{captureError}</div>
+              {captureMessage ? (
+                <>
+                  <div className={`${captureError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__error-text`.trim()}>
+                    {captureMessage}
+                  </div>
+                  <div className="settings-inline-actions">
+                    <button
+                      type="button"
+                      className="settings-chip"
+                      onClick={() => {
+                        void handleRetryCapture()
+                      }}
+                    >
+                      Retry
+                    </button>
+                    {canUseDefaultSource ? (
+                      <button
+                        type="button"
+                        className="settings-chip"
+                        onClick={() => {
+                          void handleUseDefaultSource()
+                        }}
+                      >
+                        Use Default
+                      </button>
+                    ) : null}
+                    {!captureError && captureNotice ? (
+                      <button
+                        type="button"
+                        className="settings-chip"
+                        onClick={clearCaptureNotice}
+                      >
+                        Dismiss
+                      </button>
+                    ) : null}
+                  </div>
+                </>
               ) : null}
             </div>
           </section>

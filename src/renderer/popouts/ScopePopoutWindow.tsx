@@ -7,6 +7,7 @@ import ScopeModule from '../components/ScopeModule'
 import ScopeSettingsSection from '../components/ScopeSettingsSection'
 import WindowResizeOverlay from '../components/WindowResizeOverlay'
 import { usePerformanceStore } from '../stores/performanceStore'
+import { useUiStore } from '../stores/uiStore'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
 
@@ -66,9 +67,10 @@ const defaultTheme = resolveTheme(createDefaultTheme())
 export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
-  const [miniSettingsOpen, setMiniSettingsOpen] = useState(false)
   const prevMiniSettingsOpenRef = useRef(false)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
+  const miniSettingsOpen = useUiStore((s) => s.settingsOpen)
+  const setMiniSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const frameScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
 
@@ -226,7 +228,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
               <button
                 type="button"
                 className={`scope-popout__button ${miniSettingsOpen ? 'is-active' : ''}`.trim()}
-                onClick={() => setMiniSettingsOpen((prev) => !prev)}
+                onClick={() => setMiniSettingsOpen(!miniSettingsOpen)}
                 aria-label="Toggle mini settings"
                 title="Mini settings"
               >

@@ -20,6 +20,7 @@ import {
 } from '../../shared/profileState'
 import { useThemeStore } from './themeStore'
 import { buildProfileDraft, profilesMatch } from './profileDraft'
+import { useUiStore } from './uiStore'
 
 export type { ScopeSettings } from '../../types/settings'
 
@@ -710,7 +711,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       try {
         await get().updateActiveProfile()
       } catch (error) {
-        window.alert(getErrorMessage(error, 'Could not save the profile.'))
+        useUiStore.getState().showBanner({
+          tone: 'error',
+          message: getErrorMessage(error, 'Could not save the profile.'),
+          actions: [],
+        })
         return false
       }
     } else {

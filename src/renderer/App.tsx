@@ -5,31 +5,35 @@ import SettingsPanel from './components/SettingsPanel'
 import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import WindowResizeOverlay from './components/WindowResizeOverlay'
+import AppBanner from './components/AppBanner'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAstraStore } from './stores/astraStore'
 import { useAudioStore } from './stores/audioStore'
 import { useThemeStore } from './stores/themeStore'
-import { SCOPE_KINDS } from '../types/scope'
+import { useUiStore } from './stores/uiStore'
 
 const DEFAULT_SETTINGS_HEIGHT = 400
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const externalProfileOpenQueueRef = useRef(Promise.resolve())
 
-  const toggleScope = useSettingsStore((s) => s.toggleScope)
   const initializeProfiles = useSettingsStore((s) => s.initializeProfiles)
   const applyExternalProfileSnapshot = useSettingsStore((s) => s.applyExternalProfileSnapshot)
   const guardProfileTransition = useSettingsStore((s) => s.guardProfileTransition)
   const importProfileFromPath = useSettingsStore((s) => s.importProfileFromPath)
+  const showProfilesFolder = useSettingsStore((s) => s.showProfilesFolder)
   const updateMainWindowBounds = useSettingsStore((s) => s.updateMainWindowBounds)
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
   const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
   const initializeAstra = useAstraStore((s) => s.initialize)
+  const settingsOpen = useUiStore((s) => s.settingsOpen)
+  const toggleSettings = useUiStore((s) => s.toggleSettings)
+  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
+  const showBanner = useUiStore((s) => s.showBanner)
 
   // Auto-capture on launch
   useEffect(() => {
@@ -71,9 +75,32 @@ export default function App(): JSX.Element {
           }
         })
         .catch((error: unknown) => {
-          window.alert(error instanceof Error && error.message
+          const message = error instanceof Error && error.message
             ? error.message
-            : `Prism could not open ${path}.`)
+            : `Prism could not open ${path}.`
+
+          showBanner({
+            tone: 'error',
+            message,
+            actions: [
+              {
+                label: 'Open Folder',
+                onSelect: async () => {
+                  try {
+                    await showProfilesFolder()
+                  } catch (folderError) {
+                    showBanner({
+                      tone: 'error',
+                      message: folderError instanceof Error && folderError.message
+                        ? folderError.message
+                        : 'Could not open the profiles folder.',
+                      actions: [],
+                    })
+                  }
+                },
+              },
+            ],
+          })
         })
     })
     const unsubscribeCloseRequested = window.electronAPI.onMainCloseRequested(() => {
@@ -104,6 +131,8 @@ export default function App(): JSX.Element {
     initializeProfiles,
     initializeThemes,
     initializeAstra,
+    showBanner,
+    showProfilesFolder,
     updateMainWindowBounds,
   ])
 
@@ -133,12 +162,12 @@ export default function App(): JSX.Element {
   }, [settingsOpen])
 
   const handleToggleSettings = useCallback(() => {
-    setSettingsOpen((prev) => !prev)
-  }, [])
+    toggleSettings()
+  }, [toggleSettings])
 
   const handleCloseSettings = useCallback(() => {
     setSettingsOpen(false)
-  }, [])
+  }, [setSettingsOpen])
 
   const handleAltDragStart = useCallback((event: React.MouseEvent) => {
     if (event.altKey && event.button === 0) {
@@ -160,29 +189,6 @@ export default function App(): JSX.Element {
     }
   }, [])
 
-  // Keyboard shortcuts from main process
-  useEffect(() => {
-    const unsubs = [
-      window.electronAPI.onToggleScope((index) => {
-        if (index >= 0 && index < SCOPE_KINDS.length) {
-          toggleScope(SCOPE_KINDS[index])
-        }
-      }),
-      window.electronAPI.onToggleCapture(() => {
-        const { isCapturing, startCapture, stopCapture } = useAudioStore.getState()
-        if (isCapturing) {
-          stopCapture()
-        } else {
-          startCapture()
-        }
-      }),
-      window.electronAPI.onToggleSettings(() => {
-        setSettingsOpen((prev) => !prev)
-      }),
-    ]
-    return () => unsubs.forEach((unsub) => unsub())
-  }, [toggleScope])
-
   return (
     <div
       className="prism-app"
@@ -202,6 +208,8 @@ export default function App(): JSX.Element {
       </div>
 
       <ScopePopoutBridge />
+
+      <AppBanner />
 
       {settingsOpen && (
         <div className="prism-settings-region" style={{ height: settingsHeight }}>
