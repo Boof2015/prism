@@ -1489,13 +1489,6 @@ select {
   letter-spacing: 0.08em;
 }
 
-.bottom-bar__memory-pill {
-  justify-content: center;
-  color: var(--text-primary);
-  font-family: 'JetBrains Mono', monospace;
-  letter-spacing: 0.06em;
-}
-
 .bottom-bar__error-text {
   margin-top: 0;
   max-width: 360px;

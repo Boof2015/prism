@@ -1,8 +1,6 @@
 import { create } from 'zustand'
 import {
   isVisualizerFrameTarget,
-  type PerformanceMemoryLogRecord,
-  type PerformanceMemorySnapshot,
   type VisualizerFrameTarget,
 } from '../../types/performance'
 
@@ -16,14 +14,8 @@ interface PersistedPerformanceState {
 interface PerformanceState {
   frameTarget: VisualizerFrameTarget
   dockedRenderFps: number
-  memorySample: PerformanceMemorySnapshot | null
-  memoryHistory: PerformanceMemorySnapshot[]
-  rendererMemoryDeltaMb: number
-  appMemoryDeltaMb: number
   setFrameTarget: (target: VisualizerFrameTarget) => void
   setDockedRenderFps: (fps: number) => void
-  startMemoryMonitoring: () => void
-  stopMemoryMonitoring: () => void
 }
 
 interface StorageLike {
@@ -77,180 +69,10 @@ function persistPerformancePreferences(target: VisualizerFrameTarget, storage = 
 }
 
 const storedPreferences = loadPerformancePreferences()
-const MEMORY_SAMPLE_INTERVAL_MS = 5000
-const MEMORY_HISTORY_LIMIT = 720
-
-interface ChromiumPerformanceMemory {
-  jsHeapSizeLimit: number
-  totalJSHeapSize: number
-  usedJSHeapSize: number
-}
-
-let memoryMonitorTimer: ReturnType<typeof setInterval> | null = null
-let memoryMonitorRefCount = 0
-let memoryMonitorInFlight = false
-let contextStoreAccessorsPromise: Promise<{
-  getAudioState: () => {
-    isCapturing: boolean
-    captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
-  }
-  getSettingsState: () => {
-    scopeOrder: string[]
-    hiddenScopes: Set<string>
-    scopePopouts: Record<string, { poppedOut?: boolean }>
-  }
-}> | null = null
-
-function isMainWindowContext(): boolean {
-  if (typeof window === 'undefined') {
-    return false
-  }
-
-  const params = new URLSearchParams(window.location.search)
-  return params.get('window') !== 'scope-popout'
-}
-
-function bytesToMegabytes(value: number | undefined): number {
-  return Math.round((((value ?? 0) / (1024 * 1024)) * 10)) / 10
-}
-
-async function collectMemorySnapshot(): Promise<PerformanceMemorySnapshot | null> {
-  if (typeof window === 'undefined' || typeof window.electronAPI?.getPerformanceMemorySnapshot !== 'function') {
-    return null
-  }
-
-  const snapshot = await window.electronAPI.getPerformanceMemorySnapshot()
-  const performanceWithMemory = performance as Performance & { memory?: ChromiumPerformanceMemory }
-  const heap = performanceWithMemory.memory
-  return {
-    ...snapshot,
-    jsHeapUsedMb: heap ? bytesToMegabytes(heap.usedJSHeapSize) : null,
-    jsHeapLimitMb: heap ? bytesToMegabytes(heap.jsHeapSizeLimit) : null,
-  }
-}
-
-async function getContextStoreAccessors(): Promise<{
-  getAudioState: () => {
-    isCapturing: boolean
-    captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
-  }
-  getSettingsState: () => {
-    scopeOrder: string[]
-    hiddenScopes: Set<string>
-    scopePopouts: Record<string, { poppedOut?: boolean }>
-  }
-} | null> {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  if (!contextStoreAccessorsPromise) {
-    contextStoreAccessorsPromise = Promise.all([
-      import('./audioStore'),
-      import('./settingsStore'),
-    ]).then(([audioStoreModule, settingsStoreModule]) => ({
-      getAudioState: () => audioStoreModule.useAudioStore.getState(),
-      getSettingsState: () => settingsStoreModule.useSettingsStore.getState(),
-    }))
-  }
-
-  return contextStoreAccessorsPromise
-}
-
-async function sampleMemory(): Promise<void> {
-  if (memoryMonitorInFlight) {
-    return
-  }
-
-  memoryMonitorInFlight = true
-  try {
-    const snapshot = await collectMemorySnapshot()
-    if (!snapshot) {
-      return
-    }
-
-    const contextStoreAccessors = await getContextStoreAccessors()
-    let logRecord: PerformanceMemoryLogRecord | null = null
-    usePerformanceStore.setState((state) => {
-      const baseline = state.memoryHistory[0] ?? snapshot
-      const nextHistory = [...state.memoryHistory, snapshot]
-      if (nextHistory.length > MEMORY_HISTORY_LIMIT) {
-        nextHistory.splice(0, nextHistory.length - MEMORY_HISTORY_LIMIT)
-      }
-
-      const baselineRendererMb = baseline.rendererPrivateMb ?? baseline.rendererMb
-      const currentRendererMb = snapshot.rendererPrivateMb ?? snapshot.rendererMb
-      const rendererDeltaMb = Math.round((currentRendererMb - baselineRendererMb) * 10) / 10
-      const rendererTotalDeltaMb = Math.round((snapshot.rendererTotalMb - baseline.rendererTotalMb) * 10) / 10
-      const appDeltaMb = Math.round((snapshot.appMb - baseline.appMb) * 10) / 10
-      const settingsState = contextStoreAccessors?.getSettingsState()
-      const audioState = contextStoreAccessors?.getAudioState()
-      const visibleScopes = settingsState
-        ? settingsState.scopeOrder.filter((kind) => !settingsState.hiddenScopes.has(kind))
-        : []
-      const poppedOutScopes = settingsState
-        ? settingsState.scopeOrder.filter((kind) => settingsState.scopePopouts[kind]?.poppedOut)
-        : []
-
-      logRecord = {
-        ...snapshot,
-        elapsedSeconds: Math.round(((snapshot.capturedAt - baseline.capturedAt) / 100)) / 10,
-        rendererDeltaMb,
-        rendererTotalDeltaMb,
-        appDeltaMb,
-        frameTarget: state.frameTarget,
-        dockedRenderFps: state.dockedRenderFps,
-        isCapturing: audioState?.isCapturing ?? false,
-        captureStatus: audioState?.captureStatus ?? 'idle',
-        visibleScopes,
-        poppedOutScopes,
-      }
-
-      return {
-        memorySample: snapshot,
-        memoryHistory: nextHistory,
-        rendererMemoryDeltaMb: rendererDeltaMb,
-        appMemoryDeltaMb: appDeltaMb,
-      }
-    })
-
-    if (logRecord && typeof window !== 'undefined' && typeof window.electronAPI?.appendPerformanceMemoryLog === 'function') {
-      void window.electronAPI.appendPerformanceMemoryLog(logRecord)
-    }
-  } finally {
-    memoryMonitorInFlight = false
-  }
-}
-
-function ensureMemoryMonitor(): void {
-  if (memoryMonitorTimer || !isMainWindowContext()) {
-    return
-  }
-
-  void sampleMemory()
-  memoryMonitorTimer = setInterval(() => {
-    void sampleMemory()
-  }, MEMORY_SAMPLE_INTERVAL_MS)
-}
-
-function releaseMemoryMonitor(): void {
-  if (memoryMonitorRefCount > 0) {
-    return
-  }
-
-  if (memoryMonitorTimer) {
-    clearInterval(memoryMonitorTimer)
-    memoryMonitorTimer = null
-  }
-}
 
 export const usePerformanceStore = create<PerformanceState>((set) => ({
   frameTarget: storedPreferences.frameTarget,
   dockedRenderFps: 0,
-  memorySample: null,
-  memoryHistory: [],
-  rendererMemoryDeltaMb: 0,
-  appMemoryDeltaMb: 0,
 
   setFrameTarget: (target: VisualizerFrameTarget) => {
     persistPerformancePreferences(target)
@@ -267,16 +89,6 @@ export const usePerformanceStore = create<PerformanceState>((set) => ({
       if (state.dockedRenderFps === nextFps) return state
       return { ...state, dockedRenderFps: nextFps }
     })
-  },
-
-  startMemoryMonitoring: () => {
-    memoryMonitorRefCount += 1
-    ensureMemoryMonitor()
-  },
-
-  stopMemoryMonitoring: () => {
-    memoryMonitorRefCount = Math.max(0, memoryMonitorRefCount - 1)
-    releaseMemoryMonitor()
   },
 }))
 

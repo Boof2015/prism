@@ -8,7 +8,6 @@ import WindowResizeOverlay from './components/WindowResizeOverlay'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAstraStore } from './stores/astraStore'
 import { useAudioStore } from './stores/audioStore'
-import { usePerformanceStore } from './stores/performanceStore'
 import { useThemeStore } from './stores/themeStore'
 import { SCOPE_KINDS } from '../types/scope'
 
@@ -28,8 +27,6 @@ export default function App(): JSX.Element {
   const guardProfileTransition = useSettingsStore((s) => s.guardProfileTransition)
   const importProfileFromPath = useSettingsStore((s) => s.importProfileFromPath)
   const updateMainWindowBounds = useSettingsStore((s) => s.updateMainWindowBounds)
-  const startMemoryMonitoring = usePerformanceStore((s) => s.startMemoryMonitoring)
-  const stopMemoryMonitoring = usePerformanceStore((s) => s.stopMemoryMonitoring)
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
   const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
   const initializeAstra = useAstraStore((s) => s.initialize)
@@ -104,13 +101,6 @@ export default function App(): JSX.Element {
     initializeAstra,
     updateMainWindowBounds,
   ])
-
-  useEffect(() => {
-    startMemoryMonitoring()
-    return () => {
-      stopMemoryMonitoring()
-    }
-  }, [startMemoryMonitoring, stopMemoryMonitoring])
 
   const measuredSettingsHeight = settingsPanelHeight > 0 && bottomBarHeight > 0
     ? settingsPanelHeight + bottomBarHeight

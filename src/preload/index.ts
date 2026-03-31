@@ -28,13 +28,8 @@ import type {
 } from '../types/theme'
 import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
-import type { PerformanceMemoryLogRecord, PerformanceMemorySnapshot } from '../types/performance'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
-
-function kilobytesToMegabytes(value: number | undefined): number {
-  return Math.round((((value ?? 0) / 1024) * 10)) / 10
-}
 
 // Expose Electron API to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -50,23 +45,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
-  getPerformanceMemoryLogPath: () => ipcRenderer.invoke('performance:get-memory-log-path') as Promise<string>,
-  revealPerformanceMemoryLog: () => ipcRenderer.invoke('performance:reveal-memory-log') as Promise<void>,
-  appendPerformanceMemoryLog: (record: PerformanceMemoryLogRecord) => {
-    return ipcRenderer.invoke('performance:append-memory-log', record) as Promise<void>
-  },
-  getPerformanceMemorySnapshot: async () => {
-    const snapshot = await ipcRenderer.invoke('performance:get-memory-snapshot') as PerformanceMemorySnapshot
-    try {
-      const rendererMemory = await process.getProcessMemoryInfo()
-      return {
-        ...snapshot,
-        rendererPrivateMb: kilobytesToMegabytes(rendererMemory.private),
-      } satisfies PerformanceMemorySnapshot
-    } catch {
-      return snapshot
-    }
-  },
   getDesktopSources: () => ipcRenderer.invoke('audio:get-desktop-sources') as Promise<{ id: string; name: string }[]>,
   getCaptureBackendSupport: async () => {
     const support = await ipcRenderer.invoke('capture:get-backend-support') as CaptureBackendSupport

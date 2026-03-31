@@ -29,7 +29,6 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import type { ResizeDirection } from '../types/windowResize'
-import type { PerformanceMemoryLogRecord, PerformanceMemorySnapshot } from '../types/performance'
 
 declare global {
   interface Window {
@@ -48,10 +47,6 @@ declare global {
       repositionWindow: (position: 'top' | 'bottom') => void
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
-      getPerformanceMemoryLogPath: () => Promise<string>
-      revealPerformanceMemoryLog: () => Promise<void>
-      appendPerformanceMemoryLog: (record: PerformanceMemoryLogRecord) => Promise<void>
-      getPerformanceMemorySnapshot: () => Promise<PerformanceMemorySnapshot>
       getDesktopSources: () => Promise<{ id: string; name: string }[]>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
       getAstraConfig: () => Promise<AstraIntegrationConfig>
