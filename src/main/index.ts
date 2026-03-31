@@ -22,6 +22,7 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
+import type { PerformanceMemorySnapshot } from '../types/performance'
 import { normalizeProfile } from '../shared/profileState'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
@@ -68,6 +69,25 @@ const POPOUT_DEFAULTS = {
   height: 240,
   minWidth: 220,
   minHeight: 160,
+}
+
+function kilobytesToMegabytes(value: number | undefined): number {
+  return Math.round((((value ?? 0) / 1024) * 10)) / 10
+}
+
+function workingSetForMetric(metric: Electron.ProcessMetric | undefined): number {
+  return kilobytesToMegabytes(metric?.memory.workingSetSize)
+}
+
+function sumWorkingSet(metrics: Electron.ProcessMetric[], predicate: (metric: Electron.ProcessMetric) => boolean): number {
+  let totalKilobytes = 0
+  for (const metric of metrics) {
+    if (!predicate(metric)) {
+      continue
+    }
+    totalKilobytes += metric.memory.workingSetSize
+  }
+  return kilobytesToMegabytes(totalKilobytes)
 }
 
 function getProfileLibrary(): FileBackedProfileLibrary {
@@ -901,6 +921,25 @@ function setupIPC(): void {
 
   ipcMain.handle('window:is-always-on-top', (event) => {
     return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? true
+  })
+
+  ipcMain.handle('performance:get-memory-snapshot', async (event): Promise<PerformanceMemorySnapshot> => {
+    const metrics = app.getAppMetrics()
+    const senderPid = event.sender.getOSProcessId()
+    const browserMetric = metrics.find((metric) => metric.type === 'Browser')
+    const rendererMetric = metrics.find((metric) => metric.pid === senderPid)
+
+    return {
+      capturedAt: Date.now(),
+      appMb: sumWorkingSet(metrics, () => true),
+      mainMb: workingSetForMetric(browserMetric),
+      rendererMb: workingSetForMetric(rendererMetric),
+      rendererPrivateMb: null,
+      gpuMb: sumWorkingSet(metrics, (metric) => metric.type === 'GPU'),
+      utilityMb: sumWorkingSet(metrics, (metric) => metric.type === 'Utility'),
+      jsHeapUsedMb: null,
+      jsHeapLimitMb: null,
+    }
   })
 
   ipcMain.handle('audio:get-desktop-sources', async () => {

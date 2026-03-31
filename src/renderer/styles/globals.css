@@ -1414,6 +1414,12 @@ select {
   gap: 10px;
 }
 
+.bottom-bar__inline--memory {
+  gap: 6px;
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
 .bottom-bar__divider {
   width: 1px;
   align-self: stretch;
@@ -1481,6 +1487,13 @@ select {
   color: var(--text-primary);
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.08em;
+}
+
+.bottom-bar__memory-pill {
+  justify-content: center;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.06em;
 }
 
 .bottom-bar__error-text {

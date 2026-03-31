@@ -46,6 +46,9 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const toggleScope = useSettingsStore((s) => s.toggleScope)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
+  const memorySample = usePerformanceStore((s) => s.memorySample)
+  const rendererMemoryDeltaMb = usePerformanceStore((s) => s.rendererMemoryDeltaMb)
+  const appMemoryDeltaMb = usePerformanceStore((s) => s.appMemoryDeltaMb)
   const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
   const themeId = useSettingsStore((s) => s.themeId)
   const setThemeId = useSettingsStore((s) => s.setThemeId)
@@ -155,6 +158,9 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
   const roundedDockedRenderFps = Math.max(0, Math.round(dockedRenderFps))
   const themeEntries = Object.entries(themes)
+  const rendererMemoryMb = memorySample?.rendererPrivateMb ?? memorySample?.rendererMb ?? 0
+  const jsHeapUsedMb = memorySample?.jsHeapUsedMb ?? null
+  const jsHeapLimitMb = memorySample?.jsHeapLimitMb ?? null
 
   const handleThemeChange = async (value: string): Promise<void> => {
     await loadTheme(value)
@@ -435,6 +441,28 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   <span>{roundedDockedRenderFps} FPS</span>
                 </div>
               </div>
+
+              {memorySample ? (
+                <div className="bottom-bar__inline bottom-bar__inline--memory">
+                  <div className="settings-status-pill bottom-bar__memory-pill" title="Whole-app working set from Electron process metrics">
+                    <span>App {memorySample.appMb.toFixed(1)} MB</span>
+                  </div>
+                  <div className="settings-status-pill bottom-bar__memory-pill" title="Current renderer private memory when available, otherwise working set">
+                    <span>Renderer {rendererMemoryMb.toFixed(1)} MB</span>
+                  </div>
+                  <div className="settings-status-pill bottom-bar__memory-pill" title="Growth since the first sample in this session">
+                    <span>ΔR {rendererMemoryDeltaMb >= 0 ? '+' : ''}{rendererMemoryDeltaMb.toFixed(1)} MB</span>
+                  </div>
+                  <div className="settings-status-pill bottom-bar__memory-pill" title="Whole-app growth since the first sample in this session">
+                    <span>ΔA {appMemoryDeltaMb >= 0 ? '+' : ''}{appMemoryDeltaMb.toFixed(1)} MB</span>
+                  </div>
+                  {jsHeapUsedMb !== null ? (
+                    <div className="settings-status-pill bottom-bar__memory-pill" title={jsHeapLimitMb !== null ? `Renderer JS heap (${jsHeapUsedMb.toFixed(1)} / ${jsHeapLimitMb.toFixed(1)} MB)` : 'Renderer JS heap'}>
+                      <span>JS {jsHeapUsedMb.toFixed(1)} MB</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </section>
 
