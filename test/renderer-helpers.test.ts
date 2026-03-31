@@ -18,7 +18,7 @@ import {
   createDefaultProfile,
 } from '../src/shared/profileState'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
-import { createDefaultTheme, resolveTheme } from '../src/shared/themeState'
+import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../src/shared/themeState'
 import { usePerformanceStore } from '../src/renderer/stores/performanceStore'
 import { buildProfileDraft, profilesMatch } from '../src/renderer/stores/profileDraft'
 import {
@@ -223,6 +223,8 @@ function createScopePopouts(poppedOutScopes: ScopeKind[] = []): ScopePopoutState
 
 function installFakeLocalStorage(): {
   getSetCount: () => number
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
   restore: () => void
 } {
   const storage = new Map<string, string>()
@@ -254,6 +256,12 @@ function installFakeLocalStorage(): {
 
   return {
     getSetCount: () => setCount,
+    getItem(key: string): string | null {
+      return storage.get(key) ?? null
+    },
+    setItem(key: string, value: string): void {
+      storage.set(key, value)
+    },
     restore(): void {
       if (previousLocalStorage === undefined) {
         delete globalWithStorage.localStorage
@@ -1097,6 +1105,21 @@ test('buildProfileDraft preserves unlinked themes instead of coercing the active
   assert.equal(draft.themeId, null)
 })
 
+test('resolveNativeThemeSource follows the active theme brightness for native UI', () => {
+  const darkTheme = createDefaultTheme()
+  const lightTheme = createDefaultTheme()
+  lightTheme.app.background = 'rgb(248, 250, 252)'
+  lightTheme.app.surface = 'rgba(255, 255, 255, 0.96)'
+  lightTheme.app.surfaceAlt = 'rgba(255, 255, 255, 0.92)'
+  lightTheme.app.text = 'rgb(15, 23, 42)'
+  lightTheme.app.textMuted = 'rgba(15, 23, 42, 0.48)'
+  lightTheme.controls.menuSurface = 'rgb(255, 255, 255)'
+  lightTheme.controls.menuBorder = 'rgba(15, 23, 42, 0.12)'
+
+  assert.equal(resolveNativeThemeSource(darkTheme), 'dark')
+  assert.equal(resolveNativeThemeSource(lightTheme), 'light')
+})
+
 test('toggleScope appends astra to the scope order when it is enabled from an opt-in profile', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeWindow = installFakeElectronWindow()
@@ -1118,7 +1141,7 @@ test('toggleScope appends astra to the scope order when it is enabled from an op
   }
 })
 
-test('main-window bounds updates stay in memory in Electron mode until save', () => {
+test('main-window bounds updates persist working state in Electron mode', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeStorage = installFakeLocalStorage()
   const fakeWindow = installFakeElectronWindow()
@@ -1131,15 +1154,69 @@ test('main-window bounds updates stay in memory in Electron mode until save', ()
 
     useSettingsStore.getState().updateMainWindowBounds({ x: 10, y: 20, width: 900, height: 180 })
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
-    assert.equal(fakeStorage.getSetCount(), 0)
+    assert.equal(fakeStorage.getSetCount(), 1)
 
     useSettingsStore.getState().updateMainWindowBounds({ x: 24, y: 20, width: 900, height: 180 })
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, true)
-    assert.equal(fakeStorage.getSetCount(), 0)
+    assert.equal(fakeStorage.getSetCount(), 2)
 
     useSettingsStore.getState().updateMainWindowBounds({ x: 10, y: 20, width: 900, height: 180 })
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
-    assert.equal(fakeStorage.getSetCount(), 0)
+    assert.equal(fakeStorage.getSetCount(), 3)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles restores persisted dirty window bounds while keeping the saved profile as baseline', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const restoredBounds: WindowBounds[] = []
+  const dirtyBounds = { x: 44, y: 55, width: 900, height: 180 }
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => {
+      const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+      profile.themeId = 'theme_default'
+      profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
+
+      return {
+        activeProfileId: DEFAULT_PROFILE_ID,
+        profiles: {
+          [DEFAULT_PROFILE_ID]: profile,
+        },
+      }
+    },
+    getWindowBounds: async () => dirtyBounds,
+    setWindowBounds: (bounds: WindowBounds) => {
+      restoredBounds.push(bounds)
+    },
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.themeId = 'theme_default'
+    profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
+
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      themeId: profile.themeId,
+      scopeOrder: profile.scopeOrder,
+      hiddenScopes: profile.hiddenScopes,
+      widthWeights: profile.widthWeights,
+      scopeSettings: profile.scopeSettings,
+      scopePopouts: profile.scopePopouts,
+      windowBounds: dirtyBounds,
+    }))
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.activeProfileId, DEFAULT_PROFILE_ID)
+    assert.deepEqual(state.windowBounds, dirtyBounds)
+    assert.deepEqual(state.savedProfileBaseline?.windowBounds, profile.windowBounds)
+    assert.equal(state.hasUnsavedProfileChanges, true)
+    assert.deepEqual(restoredBounds, [dirtyBounds])
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()
@@ -1332,7 +1409,7 @@ test('geometry sync window extends while load-time macOS bound updates continue'
   }
 })
 
-test('popout bounds updates stay in memory in Electron mode until save', () => {
+test('popout bounds updates persist working state in Electron mode', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeStorage = installFakeLocalStorage()
   const fakeWindow = installFakeElectronWindow()
@@ -1348,15 +1425,15 @@ test('popout bounds updates stay in memory in Electron mode until save', () => {
 
     useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 140, y: 60, width: 420, height: 240 })
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
-    assert.equal(fakeStorage.getSetCount(), 0)
+    assert.equal(fakeStorage.getSetCount(), 1)
 
     useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 180, y: 60, width: 420, height: 240 })
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, true)
-    assert.equal(fakeStorage.getSetCount(), 0)
+    assert.equal(fakeStorage.getSetCount(), 2)
 
     useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 140, y: 60, width: 420, height: 240 })
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
-    assert.equal(fakeStorage.getSetCount(), 0)
+    assert.equal(fakeStorage.getSetCount(), 3)
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()

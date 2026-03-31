@@ -26,6 +26,7 @@ import type {
   LegacyThemeMigrationResult,
   ThemeLibrarySnapshot,
 } from '../types/theme'
+import type { DialogOptions, DialogResult } from '../types/dialog'
 import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 
@@ -217,6 +218,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('scope-popout:session', handler)
     return () => ipcRenderer.removeListener('scope-popout:session', handler)
   },
+  showDialog: (options: DialogOptions) => ipcRenderer.invoke('dialog:show', options) as Promise<DialogResult>,
+  onDialogConfig: (callback: (options: DialogOptions) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, options: DialogOptions): void => callback(options)
+    ipcRenderer.on('dialog:config', handler)
+    return () => ipcRenderer.removeListener('dialog:config', handler)
+  },
+  sendDialogResult: (result: DialogResult) => ipcRenderer.send('dialog:result', result),
 })
 
 // Native DSP module — load if available, gracefully degrade if not

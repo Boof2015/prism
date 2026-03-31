@@ -83,6 +83,10 @@ function canUseElectronAPI(): boolean {
   return typeof window !== 'undefined' && typeof window.electronAPI !== 'undefined'
 }
 
+function canUseBrowserStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message
     ? error.message
@@ -90,9 +94,20 @@ function getErrorMessage(error: unknown, fallback: string): string {
 }
 
 function loadFromStorage(): Partial<PersistedSettingsState> {
+  if (!canUseBrowserStorage()) {
+    return {}
+  }
+
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw) as Partial<PersistedSettingsState>
+    if (!raw) {
+      return {}
+    }
+
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed === 'object' && parsed !== null) {
+      return parsed as Partial<PersistedSettingsState>
+    }
   } catch {
     // Ignore localStorage read failures.
   }
@@ -100,6 +115,10 @@ function loadFromStorage(): Partial<PersistedSettingsState> {
 }
 
 function saveToStorage(state: WorkingSettingsState): void {
+  if (!canUseBrowserStorage()) {
+    return
+  }
+
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       themeId: state.themeId,
@@ -116,9 +135,17 @@ function saveToStorage(state: WorkingSettingsState): void {
 }
 
 function persistWorkingState(state: WorkingSettingsState): void {
-  if (!canUseElectronAPI()) {
-    saveToStorage(state)
-  }
+  saveToStorage(state)
+}
+
+function hasPersistedWorkingState(state: Partial<PersistedSettingsState>): boolean {
+  return 'themeId' in state
+    || 'scopeOrder' in state
+    || 'hiddenScopes' in state
+    || 'widthWeights' in state
+    || 'scopeSettings' in state
+    || 'scopePopouts' in state
+    || 'windowBounds' in state
 }
 
 function loadLegacyProfileMigrationPayload(): LegacyProfileMigrationPayload | null {
@@ -175,6 +202,20 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
     scopeSettings: mergeScopeSettings(normalizedProfile.scopeSettings),
     scopePopouts: normalizeScopePopouts(normalizedProfile.scopePopouts),
     windowBounds: normalizedProfile.windowBounds,
+  }
+}
+
+function createWorkingStateFromPersistedState(state: Partial<PersistedSettingsState>): WorkingSettingsState {
+  return {
+    themeId: typeof state.themeId === 'string' && state.themeId.trim()
+      ? state.themeId.trim()
+      : null,
+    scopeOrder: normalizeScopeOrder(state.scopeOrder),
+    hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(state.hiddenScopes)),
+    widthWeights: normalizeWidthWeights(state.widthWeights),
+    scopeSettings: mergeScopeSettings(state.scopeSettings),
+    scopePopouts: normalizeScopePopouts(state.scopePopouts),
+    windowBounds: state.windowBounds,
   }
 }
 
@@ -454,18 +495,8 @@ async function restoreSavedProfileBaseline(
   syncCurrentMainWindowBounds(set)
 }
 
-const stored = canUseElectronAPI() ? {} : loadFromStorage()
-const initialWorkingState: WorkingSettingsState = {
-  themeId: typeof stored.themeId === 'string' && stored.themeId.trim()
-    ? stored.themeId.trim()
-    : null,
-  scopeOrder: normalizeScopeOrder(stored.scopeOrder),
-  hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(stored.hiddenScopes)),
-  widthWeights: normalizeWidthWeights(stored.widthWeights),
-  scopeSettings: mergeScopeSettings(stored.scopeSettings),
-  scopePopouts: normalizeScopePopouts(stored.scopePopouts),
-  windowBounds: stored.windowBounds,
-}
+const stored = loadFromStorage()
+const initialWorkingState = createWorkingStateFromPersistedState(stored)
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   ...initialWorkingState,
@@ -496,7 +527,34 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       }
     }
 
-    applyProfileSnapshot(set, snapshot, { loadActiveProfile: true })
+    // If localStorage has a working state from a previous session, preserve it so the
+    // user picks up exactly where they left off (dirty or not). The saved profile becomes
+    // the baseline for dirty-state comparison but the working values are left as-is.
+    // On first launch (no stored state) we load the profile normally.
+    const storedWorkingState = loadFromStorage()
+    const hasStoredWorkingState = hasPersistedWorkingState(storedWorkingState)
+    applyProfileSnapshot(set, snapshot, { loadActiveProfile: !hasStoredWorkingState })
+    if (hasStoredWorkingState) {
+      set((state) => commitWorkingState(
+        state,
+        createWorkingStateFromPersistedState(storedWorkingState),
+        state.savedProfileBaseline,
+      ))
+
+      // Restore window position: use the working-state bounds (last known position,
+      // possibly dirty) or fall back to the saved profile's bounds if none exist.
+      const state = get()
+      const boundsToApply = state.windowBounds ?? state.savedProfileBaseline?.windowBounds ?? null
+      if (boundsToApply) {
+        window.electronAPI.setWindowBounds(boundsToApply)
+      }
+      syncCurrentMainWindowBounds(set)
+      const { themeId } = state
+      const { themes, loadTheme, activeThemeId } = useThemeStore.getState()
+      if (themeId && themeId !== activeThemeId && themes[themeId]) {
+        void loadTheme(themeId)
+      }
+    }
   },
 
   applyExternalProfileSnapshot: (snapshot: ProfileLibrarySnapshot) => {

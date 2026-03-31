@@ -322,6 +322,10 @@ function parseCssColor(value: string): RgbaColor | null {
   return { r, g, b, a }
 }
 
+function getPerceivedBrightness(color: RgbaColor): number {
+  return ((color.r * 299) + (color.g * 587) + (color.b * 114)) / 1000
+}
+
 function toCssColor(color: RgbaColor): string {
   if (Math.abs(color.a - 1) < 0.001) {
     return `rgb(${color.r}, ${color.g}, ${color.b})`
@@ -1140,6 +1144,16 @@ export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
     waveform: resolveWaveformTheme(normalized, app, scopes),
     astra: resolveAstraTheme(normalized, app, controls, scopes),
   }
+}
+
+export function resolveNativeThemeSource(theme: PrismTheme | null | undefined): 'dark' | 'light' {
+  const resolved = resolveTheme(theme ?? createDefaultTheme())
+  const parsed = parseCssColor(resolved.interface.menuBg) ?? parseThemeChannelColor(resolved.interface.menuBg)
+  if (!parsed) {
+    return 'dark'
+  }
+
+  return getPerceivedBrightness(parsed) >= 156 ? 'light' : 'dark'
 }
 
 export function resolveLegacyThemeToPresetId(payload: LegacyThemeMigrationPayload): string | null {

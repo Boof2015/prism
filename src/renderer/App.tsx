@@ -77,10 +77,15 @@ export default function App(): JSX.Element {
         })
     })
     const unsubscribeCloseRequested = window.electronAPI.onMainCloseRequested(() => {
-      void (async () => {
-        const shouldClose = await guardProfileTransition(async () => {})
-        window.electronAPI.respondToCloseRequest(shouldClose)
-      })()
+      void window.electronAPI.getWindowBounds()
+        .then((bounds) => {
+          if (bounds) {
+            updateMainWindowBounds(bounds)
+          }
+        })
+        .finally(() => {
+          window.electronAPI.respondToCloseRequest(true)
+        })
     })
 
     return () => {

@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import ScopePopoutWindow from './popouts/ScopePopoutWindow'
+import DialogApp from './components/DialogApp'
 import './styles/globals.css'
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
@@ -14,14 +15,20 @@ function isScopeKind(value: string | null): value is ScopeKind {
 }
 
 const params = new URLSearchParams(window.location.search)
+const windowMode = params.get('mode')
 const windowRole = params.get('window')
 const scopeKind = params.get('scope')
 
-const root = windowRole === 'scope-popout'
-  ? isScopeKind(scopeKind)
+let root: React.ReactElement
+if (windowMode === 'dialog') {
+  root = <DialogApp />
+} else if (windowRole === 'scope-popout') {
+  root = isScopeKind(scopeKind)
     ? <ScopePopoutWindow scopeKind={scopeKind} />
     : <div>Invalid scope popout</div>
-  : <App />
+} else {
+  root = <App />
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeTheme, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { extname, join, resolve } from 'path'
 import type {
@@ -22,7 +22,9 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
+import type { DialogOptions, DialogResult } from '../types/dialog'
 import { normalizeProfile } from '../shared/profileState'
+import { resolveNativeThemeSource } from '../shared/themeState'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
 import { AstraIntegrationService } from './services/astraIntegration'
@@ -216,8 +218,20 @@ async function processPendingThemeOpenPaths(): Promise<void> {
 
   if (!latestSnapshot || !mainWindow || mainWindow.isDestroyed()) return
 
+  applyNativeThemeSnapshot(latestSnapshot)
   focusMainWindow()
   mainWindow.webContents.send('themes:external-activated', latestSnapshot)
+}
+
+function applyNativeThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
+  const activeTheme = snapshot.activeThemeId
+    ? snapshot.themes[snapshot.activeThemeId] ?? null
+    : null
+  nativeTheme.themeSource = resolveNativeThemeSource(activeTheme)
+}
+
+async function syncNativeThemeAppearance(): Promise<void> {
+  applyNativeThemeSnapshot(await getThemeLibrary().getSnapshot())
 }
 
 function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
@@ -618,6 +632,51 @@ function loadRendererTarget(window: BrowserWindow, query: Record<string, string>
   }
 
   void window.loadFile(join(__dirname, '../renderer/index.html'), { query })
+}
+
+async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
+  return new Promise((resolve) => {
+    const height = options.type === 'prompt' ? 200 : 160
+    const win = new BrowserWindow({
+      width: 380,
+      height,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      resizable: false,
+      alwaysOnTop: true,
+      hasShadow: false,
+      skipTaskbar: true,
+      show: false,
+      webPreferences: {
+        preload: join(__dirname, '../preload/index.js'),
+        sandbox: false,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+
+    win.center()
+    loadRendererTarget(win, { mode: 'dialog' })
+
+    const onResult = (_event: Electron.IpcMainEvent, result: DialogResult) => {
+      if (_event.sender !== win.webContents) return
+      resolve(result)
+      win.destroy()
+    }
+
+    ipcMain.on('dialog:result', onResult)
+
+    win.webContents.once('did-finish-load', () => {
+      win.webContents.send('dialog:config', options)
+      win.show()
+    })
+
+    win.once('closed', () => {
+      ipcMain.removeListener('dialog:result', onResult)
+      resolve({ buttonIndex: options.cancelId ?? options.buttons.length - 1 })
+    })
+  })
 }
 
 function createMainWindow(): void {
@@ -1081,43 +1140,26 @@ function setupIPC(): void {
     return getProfileLibrary().importProfileFromPath(path)
   })
 
-  ipcMain.handle('profiles:prompt-unsaved', async (event, profileName: string | null) => {
-    const targetWindow = getWindowFromSender(event.sender) ?? mainWindow ?? undefined
-    const { response } = targetWindow
-      ? await dialog.showMessageBox(targetWindow, {
-        type: 'warning',
-        title: 'Unsaved Profile Changes',
-        message: profileName
-          ? `Save changes to "${profileName}"?`
-          : 'Save unsaved profile changes?',
-        detail: 'Your profile changes will be lost if you continue without saving.',
-        buttons: ['Save', 'Discard', 'Cancel'],
-        defaultId: 0,
-        cancelId: 2,
-        noLink: true,
-      })
-      : await dialog.showMessageBox({
-        type: 'warning',
-        title: 'Unsaved Profile Changes',
-        message: profileName
-          ? `Save changes to "${profileName}"?`
-          : 'Save unsaved profile changes?',
-        detail: 'Your profile changes will be lost if you continue without saving.',
-        buttons: ['Save', 'Discard', 'Cancel'],
-        defaultId: 0,
-        cancelId: 2,
-        noLink: true,
-      })
+  ipcMain.handle('profiles:prompt-unsaved', async (_event, profileName: string | null) => {
+    const result = await showCustomDialog({
+      type: 'confirm',
+      title: 'Unsaved Profile Changes',
+      message: profileName
+        ? `Save changes to "${profileName}"?`
+        : 'Save unsaved profile changes?',
+      detail: 'Your profile changes will be lost if you continue without saving.',
+      buttons: ['Save', 'Discard', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+    })
 
-    if (response === 0) {
-      return 'save'
-    }
-
-    if (response === 1) {
-      return 'discard'
-    }
-
+    if (result.buttonIndex === 0) return 'save'
+    if (result.buttonIndex === 1) return 'discard'
     return 'cancel'
+  })
+
+  ipcMain.handle('dialog:show', async (_event, options: DialogOptions) => {
+    return showCustomDialog(options)
   })
 
   ipcMain.handle('profiles:reveal-folder', async () => {
@@ -1133,23 +1175,33 @@ function setupIPC(): void {
   })
 
   ipcMain.handle('themes:get-snapshot', async () => {
-    return getThemeLibrary().getSnapshot()
+    const snapshot = await getThemeLibrary().getSnapshot()
+    applyNativeThemeSnapshot(snapshot)
+    return snapshot
   })
 
   ipcMain.handle('themes:load', async (_event, id: string) => {
-    return getThemeLibrary().loadTheme(id)
+    const snapshot = await getThemeLibrary().loadTheme(id)
+    applyNativeThemeSnapshot(snapshot)
+    return snapshot
   })
 
   ipcMain.handle('themes:rename', async (_event, id: string, name: string) => {
-    return getThemeLibrary().renameTheme(id, name)
+    const snapshot = await getThemeLibrary().renameTheme(id, name)
+    applyNativeThemeSnapshot(snapshot)
+    return snapshot
   })
 
   ipcMain.handle('themes:delete', async (_event, id: string) => {
-    return getThemeLibrary().deleteTheme(id)
+    const snapshot = await getThemeLibrary().deleteTheme(id)
+    applyNativeThemeSnapshot(snapshot)
+    return snapshot
   })
 
   ipcMain.handle('themes:reload', async () => {
-    return getThemeLibrary().reloadThemes()
+    const snapshot = await getThemeLibrary().reloadThemes()
+    applyNativeThemeSnapshot(snapshot)
+    return snapshot
   })
 
   ipcMain.handle('themes:import-dialog', async () => {
@@ -1171,7 +1223,9 @@ function setupIPC(): void {
       return null
     }
 
-    return getThemeLibrary().importThemeFromPath(result.filePaths[0])
+    const snapshot = await getThemeLibrary().importThemeFromPath(result.filePaths[0])
+    applyNativeThemeSnapshot(snapshot)
+    return snapshot
   })
 
   ipcMain.handle('themes:reveal-folder', async () => {
@@ -1183,7 +1237,9 @@ function setupIPC(): void {
   })
 
   ipcMain.handle('themes:migrate-legacy', async (_event, payload: LegacyThemeMigrationPayload) => {
-    return getThemeLibrary().migrateLegacyTheme(payload)
+    const migration = await getThemeLibrary().migrateLegacyTheme(payload)
+    applyNativeThemeSnapshot(migration.snapshot)
+    return migration
   })
 
   ipcMain.on('profile-menu:open', (event, rawRequest: unknown) => {
@@ -1324,6 +1380,7 @@ if (!hasSingleInstanceLock) {
     void getAstraIntegrationService().initialize()
     setupIPC()
     await getWindowStateStore().initialize()
+    await syncNativeThemeAppearance()
     createMainWindow()
     queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
     queueThemeOpenPaths(extractThemePathsFromArgv(process.argv))

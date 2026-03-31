@@ -28,6 +28,7 @@ import type {
   LegacyThemeMigrationResult,
   ThemeLibrarySnapshot,
 } from '../types/theme'
+import type { DialogOptions, DialogResult } from '../types/dialog'
 import type { ResizeDirection } from '../types/windowResize'
 
 declare global {
@@ -111,6 +112,9 @@ declare global {
       onScopePopoutSnapshot: (callback: (snapshot: ScopePopoutSnapshot) => void) => () => void
       onScopePopoutAudio: (callback: (kind: ScopeKind, batch: ScopePopoutAudioBatch) => void) => () => void
       onScopePopoutSession: (callback: (kind: ScopeKind, session: ScopePopoutSessionState) => void) => () => void
+      showDialog: (options: DialogOptions) => Promise<DialogResult>
+      onDialogConfig: (callback: (options: DialogOptions) => void) => () => void
+      sendDialogResult: (result: DialogResult) => void
     }
   }
 }

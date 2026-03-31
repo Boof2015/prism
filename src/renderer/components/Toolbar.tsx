@@ -113,13 +113,22 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   }, [])
 
   const handleSaveNew = useCallback(async () => {
+    setIsProfileMenuOpen(false)
     const count = Object.keys(useSettingsStore.getState().profiles).length
+    const result = await window.electronAPI.showDialog({
+      type: 'prompt',
+      title: 'Save as New Profile',
+      message: 'Profile name',
+      buttons: ['Save', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      defaultValue: `Profile ${count}`,
+    })
+    if (result.buttonIndex !== 0 || !result.value?.trim()) return
     try {
-      await saveProfile(`Profile ${count}`)
+      await saveProfile(result.value.trim())
     } catch (error) {
       window.alert(getErrorMessage(error, 'Could not save the profile.'))
-    } finally {
-      setIsProfileMenuOpen(false)
     }
   }, [saveProfile])
 
@@ -140,18 +149,22 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
       return
     }
 
-    const nextName = window.prompt('Rename profile', profile.name)?.trim()
-    if (!nextName) {
-      setIsProfileMenuOpen(false)
-      return
-    }
+    setIsProfileMenuOpen(false)
+    const result = await window.electronAPI.showDialog({
+      type: 'prompt',
+      title: 'Rename Profile',
+      message: `New name for "${profile.name}"`,
+      buttons: ['Rename', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      defaultValue: profile.name,
+    })
+    if (result.buttonIndex !== 0 || !result.value?.trim()) return
 
     try {
-      await renameProfile(id, nextName)
+      await renameProfile(id, result.value.trim())
     } catch (error) {
       window.alert(getErrorMessage(error, 'Could not rename the profile.'))
-    } finally {
-      setIsProfileMenuOpen(false)
     }
   }, [renameProfile])
 
@@ -162,17 +175,22 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
       return
     }
 
-    if (!window.confirm(`Delete "${profile.name}"?`)) {
-      setIsProfileMenuOpen(false)
-      return
-    }
+    setIsProfileMenuOpen(false)
+    const result = await window.electronAPI.showDialog({
+      type: 'confirm',
+      title: 'Delete Profile',
+      message: `Delete "${profile.name}"?`,
+      detail: 'This cannot be undone.',
+      buttons: ['Delete', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    if (result.buttonIndex !== 0) return
 
     try {
       await deleteProfile(id)
     } catch (error) {
       window.alert(getErrorMessage(error, 'Could not delete the profile.'))
-    } finally {
-      setIsProfileMenuOpen(false)
     }
   }, [deleteProfile])
 
