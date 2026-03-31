@@ -23,7 +23,11 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
-import type { PerformanceMemoryLogRecord, PerformanceMemorySnapshot } from '../types/performance'
+import type {
+  PerformanceMemoryLogRecord,
+  PerformanceMemorySnapshot,
+  PerformanceRendererProcessSnapshot,
+} from '../types/performance'
 import { normalizeProfile } from '../shared/profileState'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
@@ -97,6 +101,56 @@ function sumWorkingSet(metrics: Electron.ProcessMetric[], predicate: (metric: El
   return kilobytesToMegabytes(totalKilobytes)
 }
 
+function getRendererProcessSnapshots(metrics: Electron.ProcessMetric[]): PerformanceRendererProcessSnapshot[] {
+  const rendererMetrics = metrics.filter((metric) => metric.type === 'Tab')
+  const metricsByPid = new Map(rendererMetrics.map((metric) => [metric.pid, metric]))
+  const snapshots: PerformanceRendererProcessSnapshot[] = []
+  const seenPids = new Set<number>()
+
+  const pushSnapshot = (label: string, webContents: WebContents | null | undefined): void => {
+    if (!webContents || webContents.isDestroyed()) {
+      return
+    }
+
+    const pid = webContents.getOSProcessId()
+    if (!pid || seenPids.has(pid)) {
+      return
+    }
+
+    const metric = metricsByPid.get(pid)
+    if (!metric) {
+      return
+    }
+
+    snapshots.push({
+      pid,
+      label,
+      workingSetMb: workingSetForMetric(metric),
+    })
+    seenPids.add(pid)
+  }
+
+  pushSnapshot('main', mainWindow?.webContents ?? null)
+  for (const [kind, window] of scopePopoutWindows) {
+    pushSnapshot(`popout:${kind}`, window.webContents)
+  }
+
+  for (const metric of rendererMetrics) {
+    if (seenPids.has(metric.pid)) {
+      continue
+    }
+
+    snapshots.push({
+      pid: metric.pid,
+      label: metric.name ? `renderer:${metric.name}` : `renderer:${metric.pid}`,
+      workingSetMb: workingSetForMetric(metric),
+    })
+  }
+
+  snapshots.sort((left, right) => left.label.localeCompare(right.label) || left.pid - right.pid)
+  return snapshots
+}
+
 function getMemoryLogDirectory(): string {
   return join(app.getPath('documents'), MEMORY_LOG_DIRECTORY_NAME)
 }
@@ -134,11 +188,15 @@ async function ensureMemoryLogFile(): Promise<void> {
         'main_mb',
         'renderer_mb',
         'renderer_private_mb',
+        'renderer_total_mb',
+        'renderer_process_count',
+        'renderer_processes',
         'gpu_mb',
         'utility_mb',
         'js_heap_used_mb',
         'js_heap_limit_mb',
         'renderer_delta_mb',
+        'renderer_total_delta_mb',
         'app_delta_mb',
         'frame_target',
         'docked_render_fps',
@@ -166,11 +224,17 @@ function queueMemoryLogWrite(record: PerformanceMemoryLogRecord): void {
     record.mainMb.toFixed(1),
     record.rendererMb.toFixed(1),
     record.rendererPrivateMb === null ? '' : record.rendererPrivateMb.toFixed(1),
+    record.rendererTotalMb.toFixed(1),
+    Math.round(record.rendererProcessCount),
+    record.rendererProcesses
+      .map((process) => `${process.label}@${process.pid}=${process.workingSetMb.toFixed(1)}`)
+      .join('|'),
     record.gpuMb.toFixed(1),
     record.utilityMb.toFixed(1),
     record.jsHeapUsedMb === null ? '' : record.jsHeapUsedMb.toFixed(1),
     record.jsHeapLimitMb === null ? '' : record.jsHeapLimitMb.toFixed(1),
     record.rendererDeltaMb.toFixed(1),
+    record.rendererTotalDeltaMb.toFixed(1),
     record.appDeltaMb.toFixed(1),
     record.frameTarget,
     Math.round(record.dockedRenderFps),
@@ -1039,7 +1103,8 @@ function setupIPC(): void {
     const metrics = app.getAppMetrics()
     const senderPid = event.sender.getOSProcessId()
     const browserMetric = metrics.find((metric) => metric.type === 'Browser')
-    const rendererMetric = metrics.find((metric) => metric.pid === senderPid)
+    const rendererMetric = metrics.find((metric) => metric.type === 'Tab' && metric.pid === senderPid)
+    const rendererProcesses = getRendererProcessSnapshots(metrics)
 
     return {
       capturedAt: Date.now(),
@@ -1047,6 +1112,9 @@ function setupIPC(): void {
       mainMb: workingSetForMetric(browserMetric),
       rendererMb: workingSetForMetric(rendererMetric),
       rendererPrivateMb: null,
+      rendererTotalMb: sumWorkingSet(metrics, (metric) => metric.type === 'Tab'),
+      rendererProcessCount: rendererProcesses.length,
+      rendererProcesses,
       gpuMb: sumWorkingSet(metrics, (metric) => metric.type === 'GPU'),
       utilityMb: sumWorkingSet(metrics, (metric) => metric.type === 'Utility'),
       jsHeapUsedMb: null,

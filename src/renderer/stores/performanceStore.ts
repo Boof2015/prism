@@ -181,6 +181,7 @@ async function sampleMemory(): Promise<void> {
       const baselineRendererMb = baseline.rendererPrivateMb ?? baseline.rendererMb
       const currentRendererMb = snapshot.rendererPrivateMb ?? snapshot.rendererMb
       const rendererDeltaMb = Math.round((currentRendererMb - baselineRendererMb) * 10) / 10
+      const rendererTotalDeltaMb = Math.round((snapshot.rendererTotalMb - baseline.rendererTotalMb) * 10) / 10
       const appDeltaMb = Math.round((snapshot.appMb - baseline.appMb) * 10) / 10
       const settingsState = contextStoreAccessors?.getSettingsState()
       const audioState = contextStoreAccessors?.getAudioState()
@@ -195,6 +196,7 @@ async function sampleMemory(): Promise<void> {
         ...snapshot,
         elapsedSeconds: Math.round(((snapshot.capturedAt - baseline.capturedAt) / 100)) / 10,
         rendererDeltaMb,
+        rendererTotalDeltaMb,
         appDeltaMb,
         frameTarget: state.frameTarget,
         dockedRenderFps: state.dockedRenderFps,
