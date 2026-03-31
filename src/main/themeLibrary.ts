@@ -167,10 +167,7 @@ export class FileBackedThemeLibrary {
       entries = await this.readManagedEntries()
     }
 
-    if (!entries.some((entry) => entry.id === DEFAULT_THEME_ID)) {
-      await this.writeManagedTheme(entries, DEFAULT_THEME_ID, createDefaultTheme())
-      entries = await this.readManagedEntries()
-    }
+    entries = await this.syncBundledThemes(entries)
 
     await this.ensureTemplateFile()
 
@@ -186,6 +183,26 @@ export class FileBackedThemeLibrary {
       entries: this.sortEntries(entries),
       localState,
     }
+  }
+
+  private async syncBundledThemes(entries: ManagedThemeEntry[]): Promise<ManagedThemeEntry[]> {
+    let nextEntries = entries
+
+    for (const theme of createBundledThemes()) {
+      const existingEntry = nextEntries.find((entry) => entry.id === theme.id) ?? null
+      const shouldWrite = !existingEntry || serializeThemeFile(existingEntry.theme) !== serializeThemeFile(theme)
+      if (!shouldWrite) continue
+
+      await this.writeManagedTheme(nextEntries, theme.id, theme, existingEntry?.path)
+      nextEntries = await this.readManagedEntries()
+    }
+
+    if (!nextEntries.some((entry) => entry.id === DEFAULT_THEME_ID)) {
+      await this.writeManagedTheme(nextEntries, DEFAULT_THEME_ID, createDefaultTheme())
+      nextEntries = await this.readManagedEntries()
+    }
+
+    return nextEntries
   }
 
   private async ensureTemplateFile(): Promise<void> {

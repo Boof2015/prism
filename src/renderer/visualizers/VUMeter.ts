@@ -22,7 +22,9 @@ export interface VUMeterDataSource extends VisualizerSessionSource {
 export interface VUMeterOptions {
   mode?: VUMeterMode
   orientation?: VUMeterOrientation
+  backgroundColor?: string
   lineColor?: string
+  trackColor?: string
   peakColor?: string
   clipColor?: string
   scaleColor?: string
@@ -36,7 +38,9 @@ type ResolvedVUMeterOptions = Required<Omit<VUMeterOptions, 'dataSource' | 'fram
 const defaultOptions: ResolvedVUMeterOptions = {
   mode: 'bar',
   orientation: DEFAULT_VU_METER_ORIENTATION,
+  backgroundColor: 'transparent',
   lineColor: '#38bdf8',
+  trackColor: 'rgba(56, 189, 248, 0.08)',
   peakColor: 'rgb(255, 127, 0)',
   clipColor: 'rgba(255, 120, 80, 0.9)',
   scaleColor: 'rgba(255, 255, 255, 0.12)',
@@ -258,7 +262,7 @@ export class VUMeter {
     const hotThreshold = this.dbToNormalized(-6) * w
 
     // Background track
-    ctx.fillStyle = alphaColor(this.options.scaleColor, 0.25)
+    ctx.fillStyle = this.options.trackColor
     ctx.fillRect(x, y, w, h)
 
     // Main level bar
@@ -310,7 +314,7 @@ export class VUMeter {
     const levelHeight = levelNorm * h
     const hotThreshold = this.dbToNormalized(-6) * h
 
-    ctx.fillStyle = alphaColor(this.options.scaleColor, 0.25)
+    ctx.fillStyle = this.options.trackColor
     ctx.fillRect(x, y, w, h)
 
     if (levelHeight > 0) {
@@ -396,7 +400,7 @@ export class VUMeter {
     const corr = Math.max(-1, Math.min(1, this.correlation))
 
     // Background track
-    ctx.fillStyle = alphaColor(this.options.scaleColor, 0.25)
+    ctx.fillStyle = this.options.trackColor
     ctx.fillRect(x, y, w, h)
 
     // Center line
@@ -561,6 +565,10 @@ export class VUMeter {
     this.processAudio()
 
     ctx.clearRect(0, 0, width, height)
+    if (options.backgroundColor !== 'transparent') {
+      ctx.fillStyle = options.backgroundColor
+      ctx.fillRect(0, 0, width, height)
+    }
 
     if (options.mode === 'needle') {
       this.drawNeedleMode(width, height)

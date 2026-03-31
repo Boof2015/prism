@@ -13,6 +13,7 @@
     "test:astra": "node scripts/run-astra-integration-tests.mjs",
     "test:profiles": "node scripts/run-profile-library-tests.mjs",
     "test:themes": "node scripts/run-theme-library-tests.mjs",
+    "test:window-state": "node scripts/run-window-state-tests.mjs",
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
     "build:native": "cd native && node-gyp rebuild",
     "rebuild:native": "node -e \"const e=require('electron/package.json').version;const a=process.arch;const{execSync}=require('child_process');execSync('node-gyp rebuild --target='+e+' --arch='+a+' --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native'})\"",

@@ -1,7 +1,7 @@
 import type { ScopeKind } from './scope'
 
 export const THEME_FILE_FORMAT = 'prism-theme'
-export const THEME_FILE_VERSION = 1
+export const THEME_FILE_VERSION = 2
 export const THEME_LOCAL_STATE_FORMAT = 'prism-theme-local'
 export const THEME_LOCAL_STATE_VERSION = 1
 export const LEGACY_THEME_MIGRATION_VERSION = 1
@@ -9,29 +9,107 @@ export const DEFAULT_THEME_ID = 'theme_default'
 export const DEFAULT_THEME_NAME = 'Default'
 
 export type ThemeSectionName =
-  | 'all'
-  | 'interface'
+  | 'app'
+  | 'controls'
+  | 'scopes'
   | ScopeKind
 
-export interface ThemeTokens {
-  primary?: string
-  secondary?: string
-  guides?: string
-  text?: string
-  background?: string
-  lowBand?: string
-  midBand?: string
-  highBand?: string
-  fill?: string
-  peak?: string
-  clip?: string
-  target?: string
-  heatLow?: string
-  heatMid?: string
-  heatHigh?: string
+export interface ThemeAppTokens {
+  accent?: string
   success?: string
   warning?: string
   danger?: string
+  background?: string
+  surface?: string
+  surfaceAlt?: string
+  border?: string
+  text?: string
+  textMuted?: string
+}
+
+export interface ThemeControlsTokens {
+  surface?: string
+  surfaceHover?: string
+  surfaceActive?: string
+  border?: string
+  borderActive?: string
+  text?: string
+  inputSurface?: string
+  inputBorder?: string
+  menuSurface?: string
+  menuBorder?: string
+  slider?: string
+}
+
+export interface ThemeScopesTokens {
+  background?: string
+  guides?: string
+  overlaySurface?: string
+  overlayText?: string
+  overlayBorder?: string
+  resizeHandle?: string
+}
+
+export interface ThemeSpectrumTokens {
+  line?: string
+  sideLine?: string
+  fill?: string
+  heatLow?: string
+  heatMid?: string
+  heatHigh?: string
+}
+
+export interface ThemeOscilloscopeTokens {
+  line?: string
+  fill?: string
+}
+
+export interface ThemeVectorscopeTokens {
+  trace?: string
+  bandLow?: string
+  bandMid?: string
+  bandHigh?: string
+}
+
+export interface ThemeSpectrogramTokens {
+  mono?: string
+  heatLow?: string
+  heatMid?: string
+  heatHigh?: string
+}
+
+export interface ThemeVUMeterTokens {
+  level?: string
+  track?: string
+  peak?: string
+  clip?: string
+}
+
+export interface ThemeLUFSMeterTokens {
+  level?: string
+  track?: string
+  target?: string
+}
+
+export interface ThemeWaveformTokens {
+  line?: string
+  bandLow?: string
+  bandMid?: string
+  bandHigh?: string
+}
+
+export interface ThemeAstraTokens {
+  accent?: string
+  background?: string
+  surface?: string
+  border?: string
+  text?: string
+  progressTrack?: string
+  progressFill?: string
+  buttonSurface?: string
+  buttonBorder?: string
+  statusOk?: string
+  statusError?: string
 }
 
 export interface PrismTheme {
@@ -40,16 +118,17 @@ export interface PrismTheme {
   credit?: string
   website?: string
   description?: string
-  all: ThemeTokens
-  interface: ThemeTokens
-  spectrum: ThemeTokens
-  oscilloscope: ThemeTokens
-  vectorscope: ThemeTokens
-  spectrogram: ThemeTokens
-  vumeter: ThemeTokens
-  lufsmeter: ThemeTokens
-  waveform: ThemeTokens
-  astra: ThemeTokens
+  app: ThemeAppTokens
+  controls: ThemeControlsTokens
+  scopes: ThemeScopesTokens
+  spectrum: ThemeSpectrumTokens
+  oscilloscope: ThemeOscilloscopeTokens
+  vectorscope: ThemeVectorscopeTokens
+  spectrogram: ThemeSpectrogramTokens
+  vumeter: ThemeVUMeterTokens
+  lufsmeter: ThemeLUFSMeterTokens
+  waveform: ThemeWaveformTokens
+  astra: ThemeAstraTokens
 }
 
 export interface PrismThemeLocalStateV1 {
@@ -83,7 +162,7 @@ export interface LegacyThemeMigrationResult {
 export interface ResolvedInterfaceTheme {
   primary: string
   secondary: string
-  guides: string
+  border: string
   text: string
   background: string
   accent: string
@@ -115,72 +194,92 @@ export interface ResolvedInterfaceTheme {
   controlBgActive: string
   controlBorder: string
   controlBorderActive: string
+  controlText: string
   inputBg: string
   inputBgFocus: string
   inputBorder: string
   inputBorderFocus: string
+  optionBg: string
+  optionText: string
+  sliderTrack: string
+  sliderFill: string
+  sliderThumb: string
   divider: string
+  scopeBackground: string
+  scopeGuides: string
+  scopeOverlayBg: string
+  scopeOverlayText: string
+  scopeOverlayBorder: string
+  scopeResizeHandle: string
   success: string
   warning: string
   danger: string
 }
 
 export interface ResolvedSpectrumTheme {
-  primary: string
-  secondary: string
+  line: string
+  sideLine: string
   guides: string
+  guidesSecondary: string
+  labels: string
   background: string
+  fill: string
   fillGradient: [string, string, string]
   heatColors: [string, string, string]
 }
 
 export interface ResolvedOscilloscopeTheme {
-  primary: string
+  line: string
   guides: string
+  guidesSecondary: string
   background: string
   fill: string
 }
 
 export interface ResolvedVectorscopeTheme {
-  primary: string
+  trace: string
   guides: string
+  guidesSecondary: string
+  labels: string
   background: string
-  lowBand: string
-  midBand: string
-  highBand: string
+  bandLow: string
+  bandMid: string
+  bandHigh: string
 }
 
 export interface ResolvedSpectrogramTheme {
-  primary: string
-  guides: string
+  mono: string
   background: string
   heatColors: [string, string, string]
 }
 
 export interface ResolvedVUMeterTheme {
-  primary: string
+  level: string
+  track: string
   peak: string
   clip: string
-  guides: string
-  text: string
+  scale: string
+  labels: string
   background: string
 }
 
 export interface ResolvedLUFSMeterTheme {
-  primary: string
+  level: string
+  track: string
   target: string
-  guides: string
-  text: string
+  scale: string
+  labels: string
   background: string
 }
 
 export interface ResolvedWaveformTheme {
-  primary: string
+  line: string
   guides: string
+  guidesSecondary: string
   background: string
-  lowBand: string
-  midBand: string
-  highBand: string
+  bandLow: string
+  bandMid: string
+  bandHigh: string
 }
 
 export interface ResolvedAstraTheme {

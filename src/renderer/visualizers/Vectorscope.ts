@@ -17,7 +17,9 @@ export interface VectorscopeOptions {
   lineWidth?: number
   backgroundColor?: string
   showGrid?: boolean
-  gridColor?: string
+  gridMajorColor?: string
+  gridMinorColor?: string
+  labelColor?: string
   bandColors?: {
     low: string
     mid: string
@@ -38,7 +40,9 @@ const defaultOptions: ResolvedVectorscopeOptions = {
   lineWidth: 1.5,
   backgroundColor: 'transparent',
   showGrid: true,
-  gridColor: 'rgba(255, 255, 255, 0.1)',
+  gridMajorColor: 'rgba(255, 255, 255, 0.1)',
+  gridMinorColor: 'rgba(255, 255, 255, 0.05)',
+  labelColor: 'rgba(255, 255, 255, 0.1)',
   bandColors: {
     low: '#ff4444',
     mid: '#44dd44',
@@ -247,7 +251,9 @@ export class Vectorscope {
       canvas.height,
       options.backgroundColor,
       options.showGrid,
-      options.gridColor,
+      options.gridMajorColor,
+      options.gridMinorColor,
+      options.labelColor,
       options.mode,
     ].join(':')
 
@@ -266,7 +272,16 @@ export class Vectorscope {
 
     if (options.showGrid) {
       const dpr = window.devicePixelRatio || 1
-      drawVectorscopeGridForMode(this.staticLayerCtx, canvas.width, canvas.height, options.gridColor, options.mode, dpr)
+      drawVectorscopeGridForMode(
+        this.staticLayerCtx,
+        canvas.width,
+        canvas.height,
+        options.gridMajorColor,
+        options.gridMinorColor,
+        options.labelColor,
+        options.mode,
+        dpr,
+      )
     }
 
     this.staticLayerKey = key

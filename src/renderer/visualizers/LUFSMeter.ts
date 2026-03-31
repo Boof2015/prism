@@ -11,7 +11,9 @@ export interface LUFSMeterDataSource extends VisualizerSessionSource {
 
 export interface LUFSMeterOptions {
   mode?: LUFSMeterMode
+  backgroundColor?: string
   lineColor?: string
+  trackColor?: string
   targetColor?: string
   scaleColor?: string
   labelColor?: string
@@ -23,7 +25,9 @@ type ResolvedLUFSMeterOptions = Required<Omit<LUFSMeterOptions, 'dataSource' | '
 
 const defaultOptions: ResolvedLUFSMeterOptions = {
   mode: 'bar',
+  backgroundColor: 'transparent',
   lineColor: '#38bdf8',
+  trackColor: 'rgba(56, 189, 248, 0.08)',
   targetColor: 'rgba(56, 189, 248, 0.25)',
   scaleColor: 'rgba(255, 255, 255, 0.35)',
   labelColor: 'rgba(255, 255, 255, 0.8)',
@@ -396,7 +400,7 @@ export class LUFSMeter {
   }
 
   private drawFrame = (): void => {
-    const { canvas, ctx } = this
+    const { canvas, ctx, options } = this
     const width = canvas.width
     const height = canvas.height
 
@@ -407,6 +411,10 @@ export class LUFSMeter {
     this.processAudio()
 
     ctx.clearRect(0, 0, width, height)
+    if (options.backgroundColor !== 'transparent') {
+      ctx.fillStyle = options.backgroundColor
+      ctx.fillRect(0, 0, width, height)
+    }
 
     this.drawBars(width, height)
   }
@@ -450,7 +458,7 @@ export class LUFSMeter {
       ctx.fillText(labels[i], x + barWidth / 2, padding)
 
       // Bar background
-      ctx.fillStyle = `rgba(${tintR}, ${tintG}, ${tintB}, 0.08)`
+      ctx.fillStyle = this.options.trackColor
       ctx.fillRect(x, barAreaTop, barWidth, barAreaHeight)
 
       // Bar fill — gradient from dim at bottom to bright at top

@@ -24,6 +24,7 @@ export interface WaveformDataSource extends VisualizerSessionSource {
 }
 
 export interface WaveformOptions {
+  backgroundColor?: string
   lineColor?: string
   gridMajorColor?: string
   gridMinorColor?: string
@@ -43,6 +44,7 @@ export interface WaveformOptions {
 type ResolvedWaveformOptions = Required<Omit<WaveformOptions, 'dataSource' | 'frameScheduler'>>
 
 const defaultOptions: ResolvedWaveformOptions = {
+  backgroundColor: 'transparent',
   lineColor: '#38bdf8',
   gridMajorColor: 'rgba(255, 255, 255, 0.08)',
   gridMinorColor: 'rgba(255, 255, 255, 0.04)',
@@ -377,7 +379,7 @@ export class Waveform {
   }
 
   private ensureStaticLayer(width: number, height: number): void {
-    const key = `${width}:${height}:${this.options.mode}`
+    const key = `${width}:${height}:${this.options.mode}:${this.options.backgroundColor}`
     if (this.staticLayerKey === key) {
       return
     }
@@ -385,6 +387,10 @@ export class Waveform {
     this.staticLayerCanvas.width = this.canvas.width
     this.staticLayerCanvas.height = this.canvas.height
     this.staticLayerCtx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+    if (this.options.backgroundColor !== 'transparent') {
+      this.staticLayerCtx.fillStyle = this.options.backgroundColor
+      this.staticLayerCtx.fillRect(0, 0, this.canvas.width, this.canvas.height)
+    }
     this.drawGrid(this.staticLayerCtx, width, height)
     this.staticLayerKey = key
   }

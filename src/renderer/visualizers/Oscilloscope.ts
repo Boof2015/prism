@@ -5,7 +5,7 @@ import {
   isNativeAvailable
 } from '../audio/native'
 import { getNormalizedOscilloscopeDisplaySamples } from '../audio/native/oscilloscopeDisplaySamples'
-import { colorToRgbChannels } from '../utils/color'
+import { colorToRgbChannels, multiplyColorAlpha } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
@@ -19,7 +19,8 @@ export interface OscilloscopeOptions {
   lineWidth?: number
   backgroundColor?: string
   showGrid?: boolean
-  gridColor?: string
+  gridMajorColor?: string
+  gridMinorColor?: string
   underfillColor?: string
   pitchLock?: boolean
   underfillEnabled?: boolean
@@ -34,7 +35,8 @@ const defaultOptions: ResolvedOscilloscopeOptions = {
   lineWidth: 2,
   backgroundColor: 'transparent',
   showGrid: true,
-  gridColor: 'rgba(255, 255, 255, 0.1)',
+  gridMajorColor: 'rgba(255, 255, 255, 0.1)',
+  gridMinorColor: 'rgba(255, 255, 255, 0.05)',
   underfillColor: 'rgba(245, 248, 252, 0.18)',
   pitchLock: true,
   underfillEnabled: false,
@@ -294,7 +296,8 @@ export class Oscilloscope {
       canvas.height,
       options.backgroundColor,
       options.showGrid,
-      options.gridColor,
+      options.gridMajorColor,
+      options.gridMinorColor,
     ].join(':')
 
     if (this.staticLayerKey === key) {
@@ -323,7 +326,7 @@ export class Oscilloscope {
     const height = canvas.height
     const dpr = window.devicePixelRatio || 1
 
-    ctx.strokeStyle = options.gridColor
+    ctx.strokeStyle = options.gridMajorColor
     ctx.lineWidth = dpr
 
     ctx.beginPath()
@@ -336,7 +339,7 @@ export class Oscilloscope {
     ctx.lineTo(width / 2, height)
     ctx.stroke()
 
-    ctx.strokeStyle = options.gridColor.replace('0.1', '0.05')
+    ctx.strokeStyle = options.gridMinorColor || multiplyColorAlpha(options.gridMajorColor, 0.5)
     for (let i = 1; i < 4; i++) {
       if (i === 2) continue
       ctx.beginPath()

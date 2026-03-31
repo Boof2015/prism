@@ -5,10 +5,13 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { FileBackedThemeLibrary } from '../src/main/themeLibrary'
 import {
+  createBundledThemes,
   createDefaultTheme,
+  createMigratedAccentTheme,
   parseThemeFileContent,
   resolveTheme,
   serializeThemeFile,
+  themeToCssVariables,
 } from '../src/shared/themeState'
 import {
   DEFAULT_THEME_ID,
@@ -37,37 +40,110 @@ async function createHarness(): Promise<{
 
 test('theme files round-trip and keep grouped sections intact', () => {
   const theme = createDefaultTheme()
+  theme.app.accent = '#4ade80'
+  theme.controls.menuSurface = 'rgb(12, 18, 32)'
+  theme.scopes.background = '#030712'
   theme.spectrum.heatMid = 'rgb(200, 50, 120)'
+  theme.vumeter.track = '#111827'
 
   const serialized = serializeThemeFile(theme)
   const parsed = parseThemeFileContent(serialized, DEFAULT_THEME_ID, DEFAULT_THEME_NAME)
 
+  assert.match(serialized, /\[Theme\]/)
+  assert.match(serialized, /version = 2/)
+  assert.match(serialized, /\[App\]/)
+  assert.match(serialized, /\[Controls\]/)
+  assert.match(serialized, /\[Scopes\]/)
+
   assert.equal(parsed.id, DEFAULT_THEME_ID)
   assert.equal(parsed.name, DEFAULT_THEME_NAME)
+  assert.equal(parsed.app.accent, 'rgb(74, 222, 128)')
+  assert.equal(parsed.controls.menuSurface, 'rgb(12, 18, 32)')
+  assert.equal(parsed.scopes.background, 'rgb(3, 7, 18)')
   assert.equal(parsed.spectrum.heatMid, 'rgb(200, 50, 120)')
-  assert.equal(parsed.interface.secondary, theme.interface.secondary)
+  assert.equal(parsed.vumeter.track, 'rgb(17, 24, 39)')
   assert.equal(parsed.astra.background, theme.astra.background)
 })
 
-test('astra theme falls back to [All] tokens until [Astra] overrides are provided', () => {
+test('resolveTheme maps grouped app, controls, and scopes tokens into UI and scope surfaces', () => {
   const theme = createDefaultTheme()
-  theme.all.primary = 'rgb(255, 159, 67)'
-  theme.all.background = 'rgb(5, 6, 7)'
-  theme.all.text = 'rgb(240, 244, 248)'
+  theme.app.accent = 'rgb(255, 159, 67)'
+  theme.app.background = 'rgb(5, 6, 7)'
+  theme.app.surface = 'rgb(8, 9, 10)'
+  theme.app.surfaceAlt = 'rgb(11, 12, 13)'
+  theme.app.text = 'rgb(240, 244, 248)'
+  theme.app.textMuted = 'rgba(220, 224, 228, 0.4)'
+  theme.controls.text = 'rgb(225, 229, 233)'
+  theme.controls.menuSurface = 'rgb(14, 15, 16)'
+  theme.controls.menuBorder = 'rgb(17, 18, 19)'
+  theme.controls.inputSurface = 'rgb(20, 21, 22)'
+  theme.controls.inputBorder = 'rgb(23, 24, 25)'
+  theme.controls.slider = 'rgb(26, 27, 28)'
+  theme.scopes.background = 'rgb(29, 30, 31)'
+  theme.scopes.guides = 'rgba(100, 110, 120, 0.2)'
+  theme.scopes.overlaySurface = 'rgb(32, 33, 34)'
+  theme.scopes.overlayText = 'rgb(235, 236, 237)'
+  theme.scopes.overlayBorder = 'rgb(35, 36, 37)'
+  theme.scopes.resizeHandle = 'rgb(38, 39, 40)'
+  theme.vumeter.track = 'rgb(41, 42, 43)'
+  theme.lufsmeter.track = 'rgb(44, 45, 46)'
+  theme.astra = {}
 
-  const fallbackResolved = resolveTheme(theme)
-  assert.equal(fallbackResolved.astra.accent, 'rgb(255, 159, 67)')
-  assert.equal(fallbackResolved.astra.background, 'rgb(5, 6, 7)')
-  assert.equal(fallbackResolved.astra.text, 'rgb(240, 244, 248)')
+  const resolved = resolveTheme(theme)
+  assert.equal(resolved.interface.accent, 'rgb(255, 159, 67)')
+  assert.equal(resolved.interface.menuBg, 'rgb(14, 15, 16)')
+  assert.equal(resolved.interface.menuBorder, 'rgb(17, 18, 19)')
+  assert.equal(resolved.interface.inputBg, 'rgb(20, 21, 22)')
+  assert.equal(resolved.interface.inputBorder, 'rgb(23, 24, 25)')
+  assert.equal(resolved.interface.controlText, 'rgb(225, 229, 233)')
+  assert.equal(resolved.interface.optionBg, 'rgb(14, 15, 16)')
+  assert.equal(resolved.interface.optionText, 'rgb(225, 229, 233)')
+  assert.equal(resolved.interface.sliderFill, 'rgb(26, 27, 28)')
+  assert.equal(resolved.interface.scopeBackground, 'rgb(29, 30, 31)')
+  assert.equal(resolved.interface.scopeGuides, 'rgba(100, 110, 120, 0.2)')
+  assert.equal(resolved.interface.scopeOverlayBg, 'rgb(32, 33, 34)')
+  assert.equal(resolved.interface.scopeOverlayText, 'rgb(235, 236, 237)')
+  assert.equal(resolved.interface.scopeOverlayBorder, 'rgb(35, 36, 37)')
+  assert.equal(resolved.interface.scopeResizeHandle, 'rgb(38, 39, 40)')
+  assert.equal(resolved.spectrogram.background, 'rgb(29, 30, 31)')
+  assert.equal(resolved.waveform.guides, 'rgba(100, 110, 120, 0.2)')
+  assert.equal(resolved.vumeter.track, 'rgb(41, 42, 43)')
+  assert.equal(resolved.lufsmeter.track, 'rgb(44, 45, 46)')
+  assert.equal(resolved.astra.accent, 'rgb(255, 159, 67)')
+  assert.equal(resolved.astra.background, 'rgb(29, 30, 31)')
+  assert.equal(resolved.astra.text, 'rgb(240, 244, 248)')
+})
 
-  theme.astra.primary = 'rgb(129, 140, 248)'
-  theme.astra.background = 'rgba(12, 18, 32, 0.88)'
-  theme.astra.text = 'rgb(248, 250, 252)'
+test('themeToCssVariables exposes grouped UI, control, and scope variables', () => {
+  const theme = createDefaultTheme()
+  theme.controls.menuSurface = 'rgb(11, 12, 13)'
+  theme.controls.text = 'rgb(220, 221, 222)'
+  theme.scopes.overlaySurface = 'rgb(14, 15, 16)'
+  theme.scopes.overlayText = 'rgb(223, 224, 225)'
+  theme.scopes.overlayBorder = 'rgb(17, 18, 19)'
+  theme.scopes.resizeHandle = 'rgb(20, 21, 22)'
 
-  const overriddenResolved = resolveTheme(theme)
-  assert.equal(overriddenResolved.astra.accent, 'rgb(129, 140, 248)')
-  assert.match(overriddenResolved.astra.background, /^rgba\(12, 18, 32, 0\.87/)
-  assert.equal(overriddenResolved.astra.text, 'rgb(248, 250, 252)')
+  const variables = themeToCssVariables(resolveTheme(theme))
+  assert.equal(variables['--menu-bg'], 'rgb(11, 12, 13)')
+  assert.equal(variables['--option-bg'], 'rgb(11, 12, 13)')
+  assert.equal(variables['--option-text'], 'rgb(220, 221, 222)')
+  assert.equal(variables['--slider-fill'], resolveTheme(theme).interface.sliderFill)
+  assert.equal(variables['--scope-overlay-bg'], 'rgb(14, 15, 16)')
+  assert.equal(variables['--scope-overlay-text'], 'rgb(223, 224, 225)')
+  assert.equal(variables['--scope-overlay-border'], 'rgb(17, 18, 19)')
+  assert.equal(variables['--scope-resize-handle'], 'rgb(20, 21, 22)')
+})
+
+test('bundled and migrated accent themes recolor every accent-driven scope', () => {
+  const purple = createBundledThemes().find((theme) => theme.id === 'theme_purple')
+  assert.ok(purple)
+  assert.equal(purple.oscilloscope.line, purple.app.accent)
+  assert.equal(purple.vectorscope.trace, purple.app.accent)
+
+  const migrated = createMigratedAccentTheme('#4ade80')
+  assert.ok(migrated)
+  assert.equal(migrated.oscilloscope.line, migrated.app.accent)
+  assert.equal(migrated.vectorscope.trace, migrated.app.accent)
 })
 
 test('library seeds default themes and template file', async () => {
@@ -81,6 +157,14 @@ test('library seeds default themes and template file', async () => {
     const fileNames = (await readdir(harness.themesDir)).sort()
     assert.ok(fileNames.includes('Default.iro'))
     assert.ok(fileNames.includes('_TEMPLATE.iro'))
+
+    const defaultThemeContent = await readFile(join(harness.themesDir, 'Default.iro'), 'utf8')
+    const templateContent = await readFile(join(harness.themesDir, '_TEMPLATE.iro'), 'utf8')
+    assert.match(defaultThemeContent, /version = 2/)
+    assert.match(defaultThemeContent, /\[App\]/)
+    assert.doesNotMatch(defaultThemeContent, /\[All\]/)
+    assert.match(templateContent, /\[Controls\]/)
+    assert.match(templateContent, /\[Scopes\]/)
   } finally {
     await harness.cleanup()
   }
@@ -100,14 +184,37 @@ test('importing the same embedded theme id replaces the managed theme', async ()
     assert.equal(firstSnapshot.activeThemeId, 'theme_shared')
 
     theme.name = 'Shared Updated'
-    theme.all.primary = 'rgb(74, 222, 128)'
+    theme.app.accent = 'rgb(74, 222, 128)'
     const updatedPath = join(harness.rootDir, 'shared-updated.iro')
     await writeFile(updatedPath, serializeThemeFile(theme), 'utf8')
 
     const secondSnapshot = await harness.library.importThemeFromPath(updatedPath)
     assert.equal(secondSnapshot.activeThemeId, 'theme_shared')
     assert.equal(secondSnapshot.themes.theme_shared.name, 'Shared Updated')
-    assert.equal(secondSnapshot.themes.theme_shared.all.primary, 'rgb(74, 222, 128)')
+    assert.equal(secondSnapshot.themes.theme_shared.app.accent, 'rgb(74, 222, 128)')
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('library refreshes shipped bundled themes when their definitions change', async () => {
+  const harness = await createHarness()
+
+  try {
+    await harness.library.getSnapshot()
+
+    const stalePurple = createDefaultTheme()
+    stalePurple.id = 'theme_purple'
+    stalePurple.name = 'Purple'
+    stalePurple.app.accent = 'rgb(167, 139, 250)'
+    stalePurple.oscilloscope.line = 'rgb(56, 189, 248)'
+    stalePurple.vectorscope.trace = 'rgb(56, 189, 248)'
+
+    await writeFile(join(harness.themesDir, 'Purple.iro'), serializeThemeFile(stalePurple), 'utf8')
+
+    const snapshot = await harness.library.reloadThemes()
+    assert.equal(snapshot.themes.theme_purple.oscilloscope.line, snapshot.themes.theme_purple.app.accent)
+    assert.equal(snapshot.themes.theme_purple.vectorscope.trace, snapshot.themes.theme_purple.app.accent)
   } finally {
     await harness.cleanup()
   }

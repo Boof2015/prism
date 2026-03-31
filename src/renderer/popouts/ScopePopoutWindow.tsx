@@ -21,8 +21,24 @@ function PopInIcon(): JSX.Element {
 function SettingsIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M8 1.8v1.7M8 12.5v1.7M14.2 8h-1.7M3.5 8H1.8M12.2 3.8l-1.2 1.2M5 11l-1.2 1.2M12.2 12.2 11 11M5 5 3.8 3.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <g fill="currentColor">
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(60 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(120 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(180 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(240 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(300 8 8)" />
+      </g>
+      <circle cx="8" cy="8" r="3.45" fill="none" stroke="currentColor" strokeWidth="1.85" />
+      <circle cx="8" cy="8" r="1.5" fill="none" stroke="currentColor" strokeWidth="1.05" />
+    </svg>
+  )
+}
+
+function PinIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M10.9 2.5 13 4.6 10.8 7v2.2l-1 1L8 8.4 4.8 11.6 4 10.8l3.2-3.2-1.8-1.8 1-1H8.6z" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -49,11 +65,18 @@ const defaultTheme = resolveTheme(createDefaultTheme())
 
 export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
   const [miniSettingsOpen, setMiniSettingsOpen] = useState(false)
   const prevMiniSettingsOpenRef = useRef(false)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const frameScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
+
+  useEffect(() => {
+    void window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
+    const unsubscribe = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
+    return unsubscribe
+  }, [])
 
   useEffect(() => {
     frameScheduler.setFrameTarget(frameTarget)
@@ -191,6 +214,15 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
             </div>
 
             <div className="scope-popout__actions">
+              <button
+                type="button"
+                className={`scope-popout__button ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
+                onClick={() => window.electronAPI.toggleAlwaysOnTop()}
+                aria-label={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
+                title={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
+              >
+                <PinIcon />
+              </button>
               <button
                 type="button"
                 className={`scope-popout__button ${miniSettingsOpen ? 'is-active' : ''}`.trim()}

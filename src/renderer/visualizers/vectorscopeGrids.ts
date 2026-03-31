@@ -1,4 +1,5 @@
 import type { VectorscopeMode } from './Vectorscope'
+import { multiplyColorAlpha } from '../utils/color'
 
 const INV_SQRT2 = 1 / Math.sqrt(2)
 const COS45 = Math.SQRT2 / 2 // 0.7071...
@@ -91,12 +92,14 @@ export function transformPoint(
 export function drawLissajousGrid(
   ctx: CanvasRenderingContext2D,
   layout: VectorscopeLayout,
-  gridColor: string,
+  gridMajorColor: string,
+  gridMinorColor: string,
+  labelColor: string,
   dpr: number
 ): void {
   const { centerX, centerY, radius } = layout
 
-  ctx.strokeStyle = gridColor
+  ctx.strokeStyle = gridMajorColor
   ctx.lineWidth = dpr
 
   // Outer box
@@ -120,8 +123,7 @@ export function drawLissajousGrid(
   ctx.stroke()
 
   // Diagonal guides (dimmer)
-  const dimColor = gridColor.replace(/[\d.]+\)$/, (m) => `${parseFloat(m) * 0.5})`)
-  ctx.strokeStyle = dimColor
+  ctx.strokeStyle = gridMinorColor || multiplyColorAlpha(gridMajorColor, 0.5)
 
   ctx.beginPath()
   ctx.moveTo(centerX - radius, centerY - radius)
@@ -134,7 +136,7 @@ export function drawLissajousGrid(
   ctx.stroke()
 
   // Labels
-  ctx.fillStyle = gridColor
+  ctx.fillStyle = labelColor
   ctx.font = `${10 * dpr}px monospace`
   ctx.textAlign = 'center'
   ctx.fillText('L', centerX, centerY - radius - 6 * dpr)
@@ -147,13 +149,15 @@ export function drawLissajousGrid(
 export function drawPolarGrid(
   ctx: CanvasRenderingContext2D,
   layout: VectorscopeLayout,
-  gridColor: string,
+  gridMajorColor: string,
+  gridMinorColor: string,
+  labelColor: string,
   unipolar: boolean,
   dpr: number
 ): void {
   const { centerX, centerY, radius } = layout
 
-  ctx.strokeStyle = gridColor
+  ctx.strokeStyle = gridMajorColor
   ctx.lineWidth = dpr
 
   // Concentric circles (or semicircles for unipolar)
@@ -185,8 +189,7 @@ export function drawPolarGrid(
   ctx.stroke()
 
   // Diagonal guides (L and R channel axes) — dimmer
-  const dimColor = gridColor.replace(/[\d.]+\)$/, (m) => `${parseFloat(m) * 0.5})`)
-  ctx.strokeStyle = dimColor
+  ctx.strokeStyle = gridMinorColor || multiplyColorAlpha(gridMajorColor, 0.5)
 
   if (unipolar) {
     ctx.beginPath()
@@ -211,7 +214,7 @@ export function drawPolarGrid(
   }
 
   // Labels
-  ctx.fillStyle = gridColor
+  ctx.fillStyle = labelColor
   ctx.font = `${10 * dpr}px monospace`
   ctx.textAlign = 'center'
 
@@ -230,13 +233,15 @@ export function drawPolarGrid(
 export function drawLinearGrid(
   ctx: CanvasRenderingContext2D,
   layout: VectorscopeLayout,
-  gridColor: string,
+  gridMajorColor: string,
+  _gridMinorColor: string,
+  labelColor: string,
   unipolar: boolean,
   dpr: number
 ): void {
   const { centerX, centerY, radius } = layout
 
-  ctx.strokeStyle = gridColor
+  ctx.strokeStyle = gridMajorColor
   ctx.lineWidth = dpr
 
   const scales = [0.25, 0.5, 0.75, 1.0]
@@ -275,7 +280,7 @@ export function drawLinearGrid(
   ctx.stroke()
 
   // Labels
-  ctx.fillStyle = gridColor
+  ctx.fillStyle = labelColor
   ctx.font = `${10 * dpr}px monospace`
   ctx.textAlign = 'center'
 
@@ -295,7 +300,9 @@ export function drawVectorscopeGridForMode(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  gridColor: string,
+  gridMajorColor: string,
+  gridMinorColor: string,
+  labelColor: string,
   mode: VectorscopeMode,
   dpr: number = 1
 ): void {
@@ -303,19 +310,19 @@ export function drawVectorscopeGridForMode(
 
   switch (mode) {
     case 'lissajous':
-      drawLissajousGrid(ctx, layout, gridColor, dpr)
+      drawLissajousGrid(ctx, layout, gridMajorColor, gridMinorColor, labelColor, dpr)
       break
     case 'polar-unipolar':
-      drawPolarGrid(ctx, layout, gridColor, true, dpr)
+      drawPolarGrid(ctx, layout, gridMajorColor, gridMinorColor, labelColor, true, dpr)
       break
     case 'polar-bipolar':
-      drawPolarGrid(ctx, layout, gridColor, false, dpr)
+      drawPolarGrid(ctx, layout, gridMajorColor, gridMinorColor, labelColor, false, dpr)
       break
     case 'linear-unipolar':
-      drawLinearGrid(ctx, layout, gridColor, true, dpr)
+      drawLinearGrid(ctx, layout, gridMajorColor, gridMinorColor, labelColor, true, dpr)
       break
     case 'linear-bipolar':
-      drawLinearGrid(ctx, layout, gridColor, false, dpr)
+      drawLinearGrid(ctx, layout, gridMajorColor, gridMinorColor, labelColor, false, dpr)
       break
   }
 }

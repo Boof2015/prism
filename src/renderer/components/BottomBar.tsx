@@ -47,16 +47,11 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
   const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
-  const themeId = useSettingsStore((s) => s.themeId)
   const setThemeId = useSettingsStore((s) => s.setThemeId)
   const {
     themes,
     activeThemeId,
     loadTheme,
-    renameTheme,
-    deleteTheme,
-    reloadThemes,
-    importThemeFromDialog,
     showThemesFolder,
   } = useThemeStore()
   const astraState = useAstraStore((s) => s.integrationState)
@@ -161,26 +156,6 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     setThemeId(value)
   }
 
-  const handleRenameTheme = async (): Promise<void> => {
-    if (!activeThemeId || activeThemeId === 'theme_default') return
-    const activeTheme = themes[activeThemeId]
-    if (!activeTheme) return
-
-    const nextName = window.prompt('Rename theme', activeTheme.name)?.trim()
-    if (!nextName) return
-    await renameTheme(activeThemeId, nextName)
-  }
-
-  const handleDeleteTheme = async (): Promise<void> => {
-    if (!activeThemeId || activeThemeId === 'theme_default') return
-    const activeTheme = themes[activeThemeId]
-    if (!activeTheme) return
-    if (!window.confirm(`Delete "${activeTheme.name}"?`)) return
-
-    await deleteTheme(activeThemeId)
-    setThemeId(useThemeStore.getState().activeThemeId)
-  }
-
   const handleSaveAstraConfig = async (): Promise<void> => {
     const nextConfig: AstraIntegrationConfig = {
       baseUrl: astraBaseUrlInput,
@@ -268,58 +243,11 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   type="button"
                   className="settings-chip"
                   onClick={() => {
-                    void (async () => {
-                      await importThemeFromDialog()
-                      setThemeId(useThemeStore.getState().activeThemeId)
-                    })()
-                  }}
-                >
-                  Import
-                </button>
-                <button
-                  type="button"
-                  className="settings-chip"
-                  onClick={() => {
-                    void reloadThemes()
-                  }}
-                >
-                  Reload
-                </button>
-                <button
-                  type="button"
-                  className="settings-chip"
-                  onClick={() => {
                     void showThemesFolder()
                   }}
                 >
                   Folder
                 </button>
-                {activeThemeId && activeThemeId !== 'theme_default' ? (
-                  <button
-                    type="button"
-                    className="settings-chip"
-                    onClick={() => {
-                      void handleRenameTheme()
-                    }}
-                  >
-                    Rename
-                  </button>
-                ) : null}
-                {activeThemeId && activeThemeId !== 'theme_default' ? (
-                  <button
-                    type="button"
-                    className="settings-chip"
-                    onClick={() => {
-                      void handleDeleteTheme()
-                    }}
-                  >
-                    Delete
-                  </button>
-                ) : null}
-                <div className="settings-status-pill">
-                  <span className="settings-status-pill__dot" />
-                  <span>{themeId ? 'Saved With Profile' : 'Not Linked'}</span>
-                </div>
               </div>
             </div>
           </section>

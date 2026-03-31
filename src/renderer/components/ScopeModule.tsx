@@ -71,12 +71,13 @@ export function scopeSettingsToOptions(
       const s = settings as ScopeSettings['spectrum']
       const t = theme as ResolvedSpectrumTheme
       return {
-        lineColor: t.primary,
-        secondaryLineColor: t.secondary,
+        lineColor: t.line,
+        secondaryLineColor: t.sideLine,
         gradientColors: t.fillGradient,
         heatColors: t.heatColors,
         backgroundColor: t.background,
         gridColor: t.guides,
+        labelColor: t.labels,
         fftSize: s.fftSize,
         tiltDbPerOctave: s.tiltDbPerOctave,
         heatmapFill: s.heatmap,
@@ -91,9 +92,10 @@ export function scopeSettingsToOptions(
       const s = settings as ScopeSettings['oscilloscope']
       const t = theme as ResolvedOscilloscopeTheme
       return {
-        lineColor: t.primary,
+        lineColor: t.line,
         backgroundColor: t.background,
-        gridColor: t.guides,
+        gridMajorColor: t.guides,
+        gridMinorColor: t.guidesSecondary,
         underfillColor: t.fill,
         pitchLock: s.pitchLock,
         underfillEnabled: s.underfillEnabled,
@@ -105,13 +107,15 @@ export function scopeSettingsToOptions(
       const s = settings as ScopeSettings['vectorscope']
       const t = theme as ResolvedVectorscopeTheme
       return {
-        lineColor: t.primary,
+        lineColor: t.trace,
         backgroundColor: t.background,
-        gridColor: t.guides,
+        gridMajorColor: t.guides,
+        gridMinorColor: t.guidesSecondary,
+        labelColor: t.labels,
         bandColors: {
-          low: t.lowBand,
-          mid: t.midBand,
-          high: t.highBand,
+          low: t.bandLow,
+          mid: t.bandMid,
+          high: t.bandHigh,
         },
         mode: s.mode,
         multiband: s.multiband,
@@ -124,8 +128,9 @@ export function scopeSettingsToOptions(
       const s = settings as ScopeSettings['spectrogram']
       const t = theme as ResolvedSpectrogramTheme
       return {
-        lineColor: t.primary,
+        lineColor: t.mono,
         heatColors: t.heatColors,
+        backgroundColor: t.background,
         fftSize: s.fftSize,
         scrollSpeed: s.scrollSpeed,
         clarityMode: s.clarityMode,
@@ -137,11 +142,13 @@ export function scopeSettingsToOptions(
       const s = settings as ScopeSettings['vumeter']
       const t = theme as ResolvedVUMeterTheme
       return {
-        lineColor: t.primary,
+        backgroundColor: t.background,
+        lineColor: t.level,
+        trackColor: t.track,
         peakColor: t.peak,
         clipColor: t.clip,
-        scaleColor: t.guides,
-        labelColor: t.text,
+        scaleColor: t.scale,
+        labelColor: t.labels,
         mode: s.mode,
         orientation: s.orientation,
       }
@@ -150,10 +157,12 @@ export function scopeSettingsToOptions(
       const s = settings as ScopeSettings['lufsmeter']
       const t = theme as ResolvedLUFSMeterTheme
       return {
-        lineColor: t.primary,
+        backgroundColor: t.background,
+        lineColor: t.level,
+        trackColor: t.track,
         targetColor: t.target,
-        scaleColor: t.guides,
-        labelColor: t.text,
+        scaleColor: t.scale,
+        labelColor: t.labels,
         mode: s.mode,
       }
     }
@@ -161,13 +170,14 @@ export function scopeSettingsToOptions(
       const s = settings as ScopeSettings['waveform']
       const t = theme as ResolvedWaveformTheme
       return {
-        lineColor: t.primary,
+        backgroundColor: t.background,
+        lineColor: t.line,
         gridMajorColor: t.guides,
-        gridMinorColor: t.guides,
+        gridMinorColor: t.guidesSecondary,
         bandColors: {
-          low: t.lowBand,
-          mid: t.midBand,
-          high: t.highBand,
+          low: t.bandLow,
+          mid: t.bandMid,
+          high: t.bandHigh,
         },
         mode: s.mode,
         scrollSpeed: s.scrollSpeed,

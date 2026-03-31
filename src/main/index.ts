@@ -27,6 +27,7 @@ import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
 import { AstraIntegrationService } from './services/astraIntegration'
 import { FileBackedThemeLibrary } from './themeLibrary'
+import { FileBackedWindowStateStore } from './windowStateStore'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
@@ -55,6 +56,7 @@ const pendingThemeOpenPaths: string[] = []
 let profileLibrary: FileBackedProfileLibrary | null = null
 let themeLibrary: FileBackedThemeLibrary | null = null
 let astraIntegrationService: AstraIntegrationService | null = null
+let windowStateStore: FileBackedWindowStateStore | null = null
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -91,6 +93,16 @@ function getThemeLibrary(): FileBackedThemeLibrary {
   }
 
   return themeLibrary
+}
+
+function getWindowStateStore(): FileBackedWindowStateStore {
+  if (!windowStateStore) {
+    windowStateStore = new FileBackedWindowStateStore(
+      join(app.getPath('userData'), 'window-state.json'),
+    )
+  }
+
+  return windowStateStore
 }
 
 function broadcastAstraState(state: AstraIntegrationState): void {
@@ -240,6 +252,27 @@ function getWindowFromSender(sender: WebContents): BrowserWindow | null {
 
 function isMainRendererWindow(window: BrowserWindow | null): boolean {
   return window !== null && window === mainWindow
+}
+
+function getScopeKindForWindow(window: BrowserWindow | null): ScopeKind | null {
+  if (!window) return null
+
+  for (const [kind, popoutWindow] of scopePopoutWindows) {
+    if (popoutWindow === window) {
+      return kind
+    }
+  }
+
+  return null
+}
+
+function describeWindow(window: BrowserWindow): string {
+  if (isMainRendererWindow(window)) {
+    return 'main window'
+  }
+
+  const kind = getScopeKindForWindow(window)
+  return kind ? `${kind} popout` : `window ${window.id}`
 }
 
 function getBaseMinHeight(window: BrowserWindow): number {
@@ -496,6 +529,84 @@ function normalizeBounds(raw: unknown, fallback: WindowBounds): WindowBounds {
   }
 }
 
+function emitAlwaysOnTopChanged(window: BrowserWindow, next: boolean): void {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) {
+    return
+  }
+
+  window.webContents.send('window:always-on-top-changed', next)
+}
+
+async function persistAlwaysOnTopPreference(window: BrowserWindow, next: boolean): Promise<void> {
+  if (isMainRendererWindow(window)) {
+    await getWindowStateStore().setMainAlwaysOnTop(next)
+    return
+  }
+
+  const kind = getScopeKindForWindow(window)
+  if (kind) {
+    await getWindowStateStore().setPopoutAlwaysOnTop(kind, next)
+  }
+}
+
+function setWindowAlwaysOnTop(window: BrowserWindow, next: boolean): void {
+  if (window.isDestroyed()) {
+    return
+  }
+
+  window.setAlwaysOnTop(next)
+  emitAlwaysOnTopChanged(window, next)
+  void persistAlwaysOnTopPreference(window, next).catch((error) => {
+    console.warn(`Could not persist always-on-top state for ${describeWindow(window)}:`, error)
+  })
+}
+
+function attachWindowShortcuts(window: BrowserWindow): void {
+  const scopeKeys = new Map([
+    ['1', 0],
+    ['2', 1],
+    ['3', 2],
+    ['4', 3],
+    ['5', 4],
+    ['6', 5],
+    ['7', 6],
+    ['8', 7],
+  ])
+
+  window.webContents.on('before-input-event', (_event, input: Electron.Input) => {
+    if (input.type !== 'keyDown') {
+      return
+    }
+
+    const isMainWindow = isMainRendererWindow(window)
+
+    if (!input.alt && !input.control && !input.meta && !input.shift) {
+      if (isMainWindow) {
+        const scopeIndex = scopeKeys.get(input.key)
+        if (scopeIndex !== undefined) {
+          window.webContents.send('shortcut:toggle-scope', scopeIndex)
+          return
+        }
+
+        if (input.key === ' ') {
+          window.webContents.send('shortcut:toggle-capture')
+          return
+        }
+      }
+
+      if (input.key === 't') {
+        setWindowAlwaysOnTop(window, !window.isAlwaysOnTop())
+      }
+
+      return
+    }
+
+    if (isMainWindow && input.key === ',' && input.meta && !input.alt && !input.control && !input.shift) {
+      window.webContents.send('shortcut:toggle-settings')
+    }
+  })
+}
+
 function loadRendererTarget(window: BrowserWindow, query: Record<string, string>): void {
   if (process.env.ELECTRON_RENDERER_URL) {
     const url = new URL(process.env.ELECTRON_RENDERER_URL)
@@ -513,7 +624,7 @@ function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     ...WINDOW_DEFAULTS,
     ...getFramelessWindowChromeOptions(),
-    alwaysOnTop: true,
+    alwaysOnTop: getWindowStateStore().getMainAlwaysOnTop(),
     autoHideMenuBar: true,
     resizable: true,
     maximizable: true,
@@ -576,14 +687,8 @@ function createMainWindow(): void {
     scheduleMainWindowBoundsSave(mainWindow)
   })
 
+  attachWindowShortcuts(mainWindow)
   loadRendererTarget(mainWindow, { window: 'main' })
-}
-
-function setAllWindowsAlwaysOnTop(next: boolean): void {
-  mainWindow?.setAlwaysOnTop(next)
-  for (const window of scopePopoutWindows.values()) {
-    window.setAlwaysOnTop(next)
-  }
 }
 
 function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
@@ -664,7 +769,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     skipTaskbar: true,
     autoHideMenuBar: true,
     title: `Prism ${kind}`,
-    alwaysOnTop: mainWindow.isAlwaysOnTop(),
+    alwaysOnTop: getWindowStateStore().getPopoutAlwaysOnTop(kind),
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -713,6 +818,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   popoutWindow.on('move', () => emitPopoutBoundsChanged(kind, popoutWindow))
   popoutWindow.on('resize', () => emitPopoutBoundsChanged(kind, popoutWindow))
 
+  attachWindowShortcuts(popoutWindow)
   loadRendererTarget(popoutWindow, { window: 'scope-popout', scope: kind })
   return popoutWindow
 }
@@ -888,19 +994,11 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
 
-    const current = targetWindow.isAlwaysOnTop()
-    const next = !current
-    if (mainWindow && targetWindow === mainWindow) {
-      setAllWindowsAlwaysOnTop(next)
-      mainWindow?.webContents.send('window:always-on-top-changed', next)
-      return
-    }
-
-    targetWindow.setAlwaysOnTop(next)
+    setWindowAlwaysOnTop(targetWindow, !targetWindow.isAlwaysOnTop())
   })
 
   ipcMain.handle('window:is-always-on-top', (event) => {
-    return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? true
+    return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? false
   })
 
   ipcMain.handle('audio:get-desktop-sources', async () => {
@@ -1216,64 +1314,17 @@ function setupIPC(): void {
   })
 }
 
-function setupShortcuts(): void {
-  if (!mainWindow) return
-
-  const shortcutWindow = mainWindow
-  const scopeKeys = new Map([
-    ['1', 0],
-    ['2', 1],
-    ['3', 2],
-    ['4', 3],
-    ['5', 4],
-    ['6', 5],
-    ['7', 6],
-    ['8', 7],
-  ])
-  const beforeInputHandler = (_event: Electron.Event, input: Electron.Input) => {
-    if (input.type !== 'keyDown') {
-      return
-    }
-
-    if (!input.alt && !input.control && !input.meta && !input.shift) {
-      const scopeIndex = scopeKeys.get(input.key)
-      if (scopeIndex !== undefined) {
-        shortcutWindow.webContents.send('shortcut:toggle-scope', scopeIndex)
-        return
-      }
-
-      if (input.key === 't') {
-        const next = !shortcutWindow.isAlwaysOnTop()
-        setAllWindowsAlwaysOnTop(next)
-        shortcutWindow.webContents.send('window:always-on-top-changed', next)
-        return
-      }
-
-      if (input.key === ' ') {
-        shortcutWindow.webContents.send('shortcut:toggle-capture')
-        return
-      }
-    }
-
-    if (input.key === ',' && input.meta && !input.alt && !input.control && !input.shift) {
-      shortcutWindow.webContents.send('shortcut:toggle-settings')
-    }
-  }
-
-  shortcutWindow.webContents.on('before-input-event', beforeInputHandler)
-}
-
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     setupPermissions()
     void getAstraIntegrationService().initialize()
     setupIPC()
+    await getWindowStateStore().initialize()
     createMainWindow()
-    setupShortcuts()
     queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
     queueThemeOpenPaths(extractThemePathsFromArgv(process.argv))
     void processPendingProfileOpenPaths()

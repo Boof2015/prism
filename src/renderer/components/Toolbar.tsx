@@ -1,11 +1,19 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useEffect, useCallback, useRef, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
 
 function SettingsIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M8 1.7v2M8 12.3v2M14.3 8h-2M3.7 8h-2M12.4 3.6l-1.4 1.4M5 11l-1.4 1.4M12.4 12.4 11 11M5 5 3.6 3.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <g fill="currentColor">
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(60 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(120 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(180 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(240 8 8)" />
+        <rect x="7.15" y="1.15" width="1.7" height="2.7" rx="0.45" transform="rotate(300 8 8)" />
+      </g>
+      <circle cx="8" cy="8" r="3.45" fill="none" stroke="currentColor" strokeWidth="1.85" />
+      <circle cx="8" cy="8" r="1.5" fill="none" stroke="currentColor" strokeWidth="1.05" />
     </svg>
   )
 }
@@ -70,6 +78,11 @@ interface ToolbarProps {
 
 const DEFAULT_PROFILE_ID = 'profile_default'
 
+function isToolbarInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof Element
+    && target.closest('button, .toolbar__reposition-menu') !== null
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message
     ? error.message
@@ -88,13 +101,13 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const updateActiveProfile = useSettingsStore((s) => s.updateActiveProfile)
   const importProfileFromDialog = useSettingsStore((s) => s.importProfileFromDialog)
   const showProfilesFolder = useSettingsStore((s) => s.showProfilesFolder)
-  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true)
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
   const [showReposition, setShowReposition] = useState(false)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const profileButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
+    void window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
     const unsubscribe = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
     return unsubscribe
   }, [])
@@ -284,10 +297,30 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     window.electronAPI.stopWindowMove()
   }, [])
 
+  const handleToolbarDragStart = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (isToolbarInteractiveTarget(event.target) || event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    window.electronAPI.startWindowMove()
+  }, [])
+
+  const handleToolbarDragEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    window.electronAPI.stopWindowMove()
+  }, [])
+
   const activeProfile = activeProfileId ? profiles[activeProfileId] : null
 
   return (
-    <div className="toolbar">
+    <div
+      className="toolbar"
+      onPointerDown={handleToolbarDragStart}
+      onPointerUp={handleToolbarDragEnd}
+      onPointerCancel={handleToolbarDragEnd}
+      onLostPointerCapture={handleToolbarDragEnd}
+    >
       <button
         type="button"
         className="toolbar__grab"
@@ -303,7 +336,6 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
 
       <div
         className="toolbar__brand"
-        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
       >
         <span className="toolbar__brand-mark" />
         <span className="toolbar__brand-text">Prism</span>
@@ -325,10 +357,7 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         </button>
       </div>
 
-      <div
-        className="toolbar__spacer"
-        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
-      />
+      <div className="toolbar__spacer" />
 
       <div className="toolbar__actions">
         <div className="toolbar__reposition-wrap">

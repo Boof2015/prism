@@ -19,54 +19,141 @@ import {
   type ResolvedVectorscopeTheme,
   type ResolvedVUMeterTheme,
   type ResolvedWaveformTheme,
+  type ThemeAppTokens,
+  type ThemeControlsTokens,
+  type ThemeLUFSMeterTokens,
+  type ThemeOscilloscopeTokens,
+  type ThemeScopesTokens,
   type ThemeSectionName,
-  type ThemeTokens,
+  type ThemeSpectrogramTokens,
+  type ThemeSpectrumTokens,
+  type ThemeVectorscopeTokens,
+  type ThemeVUMeterTokens,
+  type ThemeWaveformTokens,
+  type ThemeAstraTokens,
 } from '../types/theme'
 
+const DEFAULT_ACCENT = '#38bdf8'
+const DEFAULT_SUCCESS = '#22c55e'
+const DEFAULT_WARNING = 'rgb(255, 191, 0)'
+const DEFAULT_DANGER = '#f87171'
+const DEFAULT_SCOPE_GUIDES = 'rgba(255, 255, 255, 0.1)'
+const DEFAULT_SCOPE_OVERLAY_BG = 'rgba(8, 12, 18, 0.88)'
+const DEFAULT_SCOPE_OVERLAY_TEXT = 'rgba(255, 255, 255, 0.76)'
+const DEFAULT_SCOPE_OVERLAY_BORDER = 'rgba(255, 255, 255, 0.12)'
+const DEFAULT_SCOPE_RESIZE_HANDLE = 'rgba(255, 255, 255, 0.12)'
 const DEFAULT_BAND_LOW = '#ff4444'
 const DEFAULT_BAND_MID = '#44dd44'
 const DEFAULT_BAND_HIGH = '#4488ff'
-const DEFAULT_WARNING = 'rgb(255, 191, 0)'
-const DEFAULT_SUCCESS = '#22c55e'
-const DEFAULT_DANGER = '#f87171'
+const DEFAULT_HEAT_LOW = 'rgb(15, 7, 33)'
+const DEFAULT_HEAT_MID = 'rgb(163, 26, 121)'
+const DEFAULT_HEAT_HIGH = 'rgb(255, 241, 209)'
 
-const MODULE_SECTION_ORDER: ThemeSectionName[] = [
-  'all',
-  'interface',
-  'spectrum',
-  'oscilloscope',
-  'vectorscope',
-  'spectrogram',
-  'vumeter',
-  'lufsmeter',
-  'waveform',
-  'astra',
-]
+type SectionTokenMap = Partial<Record<string, string>>
+type SectionSchema<T extends object> = Record<string, Extract<keyof T, string>>
 
-const COLOR_KEY_ORDER: Array<keyof ThemeTokens> = [
-  'primary',
-  'secondary',
-  'guides',
-  'text',
-  'background',
-  'lowBand',
-  'midBand',
-  'highBand',
-  'fill',
-  'peak',
-  'clip',
-  'target',
-  'heatLow',
-  'heatMid',
-  'heatHigh',
-  'success',
-  'warning',
-  'danger',
-]
+const APP_SCHEMA = {
+  accent: 'accent',
+  success: 'success',
+  warning: 'warning',
+  danger: 'danger',
+  background: 'background',
+  surface: 'surface',
+  surface_alt: 'surfaceAlt',
+  border: 'border',
+  text: 'text',
+  text_muted: 'textMuted',
+} as const satisfies SectionSchema<ThemeAppTokens>
+
+const CONTROLS_SCHEMA = {
+  surface: 'surface',
+  surface_hover: 'surfaceHover',
+  surface_active: 'surfaceActive',
+  border: 'border',
+  border_active: 'borderActive',
+  text: 'text',
+  input_surface: 'inputSurface',
+  input_border: 'inputBorder',
+  menu_surface: 'menuSurface',
+  menu_border: 'menuBorder',
+  slider: 'slider',
+} as const satisfies SectionSchema<ThemeControlsTokens>
+
+const SCOPES_SCHEMA = {
+  background: 'background',
+  guides: 'guides',
+  overlay_surface: 'overlaySurface',
+  overlay_text: 'overlayText',
+  overlay_border: 'overlayBorder',
+  resize_handle: 'resizeHandle',
+} as const satisfies SectionSchema<ThemeScopesTokens>
+
+const SPECTRUM_SCHEMA = {
+  line: 'line',
+  side_line: 'sideLine',
+  fill: 'fill',
+  heat_low: 'heatLow',
+  heat_mid: 'heatMid',
+  heat_high: 'heatHigh',
+} as const satisfies SectionSchema<ThemeSpectrumTokens>
+
+const OSCILLOSCOPE_SCHEMA = {
+  line: 'line',
+  fill: 'fill',
+} as const satisfies SectionSchema<ThemeOscilloscopeTokens>
+
+const VECTORSCOPE_SCHEMA = {
+  trace: 'trace',
+  band_low: 'bandLow',
+  band_mid: 'bandMid',
+  band_high: 'bandHigh',
+} as const satisfies SectionSchema<ThemeVectorscopeTokens>
+
+const SPECTROGRAM_SCHEMA = {
+  mono: 'mono',
+  heat_low: 'heatLow',
+  heat_mid: 'heatMid',
+  heat_high: 'heatHigh',
+} as const satisfies SectionSchema<ThemeSpectrogramTokens>
+
+const VUMETER_SCHEMA = {
+  level: 'level',
+  track: 'track',
+  peak: 'peak',
+  clip: 'clip',
+} as const satisfies SectionSchema<ThemeVUMeterTokens>
+
+const LUFSMETER_SCHEMA = {
+  level: 'level',
+  track: 'track',
+  target: 'target',
+} as const satisfies SectionSchema<ThemeLUFSMeterTokens>
+
+const WAVEFORM_SCHEMA = {
+  line: 'line',
+  band_low: 'bandLow',
+  band_mid: 'bandMid',
+  band_high: 'bandHigh',
+} as const satisfies SectionSchema<ThemeWaveformTokens>
+
+const ASTRA_SCHEMA = {
+  accent: 'accent',
+  background: 'background',
+  surface: 'surface',
+  border: 'border',
+  text: 'text',
+  progress_track: 'progressTrack',
+  progress_fill: 'progressFill',
+  button_surface: 'buttonSurface',
+  button_border: 'buttonBorder',
+  status_ok: 'statusOk',
+  status_error: 'statusError',
+} as const satisfies SectionSchema<ThemeAstraTokens>
 
 const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
-  all: 'all',
-  interface: 'interface',
+  app: 'app',
+  controls: 'controls',
+  scopes: 'scopes',
   spectrum: 'spectrum',
   oscilloscope: 'oscilloscope',
   vectorscope: 'vectorscope',
@@ -77,47 +164,33 @@ const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   astra: 'astra',
 }
 
-const TOKEN_KEY_MAP: Record<string, keyof ThemeTokens> = {
-  primary: 'primary',
-  secondary: 'secondary',
-  guides: 'guides',
-  text: 'text',
-  background: 'background',
-  low_band: 'lowBand',
-  mid_band: 'midBand',
-  high_band: 'highBand',
-  fill: 'fill',
-  peak: 'peak',
-  clip: 'clip',
-  target: 'target',
-  heat_low: 'heatLow',
-  heat_mid: 'heatMid',
-  heat_high: 'heatHigh',
-  success: 'success',
-  warning: 'warning',
-  danger: 'danger',
+const SECTION_LABEL_MAP: Record<ThemeSectionName, string> = {
+  app: 'App',
+  controls: 'Controls',
+  scopes: 'Scopes',
+  spectrum: 'Spectrum',
+  oscilloscope: 'Oscilloscope',
+  vectorscope: 'Vectorscope',
+  spectrogram: 'Spectrogram',
+  vumeter: 'VUMeter',
+  lufsmeter: 'LUFSMeter',
+  waveform: 'Waveform',
+  astra: 'Astra',
 }
 
-const TOKEN_PROPERTY_KEY_MAP: Record<string, keyof ThemeTokens> = {
-  primary: 'primary',
-  secondary: 'secondary',
-  guides: 'guides',
-  text: 'text',
-  background: 'background',
-  lowBand: 'lowBand',
-  midBand: 'midBand',
-  highBand: 'highBand',
-  fill: 'fill',
-  peak: 'peak',
-  clip: 'clip',
-  target: 'target',
-  heatLow: 'heatLow',
-  heatMid: 'heatMid',
-  heatHigh: 'heatHigh',
-  success: 'success',
-  warning: 'warning',
-  danger: 'danger',
-}
+const SECTION_SCHEMAS = {
+  app: APP_SCHEMA,
+  controls: CONTROLS_SCHEMA,
+  scopes: SCOPES_SCHEMA,
+  spectrum: SPECTRUM_SCHEMA,
+  oscilloscope: OSCILLOSCOPE_SCHEMA,
+  vectorscope: VECTORSCOPE_SCHEMA,
+  spectrogram: SPECTROGRAM_SCHEMA,
+  vumeter: VUMETER_SCHEMA,
+  lufsmeter: LUFSMETER_SCHEMA,
+  waveform: WAVEFORM_SCHEMA,
+  astra: ASTRA_SCHEMA,
+} as const
 
 interface RgbaColor {
   r: number
@@ -171,11 +244,13 @@ function parseThemeChannelColor(value: string): RgbaColor | null {
 function parseCssToken(token: string): number | null {
   const trimmed = token.trim()
   if (!trimmed) return null
+
   if (trimmed.endsWith('%')) {
     const percent = Number.parseFloat(trimmed.slice(0, -1))
     if (!Number.isFinite(percent)) return null
     return clampByte((percent / 100) * 255)
   }
+
   const value = Number.parseFloat(trimmed)
   if (!Number.isFinite(value)) return null
   return clampByte(value)
@@ -184,11 +259,13 @@ function parseCssToken(token: string): number | null {
 function parseCssAlpha(token: string): number | null {
   const trimmed = token.trim()
   if (!trimmed) return null
+
   if (trimmed.endsWith('%')) {
     const percent = Number.parseFloat(trimmed.slice(0, -1))
     if (!Number.isFinite(percent)) return null
     return clampAlpha(percent / 100)
   }
+
   const value = Number.parseFloat(trimmed)
   if (!Number.isFinite(value)) return null
   return value > 1 ? clampAlpha(value / 255) : clampAlpha(value)
@@ -213,10 +290,7 @@ function parseCssColor(value: string): RgbaColor | null {
       ? Number.parseInt(expanded.slice(6, 8), 16) / 255
       : 1
 
-    if ([r, g, b].some((channel) => Number.isNaN(channel))) {
-      return null
-    }
-
+    if ([r, g, b].some((channel) => Number.isNaN(channel))) return null
     return { r, g, b, a: clampAlpha(a) }
   }
 
@@ -314,49 +388,50 @@ function colorToRgbChannels(color: string): string {
   return `${parsed.r}, ${parsed.g}, ${parsed.b}`
 }
 
-function createEmptyThemeTokens(): ThemeTokens {
-  return {}
+function blendText(primary: string, muted: string, amount: number): string {
+  return mixColors(primary, muted, clampAlpha(amount))
 }
 
 function createEmptyTheme(): PrismTheme {
   return {
     id: DEFAULT_THEME_ID,
     name: DEFAULT_THEME_NAME,
-    all: createEmptyThemeTokens(),
-    interface: createEmptyThemeTokens(),
-    spectrum: createEmptyThemeTokens(),
-    oscilloscope: createEmptyThemeTokens(),
-    vectorscope: createEmptyThemeTokens(),
-    spectrogram: createEmptyThemeTokens(),
-    vumeter: createEmptyThemeTokens(),
-    lufsmeter: createEmptyThemeTokens(),
-    waveform: createEmptyThemeTokens(),
-    astra: createEmptyThemeTokens(),
+    app: {},
+    controls: {},
+    scopes: {},
+    spectrum: {},
+    oscilloscope: {},
+    vectorscope: {},
+    spectrogram: {},
+    vumeter: {},
+    lufsmeter: {},
+    waveform: {},
+    astra: {},
   }
 }
 
-function mergeThemeTokens(base: ThemeTokens, overrides?: ThemeTokens): ThemeTokens {
-  return {
-    ...base,
-    ...(overrides ?? {}),
-  }
-}
-
-function normalizeTokens(raw: unknown): ThemeTokens {
+function normalizeSectionTokens<T extends SectionTokenMap>(
+  raw: unknown,
+  schema: SectionSchema<T>,
+): T {
   if (typeof raw !== 'object' || raw === null) {
-    return createEmptyThemeTokens()
+    return {} as T
   }
 
   const parsed = raw as Record<string, unknown>
-  const next: ThemeTokens = {}
+  const next = {} as T
 
   for (const [rawKey, rawValue] of Object.entries(parsed)) {
     if (typeof rawValue !== 'string') continue
-    const key = TOKEN_PROPERTY_KEY_MAP[rawKey] ?? TOKEN_KEY_MAP[normalizeKey(rawKey)]
+
+    const key = Object.entries(schema).find(([serializedKey, propertyKey]) => {
+      return propertyKey === rawKey || serializedKey === normalizeKey(rawKey)
+    })?.[1] as keyof T | undefined
     if (!key) continue
+
     const parsedColor = parseCssColor(rawValue) ?? parseThemeChannelColor(rawValue)
     if (!parsedColor) continue
-    next[key] = toCssColor(quantizeThemeColor(parsedColor))
+    next[key] = toCssColor(quantizeThemeColor(parsedColor)) as T[typeof key]
   }
 
   return next
@@ -367,44 +442,92 @@ export function createDefaultTheme(): PrismTheme {
     id: DEFAULT_THEME_ID,
     name: DEFAULT_THEME_NAME,
     credit: 'Prism',
-    all: {
-      primary: '#38bdf8',
-      secondary: 'rgb(172, 192, 222)',
-      guides: 'rgba(255, 255, 255, 0.1)',
-      text: 'rgb(255, 255, 255)',
-      background: 'rgb(0, 0, 0)',
-      lowBand: DEFAULT_BAND_LOW,
-      midBand: DEFAULT_BAND_MID,
-      highBand: DEFAULT_BAND_HIGH,
+    app: {
+      accent: DEFAULT_ACCENT,
       success: DEFAULT_SUCCESS,
       warning: DEFAULT_WARNING,
       danger: DEFAULT_DANGER,
-    },
-    interface: {
-      secondary: 'rgba(8, 11, 16, 0.92)',
-      guides: 'rgba(255, 255, 255, 0.09)',
       background: 'rgb(0, 0, 0)',
+      surface: 'rgba(8, 11, 16, 0.92)',
+      surfaceAlt: 'rgba(4, 8, 12, 0.98)',
+      border: 'rgba(255, 255, 255, 0.09)',
+      text: 'rgb(255, 255, 255)',
+      textMuted: 'rgba(255, 255, 255, 0.42)',
+    },
+    controls: {
+      surface: 'rgba(255, 255, 255, 0.03)',
+      surfaceHover: 'rgba(255, 255, 255, 0.06)',
+      surfaceActive: 'rgba(56, 189, 248, 0.12)',
+      border: 'rgba(255, 255, 255, 0.08)',
+      borderActive: 'rgba(56, 189, 248, 0.28)',
+      text: 'rgba(255, 255, 255, 0.92)',
+      inputSurface: 'rgba(10, 14, 20, 0.96)',
+      inputBorder: 'rgba(255, 255, 255, 0.09)',
+      menuSurface: 'rgba(8, 11, 16, 0.96)',
+      menuBorder: 'rgba(255, 255, 255, 0.1)',
+      slider: 'rgba(56, 189, 248, 0.82)',
+    },
+    scopes: {
+      background: 'rgb(0, 0, 0)',
+      guides: DEFAULT_SCOPE_GUIDES,
+      overlaySurface: DEFAULT_SCOPE_OVERLAY_BG,
+      overlayText: DEFAULT_SCOPE_OVERLAY_TEXT,
+      overlayBorder: DEFAULT_SCOPE_OVERLAY_BORDER,
+      resizeHandle: DEFAULT_SCOPE_RESIZE_HANDLE,
     },
     spectrum: {
-      secondary: 'rgba(56, 189, 248, 0.5)',
-      heatLow: 'rgb(15, 7, 33)',
-      heatMid: 'rgb(163, 26, 121)',
-      heatHigh: 'rgb(255, 241, 209)',
+      line: DEFAULT_ACCENT,
+      sideLine: 'rgba(56, 189, 248, 0.5)',
+      fill: 'rgba(56, 189, 248, 0.34)',
+      heatLow: DEFAULT_HEAT_LOW,
+      heatMid: DEFAULT_HEAT_MID,
+      heatHigh: DEFAULT_HEAT_HIGH,
     },
     oscilloscope: {
+      line: DEFAULT_ACCENT,
       fill: 'rgba(245, 248, 252, 0.18)',
     },
+    vectorscope: {
+      trace: DEFAULT_ACCENT,
+      bandLow: DEFAULT_BAND_LOW,
+      bandMid: DEFAULT_BAND_MID,
+      bandHigh: DEFAULT_BAND_HIGH,
+    },
     spectrogram: {
-      heatLow: 'rgb(15, 7, 33)',
-      heatMid: 'rgb(163, 26, 121)',
-      heatHigh: 'rgb(255, 241, 209)',
+      mono: DEFAULT_ACCENT,
+      heatLow: DEFAULT_HEAT_LOW,
+      heatMid: DEFAULT_HEAT_MID,
+      heatHigh: DEFAULT_HEAT_HIGH,
     },
     vumeter: {
+      level: DEFAULT_ACCENT,
+      track: 'rgba(56, 189, 248, 0.08)',
       peak: 'rgb(255, 127, 0)',
       clip: 'rgba(255, 120, 80, 0.9)',
     },
     lufsmeter: {
+      level: DEFAULT_ACCENT,
+      track: 'rgba(56, 189, 248, 0.08)',
       target: 'rgba(56, 189, 248, 0.25)',
+    },
+    waveform: {
+      line: DEFAULT_ACCENT,
+      bandLow: DEFAULT_BAND_LOW,
+      bandMid: DEFAULT_BAND_MID,
+      bandHigh: DEFAULT_BAND_HIGH,
+    },
+    astra: {
+      accent: DEFAULT_ACCENT,
+      background: 'rgba(4, 8, 12, 0.9)',
+      surface: 'rgba(10, 16, 24, 0.92)',
+      border: 'rgba(255, 255, 255, 0.12)',
+      text: 'rgb(248, 250, 252)',
+      progressTrack: 'rgba(255, 255, 255, 0.18)',
+      progressFill: DEFAULT_ACCENT,
+      buttonSurface: 'rgba(255, 255, 255, 0.05)',
+      buttonBorder: 'rgba(255, 255, 255, 0.12)',
+      statusOk: DEFAULT_SUCCESS,
+      statusError: DEFAULT_DANGER,
     },
   }, DEFAULT_THEME_ID, DEFAULT_THEME_NAME)
 }
@@ -413,13 +536,28 @@ function cloneTheme(theme: PrismTheme): PrismTheme {
   return JSON.parse(JSON.stringify(theme)) as PrismTheme
 }
 
-function createPresetTheme(id: string, name: string, primary: string): PrismTheme {
+function createPresetTheme(id: string, name: string, accent: string): PrismTheme {
   const base = cloneTheme(createDefaultTheme())
   base.id = id
   base.name = name
-  base.all.primary = primary
-  base.spectrum.secondary = multiplyAlpha(primary, 0.6)
-  base.lufsmeter.target = withAlpha(primary, 0.25)
+  base.app.accent = accent
+  base.controls.surfaceActive = withAlpha(accent, 0.12)
+  base.controls.borderActive = withAlpha(accent, 0.28)
+  base.controls.slider = withAlpha(accent, 0.82)
+  base.spectrum.line = accent
+  base.spectrum.sideLine = withAlpha(accent, 0.5)
+  base.spectrum.fill = withAlpha(accent, 0.34)
+  base.oscilloscope.line = accent
+  base.vectorscope.trace = accent
+  base.spectrogram.mono = accent
+  base.vumeter.level = accent
+  base.vumeter.track = withAlpha(accent, 0.08)
+  base.lufsmeter.level = accent
+  base.lufsmeter.track = withAlpha(accent, 0.08)
+  base.lufsmeter.target = withAlpha(accent, 0.25)
+  base.waveform.line = accent
+  base.astra.accent = accent
+  base.astra.progressFill = accent
   return normalizeTheme(base, id, name)
 }
 
@@ -463,16 +601,17 @@ export function normalizeTheme(
   normalized.description = typeof parsed.description === 'string' && parsed.description.trim()
     ? parsed.description.trim()
     : undefined
-  normalized.all = normalizeTokens(parsed.all)
-  normalized.interface = normalizeTokens(parsed.interface)
-  normalized.spectrum = normalizeTokens(parsed.spectrum)
-  normalized.oscilloscope = normalizeTokens(parsed.oscilloscope)
-  normalized.vectorscope = normalizeTokens(parsed.vectorscope)
-  normalized.spectrogram = normalizeTokens(parsed.spectrogram)
-  normalized.vumeter = normalizeTokens(parsed.vumeter)
-  normalized.lufsmeter = normalizeTokens(parsed.lufsmeter)
-  normalized.waveform = normalizeTokens(parsed.waveform)
-  normalized.astra = normalizeTokens(parsed.astra)
+  normalized.app = normalizeSectionTokens(parsed.app, APP_SCHEMA)
+  normalized.controls = normalizeSectionTokens(parsed.controls, CONTROLS_SCHEMA)
+  normalized.scopes = normalizeSectionTokens(parsed.scopes, SCOPES_SCHEMA)
+  normalized.spectrum = normalizeSectionTokens(parsed.spectrum, SPECTRUM_SCHEMA)
+  normalized.oscilloscope = normalizeSectionTokens(parsed.oscilloscope, OSCILLOSCOPE_SCHEMA)
+  normalized.vectorscope = normalizeSectionTokens(parsed.vectorscope, VECTORSCOPE_SCHEMA)
+  normalized.spectrogram = normalizeSectionTokens(parsed.spectrogram, SPECTROGRAM_SCHEMA)
+  normalized.vumeter = normalizeSectionTokens(parsed.vumeter, VUMETER_SCHEMA)
+  normalized.lufsmeter = normalizeSectionTokens(parsed.lufsmeter, LUFSMETER_SCHEMA)
+  normalized.waveform = normalizeSectionTokens(parsed.waveform, WAVEFORM_SCHEMA)
+  normalized.astra = normalizeSectionTokens(parsed.astra, ASTRA_SCHEMA)
   return normalized
 }
 
@@ -514,6 +653,19 @@ export function normalizeLegacyThemePayload(raw: unknown): LegacyThemeMigrationP
   }
 }
 
+function getSectionTokenRecord(
+  theme: PrismTheme,
+  section: ThemeSectionName,
+): SectionTokenMap {
+  return theme[section] as SectionTokenMap
+}
+
+function parseSectionValue(section: ThemeSectionName, key: string): string | null {
+  const schema = SECTION_SCHEMAS[section] as Record<string, string>
+  const mapped = schema[key]
+  return mapped ?? null
+}
+
 function parseThemeContent(content: string, fallbackId: string, fallbackName: string): PrismTheme {
   const nextTheme = createEmptyTheme()
   nextTheme.id = fallbackId
@@ -523,9 +675,7 @@ function parseThemeContent(content: string, fallbackId: string, fallbackName: st
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim()
-    if (!line || line.startsWith('#') || line.startsWith(';')) {
-      continue
-    }
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue
 
     const sectionMatch = /^\[(.+)\]$/.exec(line)
     if (sectionMatch) {
@@ -537,9 +687,7 @@ function parseThemeContent(content: string, fallbackId: string, fallbackName: st
     }
 
     const equalsIndex = line.indexOf('=')
-    if (equalsIndex === -1 || !currentSection) {
-      continue
-    }
+    if (equalsIndex === -1 || !currentSection) continue
 
     const key = normalizeKey(line.slice(0, equalsIndex))
     const value = line.slice(equalsIndex + 1).trim()
@@ -580,12 +728,12 @@ function parseThemeContent(content: string, fallbackId: string, fallbackName: st
       continue
     }
 
-    const tokenKey = TOKEN_KEY_MAP[key]
+    const tokenKey = parseSectionValue(currentSection, key)
     if (!tokenKey) continue
 
-    const parsedColor = parseThemeChannelColor(value)
+    const parsedColor = parseCssColor(value) ?? parseThemeChannelColor(value)
     if (!parsedColor) continue
-    nextTheme[currentSection][tokenKey] = toCssColor(parsedColor)
+    getSectionTokenRecord(nextTheme, currentSection)[tokenKey] = toCssColor(quantizeThemeColor(parsedColor))
   }
 
   return normalizeTheme(nextTheme, fallbackId, fallbackName)
@@ -599,14 +747,16 @@ export function parseThemeFileContent(
   return parseThemeContent(content, fallbackId, fallbackName)
 }
 
-function serializeSection(sectionName: string, tokens: ThemeTokens): string[] {
+function serializeSection<T extends SectionTokenMap>(
+  sectionName: string,
+  tokens: T,
+  schema: SectionSchema<T>,
+): string[] {
   const lines: string[] = [`[${sectionName}]`]
 
-  for (const key of COLOR_KEY_ORDER) {
-    const value = tokens[key]
+  for (const [serializedKey, propertyKey] of Object.entries(schema)) {
+    const value = tokens[propertyKey as keyof T]
     if (!value) continue
-    const serializedKey = key
-      .replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`)
     lines.push(`${serializedKey} = ${toThemeChannels(value)}`)
   }
 
@@ -629,219 +779,350 @@ export function serializeThemeFile(theme: PrismTheme): string {
 
   const output = [sections.join('\n')]
 
-  for (const section of MODULE_SECTION_ORDER) {
-    const tokens = normalized[section]
+  for (const section of Object.keys(SECTION_SCHEMAS) as ThemeSectionName[]) {
+    const tokens = normalized[section] as Record<string, string | undefined>
     if (!Object.values(tokens).some(Boolean)) continue
-    const label = section === 'interface'
-      ? 'Interface'
-      : section === 'all'
-        ? 'All'
-        : section === 'vumeter'
-          ? 'VUMeter'
-          : section === 'lufsmeter'
-            ? 'LUFSMeter'
-            : section === 'astra'
-              ? 'Astra'
-            : `${section.charAt(0).toUpperCase()}${section.slice(1)}`
-    output.push(serializeSection(label, tokens).join('\n'))
+    const schema = SECTION_SCHEMAS[section] as SectionSchema<Record<string, string | undefined>>
+    output.push(serializeSection(SECTION_LABEL_MAP[section], tokens, schema).join('\n'))
   }
 
   return `${output.join('\n\n')}\n`
 }
 
 export function createTemplateThemeFile(): string {
-  return `# Prism theme template\n#\n# Authoring rules:\n# - Colors use R, G, B or R, G, B, A (0-255)\n# - Omit sections or keys you do not want to override\n# - [All] sets the defaults for everything else\n# - [Interface] overrides the app window, controls, and menus\n# - Module sections only need the colors that should differ from [All]\n\n[Theme]\nformat = ${THEME_FILE_FORMAT}\nversion = ${THEME_FILE_VERSION}\nid = theme_template\nname = Template Theme\ncredit = Your Name\nwebsite = https://example.com\n\n[All]\nprimary = 56, 189, 248\nsecondary = 172, 192, 222\nguides = 255, 255, 255, 26\ntext = 255, 255, 255\nbackground = 0, 0, 0\nlow_band = 255, 68, 68\nmid_band = 68, 221, 68\nhigh_band = 68, 136, 255\nsuccess = 34, 197, 94\nwarning = 255, 191, 0\ndanger = 248, 113, 113\n\n[Interface]\nsecondary = 8, 11, 16, 235\nguides = 255, 255, 255, 23\nbackground = 0, 0, 0\n\n[Spectrum]\nsecondary = 56, 189, 248, 127\nheat_low = 15, 7, 33\nheat_mid = 163, 26, 121\nheat_high = 255, 241, 209\n\n[Oscilloscope]\nfill = 245, 248, 252, 46\n\n[VUMeter]\npeak = 255, 127, 0\nclip = 255, 120, 80, 230\n\n[LUFSMeter]\ntarget = 56, 189, 248, 64\n\n[Astra]\nsecondary = 10, 16, 24, 235\nguides = 255, 255, 255, 31\nbackground = 4, 8, 12, 230\n`
+  const template = createDefaultTheme()
+  template.id = 'theme_template'
+  template.name = 'Template Theme'
+  template.credit = 'Your Name'
+  template.website = 'https://example.com'
+
+  return `# Prism theme template
+#
+# Authoring rules:
+# - Colors use R, G, B or R, G, B, A (0-255)
+# - CSS colors like #hex, rgb(), and rgba() also work
+# - [App] controls the overall chrome and text
+# - [Controls] covers buttons, inputs, menus, and sliders
+# - [Scopes] covers the shared analyzer background and guide system
+# - Scope sections should only override visuals unique to that module
+#
+${serializeThemeFile(template)}`
 }
 
-function getThemeFallbackSection(base: ThemeTokens): Required<ThemeTokens> {
-  const primary = base.primary ?? '#38bdf8'
-  return {
-    primary,
-    secondary: base.secondary ?? lighten(primary, 0.22),
-    guides: base.guides ?? 'rgba(255, 255, 255, 0.1)',
-    text: base.text ?? 'rgb(255, 255, 255)',
-    background: base.background ?? 'transparent',
-    lowBand: base.lowBand ?? DEFAULT_BAND_LOW,
-    midBand: base.midBand ?? DEFAULT_BAND_MID,
-    highBand: base.highBand ?? DEFAULT_BAND_HIGH,
-    fill: base.fill ?? withAlpha(primary, 0.18),
-    peak: base.peak ?? 'rgb(255, 127, 0)',
-    clip: base.clip ?? 'rgba(255, 120, 80, 0.9)',
-    target: base.target ?? withAlpha(primary, 0.25),
-    heatLow: base.heatLow ?? 'rgb(15, 7, 33)',
-    heatMid: base.heatMid ?? 'rgb(163, 26, 121)',
-    heatHigh: base.heatHigh ?? 'rgb(255, 241, 209)',
-    success: base.success ?? DEFAULT_SUCCESS,
-    warning: base.warning ?? DEFAULT_WARNING,
-    danger: base.danger ?? DEFAULT_DANGER,
-  }
+interface ResolvedAppTokens {
+  accent: string
+  success: string
+  warning: string
+  danger: string
+  background: string
+  surface: string
+  surfaceAlt: string
+  border: string
+  text: string
+  textMuted: string
 }
 
-function resolveInterfaceTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedInterfaceTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.interface))
-  const background = section.background
-  const surface = theme.interface.secondary ?? mixColors(background, section.text, 0.06)
-  const guides = theme.interface.guides ?? all.guides
-  const primary = section.primary
-  const text = section.text
-
-  return {
-    primary,
-    secondary: section.secondary,
-    guides,
-    text,
-    background,
-    accent: primary,
-    accentHover: lighten(primary, 0.2),
-    accentGlow: withAlpha(primary, 0.3),
-    accentRgb: colorToRgbChannels(primary),
-    bgPrimary: background,
-    bgSecondary: darken(background, 0.04),
-    bgTertiary: darken(background, 0.08),
-    panelSurface: surface,
-    panelSurfaceSoft: multiplyAlpha(surface, 0.92),
-    panelOutline: withAlpha(guides, 0.5),
-    panelOutlineStrong: withAlpha(guides, 0.9),
-    glassBg: withAlpha(surface, 0.18),
-    glassBorder: withAlpha(guides, 0.7),
-    glassHighlight: withAlpha(text, 0.05),
-    textPrimary: text,
-    textSecondary: withAlpha(text, 0.62),
-    textTertiary: withAlpha(text, 0.42),
-    textMuted: withAlpha(text, 0.3),
-    toolbarBg: withAlpha(background, 0.74),
-    settingsBgTop: multiplyAlpha(surface, 0.98),
-    settingsBgBottom: withAlpha(darken(background, 0.2), 0.98),
-    bottomBarBg: withAlpha(darken(background, 0.08), 0.98),
-    menuBg: withAlpha(surface, 0.96),
-    menuBorder: withAlpha(guides, 0.75),
-    controlBg: withAlpha(section.secondary, 0.08),
-    controlBgHover: withAlpha(lighten(section.secondary, 0.08), 0.12),
-    controlBgActive: withAlpha(primary, 0.12),
-    controlBorder: withAlpha(guides, 0.7),
-    controlBorderActive: withAlpha(primary, 0.34),
-    inputBg: withAlpha(surface, 0.98),
-    inputBgFocus: withAlpha(lighten(surface, 0.05), 0.98),
-    inputBorder: withAlpha(guides, 0.8),
-    inputBorderFocus: withAlpha(primary, 0.7),
-    divider: withAlpha(guides, 0.55),
-    success: all.success,
-    warning: all.warning,
-    danger: all.danger,
-  }
+interface ResolvedControlsTokens {
+  surface: string
+  surfaceHover: string
+  surfaceActive: string
+  border: string
+  borderActive: string
+  text: string
+  inputSurface: string
+  inputBorder: string
+  menuSurface: string
+  menuBorder: string
+  slider: string
 }
 
-function resolveSpectrumTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedSpectrumTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.spectrum))
-  return {
-    primary: section.primary,
-    secondary: section.secondary,
-    guides: section.guides,
-    background: theme.spectrum.background ?? 'transparent',
-    fillGradient: [
-      withAlpha(section.primary, 0),
-      withAlpha(section.primary, 0.3),
-      withAlpha(section.secondary, 0.5),
-    ],
-    heatColors: [section.heatLow, section.heatMid, section.heatHigh],
-  }
+interface ResolvedScopesTokens {
+  background: string
+  guides: string
+  guidesSecondary: string
+  labels: string
+  overlaySurface: string
+  overlayText: string
+  overlayBorder: string
+  resizeHandle: string
 }
 
-function resolveOscilloscopeTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedOscilloscopeTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.oscilloscope))
-  return {
-    primary: section.primary,
-    guides: section.guides,
-    background: theme.oscilloscope.background ?? 'transparent',
-    fill: section.fill,
-  }
-}
-
-function resolveVectorscopeTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedVectorscopeTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.vectorscope))
-  return {
-    primary: section.primary,
-    guides: section.guides,
-    background: theme.vectorscope.background ?? 'transparent',
-    lowBand: section.lowBand,
-    midBand: section.midBand,
-    highBand: section.highBand,
-  }
-}
-
-function resolveSpectrogramTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedSpectrogramTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.spectrogram))
-  return {
-    primary: section.primary,
-    guides: section.guides,
-    background: theme.spectrogram.background ?? 'transparent',
-    heatColors: [section.heatLow, section.heatMid, section.heatHigh],
-  }
-}
-
-function resolveVUMeterTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedVUMeterTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.vumeter))
-  return {
-    primary: section.primary,
-    peak: section.peak,
-    clip: section.clip,
-    guides: section.guides,
-    text: section.text,
-    background: theme.vumeter.background ?? 'transparent',
-  }
-}
-
-function resolveLUFSMeterTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedLUFSMeterTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.lufsmeter))
-  return {
-    primary: section.primary,
-    target: section.target,
-    guides: section.guides,
-    text: section.text,
-    background: theme.lufsmeter.background ?? 'transparent',
-  }
-}
-
-function resolveWaveformTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedWaveformTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.waveform))
-  return {
-    primary: section.primary,
-    guides: section.guides,
-    background: theme.waveform.background ?? 'transparent',
-    lowBand: section.lowBand,
-    midBand: section.midBand,
-    highBand: section.highBand,
-  }
-}
-
-function resolveAstraTheme(theme: PrismTheme, all: Required<ThemeTokens>): ResolvedAstraTheme {
-  const section = getThemeFallbackSection(mergeThemeTokens(all, theme.astra))
-  const background = section.background
-  const surface = theme.astra.secondary ?? withAlpha(section.secondary, 0.16)
-  const guides = theme.astra.guides ?? all.guides
+function resolveAppTokens(tokens: ThemeAppTokens): ResolvedAppTokens {
+  const accent = tokens.accent ?? DEFAULT_ACCENT
+  const text = tokens.text ?? 'rgb(255, 255, 255)'
+  const textMuted = tokens.textMuted ?? withAlpha(text, 0.42)
+  const background = tokens.background ?? 'rgb(0, 0, 0)'
+  const surface = tokens.surface ?? 'rgba(8, 11, 16, 0.92)'
+  const surfaceAlt = tokens.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)'
+  const border = tokens.border ?? 'rgba(255, 255, 255, 0.09)'
 
   return {
-    accent: section.primary,
-    text: section.text,
-    subtext: withAlpha(section.text, 0.7),
+    accent,
+    success: tokens.success ?? DEFAULT_SUCCESS,
+    warning: tokens.warning ?? DEFAULT_WARNING,
+    danger: tokens.danger ?? DEFAULT_DANGER,
     background,
     surface,
-    border: guides,
-    progressTrack: withAlpha(guides, 0.3),
-    progressFill: section.primary,
-    buttonBg: surface,
-    buttonBgHover: withAlpha(mixColors(surface, section.primary, 0.14), 0.94),
-    buttonBgActive: withAlpha(section.primary, 0.16),
-    buttonBorder: guides,
-    buttonText: section.text,
-    statusOk: section.success,
-    statusError: section.danger,
+    surfaceAlt,
+    border,
+    text,
+    textMuted,
+  }
+}
+
+function resolveControlsTokens(tokens: ThemeControlsTokens, app: ResolvedAppTokens): ResolvedControlsTokens {
+  const surface = tokens.surface ?? 'rgba(255, 255, 255, 0.03)'
+  return {
+    surface,
+    surfaceHover: tokens.surfaceHover ?? mixColors(surface, app.accent, 0.12),
+    surfaceActive: tokens.surfaceActive ?? withAlpha(app.accent, 0.12),
+    border: tokens.border ?? 'rgba(255, 255, 255, 0.08)',
+    borderActive: tokens.borderActive ?? withAlpha(app.accent, 0.28),
+    text: tokens.text ?? app.text,
+    inputSurface: tokens.inputSurface ?? 'rgba(10, 14, 20, 0.96)',
+    inputBorder: tokens.inputBorder ?? 'rgba(255, 255, 255, 0.09)',
+    menuSurface: tokens.menuSurface ?? app.surface,
+    menuBorder: tokens.menuBorder ?? 'rgba(255, 255, 255, 0.1)',
+    slider: tokens.slider ?? withAlpha(app.accent, 0.82),
+  }
+}
+
+function resolveScopesTokens(tokens: ThemeScopesTokens, app: ResolvedAppTokens): ResolvedScopesTokens {
+  const guides = tokens.guides ?? DEFAULT_SCOPE_GUIDES
+  return {
+    background: tokens.background ?? app.background,
+    guides,
+    guidesSecondary: multiplyAlpha(guides, 0.5),
+    labels: guides,
+    overlaySurface: tokens.overlaySurface ?? DEFAULT_SCOPE_OVERLAY_BG,
+    overlayText: tokens.overlayText ?? DEFAULT_SCOPE_OVERLAY_TEXT,
+    overlayBorder: tokens.overlayBorder ?? DEFAULT_SCOPE_OVERLAY_BORDER,
+    resizeHandle: tokens.resizeHandle ?? DEFAULT_SCOPE_RESIZE_HANDLE,
+  }
+}
+
+function resolveInterfaceTheme(
+  app: ResolvedAppTokens,
+  controls: ResolvedControlsTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedInterfaceTheme {
+  return {
+    primary: app.accent,
+    secondary: app.surfaceAlt,
+    border: app.border,
+    text: app.text,
+    background: app.background,
+    accent: app.accent,
+    accentHover: lighten(app.accent, 0.2),
+    accentGlow: withAlpha(app.accent, 0.3),
+    accentRgb: colorToRgbChannels(app.accent),
+    bgPrimary: app.background,
+    bgSecondary: darken(app.background, 0.04),
+    bgTertiary: darken(app.background, 0.08),
+    panelSurface: app.surface,
+    panelSurfaceSoft: app.surfaceAlt,
+    panelOutline: app.border,
+    panelOutlineStrong: withAlpha(app.border, 0.9),
+    glassBg: withAlpha(app.surface, 0.18),
+    glassBorder: withAlpha(app.border, 0.85),
+    glassHighlight: withAlpha(app.text, 0.05),
+    textPrimary: app.text,
+    textSecondary: blendText(app.text, app.textMuted, 0.45),
+    textTertiary: blendText(app.text, app.textMuted, 0.7),
+    textMuted: app.textMuted,
+    toolbarBg: withAlpha(app.surfaceAlt, 0.78),
+    settingsBgTop: app.surface,
+    settingsBgBottom: app.surfaceAlt,
+    bottomBarBg: withAlpha(app.surfaceAlt, 0.98),
+    menuBg: controls.menuSurface,
+    menuBorder: controls.menuBorder,
+    controlBg: controls.surface,
+    controlBgHover: controls.surfaceHover,
+    controlBgActive: controls.surfaceActive,
+    controlBorder: controls.border,
+    controlBorderActive: controls.borderActive,
+    controlText: controls.text,
+    inputBg: controls.inputSurface,
+    inputBgFocus: lighten(controls.inputSurface, 0.05),
+    inputBorder: controls.inputBorder,
+    inputBorderFocus: controls.borderActive,
+    optionBg: controls.menuSurface,
+    optionText: controls.text,
+    sliderTrack: withAlpha(app.border, 0.6),
+    sliderFill: controls.slider,
+    sliderThumb: lighten(controls.slider, 0.18),
+    divider: app.border,
+    scopeBackground: scopes.background,
+    scopeGuides: scopes.guides,
+    scopeOverlayBg: scopes.overlaySurface,
+    scopeOverlayText: scopes.overlayText,
+    scopeOverlayBorder: scopes.overlayBorder,
+    scopeResizeHandle: scopes.resizeHandle,
+    success: app.success,
+    warning: app.warning,
+    danger: app.danger,
+  }
+}
+
+function resolveSpectrumTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedSpectrumTheme {
+  const section = theme.spectrum
+  const line = section.line ?? app.accent
+  const sideLine = section.sideLine ?? withAlpha(line, 0.5)
+  const fill = section.fill ?? withAlpha(line, 0.34)
+  return {
+    line,
+    sideLine,
+    guides: scopes.guides,
+    guidesSecondary: scopes.guidesSecondary,
+    labels: scopes.labels,
+    background: scopes.background,
+    fill,
+    fillGradient: [
+      withAlpha(fill, 0),
+      multiplyAlpha(fill, 0.72),
+      fill,
+    ],
+    heatColors: [
+      section.heatLow ?? DEFAULT_HEAT_LOW,
+      section.heatMid ?? DEFAULT_HEAT_MID,
+      section.heatHigh ?? DEFAULT_HEAT_HIGH,
+    ],
+  }
+}
+
+function resolveOscilloscopeTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedOscilloscopeTheme {
+  return {
+    line: theme.oscilloscope.line ?? app.accent,
+    guides: scopes.guides,
+    guidesSecondary: scopes.guidesSecondary,
+    background: scopes.background,
+    fill: theme.oscilloscope.fill ?? 'rgba(245, 248, 252, 0.18)',
+  }
+}
+
+function resolveVectorscopeTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedVectorscopeTheme {
+  return {
+    trace: theme.vectorscope.trace ?? app.accent,
+    guides: scopes.guides,
+    guidesSecondary: scopes.guidesSecondary,
+    labels: scopes.labels,
+    background: scopes.background,
+    bandLow: theme.vectorscope.bandLow ?? DEFAULT_BAND_LOW,
+    bandMid: theme.vectorscope.bandMid ?? DEFAULT_BAND_MID,
+    bandHigh: theme.vectorscope.bandHigh ?? DEFAULT_BAND_HIGH,
+  }
+}
+
+function resolveSpectrogramTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedSpectrogramTheme {
+  return {
+    mono: theme.spectrogram.mono ?? app.accent,
+    background: scopes.background,
+    heatColors: [
+      theme.spectrogram.heatLow ?? DEFAULT_HEAT_LOW,
+      theme.spectrogram.heatMid ?? DEFAULT_HEAT_MID,
+      theme.spectrogram.heatHigh ?? DEFAULT_HEAT_HIGH,
+    ],
+  }
+}
+
+function resolveVUMeterTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedVUMeterTheme {
+  const level = theme.vumeter.level ?? app.accent
+  return {
+    level,
+    track: theme.vumeter.track ?? withAlpha(level, 0.08),
+    peak: theme.vumeter.peak ?? 'rgb(255, 127, 0)',
+    clip: theme.vumeter.clip ?? 'rgba(255, 120, 80, 0.9)',
+    scale: scopes.guides,
+    labels: blendText(app.text, app.textMuted, 0.35),
+    background: scopes.background,
+  }
+}
+
+function resolveLUFSMeterTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedLUFSMeterTheme {
+  const level = theme.lufsmeter.level ?? app.accent
+  return {
+    level,
+    track: theme.lufsmeter.track ?? withAlpha(level, 0.08),
+    target: theme.lufsmeter.target ?? withAlpha(level, 0.25),
+    scale: scopes.guides,
+    labels: blendText(app.text, app.textMuted, 0.2),
+    background: scopes.background,
+  }
+}
+
+function resolveWaveformTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedWaveformTheme {
+  return {
+    line: theme.waveform.line ?? app.accent,
+    guides: scopes.guides,
+    guidesSecondary: scopes.guidesSecondary,
+    background: scopes.background,
+    bandLow: theme.waveform.bandLow ?? DEFAULT_BAND_LOW,
+    bandMid: theme.waveform.bandMid ?? DEFAULT_BAND_MID,
+    bandHigh: theme.waveform.bandHigh ?? DEFAULT_BAND_HIGH,
+  }
+}
+
+function resolveAstraTheme(
+  theme: PrismTheme,
+  app: ResolvedAppTokens,
+  controls: ResolvedControlsTokens,
+  scopes: ResolvedScopesTokens,
+): ResolvedAstraTheme {
+  const accent = theme.astra.accent ?? app.accent
+  const text = theme.astra.text ?? app.text
+  const buttonBg = theme.astra.buttonSurface ?? controls.surface
+  return {
+    accent,
+    text,
+    subtext: withAlpha(text, 0.7),
+    background: theme.astra.background ?? scopes.background,
+    surface: theme.astra.surface ?? 'rgba(10, 16, 24, 0.92)',
+    border: theme.astra.border ?? withAlpha(app.border, 0.9),
+    progressTrack: theme.astra.progressTrack ?? withAlpha(text, 0.18),
+    progressFill: theme.astra.progressFill ?? accent,
+    buttonBg,
+    buttonBgHover: withAlpha(mixColors(buttonBg, accent, 0.14), 0.94),
+    buttonBgActive: withAlpha(accent, 0.16),
+    buttonBorder: theme.astra.buttonBorder ?? controls.border,
+    buttonText: text,
+    statusOk: theme.astra.statusOk ?? app.success,
+    statusError: theme.astra.statusError ?? app.danger,
   }
 }
 
 export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
   const normalized = normalizeTheme(theme, theme.id, theme.name)
-  const baseAll = getThemeFallbackSection(mergeThemeTokens(createDefaultTheme().all, normalized.all))
+  const app = resolveAppTokens(normalized.app)
+  const controls = resolveControlsTokens(normalized.controls, app)
+  const scopes = resolveScopesTokens(normalized.scopes, app)
 
   return {
     id: normalized.id,
@@ -849,15 +1130,15 @@ export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
     credit: normalized.credit,
     website: normalized.website,
     description: normalized.description,
-    interface: resolveInterfaceTheme(normalized, baseAll),
-    spectrum: resolveSpectrumTheme(normalized, baseAll),
-    oscilloscope: resolveOscilloscopeTheme(normalized, baseAll),
-    vectorscope: resolveVectorscopeTheme(normalized, baseAll),
-    spectrogram: resolveSpectrogramTheme(normalized, baseAll),
-    vumeter: resolveVUMeterTheme(normalized, baseAll),
-    lufsmeter: resolveLUFSMeterTheme(normalized, baseAll),
-    waveform: resolveWaveformTheme(normalized, baseAll),
-    astra: resolveAstraTheme(normalized, baseAll),
+    interface: resolveInterfaceTheme(app, controls, scopes),
+    spectrum: resolveSpectrumTheme(normalized, app, scopes),
+    oscilloscope: resolveOscilloscopeTheme(normalized, app, scopes),
+    vectorscope: resolveVectorscopeTheme(normalized, app, scopes),
+    spectrogram: resolveSpectrogramTheme(normalized, app, scopes),
+    vumeter: resolveVUMeterTheme(normalized, app, scopes),
+    lufsmeter: resolveLUFSMeterTheme(normalized, app, scopes),
+    waveform: resolveWaveformTheme(normalized, app, scopes),
+    astra: resolveAstraTheme(normalized, app, controls, scopes),
   }
 }
 
@@ -887,9 +1168,24 @@ export function createMigratedAccentTheme(accent: string): PrismTheme | null {
   const base = cloneTheme(createDefaultTheme())
   base.id = 'theme_migrated_accent'
   base.name = 'Migrated Accent'
-  base.all.primary = toCssColor(parsed)
-  base.spectrum.secondary = withAlpha(base.all.primary, 0.5)
-  base.lufsmeter.target = withAlpha(base.all.primary, 0.25)
+  base.app.accent = toCssColor(parsed)
+  base.controls.surfaceActive = withAlpha(base.app.accent, 0.12)
+  base.controls.borderActive = withAlpha(base.app.accent, 0.28)
+  base.controls.slider = withAlpha(base.app.accent, 0.82)
+  base.spectrum.line = base.app.accent
+  base.spectrum.sideLine = withAlpha(base.app.accent, 0.5)
+  base.spectrum.fill = withAlpha(base.app.accent, 0.34)
+  base.oscilloscope.line = base.app.accent
+  base.vectorscope.trace = base.app.accent
+  base.spectrogram.mono = base.app.accent
+  base.vumeter.level = base.app.accent
+  base.vumeter.track = withAlpha(base.app.accent, 0.08)
+  base.lufsmeter.level = base.app.accent
+  base.lufsmeter.track = withAlpha(base.app.accent, 0.08)
+  base.lufsmeter.target = withAlpha(base.app.accent, 0.25)
+  base.waveform.line = base.app.accent
+  base.astra.accent = base.app.accent
+  base.astra.progressFill = base.app.accent
   return normalizeTheme(base, base.id, base.name)
 }
 
@@ -928,11 +1224,23 @@ export function themeToCssVariables(theme: Pick<PrismResolvedTheme, 'interface'>
     '--control-bg-active': ui.controlBgActive,
     '--control-border': ui.controlBorder,
     '--control-border-active': ui.controlBorderActive,
+    '--control-text': ui.controlText,
     '--input-bg': ui.inputBg,
     '--input-bg-focus': ui.inputBgFocus,
     '--input-border': ui.inputBorder,
     '--input-border-focus': ui.inputBorderFocus,
+    '--option-bg': ui.optionBg,
+    '--option-text': ui.optionText,
+    '--slider-track': ui.sliderTrack,
+    '--slider-fill': ui.sliderFill,
+    '--slider-thumb': ui.sliderThumb,
     '--divider': ui.divider,
+    '--scope-bg': ui.scopeBackground,
+    '--scope-guides': ui.scopeGuides,
+    '--scope-overlay-bg': ui.scopeOverlayBg,
+    '--scope-overlay-text': ui.scopeOverlayText,
+    '--scope-overlay-border': ui.scopeOverlayBorder,
+    '--scope-resize-handle': ui.scopeResizeHandle,
   }
 }
 

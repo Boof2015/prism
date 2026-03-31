@@ -30,6 +30,7 @@ export interface SpectrogramOptions {
   colorScheme?: 'heat' | 'mono'
   lineColor?: string
   heatColors?: [string, string, string]
+  backgroundColor?: string
   dataSource?: SpectrogramDataSource
   frameScheduler?: FrameScheduler
 }
@@ -54,6 +55,7 @@ const defaultOptions: ResolvedSpectrogramOptions = {
   colorScheme: 'heat',
   lineColor: '#38bdf8',
   heatColors: ['rgb(15, 7, 33)', 'rgb(163, 26, 121)', 'rgb(255, 241, 209)'],
+  backgroundColor: 'transparent',
 }
 
 const defaultSpectrogramDataSource: SpectrogramDataSource = {
@@ -95,6 +97,7 @@ function resolveOptions(base: ResolvedSpectrogramOptions, overrides: Partial<Spe
     colorScheme: overrides.colorScheme ?? base.colorScheme,
     lineColor: overrides.lineColor ?? base.lineColor,
     heatColors: overrides.heatColors ?? base.heatColors,
+    backgroundColor: overrides.backgroundColor ?? base.backgroundColor,
   }
 }
 
@@ -697,6 +700,10 @@ export class Spectrogram {
       this.dataSource.getPendingSpectrogramSamples()
       // Freeze waterfall in place instead of blanking
       this.ctx.clearRect(0, 0, width, height)
+      if (this.options.backgroundColor !== 'transparent') {
+        this.ctx.fillStyle = this.options.backgroundColor
+        this.ctx.fillRect(0, 0, width, height)
+      }
       this.ctx.drawImage(this.waterfallCanvas, 0, 0)
       return
     }
@@ -728,6 +735,10 @@ export class Spectrogram {
     }
 
     this.ctx.clearRect(0, 0, width, height)
+    if (this.options.backgroundColor !== 'transparent') {
+      this.ctx.fillStyle = this.options.backgroundColor
+      this.ctx.fillRect(0, 0, width, height)
+    }
     this.ctx.drawImage(this.waterfallCanvas, 0, 0)
   }
 

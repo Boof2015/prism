@@ -745,8 +745,10 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   const options = scopeSettingsToOptions('spectrum', profile.scopeSettings.spectrum, theme.spectrum)
 
   assert.equal(options.showSideLine, true)
-  assert.equal(options.secondaryLineColor, theme.spectrum.secondary)
-  assert.equal(options.lineColor, theme.spectrum.primary)
+  assert.equal(options.secondaryLineColor, theme.spectrum.sideLine)
+  assert.equal(options.lineColor, theme.spectrum.line)
+  assert.equal(options.backgroundColor, theme.spectrum.background)
+  assert.equal(options.gridColor, theme.spectrum.guides)
 })
 
 test('astra playback progress advances from updatedAt while playing', () => {
@@ -904,7 +906,55 @@ test('scopeSettingsToOptions wires waveform stereo mode into analyzer options', 
 
   assert.equal(options.mode, 'stereo')
   assert.equal(options.multiband, true)
-  assert.equal(options.lineColor, theme.waveform.primary)
+  assert.equal(options.lineColor, theme.waveform.line)
+  assert.equal(options.backgroundColor, theme.waveform.background)
+  assert.equal(options.gridMajorColor, theme.waveform.guides)
+  assert.equal(options.gridMinorColor, theme.waveform.guidesSecondary)
+})
+
+test('scopeSettingsToOptions forwards shared scope background and guides to oscilloscope and vectorscope', () => {
+  const profile = createDefaultProfile('Default')
+  const authoredTheme = createDefaultTheme()
+  authoredTheme.scopes.background = 'rgb(3, 4, 5)'
+  authoredTheme.scopes.guides = 'rgba(120, 130, 140, 0.2)'
+  const theme = resolveTheme(authoredTheme)
+
+  const oscilloscope = scopeSettingsToOptions('oscilloscope', profile.scopeSettings.oscilloscope, theme.oscilloscope)
+  assert.equal(oscilloscope.backgroundColor, 'rgb(3, 4, 5)')
+  assert.equal(oscilloscope.gridMajorColor, theme.oscilloscope.guides)
+  assert.equal(oscilloscope.gridMinorColor, theme.oscilloscope.guidesSecondary)
+
+  const vectorscope = scopeSettingsToOptions('vectorscope', profile.scopeSettings.vectorscope, theme.vectorscope)
+  assert.equal(vectorscope.backgroundColor, 'rgb(3, 4, 5)')
+  assert.equal(vectorscope.gridMajorColor, theme.vectorscope.guides)
+  assert.equal(vectorscope.gridMinorColor, theme.vectorscope.guidesSecondary)
+  assert.equal(vectorscope.labelColor, theme.vectorscope.labels)
+})
+
+test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
+  const profile = createDefaultProfile('Default')
+  const authoredTheme = createDefaultTheme()
+  authoredTheme.scopes.background = 'rgb(6, 7, 8)'
+  authoredTheme.vumeter.track = 'rgb(9, 10, 11)'
+  authoredTheme.lufsmeter.track = 'rgb(12, 13, 14)'
+  authoredTheme.lufsmeter.target = 'rgb(15, 16, 17)'
+  const theme = resolveTheme(authoredTheme)
+
+  const spectrogram = scopeSettingsToOptions('spectrogram', profile.scopeSettings.spectrogram, theme.spectrogram)
+  assert.equal(spectrogram.backgroundColor, 'rgb(6, 7, 8)')
+
+  const vumeter = scopeSettingsToOptions('vumeter', profile.scopeSettings.vumeter, theme.vumeter)
+  assert.equal(vumeter.backgroundColor, 'rgb(6, 7, 8)')
+  assert.equal(vumeter.trackColor, 'rgb(9, 10, 11)')
+  assert.equal(vumeter.scaleColor, theme.vumeter.scale)
+  assert.equal(vumeter.labelColor, theme.vumeter.labels)
+
+  const lufsmeter = scopeSettingsToOptions('lufsmeter', profile.scopeSettings.lufsmeter, theme.lufsmeter)
+  assert.equal(lufsmeter.backgroundColor, 'rgb(6, 7, 8)')
+  assert.equal(lufsmeter.trackColor, 'rgb(12, 13, 14)')
+  assert.equal(lufsmeter.targetColor, 'rgb(15, 16, 17)')
+  assert.equal(lufsmeter.scaleColor, theme.lufsmeter.scale)
+  assert.equal(lufsmeter.labelColor, theme.lufsmeter.labels)
 })
 
 test('scopeSummary includes Stereo for waveform only when stereo mode is enabled', () => {
