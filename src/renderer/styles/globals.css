@@ -14,6 +14,7 @@
   --glass-bg: rgba(255, 255, 255, 0.03);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-highlight: rgba(255, 255, 255, 0.045);
+  --glass-highlight-strong: rgba(255, 255, 255, 0.14);
 
   --text-primary: rgba(255, 255, 255, 0.95);
   --text-secondary: rgba(255, 255, 255, 0.62);
@@ -377,7 +378,7 @@ select {
   border-radius: 999px;
   border: 1px solid var(--control-border);
   background: var(--control-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: var(--text-secondary);
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
@@ -461,7 +462,7 @@ select {
   border-radius: 999px;
   border: 1px solid var(--control-border);
   background: var(--control-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: var(--text-tertiary);
   font-size: 9px;
   cursor: pointer;
@@ -497,7 +498,7 @@ select {
   border-radius: 999px;
   border: 1px solid var(--control-border);
   background: var(--control-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
@@ -1067,7 +1068,7 @@ select {
   border-radius: 10px;
   border: 1px solid var(--control-border);
   background: var(--control-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: var(--control-text);
   font-size: 11px;
   transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
@@ -1152,9 +1153,9 @@ select {
   border: 1px solid var(--control-border);
   background:
     linear-gradient(90deg, var(--slider-fill), var(--slider-fill)) 0 / var(--range-percent) 100% no-repeat,
-    linear-gradient(180deg, var(--slider-track), rgba(255, 255, 255, 0.04));
+    linear-gradient(180deg, var(--slider-track), var(--glass-highlight));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 1px 0 var(--glass-highlight),
     0 0 0 1px rgba(0, 0, 0, 0.22);
 }
 
@@ -1167,7 +1168,7 @@ select {
   border: 1px solid var(--control-border-active);
   background: var(--slider-thumb);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 1px 0 var(--glass-highlight-strong),
     0 0 0 2px rgba(var(--accent-rgb), 0.14),
     0 3px 8px rgba(0, 0, 0, 0.35);
 }
@@ -1176,9 +1177,9 @@ select {
   height: 6px;
   border-radius: 999px;
   border: 1px solid var(--control-border);
-  background: linear-gradient(180deg, var(--slider-track), rgba(255, 255, 255, 0.04));
+  background: linear-gradient(180deg, var(--slider-track), var(--glass-highlight));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 1px 0 var(--glass-highlight),
     0 0 0 1px rgba(0, 0, 0, 0.22);
 }
 
@@ -1189,7 +1190,7 @@ select {
   border: 1px solid var(--control-border-active);
   background: var(--slider-thumb);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 1px 0 var(--glass-highlight-strong),
     0 0 0 2px rgba(var(--accent-rgb), 0.14),
     0 3px 8px rgba(0, 0, 0, 0.35);
 }
@@ -1197,7 +1198,7 @@ select {
 .settings-control__range::-moz-range-progress {
   height: 6px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--glass-highlight);
   background: linear-gradient(90deg, var(--slider-fill), var(--slider-fill));
 }
 
@@ -1217,7 +1218,7 @@ select {
 .settings-control__range:focus-visible::-webkit-slider-thumb {
   border-color: rgba(var(--accent-rgb), 0.96);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 1px 0 var(--glass-highlight-strong),
     0 0 0 3px rgba(var(--accent-rgb), 0.18),
     0 3px 10px rgba(0, 0, 0, 0.4);
 }
@@ -1226,7 +1227,7 @@ select {
 .settings-control__range:focus-visible::-moz-range-thumb {
   border-color: rgba(var(--accent-rgb), 0.96);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 1px 0 var(--glass-highlight-strong),
     0 0 0 3px rgba(var(--accent-rgb), 0.18),
     0 3px 10px rgba(0, 0, 0, 0.4);
 }
@@ -1392,7 +1393,7 @@ select {
   background: linear-gradient(180deg, var(--input-bg), var(--settings-bg-bottom));
   cursor: pointer;
   padding: 3px 4px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
 }
 
 .settings-panel__close {
@@ -1739,7 +1740,7 @@ select {
   border-radius: 999px;
   border: 1px solid transparent;
   background: var(--control-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: var(--text-secondary);
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
@@ -1770,7 +1771,7 @@ select {
 .settings-control__select:focus-within {
   outline: none;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 var(--glass-highlight),
     0 0 0 1px rgba(var(--accent-rgb), 0.32),
     0 0 0 4px rgba(var(--accent-rgb), 0.12);
 }

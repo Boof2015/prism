@@ -63,6 +63,10 @@ const APP_SCHEMA = {
   border: 'border',
   text: 'text',
   text_muted: 'textMuted',
+  toolbar_bg: 'toolbarBg',
+  settings_bg_top: 'settingsBgTop',
+  settings_bg_bottom: 'settingsBgBottom',
+  bottom_bar_bg: 'bottomBarBg',
 } as const satisfies SectionSchema<ThemeAppTokens>
 
 const CONTROLS_SCHEMA = {
@@ -77,6 +81,7 @@ const CONTROLS_SCHEMA = {
   menu_surface: 'menuSurface',
   menu_border: 'menuBorder',
   slider: 'slider',
+  flat_controls: 'flatControls',
 } as const satisfies SectionSchema<ThemeControlsTokens>
 
 const SCOPES_SCHEMA = {
@@ -95,11 +100,14 @@ const SPECTRUM_SCHEMA = {
   heat_low: 'heatLow',
   heat_mid: 'heatMid',
   heat_high: 'heatHigh',
+  heat_base: 'heatBase',
+  guides: 'guides',
 } as const satisfies SectionSchema<ThemeSpectrumTokens>
 
 const OSCILLOSCOPE_SCHEMA = {
   line: 'line',
   fill: 'fill',
+  guides: 'guides',
 } as const satisfies SectionSchema<ThemeOscilloscopeTokens>
 
 const VECTORSCOPE_SCHEMA = {
@@ -107,6 +115,7 @@ const VECTORSCOPE_SCHEMA = {
   band_low: 'bandLow',
   band_mid: 'bandMid',
   band_high: 'bandHigh',
+  guides: 'guides',
 } as const satisfies SectionSchema<ThemeVectorscopeTokens>
 
 const SPECTROGRAM_SCHEMA = {
@@ -121,12 +130,14 @@ const VUMETER_SCHEMA = {
   track: 'track',
   peak: 'peak',
   clip: 'clip',
+  scale: 'scale',
 } as const satisfies SectionSchema<ThemeVUMeterTokens>
 
 const LUFSMETER_SCHEMA = {
   level: 'level',
   track: 'track',
   target: 'target',
+  scale: 'scale',
 } as const satisfies SectionSchema<ThemeLUFSMeterTokens>
 
 const WAVEFORM_SCHEMA = {
@@ -134,6 +145,7 @@ const WAVEFORM_SCHEMA = {
   band_low: 'bandLow',
   band_mid: 'bandMid',
   band_high: 'bandHigh',
+  guides: 'guides',
 } as const satisfies SectionSchema<ThemeWaveformTokens>
 
 const ASTRA_SCHEMA = {
@@ -414,6 +426,8 @@ function createEmptyTheme(): PrismTheme {
   }
 }
 
+const PASSTHROUGH_KEYS: ReadonlySet<string> = new Set(['flatControls'])
+
 function normalizeSectionTokens<T extends SectionTokenMap>(
   raw: unknown,
   schema: SectionSchema<T>,
@@ -432,6 +446,11 @@ function normalizeSectionTokens<T extends SectionTokenMap>(
       return propertyKey === rawKey || serializedKey === normalizeKey(rawKey)
     })?.[1] as keyof T | undefined
     if (!key) continue
+
+    if (PASSTHROUGH_KEYS.has(key as string)) {
+      next[key] = rawValue as T[typeof key]
+      continue
+    }
 
     const parsedColor = parseCssColor(rawValue) ?? parseThemeChannelColor(rawValue)
     if (!parsedColor) continue
@@ -761,7 +780,11 @@ function serializeSection<T extends SectionTokenMap>(
   for (const [serializedKey, propertyKey] of Object.entries(schema)) {
     const value = tokens[propertyKey as keyof T]
     if (!value) continue
-    lines.push(`${serializedKey} = ${toThemeChannels(value)}`)
+    if (PASSTHROUGH_KEYS.has(propertyKey)) {
+      lines.push(`${serializedKey} = ${value}`)
+    } else {
+      lines.push(`${serializedKey} = ${toThemeChannels(value)}`)
+    }
   }
 
   return lines
@@ -805,10 +828,29 @@ export function createTemplateThemeFile(): string {
 # Authoring rules:
 # - Colors use R, G, B or R, G, B, A (0-255)
 # - CSS colors like #hex, rgb(), and rgba() also work
-# - [App] controls the overall chrome and text
-# - [Controls] covers buttons, inputs, menus, and sliders
-# - [Scopes] covers the shared analyzer background and guide system
-# - Scope sections should only override visuals unique to that module
+#
+# ── UI ──
+# [App]       Overall window chrome, background, and text
+#             toolbar_bg, settings_bg_top, settings_bg_bottom, bottom_bar_bg
+#             can be set to override the default derived values
+# [Controls]  Buttons, inputs, menus, and sliders
+#             Set flat_controls = true to disable glass highlights/gradients
+#
+# ── Scopes ──
+# [Scopes]    Shared background and guide color for all scopes
+#             background defaults to [App] background if not set
+#             Set it explicitly here to decouple scope bg from window bg
+#
+# Per-scope sections override colors unique to that module.
+# Each scope can set its own guides to override the shared [Scopes] guides.
+#
+# [Spectrum]      line, fill, heat gradient (heat_low/mid/high/base), guides
+# [Oscilloscope]  line, fill, guides
+# [Vectorscope]   trace, band_low/mid/high (RGB overlay colors), guides
+# [Spectrogram]   mono, heat gradient
+# [VUMeter]       level, track, peak, clip, scale
+# [LUFSMeter]     level, track, target, scale
+# [Waveform]      line, band_low/mid/high, guides
 #
 ${serializeThemeFile(template)}`
 }
@@ -824,6 +866,10 @@ interface ResolvedAppTokens {
   border: string
   text: string
   textMuted: string
+  toolbarBg: string | null
+  settingsBgTop: string | null
+  settingsBgBottom: string | null
+  bottomBarBg: string | null
 }
 
 interface ResolvedControlsTokens {
@@ -838,6 +884,7 @@ interface ResolvedControlsTokens {
   menuSurface: string
   menuBorder: string
   slider: string
+  flatControls: boolean
 }
 
 interface ResolvedScopesTokens {
@@ -871,6 +918,10 @@ function resolveAppTokens(tokens: ThemeAppTokens): ResolvedAppTokens {
     border,
     text,
     textMuted,
+    toolbarBg: tokens.toolbarBg ?? null,
+    settingsBgTop: tokens.settingsBgTop ?? null,
+    settingsBgBottom: tokens.settingsBgBottom ?? null,
+    bottomBarBg: tokens.bottomBarBg ?? null,
   }
 }
 
@@ -888,6 +939,7 @@ function resolveControlsTokens(tokens: ThemeControlsTokens, app: ResolvedAppToke
     menuSurface: tokens.menuSurface ?? app.surface,
     menuBorder: tokens.menuBorder ?? 'rgba(255, 255, 255, 0.1)',
     slider: tokens.slider ?? withAlpha(app.accent, 0.82),
+    flatControls: tokens.flatControls === 'true',
   }
 }
 
@@ -910,6 +962,12 @@ function resolveInterfaceTheme(
   controls: ResolvedControlsTokens,
   scopes: ResolvedScopesTokens,
 ): ResolvedInterfaceTheme {
+  const bgParsed = parseCssColor(app.background)
+  const colorScheme: 'light' | 'dark' = bgParsed && getPerceivedBrightness(bgParsed) >= 156 ? 'light' : 'dark'
+
+  const glassHighlight = controls.flatControls ? 'transparent' : withAlpha(app.text, 0.05)
+  const glassBg = controls.flatControls ? 'transparent' : withAlpha(app.surface, 0.18)
+
   return {
     primary: app.accent,
     secondary: app.surfaceAlt,
@@ -920,6 +978,7 @@ function resolveInterfaceTheme(
     accentHover: lighten(app.accent, 0.2),
     accentGlow: withAlpha(app.accent, 0.3),
     accentRgb: colorToRgbChannels(app.accent),
+    colorScheme,
     bgPrimary: app.background,
     bgSecondary: darken(app.background, 0.04),
     bgTertiary: darken(app.background, 0.08),
@@ -927,17 +986,18 @@ function resolveInterfaceTheme(
     panelSurfaceSoft: app.surfaceAlt,
     panelOutline: app.border,
     panelOutlineStrong: withAlpha(app.border, 0.9),
-    glassBg: withAlpha(app.surface, 0.18),
+    glassBg,
     glassBorder: withAlpha(app.border, 0.85),
-    glassHighlight: withAlpha(app.text, 0.05),
+    glassHighlight,
+    glassHighlightStrong: controls.flatControls ? 'transparent' : withAlpha(app.text, 0.14),
     textPrimary: app.text,
     textSecondary: blendText(app.text, app.textMuted, 0.45),
     textTertiary: blendText(app.text, app.textMuted, 0.7),
     textMuted: app.textMuted,
-    toolbarBg: withAlpha(app.surfaceAlt, 0.78),
-    settingsBgTop: app.surface,
-    settingsBgBottom: app.surfaceAlt,
-    bottomBarBg: withAlpha(app.surfaceAlt, 0.98),
+    toolbarBg: app.toolbarBg ?? withAlpha(app.surfaceAlt, 0.78),
+    settingsBgTop: app.settingsBgTop ?? app.surface,
+    settingsBgBottom: app.settingsBgBottom ?? app.surfaceAlt,
+    bottomBarBg: app.bottomBarBg ?? withAlpha(app.surfaceAlt, 0.98),
     menuBg: controls.menuSurface,
     menuBorder: controls.menuBorder,
     controlBg: controls.surface,
@@ -977,12 +1037,13 @@ function resolveSpectrumTheme(
   const line = section.line ?? app.accent
   const sideLine = section.sideLine ?? withAlpha(line, 0.5)
   const fill = section.fill ?? withAlpha(line, 0.34)
+  const guides = section.guides ?? scopes.guides
   return {
     line,
     sideLine,
-    guides: scopes.guides,
-    guidesSecondary: scopes.guidesSecondary,
-    labels: scopes.labels,
+    guides,
+    guidesSecondary: multiplyAlpha(guides, 0.5),
+    labels: section.guides ? guides : scopes.labels,
     background: scopes.background,
     fill,
     fillGradient: [
@@ -995,6 +1056,7 @@ function resolveSpectrumTheme(
       section.heatMid ?? DEFAULT_HEAT_MID,
       section.heatHigh ?? DEFAULT_HEAT_HIGH,
     ],
+    heatBase: section.heatBase ?? scopes.background,
   }
 }
 
@@ -1003,10 +1065,11 @@ function resolveOscilloscopeTheme(
   app: ResolvedAppTokens,
   scopes: ResolvedScopesTokens,
 ): ResolvedOscilloscopeTheme {
+  const guides = theme.oscilloscope.guides ?? scopes.guides
   return {
     line: theme.oscilloscope.line ?? app.accent,
-    guides: scopes.guides,
-    guidesSecondary: scopes.guidesSecondary,
+    guides,
+    guidesSecondary: multiplyAlpha(guides, 0.5),
     background: scopes.background,
     fill: theme.oscilloscope.fill ?? 'rgba(245, 248, 252, 0.18)',
   }
@@ -1017,11 +1080,12 @@ function resolveVectorscopeTheme(
   app: ResolvedAppTokens,
   scopes: ResolvedScopesTokens,
 ): ResolvedVectorscopeTheme {
+  const guides = theme.vectorscope.guides ?? scopes.guides
   return {
     trace: theme.vectorscope.trace ?? app.accent,
-    guides: scopes.guides,
-    guidesSecondary: scopes.guidesSecondary,
-    labels: scopes.labels,
+    guides,
+    guidesSecondary: multiplyAlpha(guides, 0.5),
+    labels: theme.vectorscope.guides ? guides : scopes.labels,
     background: scopes.background,
     bandLow: theme.vectorscope.bandLow ?? DEFAULT_BAND_LOW,
     bandMid: theme.vectorscope.bandMid ?? DEFAULT_BAND_MID,
@@ -1056,7 +1120,7 @@ function resolveVUMeterTheme(
     track: theme.vumeter.track ?? withAlpha(level, 0.08),
     peak: theme.vumeter.peak ?? 'rgb(255, 127, 0)',
     clip: theme.vumeter.clip ?? 'rgba(255, 120, 80, 0.9)',
-    scale: scopes.guides,
+    scale: theme.vumeter.scale ?? scopes.guides,
     labels: blendText(app.text, app.textMuted, 0.35),
     background: scopes.background,
   }
@@ -1072,7 +1136,7 @@ function resolveLUFSMeterTheme(
     level,
     track: theme.lufsmeter.track ?? withAlpha(level, 0.08),
     target: theme.lufsmeter.target ?? withAlpha(level, 0.25),
-    scale: scopes.guides,
+    scale: theme.lufsmeter.scale ?? scopes.guides,
     labels: blendText(app.text, app.textMuted, 0.2),
     background: scopes.background,
   }
@@ -1083,10 +1147,11 @@ function resolveWaveformTheme(
   app: ResolvedAppTokens,
   scopes: ResolvedScopesTokens,
 ): ResolvedWaveformTheme {
+  const guides = theme.waveform.guides ?? scopes.guides
   return {
     line: theme.waveform.line ?? app.accent,
-    guides: scopes.guides,
-    guidesSecondary: scopes.guidesSecondary,
+    guides,
+    guidesSecondary: multiplyAlpha(guides, 0.5),
     background: scopes.background,
     bandLow: theme.waveform.bandLow ?? DEFAULT_BAND_LOW,
     bandMid: theme.waveform.bandMid ?? DEFAULT_BAND_MID,
@@ -1216,6 +1281,7 @@ export function themeToCssVariables(theme: Pick<PrismResolvedTheme, 'interface'>
     '--glass-bg': ui.glassBg,
     '--glass-border': ui.glassBorder,
     '--glass-highlight': ui.glassHighlight,
+    '--glass-highlight-strong': ui.glassHighlightStrong,
     '--text-primary': ui.textPrimary,
     '--text-secondary': ui.textSecondary,
     '--text-tertiary': ui.textTertiary,
@@ -1266,6 +1332,7 @@ export function applyResolvedThemeToDocument(
   for (const [name, value] of Object.entries(variables)) {
     root.setProperty(name, value)
   }
+  root.setProperty('color-scheme', theme.interface.colorScheme)
 }
 
 export function getDefaultThemeIdForLocalState(): string {

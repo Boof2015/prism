@@ -29,6 +29,7 @@ export interface SpectrumAnalyzerOptions {
   heatmapFill?: boolean
   gradientColors?: string[]
   heatColors?: [string, string, string]
+  heatBaseColor?: string
   backgroundColor?: string
   showGrid?: boolean
   gridColor?: string
@@ -198,6 +199,7 @@ const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
   heatmapFill: false,
   gradientColors: ['rgba(0, 255, 255, 0)', 'rgba(0, 255, 255, 0.3)', 'rgba(138, 43, 226, 0.5)'],
   heatColors: [...LEGACY_DEFAULT_HEAT_COLORS],
+  heatBaseColor: 'transparent',
   backgroundColor: 'transparent',
   showGrid: true,
   gridColor: 'rgba(255, 255, 255, 0.1)',
@@ -636,6 +638,12 @@ export class SpectrumAnalyzer {
   }
 
   private renderHeatmap(xPoints: Float32Array, yPoints: Float32Array, heatmapIntensity: Float32Array, pointCount: number, width: number, height: number): void {
+    const baseColor = this.options.heatBaseColor
+    if (baseColor && baseColor !== 'transparent') {
+      this.ctx.fillStyle = baseColor
+      this.ctx.fillRect(0, 0, width, height)
+    }
+
     for (let index = 0; index < pointCount; index += 1) {
       const x = Math.floor(xPoints[index])
       const y = yPoints[index]

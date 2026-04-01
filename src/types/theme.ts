@@ -25,6 +25,10 @@ export interface ThemeAppTokens {
   border?: string
   text?: string
   textMuted?: string
+  toolbarBg?: string
+  settingsBgTop?: string
+  settingsBgBottom?: string
+  bottomBarBg?: string
 }
 
 export interface ThemeControlsTokens {
@@ -39,6 +43,7 @@ export interface ThemeControlsTokens {
   menuSurface?: string
   menuBorder?: string
   slider?: string
+  flatControls?: string
 }
 
 export interface ThemeScopesTokens {
@@ -57,11 +62,14 @@ export interface ThemeSpectrumTokens {
   heatLow?: string
   heatMid?: string
   heatHigh?: string
+  heatBase?: string
+  guides?: string
 }
 
 export interface ThemeOscilloscopeTokens {
   line?: string
   fill?: string
+  guides?: string
 }
 
 export interface ThemeVectorscopeTokens {
@@ -69,6 +77,7 @@ export interface ThemeVectorscopeTokens {
   bandLow?: string
   bandMid?: string
   bandHigh?: string
+  guides?: string
 }
 
 export interface ThemeSpectrogramTokens {
@@ -83,12 +92,14 @@ export interface ThemeVUMeterTokens {
   track?: string
   peak?: string
   clip?: string
+  scale?: string
 }
 
 export interface ThemeLUFSMeterTokens {
   level?: string
   track?: string
   target?: string
+  scale?: string
 }
 
 export interface ThemeWaveformTokens {
@@ -96,6 +107,7 @@ export interface ThemeWaveformTokens {
   bandLow?: string
   bandMid?: string
   bandHigh?: string
+  guides?: string
 }
 
 export interface ThemeAstraTokens {
@@ -176,9 +188,11 @@ export interface ResolvedInterfaceTheme {
   panelSurfaceSoft: string
   panelOutline: string
   panelOutlineStrong: string
+  colorScheme: 'light' | 'dark'
   glassBg: string
   glassBorder: string
   glassHighlight: string
+  glassHighlightStrong: string
   textPrimary: string
   textSecondary: string
   textTertiary: string
@@ -226,6 +240,7 @@ export interface ResolvedSpectrumTheme {
   fill: string
   fillGradient: [string, string, string]
   heatColors: [string, string, string]
+  heatBase: string
 }
 
 export interface ResolvedOscilloscopeTheme {

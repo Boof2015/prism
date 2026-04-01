@@ -75,6 +75,7 @@ export function scopeSettingsToOptions(
         secondaryLineColor: t.sideLine,
         gradientColors: t.fillGradient,
         heatColors: t.heatColors,
+        heatBaseColor: t.heatBase,
         backgroundColor: t.background,
         gridColor: t.guides,
         labelColor: t.labels,
