@@ -1442,6 +1442,8 @@ function setupIPC(): void {
   })
 }
 
+app.commandLine.appendSwitch('enable-features', 'Metal')
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
