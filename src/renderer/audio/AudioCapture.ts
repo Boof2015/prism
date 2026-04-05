@@ -64,6 +64,7 @@ function resolveNativeCapturePollDelay(chunkCount: number): number {
   return chunkCount > 0 ? 0 : 2
 }
 
+
 export interface CaptureManagerStatus {
   captureMode: CaptureMode
   backendPolicy: CaptureBackendPolicy
@@ -859,10 +860,6 @@ class AudioCapture {
       channelCount: chunk.channelCount,
       capturedAt: chunk.capturedAt,
       sequence: chunk.sequence,
-    })
-    nativeVisualizerTransport.handleChunk(chunk.left, chunk.right, {
-      sessionId: this.sessionId,
-      channelCount: chunk.channelCount,
     })
   }
 

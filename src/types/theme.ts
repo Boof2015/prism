@@ -56,6 +56,7 @@ export interface ThemeScopesTokens {
 }
 
 export interface ThemeSpectrumTokens {
+  background?: string
   line?: string
   sideLine?: string
   fill?: string
@@ -64,23 +65,28 @@ export interface ThemeSpectrumTokens {
   heatHigh?: string
   heatBase?: string
   guides?: string
+  labels?: string
 }
 
 export interface ThemeOscilloscopeTokens {
+  background?: string
   line?: string
   fill?: string
   guides?: string
 }
 
 export interface ThemeVectorscopeTokens {
+  background?: string
   trace?: string
   bandLow?: string
   bandMid?: string
   bandHigh?: string
   guides?: string
+  labels?: string
 }
 
 export interface ThemeSpectrogramTokens {
+  background?: string
   mono?: string
   heatLow?: string
   heatMid?: string
@@ -88,21 +94,26 @@ export interface ThemeSpectrogramTokens {
 }
 
 export interface ThemeVUMeterTokens {
+  background?: string
   level?: string
   track?: string
   peak?: string
   clip?: string
   scale?: string
+  labels?: string
 }
 
 export interface ThemeLUFSMeterTokens {
+  background?: string
   level?: string
   track?: string
   target?: string
   scale?: string
+  labels?: string
 }
 
 export interface ThemeWaveformTokens {
+  background?: string
   line?: string
   bandLow?: string
   bandMid?: string

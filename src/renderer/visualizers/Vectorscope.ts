@@ -81,6 +81,8 @@ export class Vectorscope {
   private multibandPointScratch: MultibandChunk = createMultibandChunk(0)
   private nativePointX = new Float32Array(0)
   private nativePointY = new Float32Array(0)
+  private pushScratchL = new Float32Array(0)
+  private pushScratchR = new Float32Array(0)
   private staticLayerKey = ''
 
   constructor(canvas: HTMLCanvasElement, options: VectorscopeOptions = {}) {
@@ -214,16 +216,14 @@ export class Vectorscope {
     offscreenCtx.fillRect(0, 0, width, height)
     offscreenCtx.globalCompositeOperation = 'source-over'
 
-    const nativeTransport = this.dataSource.getNativeVisualizerTransport?.() ?? null
     const pendingSamples = this.dataSource.getPendingVectorscopeSamples()
 
     if (options.multiband) {
       this.drawMultibandPoints(offscreenCtx, pendingSamples, centerX, centerY, scale)
     } else if (isNativeAvailable()) {
-      if (!nativeTransport) {
-        for (const chunk of pendingSamples) {
-          nativeVectorscope.pushSamples(chunk.left, chunk.right)
-        }
+      if (pendingSamples.length > 0) {
+        const { left, right } = this.concatStereoChunks(pendingSamples)
+        nativeVectorscope.pushSamples(left, right)
       }
 
       const count = this.fillNativePoints(options.displayPoints)
@@ -421,6 +421,37 @@ export class Vectorscope {
       this.multibandPointScratch = createMultibandChunk(displayPoints)
     }
     return this.multibandPointScratch
+  }
+
+  private concatStereoChunks(chunks: Array<{ left: Float32Array; right: Float32Array }>): { left: Float32Array; right: Float32Array } {
+    if (chunks.length === 1) return chunks[0]
+
+    let totalLength = 0
+    for (const chunk of chunks) {
+      totalLength += Math.min(chunk.left.length, chunk.right.length)
+    }
+
+    if (this.pushScratchL.length < totalLength) {
+      this.pushScratchL = new Float32Array(totalLength)
+      this.pushScratchR = new Float32Array(totalLength)
+    }
+
+    const left = this.pushScratchL.length === totalLength
+      ? this.pushScratchL
+      : this.pushScratchL.subarray(0, totalLength)
+    const right = this.pushScratchR.length === totalLength
+      ? this.pushScratchR
+      : this.pushScratchR.subarray(0, totalLength)
+
+    let offset = 0
+    for (const chunk of chunks) {
+      const len = Math.min(chunk.left.length, chunk.right.length)
+      left.set(chunk.left.subarray(0, len), offset)
+      right.set(chunk.right.subarray(0, len), offset)
+      offset += len
+    }
+
+    return { left, right }
   }
 
   private drawProjectedDot(

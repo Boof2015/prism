@@ -58,12 +58,6 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     if (isStereoScope(this.scopeKind)) {
       if (!isStereoBatch(batch)) return
       this.stereoQueue.push(...batch)
-      for (const chunk of batch) {
-        this.nativeVisualizerTransport.handleChunk(chunk.left, chunk.right, {
-          sessionId: this.sessionState.sessionId,
-          channelCount: this.sessionState.channelCount,
-        })
-      }
       return
     }
 
@@ -71,38 +65,16 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
       if (isStereoBatch(batch)) {
         this.monoQueue = []
         this.stereoQueue.push(...batch)
-        if (this.scopeKind === 'spectrum') {
-          for (const chunk of batch) {
-            this.nativeVisualizerTransport.handleChunk(chunk.left, chunk.right, {
-              sessionId: this.sessionState.sessionId,
-              channelCount: this.sessionState.channelCount,
-            })
-          }
-        }
         return
       }
 
       this.stereoQueue = []
       this.monoQueue.push(...batch)
-      if (this.scopeKind === 'spectrum') {
-        for (const chunk of batch) {
-          this.nativeVisualizerTransport.handleChunk(chunk, chunk, {
-            sessionId: this.sessionState.sessionId,
-            channelCount: 1,
-          })
-        }
-      }
       return
     }
 
     if (isStereoBatch(batch)) return
     this.monoQueue.push(...batch)
-    for (const chunk of batch) {
-      this.nativeVisualizerTransport.handleChunk(chunk, chunk, {
-        sessionId: this.sessionState.sessionId,
-        channelCount: 1,
-      })
-    }
   }
 
   setSessionState(nextState: ScopePopoutSessionState): void {
@@ -134,9 +106,6 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     }
   }
 
-  getNativeVisualizerTransport(): NativeVisualizerTransport {
-    return this.nativeVisualizerTransport
-  }
 
   getPendingSpectrumSamples(): Float32Array[] {
     const batch = this.monoQueue

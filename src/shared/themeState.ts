@@ -94,6 +94,7 @@ const SCOPES_SCHEMA = {
 } as const satisfies SectionSchema<ThemeScopesTokens>
 
 const SPECTRUM_SCHEMA = {
+  background: 'background',
   line: 'line',
   side_line: 'sideLine',
   fill: 'fill',
@@ -102,23 +103,28 @@ const SPECTRUM_SCHEMA = {
   heat_high: 'heatHigh',
   heat_base: 'heatBase',
   guides: 'guides',
+  labels: 'labels',
 } as const satisfies SectionSchema<ThemeSpectrumTokens>
 
 const OSCILLOSCOPE_SCHEMA = {
+  background: 'background',
   line: 'line',
   fill: 'fill',
   guides: 'guides',
 } as const satisfies SectionSchema<ThemeOscilloscopeTokens>
 
 const VECTORSCOPE_SCHEMA = {
+  background: 'background',
   trace: 'trace',
   band_low: 'bandLow',
   band_mid: 'bandMid',
   band_high: 'bandHigh',
   guides: 'guides',
+  labels: 'labels',
 } as const satisfies SectionSchema<ThemeVectorscopeTokens>
 
 const SPECTROGRAM_SCHEMA = {
+  background: 'background',
   mono: 'mono',
   heat_low: 'heatLow',
   heat_mid: 'heatMid',
@@ -126,21 +132,26 @@ const SPECTROGRAM_SCHEMA = {
 } as const satisfies SectionSchema<ThemeSpectrogramTokens>
 
 const VUMETER_SCHEMA = {
+  background: 'background',
   level: 'level',
   track: 'track',
   peak: 'peak',
   clip: 'clip',
   scale: 'scale',
+  labels: 'labels',
 } as const satisfies SectionSchema<ThemeVUMeterTokens>
 
 const LUFSMETER_SCHEMA = {
+  background: 'background',
   level: 'level',
   track: 'track',
   target: 'target',
   scale: 'scale',
+  labels: 'labels',
 } as const satisfies SectionSchema<ThemeLUFSMeterTokens>
 
 const WAVEFORM_SCHEMA = {
+  background: 'background',
   line: 'line',
   band_low: 'bandLow',
   band_mid: 'bandMid',
@@ -817,40 +828,82 @@ export function serializeThemeFile(theme: PrismTheme): string {
 }
 
 export function createTemplateThemeFile(): string {
-  const template = createDefaultTheme()
-  template.id = 'theme_template'
-  template.name = 'Template Theme'
-  template.credit = 'Your Name'
-  template.website = 'https://example.com'
+  const base = createDefaultTheme()
+  const resolved = resolveTheme(base)
+
+  const template: PrismTheme = {
+    id: 'theme_template',
+    name: 'Template Theme',
+    credit: 'Your Name',
+    website: 'https://example.com',
+    description: 'Custom Prism theme',
+    app: {
+      ...base.app,
+      toolbarBg: resolved.interface.toolbarBg,
+      settingsBgTop: resolved.interface.settingsBgTop,
+      settingsBgBottom: resolved.interface.settingsBgBottom,
+      bottomBarBg: resolved.interface.bottomBarBg,
+    },
+    controls: { ...base.controls },
+    scopes: { ...base.scopes },
+    spectrum: {
+      ...base.spectrum,
+      background: resolved.spectrum.background,
+      guides: resolved.spectrum.guides,
+      labels: resolved.spectrum.labels,
+      heatBase: resolved.spectrum.heatBase,
+    },
+    oscilloscope: {
+      ...base.oscilloscope,
+      background: resolved.oscilloscope.background,
+      guides: resolved.oscilloscope.guides,
+    },
+    vectorscope: {
+      ...base.vectorscope,
+      background: resolved.vectorscope.background,
+      guides: resolved.vectorscope.guides,
+      labels: resolved.vectorscope.labels,
+    },
+    spectrogram: {
+      ...base.spectrogram,
+      background: resolved.spectrogram.background,
+    },
+    vumeter: {
+      ...base.vumeter,
+      background: resolved.vumeter.background,
+      scale: resolved.vumeter.scale,
+      labels: resolved.vumeter.labels,
+    },
+    lufsmeter: {
+      ...base.lufsmeter,
+      background: resolved.lufsmeter.background,
+      scale: resolved.lufsmeter.scale,
+      labels: resolved.lufsmeter.labels,
+    },
+    waveform: {
+      ...base.waveform,
+      background: resolved.waveform.background,
+      guides: resolved.waveform.guides,
+    },
+    astra: { ...base.astra },
+  }
 
   return `# Prism theme template
 #
-# Authoring rules:
-# - Colors use R, G, B or R, G, B, A (0-255)
-# - CSS colors like #hex, rgb(), and rgba() also work
+# Colors use R, G, B or R, G, B, A (0-255)
+# CSS colors like #hex, rgb(), and rgba() also work
 #
 # ── UI ──
-# [App]       Overall window chrome, background, and text
-#             toolbar_bg, settings_bg_top, settings_bg_bottom, bottom_bar_bg
-#             can be set to override the default derived values
+# [App]       Window background, text, and accent color
 # [Controls]  Buttons, inputs, menus, and sliders
 #             Set flat_controls = true to disable glass highlights/gradients
 #
 # ── Scopes ──
-# [Scopes]    Shared background and guide color for all scopes
-#             background defaults to [App] background if not set
-#             Set it explicitly here to decouple scope bg from window bg
+# [Scopes]    Shared defaults for all scopes (background, guides, overlays)
 #
-# Per-scope sections override colors unique to that module.
-# Each scope can set its own guides to override the shared [Scopes] guides.
-#
-# [Spectrum]      line, fill, heat gradient (heat_low/mid/high/base), guides
-# [Oscilloscope]  line, fill, guides
-# [Vectorscope]   trace, band_low/mid/high (RGB overlay colors), guides
-# [Spectrogram]   mono, heat gradient
-# [VUMeter]       level, track, peak, clip, scale
-# [LUFSMeter]     level, track, target, scale
-# [Waveform]      line, band_low/mid/high, guides
+# Each scope section below has FULL control over its own colors.
+# Per-scope values override the shared [Scopes] defaults.
+# Every token shown below can be changed independently.
 #
 ${serializeThemeFile(template)}`
 }
@@ -1038,13 +1091,14 @@ function resolveSpectrumTheme(
   const sideLine = section.sideLine ?? withAlpha(line, 0.5)
   const fill = section.fill ?? withAlpha(line, 0.34)
   const guides = section.guides ?? scopes.guides
+  const background = section.background ?? scopes.background
   return {
     line,
     sideLine,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
-    labels: section.guides ? guides : scopes.labels,
-    background: scopes.background,
+    labels: section.labels ?? guides,
+    background,
     fill,
     fillGradient: [
       withAlpha(fill, 0),
@@ -1056,7 +1110,7 @@ function resolveSpectrumTheme(
       section.heatMid ?? DEFAULT_HEAT_MID,
       section.heatHigh ?? DEFAULT_HEAT_HIGH,
     ],
-    heatBase: section.heatBase ?? scopes.background,
+    heatBase: section.heatBase ?? background,
   }
 }
 
@@ -1070,7 +1124,7 @@ function resolveOscilloscopeTheme(
     line: theme.oscilloscope.line ?? app.accent,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
-    background: scopes.background,
+    background: theme.oscilloscope.background ?? scopes.background,
     fill: theme.oscilloscope.fill ?? 'rgba(245, 248, 252, 0.18)',
   }
 }
@@ -1085,8 +1139,8 @@ function resolveVectorscopeTheme(
     trace: theme.vectorscope.trace ?? app.accent,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
-    labels: theme.vectorscope.guides ? guides : scopes.labels,
-    background: scopes.background,
+    labels: theme.vectorscope.labels ?? guides,
+    background: theme.vectorscope.background ?? scopes.background,
     bandLow: theme.vectorscope.bandLow ?? DEFAULT_BAND_LOW,
     bandMid: theme.vectorscope.bandMid ?? DEFAULT_BAND_MID,
     bandHigh: theme.vectorscope.bandHigh ?? DEFAULT_BAND_HIGH,
@@ -1100,7 +1154,7 @@ function resolveSpectrogramTheme(
 ): ResolvedSpectrogramTheme {
   return {
     mono: theme.spectrogram.mono ?? app.accent,
-    background: scopes.background,
+    background: theme.spectrogram.background ?? scopes.background,
     heatColors: [
       theme.spectrogram.heatLow ?? DEFAULT_HEAT_LOW,
       theme.spectrogram.heatMid ?? DEFAULT_HEAT_MID,
@@ -1121,8 +1175,8 @@ function resolveVUMeterTheme(
     peak: theme.vumeter.peak ?? 'rgb(255, 127, 0)',
     clip: theme.vumeter.clip ?? 'rgba(255, 120, 80, 0.9)',
     scale: theme.vumeter.scale ?? scopes.guides,
-    labels: blendText(app.text, app.textMuted, 0.35),
-    background: scopes.background,
+    labels: theme.vumeter.labels ?? blendText(app.text, app.textMuted, 0.35),
+    background: theme.vumeter.background ?? scopes.background,
   }
 }
 
@@ -1137,8 +1191,8 @@ function resolveLUFSMeterTheme(
     track: theme.lufsmeter.track ?? withAlpha(level, 0.08),
     target: theme.lufsmeter.target ?? withAlpha(level, 0.25),
     scale: theme.lufsmeter.scale ?? scopes.guides,
-    labels: blendText(app.text, app.textMuted, 0.2),
-    background: scopes.background,
+    labels: theme.lufsmeter.labels ?? blendText(app.text, app.textMuted, 0.2),
+    background: theme.lufsmeter.background ?? scopes.background,
   }
 }
 
@@ -1152,7 +1206,7 @@ function resolveWaveformTheme(
     line: theme.waveform.line ?? app.accent,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
-    background: scopes.background,
+    background: theme.waveform.background ?? scopes.background,
     bandLow: theme.waveform.bandLow ?? DEFAULT_BAND_LOW,
     bandMid: theme.waveform.bandMid ?? DEFAULT_BAND_MID,
     bandHigh: theme.waveform.bandHigh ?? DEFAULT_BAND_HIGH,

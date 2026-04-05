@@ -1,11 +1,6 @@
 import { oscilloscope, spectrum, vectorscope, isNativeAvailable } from './native'
 import type { VisualizerConsumerDemand } from './AudioRouter'
 
-export interface NativeVisualizerTransportChunkMeta {
-  sessionId?: number
-  channelCount?: number
-}
-
 export interface NativeVisualizerTransportSessionState {
   sessionId: number
   sampleRate: number
@@ -78,21 +73,10 @@ function normalizeDemand(demand: VisualizerConsumerDemand): Required<VisualizerC
 export class NativeVisualizerTransport {
   private readonly bridge: NativeVisualizerTransportBridge
   private demand: Required<VisualizerConsumerDemand> = { ...EMPTY_DEMAND }
-  private sessionId = 0
   private sampleRate = 48000
-  private capturing = false
-  private hasSpectrumData = false
-  private spectrumMonoScratch = new Float32Array(0)
 
   constructor(bridge: NativeVisualizerTransportBridge = defaultBridge) {
     this.bridge = bridge
-  }
-
-  private ensureSpectrumMonoScratch(length: number): Float32Array {
-    if (this.spectrumMonoScratch.length !== length) {
-      this.spectrumMonoScratch = new Float32Array(length)
-    }
-    return this.spectrumMonoScratch
   }
 
   setDemand(demand: VisualizerConsumerDemand): void {
@@ -115,7 +99,6 @@ export class NativeVisualizerTransport {
       }
       if (this.demand.spectrum && !nextDemand.spectrum) {
         this.bridge.spectrum.reset()
-        this.hasSpectrumData = false
       }
       if (this.demand.vectorscope && !nextDemand.vectorscope) {
         this.bridge.vectorscope.reset()
@@ -125,7 +108,6 @@ export class NativeVisualizerTransport {
       }
       if (!this.demand.spectrum && nextDemand.spectrum) {
         this.bridge.spectrum.setSampleRate(this.sampleRate)
-        this.hasSpectrumData = false
       }
       if (!this.demand.vectorscope && nextDemand.vectorscope) {
         this.bridge.vectorscope.setSampleRate(this.sampleRate)
@@ -135,52 +117,8 @@ export class NativeVisualizerTransport {
     this.demand = nextDemand
   }
 
-  handleChunk(left: Float32Array, right: Float32Array, meta: NativeVisualizerTransportChunkMeta = {}): void {
-    if (!this.capturing || !this.bridge.isAvailable()) {
-      return
-    }
-
-    if (meta.sessionId !== undefined && meta.sessionId !== this.sessionId) {
-      return
-    }
-
-    if (!this.demand.oscilloscope && !this.demand.spectrum && !this.demand.vectorscope) {
-      return
-    }
-
-    const effectiveChannelCount = Math.max(1, Math.floor(meta.channelCount ?? 2) || 1)
-    const resolvedRight = effectiveChannelCount > 1 && right.length > 0 ? right : left
-    const length = Math.min(left.length, resolvedRight.length)
-    if (length === 0) {
-      return
-    }
-
-    const leftSamples = left.length === length ? left : left.subarray(0, length)
-    const rightSamples = resolvedRight.length === length ? resolvedRight : resolvedRight.subarray(0, length)
-
-    if (this.demand.oscilloscope) {
-      this.bridge.oscilloscope.pushSamples(leftSamples)
-    }
-
-    if (this.demand.vectorscope) {
-      this.bridge.vectorscope.pushSamples(leftSamples, rightSamples)
-    }
-
-    if (this.demand.spectrum) {
-      const mono = this.ensureSpectrumMonoScratch(length)
-      for (let index = 0; index < length; index += 1) {
-        mono[index] = (leftSamples[index] + rightSamples[index]) * 0.5
-      }
-      this.bridge.spectrum.pushSamples(mono)
-      this.hasSpectrumData = true
-    }
-  }
-
   reset(sessionState: NativeVisualizerTransportSessionState): void {
-    this.sessionId = sessionState.sessionId
-    this.capturing = sessionState.capturing
     this.sampleRate = Math.max(1, Math.floor(sessionState.sampleRate) || 1)
-    this.hasSpectrumData = false
 
     if (!this.bridge.isAvailable()) {
       return
@@ -203,14 +141,6 @@ export class NativeVisualizerTransport {
     if (this.demand.vectorscope) {
       this.bridge.vectorscope.setSampleRate(this.sampleRate)
     }
-  }
-
-  fillLatestSpectrumMagnitudes(output: Float32Array): number {
-    if (!this.bridge.isAvailable() || !this.demand.spectrum || !this.hasSpectrumData) {
-      return 0
-    }
-
-    return this.bridge.spectrum.fillMagnitudes(output)
   }
 }
 

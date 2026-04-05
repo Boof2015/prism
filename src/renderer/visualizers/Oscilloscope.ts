@@ -86,6 +86,7 @@ export class Oscilloscope {
   private staticLayerCtx: CanvasRenderingContext2D
   private staticLayerKey = ''
   private renderBuffer = new Float32Array(0)
+  private pushScratch = new Float32Array(0)
   private static readonly WARMUP_SAMPLES = 4096
 
   constructor(canvas: HTMLCanvasElement, options: OscilloscopeOptions = {}) {
@@ -186,6 +187,31 @@ export class Oscilloscope {
     return this.renderBuffer
   }
 
+  private concatMonoChunks(chunks: Float32Array[]): Float32Array {
+    if (chunks.length === 1) return chunks[0]
+
+    let totalLength = 0
+    for (const chunk of chunks) {
+      totalLength += chunk.length
+    }
+
+    if (this.pushScratch.length < totalLength) {
+      this.pushScratch = new Float32Array(totalLength)
+    }
+
+    const out = this.pushScratch.length === totalLength
+      ? this.pushScratch
+      : this.pushScratch.subarray(0, totalLength)
+
+    let offset = 0
+    for (const chunk of chunks) {
+      out.set(chunk, offset)
+      offset += chunk.length
+    }
+
+    return out
+  }
+
   private drawFrame = (): void => {
     const { canvas, ctx, options } = this
     const width = canvas.width
@@ -207,13 +233,11 @@ export class Oscilloscope {
       return
     }
 
-    const nativeTransport = this.dataSource.getNativeVisualizerTransport?.() ?? null
     const pendingSamples = this.dataSource.getPendingOscilloscopeSamples()
-    for (const chunk of pendingSamples) {
-      if (!nativeTransport) {
-        nativeOscilloscope.pushSamples(chunk)
-      }
-      this.samplesReceived += chunk.length
+    if (pendingSamples.length > 0) {
+      const merged = this.concatMonoChunks(pendingSamples)
+      nativeOscilloscope.pushSamples(merged)
+      this.samplesReceived += merged.length
     }
 
     if (options.pitchLock && this.samplesReceived < Oscilloscope.WARMUP_SAMPLES) {

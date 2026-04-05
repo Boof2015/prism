@@ -246,6 +246,7 @@ export class SpectrumAnalyzer {
   private jsBufferedSamples = 0
   private jsHasSpectrumData = false
   private nativeMagnitudeBuffer = new Float32Array(0)
+  private pushScratch = new Float32Array(0)
   private primaryPointX = new Float32Array(0)
   private primaryPointY = new Float32Array(0)
   private primaryPointHeatmap = new Float32Array(0)
@@ -497,11 +498,38 @@ export class SpectrumAnalyzer {
   }
 
   private pushPendingSpectrumChunks(pendingSpectrum: Float32Array[]): void {
+    if (pendingSpectrum.length === 0) return
+
+    if (pendingSpectrum.length === 1) {
+      if (pendingSpectrum[0].length > 0) {
+        nativeSpectrum.pushSamples(pendingSpectrum[0])
+      }
+      return
+    }
+
+    let totalLength = 0
+    for (const chunk of pendingSpectrum) {
+      totalLength += chunk.length
+    }
+    if (totalLength === 0) return
+
+    if (this.pushScratch.length < totalLength) {
+      this.pushScratch = new Float32Array(totalLength)
+    }
+
+    const merged = this.pushScratch.length === totalLength
+      ? this.pushScratch
+      : this.pushScratch.subarray(0, totalLength)
+
+    let offset = 0
     for (const chunk of pendingSpectrum) {
       if (chunk.length > 0) {
-        nativeSpectrum.pushSamples(chunk)
+        merged.set(chunk, offset)
+        offset += chunk.length
       }
     }
+
+    nativeSpectrum.pushSamples(merged)
   }
 
   private clearPendingSpectrumQueues(): void {
@@ -747,17 +775,12 @@ export class SpectrumAnalyzer {
         return
       }
 
-      const nativeTransport = this.dataSource.getNativeVisualizerTransport?.() ?? null
       const pendingSpectrum = this.dataSource.getPendingSpectrumSamples()
-      if (!nativeTransport) {
-        this.pushPendingSpectrumChunks(pendingSpectrum)
-      }
+      this.pushPendingSpectrumChunks(pendingSpectrum)
 
       const nativeMagnitudes = this.ensureNativeMagnitudeBuffer()
       primaryData = nativeMagnitudes
-      primaryDataLength = nativeTransport
-        ? nativeTransport.fillLatestSpectrumMagnitudes(nativeMagnitudes)
-        : nativeSpectrum.fillMagnitudes(nativeMagnitudes)
+      primaryDataLength = nativeSpectrum.fillMagnitudes(nativeMagnitudes)
     }
 
     if (!primaryData || primaryDataLength === 0) {
