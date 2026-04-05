@@ -919,13 +919,6 @@ export class SpectrumAnalyzer {
       )
       : 0
 
-    if (heatmapPointCount > 0) {
-      const clipCount = Math.min(primaryPointCount, heatmapPointCount)
-      for (let index = 0; index < clipCount; index += 1) {
-        this.heatmapPointY[index] = Math.max(this.heatmapPointY[index], this.primaryPointY[index])
-      }
-    }
-
     const secondaryPointCount = secondaryData && secondaryDataLength > 0
       ? this.fillSpectrumPoints(
         secondaryData,
@@ -945,11 +938,12 @@ export class SpectrumAnalyzer {
     this.renderStaticLayer(minFrequency, maxFrequency)
 
     if (options.heatmapFill && heatmapPointCount > 0) {
+      const renderPointCount = Math.min(primaryPointCount, heatmapPointCount)
       this.renderHeatmap(
         this.primaryPointX,
-        this.heatmapPointY,
+        this.primaryPointY,
         this.primaryPointHeatmap,
-        heatmapPointCount,
+        renderPointCount,
         width,
         height,
       )

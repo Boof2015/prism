@@ -556,6 +556,7 @@ function assertArraysDiffer(actual: number[], expected: number[], tolerance: num
 function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
   primaryPointY: number[]
   heatmapPointY: number[]
+  renderedHeatmapY: number[]
   heatmapIntensity: number[]
 } {
   const dom = installFakeCanvasDom()
@@ -578,16 +579,38 @@ function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
   })
 
   try {
-    ;(analyzer as unknown as { drawFrame: () => void }).drawFrame()
     const state = analyzer as unknown as {
+      drawFrame: () => void
+      renderHeatmap: (
+        xPoints: Float32Array,
+        yPoints: Float32Array,
+        heatmapIntensity: Float32Array,
+        pointCount: number,
+        width: number,
+        height: number,
+      ) => void
+      primaryPointY: Float32Array
+      heatmapPointY: Float32Array
+      primaryPointHeatmap: Float32Array
+    }
+    const originalRenderHeatmap = state.renderHeatmap.bind(state)
+    let renderedHeatmapY: number[] = []
+    state.renderHeatmap = (xPoints, yPoints, heatmapIntensity, pointCount, width, height) => {
+      renderedHeatmapY = Array.from(yPoints.subarray(0, pointCount))
+      originalRenderHeatmap(xPoints, yPoints, heatmapIntensity, pointCount, width, height)
+    }
+
+    state.drawFrame()
+    const snapshotState = analyzer as unknown as {
       primaryPointY: Float32Array
       heatmapPointY: Float32Array
       primaryPointHeatmap: Float32Array
     }
     return {
-      primaryPointY: Array.from(state.primaryPointY),
-      heatmapPointY: Array.from(state.heatmapPointY),
-      heatmapIntensity: Array.from(state.primaryPointHeatmap),
+      primaryPointY: Array.from(snapshotState.primaryPointY),
+      heatmapPointY: Array.from(snapshotState.heatmapPointY),
+      renderedHeatmapY,
+      heatmapIntensity: Array.from(snapshotState.primaryPointHeatmap),
     }
   } finally {
     analyzer.dispose()
@@ -915,13 +938,17 @@ test('SpectrumAnalyzer heatmap output does not change when only line smoothing c
     1e-6,
     'heatmap intensity should ignore the line smoothing control',
   )
-  assert.equal(
-    looseLine.heatmapPointY.every((value, index) => value >= looseLine.primaryPointY[index]),
-    true,
+  assertArraysAlmostEqual(
+    looseLine.renderedHeatmapY,
+    looseLine.primaryPointY,
+    1e-6,
+    'rendered heatmap fill should follow the line geometry',
   )
-  assert.equal(
-    tightLine.heatmapPointY.every((value, index) => value >= tightLine.primaryPointY[index]),
-    true,
+  assertArraysAlmostEqual(
+    tightLine.renderedHeatmapY,
+    tightLine.primaryPointY,
+    1e-6,
+    'rendered heatmap fill should follow the line geometry',
   )
 })
 
@@ -947,26 +974,27 @@ test('SpectrumAnalyzer line output does not change when only heatmap smoothing c
     1e-6,
     'heatmap intensity should respond to the heatmap smoothing control',
   )
-  assert.equal(
-    looseHeat.heatmapPointY.every((value, index) => value >= looseHeat.primaryPointY[index]),
-    true,
+  assertArraysAlmostEqual(
+    looseHeat.renderedHeatmapY,
+    looseHeat.primaryPointY,
+    1e-6,
+    'rendered heatmap fill should follow the line geometry',
   )
-  assert.equal(
-    tightHeat.heatmapPointY.every((value, index) => value >= tightHeat.primaryPointY[index]),
-    true,
+  assertArraysAlmostEqual(
+    tightHeat.renderedHeatmapY,
+    tightHeat.primaryPointY,
+    1e-6,
+    'rendered heatmap fill should follow the line geometry',
   )
 })
 
-test('SpectrumAnalyzer clips heatmap fill to the spectrum line', () => {
+test('SpectrumAnalyzer renders heatmap fill on the spectrum line', () => {
   const snapshot = renderSpectrumSnapshot({
     smoothing: 0.99,
     heatmapSmoothing: 0,
   })
 
-  assert.equal(
-    snapshot.heatmapPointY.every((value, index) => value >= snapshot.primaryPointY[index]),
-    true,
-  )
+  assertArraysAlmostEqual(snapshot.renderedHeatmapY, snapshot.primaryPointY, 1e-6, 'heatmap fill should use the line geometry')
 })
 
 test('astra playback progress advances from updatedAt while playing', () => {
