@@ -66,6 +66,7 @@ function createProfile(name: string): Profile {
   }
   profile.windowBounds = { x: 10, y: 20, width: 840, height: 180 }
   profile.scopeSettings.spectrum.showSideLine = true
+  profile.scopeSettings.spectrum.heatmapSmoothing = 0.67
   profile.scopeSettings.spectrogram.colorScheme = 'mono'
   return profile
 }
@@ -80,6 +81,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(JSON.stringify(file).includes('windowBounds'), false)
   assert.equal(JSON.stringify(file).includes('frameTarget'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
+  assert.equal(file.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(file.scopeOrder.includes('astra'), false)
   assert.equal(file.hiddenScopes.includes('astra'), true)
   assert.equal(file.widthWeights.astra, 1)
@@ -88,6 +90,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.deepEqual(restored.windowBounds, profile.windowBounds)
   assert.deepEqual(restored.scopePopouts.spectrum.windowBounds, profile.scopePopouts.spectrum.windowBounds)
   assert.equal(restored.scopeSettings.spectrum.showSideLine, true)
+  assert.equal(restored.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
   assert.equal(restored.scopeSettings.astra.showControls, true)
 })
@@ -211,6 +214,7 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     const partialSnapshot = await harness.library.importProfileFromPath(partialPath)
     assert.equal(partialSnapshot.activeProfileId, 'profile_partial')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.showSideLine, false)
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.heatmapSmoothing, 0.5)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrogram.colorScheme, 'heat')
     assert.equal(partialSnapshot.profiles.profile_partial.scopePopouts.spectrogram.poppedOut, true)
     assert.equal(partialSnapshot.profiles.profile_partial.widthWeights.spectrum, 1)

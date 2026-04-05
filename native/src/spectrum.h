@@ -19,6 +19,9 @@ public:
     // Feed new samples into the rolling history and update the latest magnitudes.
     void pushSamples(const float* input, size_t length);
 
+    // Read the latest raw clamped dB magnitudes without mutating analyzer state.
+    const std::vector<float>& getRawMagnitudes() const { return rawMagnitudes_; }
+
     // Read the latest smoothed magnitudes without mutating analyzer state.
     const std::vector<float>& getMagnitudes() const { return smoothedMagnitudes_; }
 
@@ -41,6 +44,7 @@ private:
     std::vector<float> historyBuffer_;
     std::vector<float> windowedInput_;
     std::vector<float> magnitudes_;
+    std::vector<float> rawMagnitudes_;
     std::vector<float> smoothedMagnitudes_;
     size_t bufferedSamples_;
 

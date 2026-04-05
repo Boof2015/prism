@@ -74,6 +74,8 @@ export class NativeVisualizerTransport {
   private readonly bridge: NativeVisualizerTransportBridge
   private demand: Required<VisualizerConsumerDemand> = { ...EMPTY_DEMAND }
   private sampleRate = 48000
+  private activeSessionId: number | null = null
+  private capturing = false
 
   constructor(bridge: NativeVisualizerTransportBridge = defaultBridge) {
     this.bridge = bridge
@@ -119,6 +121,8 @@ export class NativeVisualizerTransport {
 
   reset(sessionState: NativeVisualizerTransportSessionState): void {
     this.sampleRate = Math.max(1, Math.floor(sessionState.sampleRate) || 1)
+    this.activeSessionId = sessionState.sessionId
+    this.capturing = sessionState.capturing
 
     if (!this.bridge.isAvailable()) {
       return
@@ -141,6 +145,51 @@ export class NativeVisualizerTransport {
     if (this.demand.vectorscope) {
       this.bridge.vectorscope.setSampleRate(this.sampleRate)
     }
+  }
+
+  handleChunk(
+    left: Float32Array,
+    right: Float32Array,
+    sessionState: Pick<NativeVisualizerTransportSessionState, 'sessionId' | 'channelCount'>,
+  ): void {
+    if (!this.bridge.isAvailable() || !this.capturing) {
+      return
+    }
+    if (this.activeSessionId === null || sessionState.sessionId !== this.activeSessionId) {
+      return
+    }
+
+    if (this.demand.oscilloscope) {
+      this.bridge.oscilloscope.pushSamples(left)
+    }
+
+    if (this.demand.spectrum) {
+      this.bridge.spectrum.pushSamples(this.downmixToMono(left, right, sessionState.channelCount))
+    }
+
+    if (this.demand.vectorscope) {
+      this.bridge.vectorscope.pushSamples(left, right)
+    }
+  }
+
+  fillLatestSpectrumMagnitudes(output: Float32Array): number {
+    if (!this.bridge.isAvailable()) {
+      return 0
+    }
+    return this.bridge.spectrum.fillMagnitudes(output)
+  }
+
+  private downmixToMono(left: Float32Array, right: Float32Array, channelCount: number): Float32Array {
+    if (channelCount <= 1) {
+      return left
+    }
+
+    const count = Math.min(left.length, right.length)
+    const mono = new Float32Array(count)
+    for (let index = 0; index < count; index += 1) {
+      mono[index] = (left[index] + right[index]) * 0.5
+    }
+    return mono
   }
 }
 

@@ -109,6 +109,16 @@ export const spectrum = {
     nativeModule?.spectrum.pushSamples(audioData)
   },
 
+  fillRawMagnitudes: (output: Float32Array): number => {
+    if (!nativeModule) return 0
+    const magnitudes = nativeModule.spectrum.getRawMagnitudes()
+    const count = Math.min(output.length, magnitudes.length)
+    if (count > 0) {
+      output.set(magnitudes.subarray(0, count), 0)
+    }
+    return count
+  },
+
   fillMagnitudes: (output: Float32Array): number => {
     if (!nativeModule) return 0
     const magnitudes = nativeModule.spectrum.getMagnitudes()
@@ -122,6 +132,11 @@ export const spectrum = {
   getMagnitudes: (): Float32Array | null => {
     if (!nativeModule) return null
     return nativeModule.spectrum.getMagnitudes()
+  },
+
+  getRawMagnitudes: (): Float32Array | null => {
+    if (!nativeModule) return null
+    return nativeModule.spectrum.getRawMagnitudes()
   },
 
   process: (audioData: Float32Array): Float32Array | null => {

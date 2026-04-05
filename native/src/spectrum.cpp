@@ -15,6 +15,7 @@ Spectrum::Spectrum(size_t fftSize)
     historyBuffer_.resize(fftSize, 0.0f);
     windowedInput_.resize(fftSize);
     magnitudes_.resize(fftSize / 2);
+    rawMagnitudes_.resize(fftSize / 2, -100.0f);
     // Initialize to silence (-100.0f dB)
     smoothedMagnitudes_.resize(fftSize / 2, -100.0f);
 }
@@ -26,6 +27,7 @@ void Spectrum::setFFTSize(size_t size) {
         historyBuffer_.assign(size, 0.0f);
         windowedInput_.resize(size);
         magnitudes_.resize(size / 2);
+        rawMagnitudes_.resize(size / 2, -100.0f);
         // Initialize to silence (-100.0f dB)
         smoothedMagnitudes_.resize(size / 2, -100.0f);
         bufferedSamples_ = 0;
@@ -97,6 +99,7 @@ void Spectrum::updateMagnitudes() {
 
         // Clamp to a stable display range.
         db = std::clamp(db, -120.0f, 12.0f);
+        rawMagnitudes_[i] = db;
 
         if (bufferedSamples_ < fftSize_) {
             smoothedMagnitudes_[i] = db;
@@ -136,6 +139,7 @@ float Spectrum::binToFrequency(int bin) const {
 
 void Spectrum::reset() {
     std::fill(historyBuffer_.begin(), historyBuffer_.end(), 0.0f);
+    std::fill(rawMagnitudes_.begin(), rawMagnitudes_.end(), -100.0f);
     std::fill(smoothedMagnitudes_.begin(), smoothedMagnitudes_.end(), -100.0f);
     bufferedSamples_ = 0;
 }

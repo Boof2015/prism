@@ -10,6 +10,7 @@ export interface ScopeSettings {
     tiltDbPerOctave: number
     heatmap: boolean
     heatmapTiltDbPerOctave: number
+    heatmapSmoothing: number
     showGrid: boolean
     smoothing: number
     fillGradient: boolean
@@ -59,7 +60,7 @@ export interface ScopeSettings {
 }
 
 export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
-  spectrum: { fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, showGrid: true, smoothing: 0.9, fillGradient: true, showSideLine: false },
+  spectrum: { fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, heatmapSmoothing: 0.5, showGrid: true, smoothing: 0.9, fillGradient: true, showSideLine: false },
   oscilloscope: { pitchLock: true, underfillEnabled: false, showGrid: true, lineWidth: 2 },
   vectorscope: { mode: 'lissajous', multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
   spectrogram: { fftSize: 2048, scrollSpeed: 2, clarityMode: 'sharper', scaleMode: 'log', colorScheme: 'heat' },

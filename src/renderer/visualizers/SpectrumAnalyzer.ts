@@ -27,6 +27,7 @@ export interface SpectrumAnalyzerOptions {
   lineWidth?: number
   fillGradient?: boolean
   heatmapFill?: boolean
+  heatmapSmoothing?: number
   gradientColors?: string[]
   heatColors?: [string, string, string]
   heatBaseColor?: string
@@ -63,6 +64,10 @@ const FFT_SILENCE_DB = -100
 const SPECTRUM_DB_FLOOR = -120
 const SPECTRUM_DB_CEILING = 12
 const SIDE_LINE_WIDTH_RATIO = 0.75
+
+function clampSmoothing(value: number): number {
+  return Math.min(0.99, Math.max(0, value))
+}
 
 const hannWindowCache = new Map<number, Float32Array>()
 
@@ -197,6 +202,7 @@ const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
   lineWidth: 2,
   fillGradient: true,
   heatmapFill: false,
+  heatmapSmoothing: 0.5,
   gradientColors: ['rgba(0, 255, 255, 0)', 'rgba(0, 255, 255, 0.3)', 'rgba(138, 43, 226, 0.5)'],
   heatColors: [...LEGACY_DEFAULT_HEAT_COLORS],
   heatBaseColor: 'transparent',
@@ -239,6 +245,8 @@ export class SpectrumAnalyzer {
 
   private jsMidHistory = new Float32Array(defaultOptions.fftSize)
   private jsSideHistory = new Float32Array(defaultOptions.fftSize)
+  private jsMidRawMagnitudes = new Float32Array(defaultOptions.fftSize / 2)
+  private jsRawScratch = new Float32Array(defaultOptions.fftSize / 2)
   private jsMidMagnitudes = new Float32Array(defaultOptions.fftSize / 2)
   private jsSideMagnitudes = new Float32Array(defaultOptions.fftSize / 2)
   private jsFftRe = new Float32Array(defaultOptions.fftSize)
@@ -246,9 +254,14 @@ export class SpectrumAnalyzer {
   private jsBufferedSamples = 0
   private jsHasSpectrumData = false
   private nativeMagnitudeBuffer = new Float32Array(0)
+  private nativeRawMagnitudeBuffer = new Float32Array(0)
+  private heatmapMagnitudeBuffer = new Float32Array(0)
+  private nativeBufferedSamples = 0
+  private nativeHasSpectrumData = false
   private pushScratch = new Float32Array(0)
   private primaryPointX = new Float32Array(0)
   private primaryPointY = new Float32Array(0)
+  private heatmapPointY = new Float32Array(0)
   private primaryPointHeatmap = new Float32Array(0)
   private secondaryPointX = new Float32Array(0)
   private secondaryPointY = new Float32Array(0)
@@ -320,22 +333,44 @@ export class SpectrumAnalyzer {
 
     this.jsMidHistory = new Float32Array(fftSize)
     this.jsSideHistory = new Float32Array(fftSize)
+    this.jsMidRawMagnitudes = new Float32Array(fftSize / 2)
+    this.jsRawScratch = new Float32Array(fftSize / 2)
     this.jsMidMagnitudes = new Float32Array(fftSize / 2)
     this.jsSideMagnitudes = new Float32Array(fftSize / 2)
     this.jsFftRe = new Float32Array(fftSize)
     this.jsFftIm = new Float32Array(fftSize)
   }
 
+  private ensureMagnitudeBufferSize(): void {
+    const length = Math.max(1, Math.floor(this.options.fftSize / 2))
+    if (this.nativeMagnitudeBuffer.length !== length) {
+      this.nativeMagnitudeBuffer = new Float32Array(length)
+    }
+    if (this.nativeRawMagnitudeBuffer.length !== length) {
+      this.nativeRawMagnitudeBuffer = new Float32Array(length)
+    }
+    if (this.heatmapMagnitudeBuffer.length !== length) {
+      this.heatmapMagnitudeBuffer = new Float32Array(length)
+    }
+  }
+
   private resetJsState(): void {
     this.ensureJsStateSize()
+    this.ensureMagnitudeBufferSize()
     this.jsMidHistory.fill(0)
     this.jsSideHistory.fill(0)
+    this.jsMidRawMagnitudes.fill(FFT_SILENCE_DB)
     this.jsMidMagnitudes.fill(FFT_SILENCE_DB)
     this.jsSideMagnitudes.fill(FFT_SILENCE_DB)
+    this.nativeMagnitudeBuffer.fill(FFT_SILENCE_DB)
+    this.nativeRawMagnitudeBuffer.fill(FFT_SILENCE_DB)
+    this.heatmapMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.jsFftRe.fill(0)
     this.jsFftIm.fill(0)
     this.jsBufferedSamples = 0
     this.jsHasSpectrumData = false
+    this.nativeBufferedSamples = 0
+    this.nativeHasSpectrumData = false
   }
 
   private updateSampleRateIfNeeded(): void {
@@ -351,9 +386,9 @@ export class SpectrumAnalyzer {
   }
 
   private getNativeSmoothing(): number {
-    const base = Math.min(0.99, Math.max(0, this.options.smoothing))
+    const base = clampSmoothing(this.options.smoothing)
     const fftRatio = Math.max(0.5, this.options.fftSize / 2048)
-    return Math.min(0.99, Math.max(0, Math.pow(base, fftRatio)))
+    return clampSmoothing(Math.pow(base, fftRatio))
   }
 
   private resetState(): void {
@@ -379,6 +414,7 @@ export class SpectrumAnalyzer {
     const shouldResetForOptions = (
       optionUpdates.fftSize !== undefined
       || optionUpdates.smoothing !== undefined
+      || optionUpdates.heatmapSmoothing !== undefined
       || optionUpdates.showSideLine !== undefined
     )
 
@@ -479,39 +515,40 @@ export class SpectrumAnalyzer {
     return db + tiltDbPerOctave * octaves
   }
 
-  private ensureNativeMagnitudeBuffer(): Float32Array {
-    const length = Math.max(1, Math.floor(this.options.fftSize / 2))
-    if (this.nativeMagnitudeBuffer.length !== length) {
-      this.nativeMagnitudeBuffer = new Float32Array(length)
-    }
-    return this.nativeMagnitudeBuffer
-  }
-
   private ensurePointBuffers(pointCount: number): void {
     if (this.primaryPointX.length !== pointCount) {
       this.primaryPointX = new Float32Array(pointCount)
       this.primaryPointY = new Float32Array(pointCount)
+      this.heatmapPointY = new Float32Array(pointCount)
       this.primaryPointHeatmap = new Float32Array(pointCount)
       this.secondaryPointX = new Float32Array(pointCount)
       this.secondaryPointY = new Float32Array(pointCount)
     }
   }
 
-  private pushPendingSpectrumChunks(pendingSpectrum: Float32Array[]): void {
-    if (pendingSpectrum.length === 0) return
+  private recordNativeBufferedSamples(length: number): void {
+    if (length <= 0) {
+      return
+    }
+    this.nativeBufferedSamples = Math.min(this.options.fftSize, this.nativeBufferedSamples + length)
+  }
+
+  private pushPendingSpectrumChunks(pendingSpectrum: Float32Array[]): number {
+    if (pendingSpectrum.length === 0) return 0
 
     if (pendingSpectrum.length === 1) {
       if (pendingSpectrum[0].length > 0) {
         nativeSpectrum.pushSamples(pendingSpectrum[0])
+        this.recordNativeBufferedSamples(pendingSpectrum[0].length)
       }
-      return
+      return pendingSpectrum[0].length
     }
 
     let totalLength = 0
     for (const chunk of pendingSpectrum) {
       totalLength += chunk.length
     }
-    if (totalLength === 0) return
+    if (totalLength === 0) return 0
 
     if (this.pushScratch.length < totalLength) {
       this.pushScratch = new Float32Array(totalLength)
@@ -530,6 +567,8 @@ export class SpectrumAnalyzer {
     }
 
     nativeSpectrum.pushSamples(merged)
+    this.recordNativeBufferedSamples(totalLength)
+    return totalLength
   }
 
   private clearPendingSpectrumQueues(): void {
@@ -563,7 +602,40 @@ export class SpectrumAnalyzer {
     this.jsBufferedSamples = Math.min(fftSize, this.jsBufferedSamples + length)
   }
 
-  private updateJsMagnitudes(history: Float32Array, smoothedMagnitudes: Float32Array): void {
+  private updateSmoothedMagnitudes(
+    rawMagnitudes: Float32Array,
+    dataLength: number,
+    smoothedMagnitudes: Float32Array,
+    smoothing: number,
+    bypassSmoothing: boolean,
+  ): number {
+    const count = Math.min(dataLength, rawMagnitudes.length, smoothedMagnitudes.length)
+    if (count <= 0) {
+      return 0
+    }
+
+    const smoothingAmount = clampSmoothing(smoothing)
+    for (let index = 0; index < count; index += 1) {
+      const rawDb = Number.isFinite(rawMagnitudes[index]) ? rawMagnitudes[index] : FFT_SILENCE_DB
+      if (bypassSmoothing) {
+        smoothedMagnitudes[index] = rawDb
+        continue
+      }
+
+      smoothedMagnitudes[index] = smoothingAmount * smoothedMagnitudes[index] + (1 - smoothingAmount) * rawDb
+      if (!Number.isFinite(smoothedMagnitudes[index])) {
+        smoothedMagnitudes[index] = FFT_SILENCE_DB
+      }
+    }
+
+    return count
+  }
+
+  private updateJsMagnitudes(
+    history: Float32Array,
+    smoothedMagnitudes: Float32Array,
+    rawMagnitudesOut: Float32Array | null = null,
+  ): void {
     const fftSize = this.options.fftSize
     const window = getHannWindow(fftSize)
 
@@ -575,23 +647,22 @@ export class SpectrumAnalyzer {
     fft(this.jsFftRe, this.jsFftIm)
 
     const scale = 2 / fftSize
-    const smoothing = Math.min(0.99, Math.max(0, this.options.smoothing))
+    const rawMagnitudes = rawMagnitudesOut ?? this.jsRawScratch
     for (let index = 0; index < smoothedMagnitudes.length; index += 1) {
       const magnitude = Math.hypot(this.jsFftRe[index], this.jsFftIm[index]) * scale
       let db = 20 * Math.log10(Math.max(magnitude, 1e-10))
       db += 6
       db = Math.min(SPECTRUM_DB_CEILING, Math.max(SPECTRUM_DB_FLOOR, db))
-
-      if (this.jsBufferedSamples < fftSize) {
-        smoothedMagnitudes[index] = db
-        continue
-      }
-
-      smoothedMagnitudes[index] = smoothing * smoothedMagnitudes[index] + (1 - smoothing) * db
-      if (!Number.isFinite(smoothedMagnitudes[index])) {
-        smoothedMagnitudes[index] = FFT_SILENCE_DB
-      }
+      rawMagnitudes[index] = db
     }
+
+    this.updateSmoothedMagnitudes(
+      rawMagnitudes,
+      rawMagnitudes.length,
+      smoothedMagnitudes,
+      this.options.smoothing,
+      this.jsBufferedSamples < fftSize,
+    )
   }
 
   private processJsSpectrumChunks(pendingSpectrum: SpectrumStereoChunk[]): void {
@@ -610,8 +681,15 @@ export class SpectrumAnalyzer {
       return
     }
 
-    this.updateJsMagnitudes(this.jsMidHistory, this.jsMidMagnitudes)
+    this.updateJsMagnitudes(this.jsMidHistory, this.jsMidMagnitudes, this.jsMidRawMagnitudes)
     this.updateJsMagnitudes(this.jsSideHistory, this.jsSideMagnitudes)
+    this.updateSmoothedMagnitudes(
+      this.jsMidRawMagnitudes,
+      this.jsMidRawMagnitudes.length,
+      this.heatmapMagnitudeBuffer,
+      this.options.heatmapSmoothing,
+      this.jsBufferedSamples < this.options.fftSize,
+    )
     this.jsHasSpectrumData = true
   }
 
@@ -623,6 +701,7 @@ export class SpectrumAnalyzer {
     minFrequency: number,
     maxFrequency: number,
     nyquist: number,
+    tiltDbPerOctave: number,
     xOut: Float32Array,
     yOut: Float32Array,
     heatmapIntensityOut: Float32Array | null,
@@ -649,16 +728,15 @@ export class SpectrumAnalyzer {
       const rawDb = binSpan <= 1
         ? this.getInterpolatedValue(frequencyData, Math.min(centerBin, bufferLength - 1))
         : this.getPeakInRange(frequencyData, bin0, bin1)
-      const db = this.applyTilt(rawDb, centerFrequency)
-      const heatmapDb = this.applyTilt(rawDb, centerFrequency, this.options.heatmapTiltDbPerOctave)
+      const db = this.applyTilt(rawDb, centerFrequency, tiltDbPerOctave)
 
       const normalized = (db - this.options.minDecibels) / (this.options.maxDecibels - this.options.minDecibels)
-      const heatmapNormalized = (heatmapDb - this.options.minDecibels) / (this.options.maxDecibels - this.options.minDecibels)
+      const clampedNormalized = Math.max(0, Math.min(1, normalized))
 
       xOut[index] = x
-      yOut[index] = height - Math.max(0, Math.min(1, normalized)) * height
+      yOut[index] = height - clampedNormalized * height
       if (heatmapIntensityOut) {
-        heatmapIntensityOut[index] = Math.pow(Math.max(0, Math.min(1, heatmapNormalized)), HEATMAP_GAMMA)
+        heatmapIntensityOut[index] = Math.pow(clampedNormalized, HEATMAP_GAMMA)
       }
     }
 
@@ -758,15 +836,19 @@ export class SpectrumAnalyzer {
     }
 
     let primaryData: Float32Array | null = null
+    let heatmapData: Float32Array | null = null
     let secondaryData: Float32Array | null = null
     let primaryDataLength = 0
+    let heatmapDataLength = 0
     let secondaryDataLength = 0
 
     if (options.showSideLine) {
       this.processJsSpectrumChunks(this.dataSource.getPendingSpectrumStereoSamples())
       primaryData = this.jsHasSpectrumData ? this.jsMidMagnitudes : null
+      heatmapData = this.jsHasSpectrumData ? this.heatmapMagnitudeBuffer : null
       secondaryData = this.jsHasSpectrumData ? this.jsSideMagnitudes : null
       primaryDataLength = primaryData?.length ?? 0
+      heatmapDataLength = heatmapData?.length ?? 0
       secondaryDataLength = secondaryData?.length ?? 0
     } else {
       if (!isNativeAvailable()) {
@@ -776,11 +858,29 @@ export class SpectrumAnalyzer {
       }
 
       const pendingSpectrum = this.dataSource.getPendingSpectrumSamples()
-      this.pushPendingSpectrumChunks(pendingSpectrum)
+      const receivedNativeSamples = this.pushPendingSpectrumChunks(pendingSpectrum)
 
-      const nativeMagnitudes = this.ensureNativeMagnitudeBuffer()
-      primaryData = nativeMagnitudes
-      primaryDataLength = nativeSpectrum.fillMagnitudes(nativeMagnitudes)
+      this.ensureMagnitudeBufferSize()
+      primaryData = this.nativeMagnitudeBuffer
+      primaryDataLength = nativeSpectrum.fillMagnitudes(this.nativeMagnitudeBuffer)
+
+      if (receivedNativeSamples > 0 || !this.nativeHasSpectrumData) {
+        heatmapDataLength = nativeSpectrum.fillRawMagnitudes(this.nativeRawMagnitudeBuffer)
+        if (heatmapDataLength > 0) {
+          this.updateSmoothedMagnitudes(
+            this.nativeRawMagnitudeBuffer,
+            heatmapDataLength,
+            this.heatmapMagnitudeBuffer,
+            options.heatmapSmoothing,
+            this.nativeBufferedSamples < options.fftSize,
+          )
+          this.nativeHasSpectrumData = true
+        }
+      } else if (this.nativeHasSpectrumData) {
+        heatmapDataLength = this.heatmapMagnitudeBuffer.length
+      }
+
+      heatmapData = this.nativeHasSpectrumData ? this.heatmapMagnitudeBuffer : null
     }
 
     if (!primaryData || primaryDataLength === 0) {
@@ -798,10 +898,34 @@ export class SpectrumAnalyzer {
       minFrequency,
       maxFrequency,
       nyquist,
+      options.tiltDbPerOctave,
       this.primaryPointX,
       this.primaryPointY,
-      this.primaryPointHeatmap,
+      null,
     )
+    const heatmapPointCount = heatmapData && heatmapDataLength > 0
+      ? this.fillSpectrumPoints(
+        heatmapData,
+        heatmapDataLength,
+        width,
+        height,
+        minFrequency,
+        maxFrequency,
+        nyquist,
+        options.heatmapTiltDbPerOctave,
+        this.primaryPointX,
+        this.heatmapPointY,
+        this.primaryPointHeatmap,
+      )
+      : 0
+
+    if (heatmapPointCount > 0) {
+      const clipCount = Math.min(primaryPointCount, heatmapPointCount)
+      for (let index = 0; index < clipCount; index += 1) {
+        this.heatmapPointY[index] = Math.max(this.heatmapPointY[index], this.primaryPointY[index])
+      }
+    }
+
     const secondaryPointCount = secondaryData && secondaryDataLength > 0
       ? this.fillSpectrumPoints(
         secondaryData,
@@ -811,6 +935,7 @@ export class SpectrumAnalyzer {
         minFrequency,
         maxFrequency,
         nyquist,
+        options.tiltDbPerOctave,
         this.secondaryPointX,
         this.secondaryPointY,
         null,
@@ -819,8 +944,15 @@ export class SpectrumAnalyzer {
 
     this.renderStaticLayer(minFrequency, maxFrequency)
 
-    if (options.heatmapFill && primaryPointCount > 0) {
-      this.renderHeatmap(this.primaryPointX, this.primaryPointY, this.primaryPointHeatmap, primaryPointCount, width, height)
+    if (options.heatmapFill && heatmapPointCount > 0) {
+      this.renderHeatmap(
+        this.primaryPointX,
+        this.heatmapPointY,
+        this.primaryPointHeatmap,
+        heatmapPointCount,
+        width,
+        height,
+      )
     } else if (options.fillGradient && primaryPointCount > 0) {
       this.renderGradientFill(this.primaryPointX, this.primaryPointY, primaryPointCount, width, height)
     }

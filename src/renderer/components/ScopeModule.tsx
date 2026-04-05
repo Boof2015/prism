@@ -83,6 +83,7 @@ export function scopeSettingsToOptions(
         tiltDbPerOctave: s.tiltDbPerOctave,
         heatmapFill: s.heatmap,
         heatmapTiltDbPerOctave: s.heatmapTiltDbPerOctave,
+        heatmapSmoothing: s.heatmapSmoothing,
         showGrid: s.showGrid,
         fillGradient: s.fillGradient,
         smoothing: s.smoothing,

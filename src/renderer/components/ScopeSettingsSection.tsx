@@ -265,6 +265,18 @@ export default function ScopeSettingsSection({
               />
 
               <RangeControl
+                label="Heat Smoothing"
+                value={current.heatmapSmoothing}
+                valueLabel={current.heatmapSmoothing.toFixed(2)}
+                min={0}
+                max={0.99}
+                step={0.01}
+                fullWidth={false}
+                disabled={!current.heatmap}
+                onChange={(value) => onUpdate('spectrum', { heatmapSmoothing: value })}
+              />
+
+              <RangeControl
                 label="Smoothing"
                 value={current.smoothing}
                 valueLabel={current.smoothing.toFixed(2)}

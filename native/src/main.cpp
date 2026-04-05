@@ -171,6 +171,30 @@ Napi::Value SpectrumGetMagnitudes(const Napi::CallbackInfo& info) {
     return result;
 }
 
+Napi::Value SpectrumGetRawMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const auto& magnitudes = spectrum.getRawMagnitudes();
+    Napi::Float32Array result = Napi::Float32Array::New(env, magnitudes.size());
+    memcpy(result.Data(), magnitudes.data(), magnitudes.size() * sizeof(float));
+    return result;
+}
+
+Napi::Value SpectrumFillRawMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected output Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array output = info[0].As<Napi::Float32Array>();
+    const auto& magnitudes = spectrum.getRawMagnitudes();
+    const size_t count = std::min(output.ElementLength(), magnitudes.size());
+    if (count > 0) {
+        memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
+    }
+    return Napi::Number::New(env, static_cast<double>(count));
+}
+
 Napi::Value SpectrumFillMagnitudes(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsTypedArray()) {
@@ -344,7 +368,9 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("setSampleRate", Napi::Function::New(env, SpectrumSetSampleRate));
     specExports.Set("setSmoothing", Napi::Function::New(env, SpectrumSetSmoothing));
     specExports.Set("pushSamples", Napi::Function::New(env, SpectrumPushSamples));
+    specExports.Set("fillRawMagnitudes", Napi::Function::New(env, SpectrumFillRawMagnitudes));
     specExports.Set("fillMagnitudes", Napi::Function::New(env, SpectrumFillMagnitudes));
+    specExports.Set("getRawMagnitudes", Napi::Function::New(env, SpectrumGetRawMagnitudes));
     specExports.Set("getMagnitudes", Napi::Function::New(env, SpectrumGetMagnitudes));
     specExports.Set("process", Napi::Function::New(env, SpectrumProcess));
     specExports.Set("binToFrequency", Napi::Function::New(env, SpectrumBinToFrequency));

@@ -54,6 +54,7 @@ import {
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
 import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
+import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
 import {
   MultibandBuffer,
   MultibandSplitter,
@@ -458,9 +459,12 @@ function createFakeCanvasContext(): CanvasRenderingContext2D {
     fillRect() {},
     fillText() {},
     beginPath() {},
+    closePath() {},
+    fill() {},
     moveTo() {},
     lineTo() {},
     stroke() {},
+    drawImage() {},
     save() {},
     restore() {},
     translate() {},
@@ -479,6 +483,8 @@ function createFakeCanvasContext(): CanvasRenderingContext2D {
     font: '',
     textAlign: 'left',
     textBaseline: 'top',
+    lineCap: 'butt',
+    lineJoin: 'miter',
   } as unknown as CanvasRenderingContext2D
 }
 
@@ -489,6 +495,104 @@ function createFakeCanvas(): HTMLCanvasElement {
     height: 180,
     getContext: (kind: string) => kind === '2d' ? context : null,
   } as unknown as HTMLCanvasElement
+}
+
+function installFakeCanvasDom(): {
+  restore: () => void
+} {
+  const globalWithDom = globalThis as typeof globalThis & { window?: Window; document?: Document }
+  const previousWindow = globalWithDom.window
+  const previousDocument = globalWithDom.document
+
+  globalWithDom.window = {
+    ...(previousWindow ?? globalThis),
+    devicePixelRatio: 1,
+  } as Window
+
+  globalWithDom.document = {
+    createElement(tagName: string) {
+      if (tagName !== 'canvas') {
+        throw new Error(`Unsupported element in test DOM: ${tagName}`)
+      }
+      return createFakeCanvas()
+    },
+  } as Document
+
+  return {
+    restore(): void {
+      if (previousWindow === undefined) {
+        delete globalWithDom.window
+      } else {
+        globalWithDom.window = previousWindow
+      }
+
+      if (previousDocument === undefined) {
+        delete globalWithDom.document
+      } else {
+        globalWithDom.document = previousDocument
+      }
+    },
+  }
+}
+
+function assertArraysAlmostEqual(actual: number[], expected: number[], tolerance: number, message: string): void {
+  assert.equal(actual.length, expected.length, `${message}: length mismatch`)
+  for (let index = 0; index < actual.length; index += 1) {
+    if (Math.abs(actual[index] - expected[index]) > tolerance) {
+      assert.fail(`${message}: arrays diverged at index ${index}; expected ${expected[index]}, got ${actual[index]}`)
+    }
+  }
+}
+
+function assertArraysDiffer(actual: number[], expected: number[], tolerance: number, message: string): void {
+  for (let index = 0; index < actual.length; index += 1) {
+    if (Math.abs(actual[index] - expected[index]) > tolerance) {
+      return
+    }
+  }
+  assert.fail(message)
+}
+
+function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
+  primaryPointY: number[]
+  heatmapPointY: number[]
+  heatmapIntensity: number[]
+} {
+  const dom = installFakeCanvasDom()
+  const { left, right } = createProgramSamples(2048)
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [{ left, right }],
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    heatmapFill: true,
+    fillGradient: false,
+    showGrid: false,
+    dataSource,
+    ...options,
+  })
+
+  try {
+    ;(analyzer as unknown as { drawFrame: () => void }).drawFrame()
+    const state = analyzer as unknown as {
+      primaryPointY: Float32Array
+      heatmapPointY: Float32Array
+      primaryPointHeatmap: Float32Array
+    }
+    return {
+      primaryPointY: Array.from(state.primaryPointY),
+      heatmapPointY: Array.from(state.heatmapPointY),
+      heatmapIntensity: Array.from(state.primaryPointHeatmap),
+    }
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
 }
 
 test('parseColorToRgb handles hex, rgb, rgba, and percentage formats', () => {
@@ -776,15 +880,93 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
 test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer options', () => {
   const profile = createDefaultProfile('Default')
   profile.scopeSettings.spectrum.showSideLine = true
+  profile.scopeSettings.spectrum.heatmapSmoothing = 0.64
   const theme = resolveTheme(createDefaultTheme())
 
   const options = scopeSettingsToOptions('spectrum', profile.scopeSettings.spectrum, theme.spectrum)
 
   assert.equal(options.showSideLine, true)
+  assert.equal(options.heatmapSmoothing, 0.64)
   assert.equal(options.secondaryLineColor, theme.spectrum.sideLine)
   assert.equal(options.lineColor, theme.spectrum.line)
   assert.equal(options.backgroundColor, theme.spectrum.background)
   assert.equal(options.gridColor, theme.spectrum.guides)
+})
+
+test('SpectrumAnalyzer heatmap output does not change when only line smoothing changes', () => {
+  const looseLine = renderSpectrumSnapshot({
+    smoothing: 0,
+    heatmapSmoothing: 0.5,
+  })
+  const tightLine = renderSpectrumSnapshot({
+    smoothing: 0.99,
+    heatmapSmoothing: 0.5,
+  })
+
+  assertArraysDiffer(
+    looseLine.primaryPointY,
+    tightLine.primaryPointY,
+    1e-6,
+    'line path should respond to the line smoothing control',
+  )
+  assertArraysAlmostEqual(
+    looseLine.heatmapIntensity,
+    tightLine.heatmapIntensity,
+    1e-6,
+    'heatmap intensity should ignore the line smoothing control',
+  )
+  assert.equal(
+    looseLine.heatmapPointY.every((value, index) => value >= looseLine.primaryPointY[index]),
+    true,
+  )
+  assert.equal(
+    tightLine.heatmapPointY.every((value, index) => value >= tightLine.primaryPointY[index]),
+    true,
+  )
+})
+
+test('SpectrumAnalyzer line output does not change when only heatmap smoothing changes', () => {
+  const looseHeat = renderSpectrumSnapshot({
+    smoothing: 0.9,
+    heatmapSmoothing: 0,
+  })
+  const tightHeat = renderSpectrumSnapshot({
+    smoothing: 0.9,
+    heatmapSmoothing: 0.99,
+  })
+
+  assertArraysAlmostEqual(
+    looseHeat.primaryPointY,
+    tightHeat.primaryPointY,
+    1e-6,
+    'line path should ignore the heatmap smoothing control',
+  )
+  assertArraysDiffer(
+    looseHeat.heatmapIntensity,
+    tightHeat.heatmapIntensity,
+    1e-6,
+    'heatmap intensity should respond to the heatmap smoothing control',
+  )
+  assert.equal(
+    looseHeat.heatmapPointY.every((value, index) => value >= looseHeat.primaryPointY[index]),
+    true,
+  )
+  assert.equal(
+    tightHeat.heatmapPointY.every((value, index) => value >= tightHeat.primaryPointY[index]),
+    true,
+  )
+})
+
+test('SpectrumAnalyzer clips heatmap fill to the spectrum line', () => {
+  const snapshot = renderSpectrumSnapshot({
+    smoothing: 0.99,
+    heatmapSmoothing: 0,
+  })
+
+  assert.equal(
+    snapshot.heatmapPointY.every((value, index) => value >= snapshot.primaryPointY[index]),
+    true,
+  )
 })
 
 test('astra playback progress advances from updatedAt while playing', () => {
