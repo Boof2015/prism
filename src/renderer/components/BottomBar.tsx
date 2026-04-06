@@ -49,6 +49,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [astraBaseUrlInput, setAstraBaseUrlInput] = useState('')
   const [astraTokenInput, setAstraTokenInput] = useState('')
+  const [isRefreshingThemes, setIsRefreshingThemes] = useState(false)
 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -61,6 +62,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     themes,
     activeThemeId,
     loadTheme,
+    reloadThemes,
     showThemesFolder,
   } = useThemeStore()
   const astraState = useAstraStore((s) => s.integrationState)
@@ -215,6 +217,25 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     }
   }
 
+  const handleReloadThemes = async (): Promise<void> => {
+    if (isRefreshingThemes) {
+      return
+    }
+
+    setIsRefreshingThemes(true)
+    try {
+      await reloadThemes()
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not refresh themes.'),
+        actions: [],
+      })
+    } finally {
+      setIsRefreshingThemes(false)
+    }
+  }
+
   const handleRailWheel = (event: WheelEvent<HTMLDivElement>): void => {
     const railElement = event.currentTarget
     const target = event.target
@@ -295,6 +316,16 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                     </option>
                   ))}
                 </ThemedSelect>
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void handleReloadThemes()
+                  }}
+                  disabled={isRefreshingThemes}
+                >
+                  {isRefreshingThemes ? 'Refreshing...' : 'Refresh'}
+                </button>
                 <button
                   type="button"
                   className="settings-chip"

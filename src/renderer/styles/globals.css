@@ -1258,10 +1258,16 @@ select {
     background-color 140ms ease;
 }
 
-.settings-chip:hover {
+.settings-chip:hover:not(:disabled) {
   color: var(--control-text);
   border-color: var(--control-border-active);
   background: var(--control-bg-hover);
+}
+
+.settings-chip:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.72;
 }
 
 .settings-chip.is-active {
