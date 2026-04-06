@@ -207,10 +207,16 @@ export class FileBackedThemeLibrary {
 
   private async ensureTemplateFile(): Promise<void> {
     const targetPath = resolve(join(this.themesDir, TEMPLATE_THEME_FILE_NAME))
+    const nextContent = createTemplateThemeFile()
+
     if (await this.pathExists(targetPath)) {
-      return
+      const currentContent = await readFile(targetPath, 'utf8')
+      if (currentContent === nextContent) {
+        return
+      }
     }
-    await writeFile(targetPath, createTemplateThemeFile(), 'utf8')
+
+    await writeFile(targetPath, nextContent, 'utf8')
   }
 
   private async readManagedEntries(): Promise<ManagedThemeEntry[]> {

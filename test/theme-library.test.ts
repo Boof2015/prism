@@ -7,6 +7,7 @@ import { FileBackedThemeLibrary } from '../src/main/themeLibrary'
 import {
   createBundledThemes,
   createDefaultTheme,
+  createTemplateThemeFile,
   createMigratedAccentTheme,
   parseThemeFileContent,
   resolveTheme,
@@ -42,6 +43,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   const theme = createDefaultTheme()
   theme.app.accent = '#4ade80'
   theme.controls.menuSurface = 'rgb(12, 18, 32)'
+  theme.controls.flatControls = 'true'
   theme.scopes.background = '#030712'
   theme.spectrum.heatMid = 'rgb(200, 50, 120)'
   theme.vumeter.track = '#111827'
@@ -54,15 +56,37 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.match(serialized, /\[App\]/)
   assert.match(serialized, /\[Controls\]/)
   assert.match(serialized, /\[Scopes\]/)
+  assert.match(serialized, /flat_controls = true/)
 
   assert.equal(parsed.id, DEFAULT_THEME_ID)
   assert.equal(parsed.name, DEFAULT_THEME_NAME)
   assert.equal(parsed.app.accent, 'rgb(74, 222, 128)')
   assert.equal(parsed.controls.menuSurface, 'rgb(12, 18, 32)')
+  assert.equal(parsed.controls.flatControls, 'true')
   assert.equal(parsed.scopes.background, 'rgb(3, 7, 18)')
   assert.equal(parsed.spectrum.heatMid, 'rgb(200, 50, 120)')
   assert.equal(parsed.vumeter.track, 'rgb(17, 24, 39)')
   assert.equal(parsed.astra.background, theme.astra.background)
+})
+
+test('parseThemeFileContent preserves passthrough controls tokens from .iro files', () => {
+  const parsed = parseThemeFileContent(`
+[Theme]
+format = prism-theme
+version = 2
+id = theme_flat
+name = Flat
+
+[Controls]
+flat_controls = true
+`, 'theme_flat', 'Flat')
+
+  const resolved = resolveTheme(parsed)
+
+  assert.equal(parsed.controls.flatControls, 'true')
+  assert.equal(resolved.interface.glassBg, 'transparent')
+  assert.equal(resolved.interface.glassHighlight, 'transparent')
+  assert.equal(resolved.interface.glassHighlightStrong, 'transparent')
 })
 
 test('resolveTheme maps grouped app, controls, and scopes tokens into UI and scope surfaces', () => {
@@ -132,6 +156,54 @@ test('themeToCssVariables exposes grouped UI, control, and scope variables', () 
   assert.equal(variables['--scope-overlay-text'], 'rgb(223, 224, 225)')
   assert.equal(variables['--scope-overlay-border'], 'rgb(17, 18, 19)')
   assert.equal(variables['--scope-resize-handle'], 'rgb(20, 21, 22)')
+})
+
+test('createTemplateThemeFile presents a simplified recommended theme layout', () => {
+  const template = createTemplateThemeFile()
+  const parsed = parseThemeFileContent(template, 'theme_template', 'Template Theme')
+
+  assert.match(template, /# Core UI:/)
+  assert.match(template, /# Shared scope defaults:/)
+  assert.match(template, /# Module overrides:/)
+  assert.match(template, /# Optional shell overrides:/)
+  assert.match(template, /flat_controls = false/)
+  assert.match(template, /# toolbar_bg =/)
+  assert.doesNotMatch(template, /\[Spectrum\]\nbackground =/)
+  assert.doesNotMatch(template, /\[Oscilloscope\]\nbackground =/)
+  assert.doesNotMatch(template, /\[Waveform\]\nbackground =/)
+  assert.equal(parsed.controls.flatControls, 'false')
+})
+
+test('resolveTheme exposes Astra-specific button tokens and derived button states', () => {
+  const theme = createDefaultTheme()
+  theme.astra.accent = 'rgb(100, 150, 200)'
+  theme.astra.text = 'rgb(240, 241, 242)'
+  theme.astra.buttonSurface = 'rgba(20, 30, 40, 0.9)'
+  theme.astra.buttonBorder = 'rgb(50, 60, 70)'
+
+  const resolved = resolveTheme(theme)
+
+  assert.equal(resolved.astra.buttonBg, 'rgba(20, 30, 40, 0.902)')
+  assert.equal(resolved.astra.buttonBgHover, 'rgba(31, 47, 62, 0.94)')
+  assert.equal(resolved.astra.buttonBgActive, 'rgba(100, 150, 200, 0.16)')
+  assert.equal(resolved.astra.buttonBorder, 'rgb(50, 60, 70)')
+  assert.equal(resolved.astra.buttonText, 'rgb(240, 241, 242)')
+})
+
+test('Astra renderer consumes Astra-specific button theme vars', async () => {
+  const componentSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'AstraScopeModule.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  assert.match(componentSource, /'--astra-button-bg': theme\.buttonBg/)
+  assert.match(componentSource, /'--astra-button-bg-hover': theme\.buttonBgHover/)
+  assert.match(componentSource, /'--astra-button-bg-active': theme\.buttonBgActive/)
+  assert.match(componentSource, /'--astra-button-border': theme\.buttonBorder/)
+  assert.match(componentSource, /'--astra-button-text': theme\.buttonText/)
+  assert.match(stylesSource, /\.astra-scope__control \{[\s\S]*background: var\(--astra-button-bg\);/)
+  assert.match(stylesSource, /\.astra-scope__control \{[\s\S]*border: 1px solid var\(--astra-button-border\);/)
+  assert.match(stylesSource, /\.astra-scope__control \{[\s\S]*color: var\(--astra-button-text\);/)
+  assert.match(stylesSource, /\.astra-scope__control:hover:not\(:disabled\),[\s\S]*background: var\(--astra-button-bg-hover\);/)
+  assert.match(stylesSource, /\.astra-scope__control:active:not\(:disabled\) \{[\s\S]*background: var\(--astra-button-bg-active\);/)
 })
 
 test('bundled and migrated accent themes recolor every accent-driven scope', () => {
@@ -215,6 +287,25 @@ test('library refreshes shipped bundled themes when their definitions change', a
     const snapshot = await harness.library.reloadThemes()
     assert.equal(snapshot.themes.theme_purple.oscilloscope.line, snapshot.themes.theme_purple.app.accent)
     assert.equal(snapshot.themes.theme_purple.vectorscope.trace, snapshot.themes.theme_purple.app.accent)
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('library refreshes the managed template when its generated layout changes', async () => {
+  const harness = await createHarness()
+
+  try {
+    await harness.library.getSnapshot()
+
+    await writeFile(join(harness.themesDir, '_TEMPLATE.iro'), '# stale template\n', 'utf8')
+
+    await harness.library.reloadThemes()
+
+    const templateContent = await readFile(join(harness.themesDir, '_TEMPLATE.iro'), 'utf8')
+    assert.match(templateContent, /# Core UI:/)
+    assert.match(templateContent, /flat_controls = false/)
+    assert.doesNotMatch(templateContent, /\[Spectrum\]\nbackground =/)
   } finally {
     await harness.cleanup()
   }

@@ -201,24 +201,24 @@ export default function DialogApp(): JSX.Element {
         }
 
         .dialog-btn--primary {
-          background: rgba(var(--accent-rgb), 0.18);
-          border-color: rgba(var(--accent-rgb), 0.32);
+          background: var(--control-bg-active);
+          border-color: var(--control-border-active);
           color: var(--accent-hover);
         }
 
         .dialog-btn--primary:hover {
-          background: rgba(var(--accent-rgb), 0.26);
-          border-color: rgba(var(--accent-rgb), 0.48);
+          background: color-mix(in srgb, var(--control-bg-active) 72%, var(--accent) 28%);
+          border-color: var(--accent);
         }
 
         .dialog-btn--danger {
-          background: rgba(248, 113, 113, 0.12);
-          border-color: rgba(248, 113, 113, 0.28);
+          background: color-mix(in srgb, var(--danger) 12%, transparent);
+          border-color: color-mix(in srgb, var(--danger) 28%, transparent);
           color: var(--danger);
         }
 
         .dialog-btn--danger:hover {
-          background: rgba(248, 113, 113, 0.2);
+          background: color-mix(in srgb, var(--danger) 20%, transparent);
         }
       `}</style>
     </div>

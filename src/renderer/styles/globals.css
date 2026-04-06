@@ -241,11 +241,11 @@ select {
 }
 
 .app-banner--error {
-  border-color: rgba(248, 113, 113, 0.32);
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
 }
 
 .app-banner--info {
-  border-color: rgba(var(--accent-rgb), 0.24);
+  border-color: var(--control-border-active);
 }
 
 .app-banner__message {
@@ -814,9 +814,9 @@ select {
   height: 32px;
   padding: 0 12px;
   border-radius: 999px;
-  border: 1px solid var(--control-border);
-  background: var(--control-bg);
-  color: var(--text-secondary);
+  border: 1px solid var(--astra-button-border);
+  background: var(--astra-button-bg);
+  color: var(--astra-button-text);
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -831,14 +831,14 @@ select {
 
 .astra-scope__control:hover:not(:disabled),
 .astra-scope__control:focus-visible {
-  background: var(--control-bg-hover);
-  border-color: var(--control-border-active);
-  color: var(--text-primary);
+  background: var(--astra-button-bg-hover);
+  border-color: var(--astra-accent);
+  color: var(--astra-button-text);
   outline: none;
 }
 
 .astra-scope__control:active:not(:disabled) {
-  background: var(--control-bg-active);
+  background: var(--astra-button-bg-active);
 }
 
 .astra-scope__control:disabled {

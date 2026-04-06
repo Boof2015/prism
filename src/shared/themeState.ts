@@ -765,6 +765,11 @@ function parseThemeContent(content: string, fallbackId: string, fallbackName: st
     const tokenKey = parseSectionValue(currentSection, key)
     if (!tokenKey) continue
 
+    if (PASSTHROUGH_KEYS.has(tokenKey)) {
+      getSectionTokenRecord(nextTheme, currentSection)[tokenKey] = value
+      continue
+    }
+
     const parsedColor = parseCssColor(value) ?? parseThemeChannelColor(value)
     if (!parsedColor) continue
     getSectionTokenRecord(nextTheme, currentSection)[tokenKey] = toCssColor(quantizeThemeColor(parsedColor))
@@ -829,83 +834,139 @@ export function serializeThemeFile(theme: PrismTheme): string {
 
 export function createTemplateThemeFile(): string {
   const base = createDefaultTheme()
-  const resolved = resolveTheme(base)
+  const themeSection = [
+    '[Theme]',
+    `format = ${THEME_FILE_FORMAT}`,
+    `version = ${THEME_FILE_VERSION}`,
+    'id = theme_template',
+    'name = Template Theme',
+    'credit = Your Name',
+    'website = https://example.com',
+    'description = Custom Prism theme',
+  ]
 
-  const template: PrismTheme = {
-    id: 'theme_template',
-    name: 'Template Theme',
-    credit: 'Your Name',
-    website: 'https://example.com',
-    description: 'Custom Prism theme',
-    app: {
-      ...base.app,
-      toolbarBg: resolved.interface.toolbarBg,
-      settingsBgTop: resolved.interface.settingsBgTop,
-      settingsBgBottom: resolved.interface.settingsBgBottom,
-      bottomBarBg: resolved.interface.bottomBarBg,
-    },
-    controls: { ...base.controls },
-    scopes: { ...base.scopes },
-    spectrum: {
-      ...base.spectrum,
-      background: resolved.spectrum.background,
-      guides: resolved.spectrum.guides,
-      labels: resolved.spectrum.labels,
-      heatBase: resolved.spectrum.heatBase,
-    },
-    oscilloscope: {
-      ...base.oscilloscope,
-      background: resolved.oscilloscope.background,
-      guides: resolved.oscilloscope.guides,
-    },
-    vectorscope: {
-      ...base.vectorscope,
-      background: resolved.vectorscope.background,
-      guides: resolved.vectorscope.guides,
-      labels: resolved.vectorscope.labels,
-    },
-    spectrogram: {
-      ...base.spectrogram,
-      background: resolved.spectrogram.background,
-    },
-    vumeter: {
-      ...base.vumeter,
-      background: resolved.vumeter.background,
-      scale: resolved.vumeter.scale,
-      labels: resolved.vumeter.labels,
-    },
-    lufsmeter: {
-      ...base.lufsmeter,
-      background: resolved.lufsmeter.background,
-      scale: resolved.lufsmeter.scale,
-      labels: resolved.lufsmeter.labels,
-    },
-    waveform: {
-      ...base.waveform,
-      background: resolved.waveform.background,
-      guides: resolved.waveform.guides,
-    },
-    astra: { ...base.astra },
-  }
+  const appSection = serializeSection('App', {
+    accent: base.app.accent,
+    success: base.app.success,
+    warning: base.app.warning,
+    danger: base.app.danger,
+    background: base.app.background,
+    surface: base.app.surface,
+    surfaceAlt: base.app.surfaceAlt,
+    border: base.app.border,
+    text: base.app.text,
+    textMuted: base.app.textMuted,
+  }, APP_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  appSection.push(
+    '# Optional shell overrides:',
+    `# toolbar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.78))}`,
+    `# settings_bg_top = ${toThemeChannels(base.app.surface ?? 'rgba(8, 11, 16, 0.92)')}`,
+    `# settings_bg_bottom = ${toThemeChannels(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)')}`,
+    `# bottom_bar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.98))}`,
+  )
+
+  const controlsSection = serializeSection('Controls', {
+    ...base.controls,
+    flatControls: 'false',
+  }, CONTROLS_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const scopesSection = serializeSection('Scopes', { ...base.scopes }, SCOPES_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const spectrumSection = serializeSection('Spectrum', {
+    line: base.spectrum.line,
+    sideLine: base.spectrum.sideLine,
+    fill: base.spectrum.fill,
+    heatLow: base.spectrum.heatLow,
+    heatMid: base.spectrum.heatMid,
+    heatHigh: base.spectrum.heatHigh,
+    heatBase: base.scopes.background,
+  }, SPECTRUM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const oscilloscopeSection = serializeSection('Oscilloscope', {
+    line: base.oscilloscope.line,
+    fill: base.oscilloscope.fill,
+  }, OSCILLOSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const vectorscopeSection = serializeSection('Vectorscope', {
+    trace: base.vectorscope.trace,
+    bandLow: base.vectorscope.bandLow,
+    bandMid: base.vectorscope.bandMid,
+    bandHigh: base.vectorscope.bandHigh,
+    labels: base.scopes.guides,
+  }, VECTORSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const spectrogramSection = serializeSection('Spectrogram', {
+    mono: base.spectrogram.mono,
+    heatLow: base.spectrogram.heatLow,
+    heatMid: base.spectrogram.heatMid,
+    heatHigh: base.spectrogram.heatHigh,
+  }, SPECTROGRAM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const vumeterSection = serializeSection('VUMeter', {
+    level: base.vumeter.level,
+    track: base.vumeter.track,
+    peak: base.vumeter.peak,
+    clip: base.vumeter.clip,
+    scale: base.scopes.guides,
+    labels: blendText(base.app.text ?? 'rgb(255, 255, 255)', base.app.textMuted ?? 'rgba(255, 255, 255, 0.42)', 0.35),
+  }, VUMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const lufsmeterSection = serializeSection('LUFSMeter', {
+    level: base.lufsmeter.level,
+    track: base.lufsmeter.track,
+    target: base.lufsmeter.target,
+    scale: base.scopes.guides,
+    labels: blendText(base.app.text ?? 'rgb(255, 255, 255)', base.app.textMuted ?? 'rgba(255, 255, 255, 0.42)', 0.2),
+  }, LUFSMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const waveformSection = serializeSection('Waveform', {
+    line: base.waveform.line,
+    bandLow: base.waveform.bandLow,
+    bandMid: base.waveform.bandMid,
+    bandHigh: base.waveform.bandHigh,
+  }, WAVEFORM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+
+  const astraSection = serializeSection('Astra', { ...base.astra }, ASTRA_SCHEMA as SectionSchema<Record<string, string | undefined>>)
 
   return `# Prism theme template
 #
 # Colors use R, G, B or R, G, B, A (0-255)
 # CSS colors like #hex, rgb(), and rgba() also work
 #
-# ── UI ──
-# [App]       Window background, text, and accent color
-# [Controls]  Buttons, inputs, menus, and sliders
-#             Set flat_controls = true to disable glass highlights/gradients
+# Theme metadata:
+# [Theme]
 #
-# ── Scopes ──
-# [Scopes]    Shared defaults for all scopes (background, guides, overlays)
+# Core UI:
+# [App]       Main palette for the window shell and text
+# [Controls]  Buttons, inputs, menus, sliders, and control chrome
 #
-# Each scope section below has FULL control over its own colors.
-# Per-scope values override the shared [Scopes] defaults.
-# Every token shown below can be changed independently.
+# Shared scope defaults:
+# [Scopes]    Background, guides, and overlays shared by all scopes
 #
-${serializeThemeFile(template)}`
+# Module overrides:
+# Add tokens inside each module section only when you want that module to
+# diverge from the shared defaults. Background/guides can still be added to
+# individual sections later even if they are not shown in this template.
+#
+# Set flat_controls = true to disable glass highlights/gradients.
+#
+${[
+  themeSection.join('\n'),
+  appSection.join('\n'),
+  controlsSection.join('\n'),
+  scopesSection.join('\n'),
+  '# Module overrides',
+  spectrumSection.join('\n'),
+  oscilloscopeSection.join('\n'),
+  vectorscopeSection.join('\n'),
+  spectrogramSection.join('\n'),
+  vumeterSection.join('\n'),
+  lufsmeterSection.join('\n'),
+  waveformSection.join('\n'),
+  astraSection.join('\n'),
+].join('\n\n')}
+`
 }
 
 interface ResolvedAppTokens {
@@ -992,7 +1053,7 @@ function resolveControlsTokens(tokens: ThemeControlsTokens, app: ResolvedAppToke
     menuSurface: tokens.menuSurface ?? app.surface,
     menuBorder: tokens.menuBorder ?? 'rgba(255, 255, 255, 0.1)',
     slider: tokens.slider ?? withAlpha(app.accent, 0.82),
-    flatControls: tokens.flatControls === 'true',
+    flatControls: tokens.flatControls?.trim().toLowerCase() === 'true',
   }
 }
 
