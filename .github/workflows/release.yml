@@ -18,6 +18,8 @@ jobs:
         include:
           - os: macos-latest
             dist_cmd: dist:mac
+          - os: ubuntu-latest
+            dist_cmd: dist:linux
           - os: windows-latest
             dist_cmd: dist:win
 
@@ -40,6 +42,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Linux native build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpulse-dev
 
       - name: Build native DSP module
         run: npm run rebuild:native
@@ -66,5 +74,7 @@ jobs:
             dist/*.exe
             dist/*.dmg
             dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
           if-no-files-found: error
           retention-days: 30
