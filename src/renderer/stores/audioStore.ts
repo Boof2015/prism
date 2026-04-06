@@ -2,11 +2,11 @@ import { create } from 'zustand'
 import { audioCapture, type CaptureManagerStatus } from '../audio/AudioCapture'
 import type {
   CaptureBackendKind,
-  CaptureBackendPolicy,
   CaptureBackendSupport,
   CaptureMode,
   CaptureSourceDescriptor,
 } from '../../types/capture'
+import { useUiStore } from './uiStore'
 
 interface AudioState {
   systemSources: CaptureSourceDescriptor[]
@@ -14,9 +14,7 @@ interface AudioState {
   selectedSystemSourceId: string | null
   selectedDeviceId: string | null
   captureMode: CaptureMode
-  capturePolicy: CaptureBackendPolicy
   activeBackendKind: CaptureBackendKind | null
-  activeBackendReason: string | null
   backendSupport: CaptureBackendSupport | null
   isCapturing: boolean
   captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
@@ -33,7 +31,6 @@ interface AudioState {
   selectSystemSource: (sourceId: string | null) => Promise<void>
   selectDevice: (deviceId: string | null) => Promise<void>
   setCaptureMode: (mode: CaptureMode) => void
-  setCapturePolicy: (policy: CaptureBackendPolicy) => Promise<void>
   startCapture: () => Promise<void>
   stopCapture: () => void
 }
@@ -41,14 +38,28 @@ interface AudioState {
 function applyCaptureStatus(status: CaptureManagerStatus): Partial<AudioState> {
   return {
     captureMode: status.captureMode,
-    capturePolicy: status.backendPolicy,
     activeBackendKind: status.activeBackendKind,
-    activeBackendReason: status.activeBackendReason,
     backendSupport: status.backendSupport,
     sampleRate: status.sampleRate,
     channelCount: status.channelCount,
     isCapturing: status.isCapturing,
   }
+}
+
+function buildSystemCaptureFallbackMessage(reason: string | null): string {
+  if (!reason) {
+    return 'System output capture is unavailable. Prism switched to Default Input.'
+  }
+
+  return `System output capture is unavailable: ${reason} Prism switched to Default Input.`
+}
+
+function showSystemCaptureFallbackBanner(message: string): void {
+  useUiStore.getState().showBanner({
+    tone: 'info',
+    message,
+    actions: [],
+  })
 }
 
 function describeInputDevice(deviceId: string, devices: MediaDeviceInfo[]): string {
@@ -70,9 +81,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   selectedSystemSourceId: audioCapture.getSelectedSystemSourceId(),
   selectedDeviceId: null,
   captureMode: 'system',
-  capturePolicy: 'auto',
   activeBackendKind: null,
-  activeBackendReason: null,
   backendSupport: null,
   isCapturing: false,
   captureStatus: 'idle',
@@ -175,30 +184,40 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     set({ captureMode: mode })
   },
 
-  setCapturePolicy: async (policy: CaptureBackendPolicy) => {
-    audioCapture.setBackendPolicy(policy)
-    set({ capturePolicy: policy })
-    await get().refreshBackendSupport()
-
-    const { isCapturing, captureMode } = get()
-    if (isCapturing && captureMode === 'system') {
-      await get().startCapture()
-    }
-  },
-
   startCapture: async () => {
     set({ captureStatus: 'connecting', captureError: null })
     try {
-      const { captureMode, capturePolicy } = get()
+      const { captureMode } = get()
       audioCapture.setCaptureMode(captureMode)
-      audioCapture.setBackendPolicy(capturePolicy)
       await get().refreshBackendSupport()
       await get().refreshDevices()
 
-      const { selectedDeviceId, selectedSystemSourceId } = get()
+      const { selectedDeviceId, selectedSystemSourceId, backendSupport } = get()
+
+      const startDefaultInputFallback = async (reason: string | null): Promise<void> => {
+        const message = buildSystemCaptureFallbackMessage(reason)
+        audioCapture.setSelectedDeviceId(null)
+        audioCapture.setCaptureMode('device')
+        set({
+          selectedDeviceId: null,
+          captureMode: 'device',
+          captureNotice: message,
+        })
+        showSystemCaptureFallbackBanner(message)
+        await audioCapture.startDevice(undefined)
+      }
 
       if (captureMode === 'system') {
-        await audioCapture.startSystemAudio(selectedSystemSourceId ?? undefined)
+        if (!backendSupport?.nativeBackend.available) {
+          await startDefaultInputFallback(backendSupport?.nativeBackend.reason ?? null)
+        } else {
+          try {
+            await audioCapture.startSystemAudio(selectedSystemSourceId ?? undefined)
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : 'Native system capture failed.'
+            await startDefaultInputFallback(reason)
+          }
+        }
       } else {
         await audioCapture.startDevice(selectedDeviceId ?? undefined)
       }

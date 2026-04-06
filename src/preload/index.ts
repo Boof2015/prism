@@ -4,7 +4,7 @@ import type {
   AstraIntegrationConfig,
   AstraIntegrationState,
 } from '../types/astra'
-import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
+import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
   ScopePopoutAudioBatch,
@@ -29,6 +29,7 @@ import type {
 import type { DialogOptions, DialogResult } from '../types/dialog'
 import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
+import { getCaptureBackendSupport } from './captureSupport'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
 
@@ -46,14 +47,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
-  getDesktopSources: () => ipcRenderer.invoke('audio:get-desktop-sources') as Promise<{ id: string; name: string }[]>,
-  getCaptureBackendSupport: async () => {
-    const support = await ipcRenderer.invoke('capture:get-backend-support') as CaptureBackendSupport
-    return {
-      ...support,
-      nativeBackend: resolveNativeCaptureSupport(support.nativeBackend),
-    } satisfies CaptureBackendSupport
-  },
+  getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
   getAstraConfig: () => ipcRenderer.invoke('astra:get-config') as Promise<AstraIntegrationConfig>,
   saveAstraConfig: (config: AstraIntegrationConfig) => ipcRenderer.invoke('astra:save-config', config) as Promise<AstraIntegrationConfig>,
   getAstraState: () => ipcRenderer.invoke('astra:get-state') as Promise<AstraIntegrationState>,
@@ -224,48 +218,6 @@ try {
   console.warn('Native DSP module not available — using JS fallback')
 }
 
-function resolveNativeCaptureSupport(
-  fallbackEntry: CaptureBackendSupportEntry,
-): CaptureBackendSupportEntry {
-  if (process.platform === 'darwin') {
-    const macosCapture = nativeAddonModule?.macosCapture
-    if (!macosCapture) {
-      return {
-        kind: 'native-macos',
-        available: false,
-        reason: 'Native capture module is not available in this build.',
-      }
-    }
-
-    const support = macosCapture.getSupport()
-    return {
-      kind: 'native-macos',
-      available: support.available,
-      reason: support.reason,
-    }
-  }
-
-  if (process.platform === 'win32') {
-    const windowsCapture = nativeAddonModule?.windowsCapture
-    if (!windowsCapture) {
-      return {
-        kind: 'native-windows',
-        available: false,
-        reason: 'Native capture module is not available in this build.',
-      }
-    }
-
-    const support = windowsCapture.getSupport()
-    return {
-      kind: 'native-windows',
-      available: support.available,
-      reason: support.reason,
-    }
-  }
-
-  return fallbackEntry
-}
-
 const visualizerAPI = nativeAddonModule
   ? {
       oscilloscope: nativeAddonModule.oscilloscope,
@@ -278,6 +230,7 @@ const nativeCaptureAPI = nativeAddonModule
   ? {
       macosCapture: nativeAddonModule.macosCapture,
       windowsCapture: nativeAddonModule.windowsCapture,
+      linuxCapture: nativeAddonModule.linuxCapture,
     }
   : null
 

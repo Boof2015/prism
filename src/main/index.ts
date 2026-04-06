@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeTheme, screen, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { extname, join, resolve } from 'path'
 import type {
@@ -6,7 +6,6 @@ import type {
   AstraIntegrationConfig,
   AstraIntegrationState,
 } from '../types/astra'
-import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -957,50 +956,9 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
   }
 }
 
-function getNativeCaptureSupportEntry(): CaptureBackendSupportEntry {
-  if (process.platform === 'darwin') {
-    return {
-      kind: 'native-macos',
-      available: false,
-      reason: 'Native macOS system audio capture is not implemented in this build.',
-    }
-  }
-
-  if (process.platform === 'win32') {
-    return {
-      kind: 'native-windows',
-      available: false,
-      reason: 'Native Windows WASAPI loopback capture is not implemented in this build.',
-    }
-  }
-
-  return {
-    kind: 'native-linux',
-    available: false,
-    reason: 'Native Linux monitor capture is not implemented in this build.',
-  }
-}
-
-function getCaptureBackendSupport(): CaptureBackendSupport {
-  return {
-    policyOptions: ['auto', 'native', 'electron'],
-    nativeBackend: getNativeCaptureSupportEntry(),
-    electronSystem: {
-      kind: 'electron-system',
-      available: true,
-      reason: null,
-    },
-    electronDevice: {
-      kind: 'electron-device',
-      available: true,
-      reason: null,
-    },
-  }
-}
-
 function setupPermissions(): void {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'display-capture') {
+    if (permission === 'media') {
       callback(true)
     } else {
       callback(false)
@@ -1119,15 +1077,6 @@ function setupIPC(): void {
 
   ipcMain.handle('window:is-always-on-top', (event) => {
     return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? false
-  })
-
-  ipcMain.handle('audio:get-desktop-sources', async () => {
-    const sources = await desktopCapturer.getSources({ types: ['screen'] })
-    return sources.map((s) => ({ id: s.id, name: s.name }))
-  })
-
-  ipcMain.handle('capture:get-backend-support', () => {
-    return getCaptureBackendSupport()
   })
 
   ipcMain.handle('astra:get-config', async () => {

@@ -8,7 +8,7 @@ function createChunk(value: number, length = 4): Float32Array {
 
 test('routes chunks only to demanded scopes and prunes queues when demand is removed', () => {
   const router = new AudioRouter()
-  const sessionId = router.beginSession(48000, 2, 'electron-system')
+  const sessionId = router.beginSession(48000, 2, 'native-macos')
 
   router.ingestChunk(createChunk(1), createChunk(1), {
     sessionId,
@@ -52,7 +52,7 @@ test('routes chunks only to demanded scopes and prunes queues when demand is rem
 
 test('spectrum keeps stereo chunks for the side overlay path and still exposes mono downmixes', () => {
   const router = new AudioRouter()
-  const sessionId = router.beginSession(48000, 2, 'electron-system')
+  const sessionId = router.beginSession(48000, 2, 'native-macos')
   router.setVisualizerConsumerDemand('test-consumer', { spectrum: true })
 
   router.ingestChunk(createChunk(2), createChunk(4), {
@@ -83,7 +83,7 @@ test('spectrum keeps stereo chunks for the side overlay path and still exposes m
 
 test('waveform keeps stereo chunks for stereo mode while mono flushes still expose the left channel', () => {
   const router = new AudioRouter()
-  const sessionId = router.beginSession(48000, 2, 'electron-system')
+  const sessionId = router.beginSession(48000, 2, 'native-macos')
   router.setVisualizerConsumerDemand('test-consumer', { waveform: true })
 
   router.ingestChunk(createChunk(2), createChunk(4), {
@@ -114,7 +114,7 @@ test('waveform keeps stereo chunks for stereo mode while mono flushes still expo
 
 test('keeps the newest chunks when a fixed-capacity ring overflows', () => {
   const router = new AudioRouter()
-  const sessionId = router.beginSession(48000, 2, 'electron-system')
+  const sessionId = router.beginSession(48000, 2, 'native-macos')
   router.setVisualizerConsumerDemand('test-consumer', { oscilloscope: true })
 
   for (let sequence = 1; sequence <= 25; sequence += 1) {
@@ -138,7 +138,7 @@ test('keeps the newest chunks when a fixed-capacity ring overflows', () => {
 
 test('drops stale-session chunks before they reach scope queues', () => {
   const router = new AudioRouter()
-  const sessionId = router.beginSession(48000, 1, 'electron-device')
+  const sessionId = router.beginSession(48000, 1, 'device-input')
   router.setVisualizerConsumerDemand('test-consumer', { vumeter: true })
 
   router.ingestChunk(createChunk(1), createChunk(1), {

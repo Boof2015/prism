@@ -48,7 +48,6 @@ declare global {
       repositionWindow: (position: 'top' | 'bottom') => void
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
-      getDesktopSources: () => Promise<{ id: string; name: string }[]>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
       getAstraConfig: () => Promise<AstraIntegrationConfig>
       saveAstraConfig: (config: AstraIntegrationConfig) => Promise<AstraIntegrationConfig>

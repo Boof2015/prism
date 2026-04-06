@@ -1,5 +1,6 @@
 #include <napi.h>
 #include <cstring>
+#include "linux_capture.h"
 #include "macos_capture.h"
 #include "windows_capture.h"
 #include "oscilloscope.h"
@@ -391,6 +392,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
 
     RegisterMacOSCapture(env, exports);
     RegisterWindowsCapture(env, exports);
+    RegisterLinuxCapture(env, exports);
 
     return exports;
 }

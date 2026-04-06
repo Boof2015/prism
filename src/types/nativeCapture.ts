@@ -56,7 +56,15 @@ export type NativeWindowsCapturedChunk = NativeCapturedChunk
 export type NativeWindowsCaptureDrainResult = NativeCaptureDrainResult
 export type NativeWindowsCaptureAPI = NativeSystemCaptureAPI
 
+export type NativeLinuxCaptureSupport = NativeCaptureSupport
+export type NativeLinuxCaptureSource = NativeCaptureSource
+export type NativeLinuxCaptureStartResult = NativeCaptureStartResult
+export type NativeLinuxCapturedChunk = NativeCapturedChunk
+export type NativeLinuxCaptureDrainResult = NativeCaptureDrainResult
+export type NativeLinuxCaptureAPI = NativeSystemCaptureAPI
+
 export interface NativeCaptureAPI {
   macosCapture: NativeMacOSCaptureAPI
   windowsCapture: NativeWindowsCaptureAPI
+  linuxCapture: NativeLinuxCaptureAPI
 }
