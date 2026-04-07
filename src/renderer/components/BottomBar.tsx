@@ -45,6 +45,43 @@ function getErrorMessage(error: unknown, fallback: string): string {
     : fallback
 }
 
+type ThemeCreditSource = {
+  credit?: string
+  website?: string
+} | null | undefined
+
+export function resolveThemeCreditDetails(theme: ThemeCreditSource): {
+  credit: string | null
+  url: string | null
+} {
+  const credit = typeof theme?.credit === 'string' && theme.credit.trim()
+    ? theme.credit.trim()
+    : null
+
+  if (!credit) {
+    return { credit: null, url: null }
+  }
+
+  const website = typeof theme?.website === 'string' && theme.website.trim()
+    ? theme.website.trim()
+    : null
+
+  if (!website) {
+    return { credit, url: null }
+  }
+
+  try {
+    const parsed = new URL(website)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return { credit, url: parsed.toString() }
+    }
+  } catch {
+    // Invalid URLs fall back to plain credit text.
+  }
+
+  return { credit, url: null }
+}
+
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [astraBaseUrlInput, setAstraBaseUrlInput] = useState('')
@@ -57,9 +94,9 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
   const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
-  const setThemeId = useSettingsStore((s) => s.setThemeId)
   const {
     themes,
+    activeTheme,
     activeThemeId,
     loadTheme,
     reloadThemes,
@@ -164,10 +201,10 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
   const roundedDockedRenderFps = Math.max(0, Math.round(dockedRenderFps))
   const themeEntries = Object.entries(themes)
+  const themeCredit = resolveThemeCreditDetails(activeTheme)
 
   const handleThemeChange = async (value: string): Promise<void> => {
     await loadTheme(value)
-    setThemeId(value)
   }
 
   const handleSaveAstraConfig = async (): Promise<void> => {
@@ -236,6 +273,18 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     }
   }
 
+  const handleOpenThemeWebsite = async (url: string): Promise<void> => {
+    try {
+      await window.electronAPI.openExternalUrl(url)
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not open the theme website.'),
+        actions: [],
+      })
+    }
+  }
+
   const handleRailWheel = (event: WheelEvent<HTMLDivElement>): void => {
     const railElement = event.currentTarget
     const target = event.target
@@ -300,7 +349,25 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
           <div className="bottom-bar__divider" />
 
           <section className="bottom-bar__section bottom-bar__section--theme">
-            <div className="bottom-bar__section-title">Theme</div>
+            <div className="bottom-bar__section-header">
+              <div className="bottom-bar__section-title">Theme</div>
+              {themeCredit.credit ? (
+                themeCredit.url ? (
+                  <a
+                    className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
+                    href={themeCredit.url}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      void handleOpenThemeWebsite(themeCredit.url!)
+                    }}
+                  >
+                    By {themeCredit.credit}
+                  </a>
+                ) : (
+                  <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
+                )
+              ) : null}
+            </div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--theme">
                 <ThemedSelect

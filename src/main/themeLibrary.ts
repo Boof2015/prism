@@ -1,8 +1,6 @@
 import { access, mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import {
-  DEFAULT_THEME_ID,
   DEFAULT_THEME_NAME,
   LEGACY_THEME_MIGRATION_VERSION,
   type LegacyThemeMigrationPayload,
@@ -17,8 +15,11 @@ import {
   createEmptyThemeLocalState,
   createMigratedAccentTheme,
   createTemplateThemeFile,
+  extractLegacyThemeFileId,
   getDefaultThemeIdForLocalState,
   normalizeLegacyThemePayload,
+  resolveLegacyThemeFileId,
+  normalizeTheme,
   normalizeThemeLocalState,
   parseThemeFileContent,
   resolveLegacyThemeToPresetId,
@@ -32,6 +33,7 @@ interface ManagedThemeEntry {
   id: string
   path: string
   theme: PrismTheme
+  legacyId: string | null
 }
 
 export class FileBackedThemeLibrary {
@@ -67,23 +69,24 @@ export class FileBackedThemeLibrary {
   async importThemeFromPath(sourcePath: string): Promise<ThemeLibrarySnapshot> {
     const { entries, localState } = await this.loadLibrary()
     const resolvedSourcePath = resolve(sourcePath)
-    const theme = await this.readThemeFile(resolvedSourcePath)
-    const existingEntry = entries.find((entry) => entry.id === theme.id) ?? null
+    const { theme } = await this.readThemeFile(resolvedSourcePath)
+    const existingEntry = entries.find((entry) => entry.id === theme.name) ?? null
     const insideManagedDirectory = this.isPathInsideDirectory(resolvedSourcePath, this.themesDir)
     const currentPath = existingEntry?.path ?? (insideManagedDirectory ? resolvedSourcePath : undefined)
-    const targetPath = await this.writeManagedTheme(entries, theme.id, theme, currentPath)
+    const targetPath = await this.writeManagedTheme(entries, theme.name, theme, currentPath)
+    const targetKey = basename(targetPath, THEME_EXTENSION)
 
     if (insideManagedDirectory && resolvedSourcePath !== targetPath) {
       await this.unlinkIfExists(resolvedSourcePath)
     }
 
-    localState.activeThemeId = theme.id
+    localState.activeThemeId = targetKey
     await this.writeLocalState(localState)
     return this.getSnapshot()
   }
 
   async renameTheme(id: string, name: string): Promise<ThemeLibrarySnapshot> {
-    if (id === DEFAULT_THEME_ID) {
+    if (id === DEFAULT_THEME_NAME) {
       throw new Error('The default theme cannot be renamed.')
     }
 
@@ -93,12 +96,17 @@ export class FileBackedThemeLibrary {
       ...entry.theme,
       name: name.trim() || entry.theme.name,
     }
-    await this.writeManagedTheme(entries, id, normalized, entry.path)
+    const targetPath = await this.writeManagedTheme(entries, id, normalized, entry.path)
+    const targetKey = basename(targetPath, THEME_EXTENSION)
+    if (localState.activeThemeId === id) {
+      localState.activeThemeId = targetKey
+      await this.writeLocalState(localState)
+    }
     return this.buildSnapshot(await this.readManagedEntries(), localState)
   }
 
   async deleteTheme(id: string): Promise<ThemeLibrarySnapshot> {
-    if (id === DEFAULT_THEME_ID) {
+    if (id === DEFAULT_THEME_NAME) {
       throw new Error('The default theme cannot be deleted.')
     }
 
@@ -106,7 +114,7 @@ export class FileBackedThemeLibrary {
     const entry = this.findEntry(entries, id)
     await unlink(entry.path)
     if (localState.activeThemeId === id) {
-      localState.activeThemeId = DEFAULT_THEME_ID
+      localState.activeThemeId = DEFAULT_THEME_NAME
     }
     await this.writeLocalState(localState)
     return this.getSnapshot()
@@ -132,8 +140,8 @@ export class FileBackedThemeLibrary {
     if (normalizedPayload.customAccent) {
       const migratedTheme = createMigratedAccentTheme(normalizedPayload.customAccent)
       if (migratedTheme) {
-        await this.writeManagedTheme(entries, migratedTheme.id, migratedTheme)
-        nextActiveThemeId = migratedTheme.id
+        await this.writeManagedTheme(entries, migratedTheme.name, migratedTheme)
+        nextActiveThemeId = migratedTheme.name
         didMigrate = true
       }
     } else if (nextActiveThemeId) {
@@ -162,7 +170,7 @@ export class FileBackedThemeLibrary {
 
     if (entries.length === 0) {
       for (const theme of createBundledThemes()) {
-        await this.writeManagedTheme(entries, theme.id, theme)
+        await this.writeManagedTheme(entries, theme.name, theme)
       }
       entries = await this.readManagedEntries()
     }
@@ -171,10 +179,23 @@ export class FileBackedThemeLibrary {
 
     await this.ensureTemplateFile()
 
+    if (localState.activeThemeId && !entries.some((entry) => entry.id === localState.activeThemeId)) {
+      const presetName = resolveLegacyThemeFileId(localState.activeThemeId)
+      const migratedEntry = entries.find((entry) => entry.legacyId === localState.activeThemeId)
+        ?? (presetName ? entries.find((entry) => entry.id === presetName) ?? null : null)
+      if (migratedEntry) {
+        localState = {
+          ...localState,
+          activeThemeId: migratedEntry.id,
+        }
+        await this.writeLocalState(localState)
+      }
+    }
+
     if (!localState.activeThemeId || !entries.some((entry) => entry.id === localState.activeThemeId)) {
       localState = {
         ...localState,
-        activeThemeId: entries.find((entry) => entry.id === DEFAULT_THEME_ID)?.id ?? entries[0]?.id ?? null,
+        activeThemeId: entries.find((entry) => entry.id === DEFAULT_THEME_NAME)?.id ?? entries[0]?.id ?? null,
       }
       await this.writeLocalState(localState)
     }
@@ -189,16 +210,16 @@ export class FileBackedThemeLibrary {
     let nextEntries = entries
 
     for (const theme of createBundledThemes()) {
-      const existingEntry = nextEntries.find((entry) => entry.id === theme.id) ?? null
+      const existingEntry = nextEntries.find((entry) => entry.id === theme.name) ?? null
       const shouldWrite = !existingEntry || serializeThemeFile(existingEntry.theme) !== serializeThemeFile(theme)
       if (!shouldWrite) continue
 
-      await this.writeManagedTheme(nextEntries, theme.id, theme, existingEntry?.path)
+      await this.writeManagedTheme(nextEntries, theme.name, theme, existingEntry?.path)
       nextEntries = await this.readManagedEntries()
     }
 
-    if (!nextEntries.some((entry) => entry.id === DEFAULT_THEME_ID)) {
-      await this.writeManagedTheme(nextEntries, DEFAULT_THEME_ID, createDefaultTheme())
+    if (!nextEntries.some((entry) => entry.id === DEFAULT_THEME_NAME)) {
+      await this.writeManagedTheme(nextEntries, DEFAULT_THEME_NAME, createDefaultTheme())
       nextEntries = await this.readManagedEntries()
     }
 
@@ -235,17 +256,18 @@ export class FileBackedThemeLibrary {
 
     for (const filePath of themePaths) {
       try {
-        const theme = await this.readThemeFile(filePath)
-        if (seenIds.has(theme.id)) {
-          console.warn(`Skipping duplicate theme id "${theme.id}" in ${basename(filePath)}.`)
-          continue
-        }
-        seenIds.add(theme.id)
-        entries.push({
-          id: theme.id,
-          path: filePath,
-          theme,
-        })
+      const { theme, legacyId } = await this.readThemeFile(filePath)
+      if (seenIds.has(theme.name)) {
+        console.warn(`Skipping duplicate theme key "${theme.name}" in ${basename(filePath)}.`)
+        continue
+      }
+      seenIds.add(theme.name)
+      entries.push({
+        id: theme.name,
+        path: filePath,
+        theme,
+        legacyId,
+      })
       } catch (error) {
         console.warn(`Skipping invalid theme file at ${filePath}:`, error)
       }
@@ -254,13 +276,12 @@ export class FileBackedThemeLibrary {
     return entries
   }
 
-  private async readThemeFile(filePath: string): Promise<PrismTheme> {
+  private async readThemeFile(filePath: string): Promise<{ theme: PrismTheme; legacyId: string | null }> {
     const content = await readFile(filePath, 'utf8')
-    return parseThemeFileContent(
-      content,
-      this.buildFallbackThemeId(filePath),
-      basename(filePath, THEME_EXTENSION),
-    )
+    return {
+      theme: parseThemeFileContent(content, basename(filePath, THEME_EXTENSION)),
+      legacyId: extractLegacyThemeFileId(content),
+    }
   }
 
   private async readLocalState(): Promise<PrismThemeLocalStateV1> {
@@ -283,11 +304,12 @@ export class FileBackedThemeLibrary {
     theme: PrismTheme,
     currentPath?: string,
   ): Promise<string> {
-    const nextPath = await this.getManagedThemePath(entries, id, theme.name, currentPath)
+    const normalizedTheme = normalizeTheme(theme, theme.name)
+    const nextPath = await this.getManagedThemePath(entries, id, normalizedTheme.name, currentPath)
     const existingPath = currentPath ? resolve(currentPath) : null
 
     await mkdir(dirname(nextPath), { recursive: true })
-    await writeFile(nextPath, serializeThemeFile(theme), 'utf8')
+    await writeFile(nextPath, serializeThemeFile(normalizedTheme), 'utf8')
 
     if (existingPath && existingPath !== nextPath) {
       await this.unlinkIfExists(existingPath)
@@ -302,7 +324,7 @@ export class FileBackedThemeLibrary {
     name: string,
     currentPath?: string,
   ): Promise<string> {
-    if (id === DEFAULT_THEME_ID) {
+    if (id === DEFAULT_THEME_NAME) {
       const defaultPath = resolve(join(this.themesDir, `${DEFAULT_THEME_NAME}${THEME_EXTENSION}`))
       if (!currentPath || resolve(currentPath) === defaultPath) {
         return defaultPath
@@ -332,8 +354,8 @@ export class FileBackedThemeLibrary {
 
   private sortEntries(entries: ManagedThemeEntry[]): ManagedThemeEntry[] {
     return [...entries].sort((left, right) => {
-      if (left.id === DEFAULT_THEME_ID) return -1
-      if (right.id === DEFAULT_THEME_ID) return 1
+      if (left.id === DEFAULT_THEME_NAME) return -1
+      if (right.id === DEFAULT_THEME_NAME) return 1
       return left.theme.name.localeCompare(right.theme.name)
     })
   }
@@ -348,7 +370,7 @@ export class FileBackedThemeLibrary {
       themes,
       activeThemeId: localState.activeThemeId && themes[localState.activeThemeId]
         ? localState.activeThemeId
-        : (themes[DEFAULT_THEME_ID] ? DEFAULT_THEME_ID : Object.keys(themes)[0] ?? null),
+        : (themes[DEFAULT_THEME_NAME] ? DEFAULT_THEME_NAME : Object.keys(themes)[0] ?? null),
     }
   }
 
@@ -368,14 +390,6 @@ export class FileBackedThemeLibrary {
       .trim()
 
     return sanitized || 'Theme'
-  }
-
-  private buildFallbackThemeId(filePath: string): string {
-    const stem = basename(filePath, THEME_EXTENSION)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-    return stem ? `theme_${stem}` : `theme_${randomUUID().replace(/-/g, '')}`
   }
 
   private isPathInsideDirectory(candidatePath: string, directoryPath: string): boolean {

@@ -5,7 +5,6 @@ export const THEME_FILE_VERSION = 2
 export const THEME_LOCAL_STATE_FORMAT = 'prism-theme-local'
 export const THEME_LOCAL_STATE_VERSION = 1
 export const LEGACY_THEME_MIGRATION_VERSION = 1
-export const DEFAULT_THEME_ID = 'theme_default'
 export const DEFAULT_THEME_NAME = 'Default'
 
 export type ThemeSectionName =
@@ -136,7 +135,6 @@ export interface ThemeAstraTokens {
 }
 
 export interface PrismTheme {
-  id: string
   name: string
   credit?: string
   website?: string
@@ -162,7 +160,6 @@ export interface PrismThemeLocalStateV1 {
 }
 
 export interface ThemeSummary {
-  id: string
   name: string
   isDefault: boolean
 }
@@ -327,7 +324,6 @@ export interface ResolvedAstraTheme {
 }
 
 export interface PrismResolvedTheme {
-  id: string
   name: string
   credit?: string
   website?: string

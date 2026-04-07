@@ -186,18 +186,20 @@ export class Vectorscope {
     this.invalidate()
   }
 
+  private getProjectionScale(radius: number): number {
+    return radius
+  }
+
   private drawFrame = (): void => {
     const { canvas, ctx, offscreenCanvas, offscreenCtx, options } = this
     const width = canvas.width
     const height = canvas.height
     if (width <= 0 || height <= 0) return
 
-    const isPolar = options.mode === 'polar-unipolar' || options.mode === 'polar-bipolar'
-    const visualGain = isPolar ? 1.2 : 1.5
     const layout = getVectorscopeLayout(width, height, options.mode)
     const centerX = layout.centerX
     const centerY = layout.centerY
-    const scale = layout.radius * visualGain
+    const scale = this.getProjectionScale(layout.radius)
 
     if (offscreenCanvas.width !== width || offscreenCanvas.height !== height) {
       offscreenCanvas.width = width

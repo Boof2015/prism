@@ -45,7 +45,6 @@ export class FileBackedProfileLibrary {
   constructor(
     private readonly profilesDir: string,
     private readonly localStatePath: string,
-    private readonly resolveDefaultThemeId?: () => Promise<string | null>,
   ) {}
 
   getProfilesDirectory(): string {
@@ -271,9 +270,7 @@ export class FileBackedProfileLibrary {
     let entries = await this.readManagedEntries(localState)
 
     if (!entries.some((entry) => entry.id === DEFAULT_PROFILE_ID)) {
-      const defaultThemeId = await this.resolveDefaultThemeId?.() ?? null
       const defaultProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-      defaultProfile.themeId = defaultThemeId
       const defaultPath = await this.writeManagedProfile(entries, DEFAULT_PROFILE_ID, defaultProfile)
       entries = await this.readManagedEntries({
         ...localState,

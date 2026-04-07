@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import test from 'node:test'
 import {
   DEFAULT_VISUALIZER_TINT,
@@ -31,6 +33,8 @@ import {
   moveDockedScopeOrder,
   useSettingsStore,
 } from '../src/renderer/stores/settingsStore'
+import { useThemeStore } from '../src/renderer/stores/themeStore'
+import { resolveThemeCreditDetails } from '../src/renderer/components/BottomBar'
 import { scopeSettingsToOptions } from '../src/renderer/components/ScopeModule'
 import { scopeSummary } from '../src/renderer/components/ScopeSettingsSection'
 import {
@@ -54,7 +58,10 @@ import {
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
 import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
+import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
+import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
+import { getVectorscopeLayout } from '../src/renderer/visualizers/vectorscopeGrids'
 import {
   MultibandBuffer,
   MultibandSplitter,
@@ -308,7 +315,6 @@ function installFakeElectronWindow(overrides: Record<string, unknown> = {}): {
 
 function seedProfileDraftState(profile: Profile): void {
   useSettingsStore.setState({
-    themeId: profile.themeId,
     scopeOrder: [...profile.scopeOrder],
     hiddenScopes: new Set(profile.hiddenScopes),
     widthWeights: { ...profile.widthWeights },
@@ -1177,6 +1183,53 @@ test('scopeSettingsToOptions forwards shared scope background and guides to osci
   assert.equal(vectorscope.labelColor, theme.vectorscope.labels)
 })
 
+test('Oscilloscope projects raw sample amplitude without renderer gain', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingOscilloscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const oscilloscope = new Oscilloscope(createFakeCanvas(), { dataSource })
+
+  try {
+    const state = oscilloscope as unknown as {
+      projectSampleY: (sample: number, height: number) => number
+    }
+
+    assert.equal(state.projectSampleY(0.5, 180), 45)
+    assert.equal(state.projectSampleY(-0.5, 180), 135)
+  } finally {
+    oscilloscope.dispose()
+    dom.restore()
+  }
+})
+
+test('Vectorscope uses the base layout radius for projection scale', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource })
+
+  try {
+    const state = vectorscope as unknown as {
+      getProjectionScale: (radius: number) => number
+    }
+    const layout = getVectorscopeLayout(320, 180, 'lissajous')
+
+    assert.equal(state.getProjectionScale(layout.radius), layout.radius)
+    assert.equal(layout.radius, 81)
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
+})
+
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
   const authoredTheme = createDefaultTheme()
@@ -1279,7 +1332,6 @@ test('applying a profile snapshot does not change the machine-local frame target
 
 test('profile draft comparisons return to clean after reverting a change', () => {
   const baselineProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-  baselineProfile.themeId = 'theme_default'
   baselineProfile.windowBounds = { x: 24, y: 48, width: 900, height: 180 }
   baselineProfile.scopePopouts.spectrum = {
     poppedOut: true,
@@ -1287,7 +1339,6 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   }
 
   const baselineDraft = buildProfileDraft({
-    themeId: baselineProfile.themeId,
     scopeOrder: baselineProfile.scopeOrder,
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
@@ -1297,7 +1348,6 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   }, baselineProfile.name)
 
   const changedDraft = buildProfileDraft({
-    themeId: baselineProfile.themeId,
     scopeOrder: baselineProfile.scopeOrder,
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
@@ -1313,7 +1363,6 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   }, baselineProfile.name)
 
   const revertedDraft = buildProfileDraft({
-    themeId: baselineProfile.themeId,
     scopeOrder: baselineProfile.scopeOrder,
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
@@ -1326,12 +1375,10 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   assert.equal(profilesMatch(baselineDraft, revertedDraft), true)
 })
 
-test('buildProfileDraft preserves unlinked themes instead of coercing the active theme', () => {
+test('buildProfileDraft omits theme metadata from the runtime draft', () => {
   const profile = createDefaultProfile('Live Mix')
-  profile.themeId = null
 
   const draft = buildProfileDraft({
-    themeId: profile.themeId,
     scopeOrder: profile.scopeOrder,
     hiddenScopes: profile.hiddenScopes,
     widthWeights: profile.widthWeights,
@@ -1340,7 +1387,7 @@ test('buildProfileDraft preserves unlinked themes instead of coercing the active
     windowBounds: profile.windowBounds,
   }, profile.name)
 
-  assert.equal(draft.themeId, null)
+  assert.equal('themeId' in draft, false)
 })
 
 test('resolveNativeThemeSource follows the active theme brightness for native UI', () => {
@@ -1358,13 +1405,64 @@ test('resolveNativeThemeSource follows the active theme brightness for native UI
   assert.equal(resolveNativeThemeSource(lightTheme), 'light')
 })
 
+test('resolveThemeCreditDetails enables links only for valid http and https theme websites', () => {
+  assert.deepEqual(
+    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'https://themes.example/night' }),
+    {
+      credit: 'Night Shift',
+      url: 'https://themes.example/night',
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'http://themes.example/night' }),
+    {
+      credit: 'Night Shift',
+      url: 'http://themes.example/night',
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'ftp://themes.example/night' }),
+    {
+      credit: 'Night Shift',
+      url: null,
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'not a url' }),
+    {
+      credit: 'Night Shift',
+      url: null,
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({ credit: '   ', website: 'https://themes.example/night' }),
+    {
+      credit: null,
+      url: null,
+    },
+  )
+})
+
+test('BottomBar theme section renders compact credit metadata and opens valid links through Electron', async () => {
+  const componentSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  assert.match(componentSource, /const themeCredit = resolveThemeCreditDetails\(activeTheme\)/)
+  assert.match(componentSource, /window\.electronAPI\.openExternalUrl\(url\)/)
+  assert.match(componentSource, /By \{themeCredit\.credit\}/)
+  assert.match(componentSource, /bottom-bar__section-header/)
+  assert.match(componentSource, /bottom-bar__theme-credit--link/)
+  assert.match(stylesSource, /\.bottom-bar__section--theme \{[\s\S]*min-width: 420px;/)
+  assert.match(stylesSource, /\.bottom-bar__section-header \{/)
+  assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
+})
+
 test('toggleScope appends astra to the scope order when it is enabled from an opt-in profile', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeWindow = installFakeElectronWindow()
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     seedProfileDraftState(profile)
 
     assert.equal(useSettingsStore.getState().scopeOrder.includes('astra'), false)
@@ -1458,7 +1556,6 @@ test('main-window bounds updates persist working state in Electron mode', () => 
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
     seedProfileDraftState(profile)
 
@@ -1488,7 +1585,6 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
   const fakeWindow = installFakeElectronWindow({
     getProfileSnapshot: async () => {
       const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-      profile.themeId = 'theme_default'
       profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
       return {
@@ -1506,11 +1602,9 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
     fakeStorage.setItem('prism:settings', JSON.stringify({
-      themeId: profile.themeId,
       scopeOrder: profile.scopeOrder,
       hiddenScopes: profile.hiddenScopes,
       widthWeights: profile.widthWeights,
@@ -1534,6 +1628,45 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
   }
 })
 
+test('initializeProfiles ignores stale persisted theme-only state and loads the saved profile normally', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const savedBounds = { x: 10, y: 20, width: 900, height: 180 }
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => {
+      const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+      profile.windowBounds = savedBounds
+
+      return {
+        activeProfileId: DEFAULT_PROFILE_ID,
+        profiles: {
+          [DEFAULT_PROFILE_ID]: profile,
+        },
+      }
+    },
+    getWindowBounds: async () => savedBounds,
+    setWindowBounds: () => {},
+  })
+
+  try {
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      themeId: 'theme_midnight',
+    }))
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.activeProfileId, DEFAULT_PROFILE_ID)
+    assert.deepEqual(state.windowBounds, savedBounds)
+    assert.deepEqual(state.savedProfileBaseline?.windowBounds, savedBounds)
+    assert.equal(state.hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
 test('profiles without saved window bounds mark the first user move dirty after load sync completes', async () => {
   const previousSettingsState = useSettingsStore.getState()
   const currentBounds = { x: 10, y: 20, width: 900, height: 180 }
@@ -1544,7 +1677,6 @@ test('profiles without saved window bounds mark the first user move dirty after 
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
       activeProfileId: DEFAULT_PROFILE_ID,
@@ -1577,7 +1709,6 @@ test('loading a profile syncs the live window bounds without marking the draft d
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
@@ -1599,8 +1730,9 @@ test('loading a profile syncs the live window bounds without marking the draft d
   }
 })
 
-test('switching to a non-default profile with an unlinked theme does not mark it dirty', async () => {
+test('switching profiles leaves the global theme alone and does not mark the profile dirty', async () => {
   const previousSettingsState = useSettingsStore.getState()
+  const previousThemeState = useThemeStore.getState()
   const fakeWindow = installFakeElectronWindow({
     getWindowBounds: async () => ({ x: 10, y: 20, width: 900, height: 180 }),
     setWindowBounds: () => {},
@@ -1608,10 +1740,20 @@ test('switching to a non-default profile with an unlinked theme does not mark it
 
   try {
     const defaultProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    defaultProfile.themeId = 'theme_default'
-
     const liveMixProfile = createDefaultProfile('Live Mix')
-    liveMixProfile.themeId = null
+    const midnightTheme = createDefaultTheme()
+    midnightTheme.name = 'Midnight'
+    midnightTheme.credit = 'Night Shift'
+    midnightTheme.app.background = 'rgb(6, 10, 20)'
+    useThemeStore.setState({
+      themes: {
+        Default: createDefaultTheme(),
+        Midnight: midnightTheme,
+      },
+      activeThemeId: 'Midnight',
+      activeTheme: resolveTheme(midnightTheme),
+      accent: resolveTheme(midnightTheme).interface.accent,
+    })
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
       activeProfileId: 'profile_live_mix',
@@ -1624,11 +1766,11 @@ test('switching to a non-default profile with an unlinked theme does not mark it
     await Promise.resolve()
     await Promise.resolve()
 
-    assert.equal(useSettingsStore.getState().themeId, null)
-    assert.equal(useSettingsStore.getState().savedProfileBaseline?.themeId, null)
+    assert.equal(useThemeStore.getState().activeThemeId, 'Midnight')
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
   } finally {
     useSettingsStore.setState(previousSettingsState)
+    useThemeStore.setState(previousThemeState)
     fakeWindow.restore()
   }
 })
@@ -1642,7 +1784,6 @@ test('profile load absorbs immediate macOS-style window bound adjustments withou
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
@@ -1671,7 +1812,6 @@ test('profile load absorbs immediate popout bound adjustments without marking di
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.scopePopouts.spectrum = {
       poppedOut: true,
       windowBounds: { x: 140, y: 60, width: 420, height: 240 },
@@ -1700,7 +1840,6 @@ test('geometry sync window extends while load-time macOS bound updates continue'
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     seedProfileDraftState(profile)
 
     useSettingsStore.setState((state) => ({
@@ -1726,7 +1865,6 @@ test('popout bounds updates persist working state in Electron mode', () => {
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.scopePopouts.spectrum = {
       poppedOut: true,
       windowBounds: { x: 140, y: 60, width: 420, height: 240 },

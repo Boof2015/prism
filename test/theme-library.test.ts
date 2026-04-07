@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { FileBackedThemeLibrary } from '../src/main/themeLibrary'
 import {
@@ -15,7 +15,6 @@ import {
   themeToCssVariables,
 } from '../src/shared/themeState'
 import {
-  DEFAULT_THEME_ID,
   DEFAULT_THEME_NAME,
 } from '../src/types/theme'
 
@@ -49,7 +48,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   theme.vumeter.track = '#111827'
 
   const serialized = serializeThemeFile(theme)
-  const parsed = parseThemeFileContent(serialized, DEFAULT_THEME_ID, DEFAULT_THEME_NAME)
+  const parsed = parseThemeFileContent(serialized, DEFAULT_THEME_NAME)
 
   assert.match(serialized, /\[Theme\]/)
   assert.match(serialized, /version = 2/)
@@ -57,8 +56,9 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.match(serialized, /\[Controls\]/)
   assert.match(serialized, /\[Scopes\]/)
   assert.match(serialized, /flat_controls = true/)
+  assert.doesNotMatch(serialized, /^id = /m)
+  assert.doesNotMatch(serialized, /^name = /m)
 
-  assert.equal(parsed.id, DEFAULT_THEME_ID)
   assert.equal(parsed.name, DEFAULT_THEME_NAME)
   assert.equal(parsed.app.accent, 'rgb(74, 222, 128)')
   assert.equal(parsed.controls.menuSurface, 'rgb(12, 18, 32)')
@@ -69,17 +69,29 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.equal(parsed.astra.background, theme.astra.background)
 })
 
+test('theme files preserve optional credit and website metadata', () => {
+  const theme = createDefaultTheme()
+  theme.credit = 'Night Shift'
+  theme.website = 'https://themes.example/night-shift'
+
+  const serialized = serializeThemeFile(theme)
+  const parsed = parseThemeFileContent(serialized, DEFAULT_THEME_NAME)
+
+  assert.match(serialized, /credit = Night Shift/)
+  assert.match(serialized, /website = https:\/\/themes\.example\/night-shift/)
+  assert.equal(parsed.credit, 'Night Shift')
+  assert.equal(parsed.website, 'https://themes.example/night-shift')
+})
+
 test('parseThemeFileContent preserves passthrough controls tokens from .iro files', () => {
   const parsed = parseThemeFileContent(`
 [Theme]
 format = prism-theme
 version = 2
-id = theme_flat
-name = Flat
 
 [Controls]
 flat_controls = true
-`, 'theme_flat', 'Flat')
+`, 'Flat')
 
   const resolved = resolveTheme(parsed)
 
@@ -87,6 +99,22 @@ flat_controls = true
   assert.equal(resolved.interface.glassBg, 'transparent')
   assert.equal(resolved.interface.glassHighlight, 'transparent')
   assert.equal(resolved.interface.glassHighlightStrong, 'transparent')
+})
+
+test('parseThemeFileContent derives the theme name from the filename stem and ignores legacy header names', () => {
+  const parsed = parseThemeFileContent(`
+[Theme]
+format = prism-theme
+version = 2
+id = theme_midnight
+name = Legacy Midnight
+
+[App]
+accent = 79, 155, 255, 255
+`, 'Midnight')
+
+  assert.equal(parsed.name, 'Midnight')
+  assert.equal(parsed.app.accent, 'rgb(79, 155, 255)')
 })
 
 test('resolveTheme maps grouped app, controls, and scopes tokens into UI and scope surfaces', () => {
@@ -160,17 +188,23 @@ test('themeToCssVariables exposes grouped UI, control, and scope variables', () 
 
 test('createTemplateThemeFile presents a simplified recommended theme layout', () => {
   const template = createTemplateThemeFile()
-  const parsed = parseThemeFileContent(template, 'theme_template', 'Template Theme')
+  const parsed = parseThemeFileContent(template, 'Template Theme')
 
-  assert.match(template, /# Core UI:/)
-  assert.match(template, /# Shared scope defaults:/)
-  assert.match(template, /# Module overrides:/)
+  assert.match(template, /# Start with \[App\]\./)
+  assert.match(template, /# Everything else below is optional and can be removed to inherit defaults\./)
+  assert.match(template, /# \[Controls\] and \[Scopes\] are shared override groups\./)
+  assert.match(template, /# Module sections show the full set of supported tokens for each module\./)
+  assert.match(template, /# Remove any token to let Prism inherit or derive it\./)
+  assert.match(template, /# Remove an entire section if that area should use Prism's defaults\./)
+  assert.match(template, /# Optional palette extras:/)
   assert.match(template, /# Optional shell overrides:/)
-  assert.match(template, /flat_controls = false/)
-  assert.match(template, /# toolbar_bg =/)
-  assert.doesNotMatch(template, /\[Spectrum\]\nbackground =/)
-  assert.doesNotMatch(template, /\[Oscilloscope\]\nbackground =/)
-  assert.doesNotMatch(template, /\[Waveform\]\nbackground =/)
+  assert.match(template, /^\[Controls\]$/m)
+  assert.match(template, /^\[Scopes\]$/m)
+  assert.match(template, /^\[Spectrum\]$/m)
+  assert.match(template, /^flat_controls = false$/m)
+  assert.match(template, /^toolbar_bg = 4, 8, 12, 199$/m)
+  assert.equal(parsed.app.accent, 'rgb(56, 189, 248)')
+  assert.equal(parsed.app.textMuted, 'rgba(255, 255, 255, 0.42)')
   assert.equal(parsed.controls.flatControls, 'false')
 })
 
@@ -207,7 +241,7 @@ test('Astra renderer consumes Astra-specific button theme vars', async () => {
 })
 
 test('bundled and migrated accent themes recolor every accent-driven scope', () => {
-  const purple = createBundledThemes().find((theme) => theme.id === 'theme_purple')
+  const purple = createBundledThemes().find((theme) => theme.name === 'Purple')
   assert.ok(purple)
   assert.equal(purple.oscilloscope.line, purple.app.accent)
   assert.equal(purple.vectorscope.trace, purple.app.accent)
@@ -223,8 +257,8 @@ test('library seeds default themes and template file', async () => {
 
   try {
     const snapshot = await harness.library.getSnapshot()
-    assert.ok(snapshot.themes[DEFAULT_THEME_ID])
-    assert.equal(snapshot.activeThemeId, DEFAULT_THEME_ID)
+    assert.ok(snapshot.themes[DEFAULT_THEME_NAME])
+    assert.equal(snapshot.activeThemeId, DEFAULT_THEME_NAME)
 
     const fileNames = (await readdir(harness.themesDir)).sort()
     assert.ok(fileNames.includes('Default.iro'))
@@ -235,35 +269,33 @@ test('library seeds default themes and template file', async () => {
     assert.match(defaultThemeContent, /version = 2/)
     assert.match(defaultThemeContent, /\[App\]/)
     assert.doesNotMatch(defaultThemeContent, /\[All\]/)
-    assert.match(templateContent, /\[Controls\]/)
-    assert.match(templateContent, /\[Scopes\]/)
+    assert.match(templateContent, /\[App\]/)
+    assert.match(templateContent, /^\[Controls\]$/m)
+    assert.match(templateContent, /^\[Scopes\]$/m)
   } finally {
     await harness.cleanup()
   }
 })
 
-test('importing the same embedded theme id replaces the managed theme', async () => {
+test('re-importing the same filename stem replaces the managed theme', async () => {
   const harness = await createHarness()
 
   try {
     const theme = createDefaultTheme()
-    theme.id = 'theme_shared'
     theme.name = 'Shared'
-    const externalPath = join(harness.rootDir, 'shared.iro')
+    const externalPath = join(harness.rootDir, 'Shared.iro')
     await writeFile(externalPath, serializeThemeFile(theme), 'utf8')
 
     const firstSnapshot = await harness.library.importThemeFromPath(externalPath)
-    assert.equal(firstSnapshot.activeThemeId, 'theme_shared')
+    assert.equal(firstSnapshot.activeThemeId, 'Shared')
 
-    theme.name = 'Shared Updated'
     theme.app.accent = 'rgb(74, 222, 128)'
-    const updatedPath = join(harness.rootDir, 'shared-updated.iro')
-    await writeFile(updatedPath, serializeThemeFile(theme), 'utf8')
+    await writeFile(externalPath, serializeThemeFile(theme), 'utf8')
 
-    const secondSnapshot = await harness.library.importThemeFromPath(updatedPath)
-    assert.equal(secondSnapshot.activeThemeId, 'theme_shared')
-    assert.equal(secondSnapshot.themes.theme_shared.name, 'Shared Updated')
-    assert.equal(secondSnapshot.themes.theme_shared.app.accent, 'rgb(74, 222, 128)')
+    const secondSnapshot = await harness.library.importThemeFromPath(externalPath)
+    assert.equal(secondSnapshot.activeThemeId, 'Shared')
+    assert.equal(secondSnapshot.themes.Shared.name, 'Shared')
+    assert.equal(secondSnapshot.themes.Shared.app.accent, 'rgb(74, 222, 128)')
   } finally {
     await harness.cleanup()
   }
@@ -276,7 +308,6 @@ test('library refreshes shipped bundled themes when their definitions change', a
     await harness.library.getSnapshot()
 
     const stalePurple = createDefaultTheme()
-    stalePurple.id = 'theme_purple'
     stalePurple.name = 'Purple'
     stalePurple.app.accent = 'rgb(167, 139, 250)'
     stalePurple.oscilloscope.line = 'rgb(56, 189, 248)'
@@ -285,8 +316,8 @@ test('library refreshes shipped bundled themes when their definitions change', a
     await writeFile(join(harness.themesDir, 'Purple.iro'), serializeThemeFile(stalePurple), 'utf8')
 
     const snapshot = await harness.library.reloadThemes()
-    assert.equal(snapshot.themes.theme_purple.oscilloscope.line, snapshot.themes.theme_purple.app.accent)
-    assert.equal(snapshot.themes.theme_purple.vectorscope.trace, snapshot.themes.theme_purple.app.accent)
+    assert.equal(snapshot.themes.Purple.oscilloscope.line, snapshot.themes.Purple.app.accent)
+    assert.equal(snapshot.themes.Purple.vectorscope.trace, snapshot.themes.Purple.app.accent)
   } finally {
     await harness.cleanup()
   }
@@ -303,9 +334,9 @@ test('library refreshes the managed template when its generated layout changes',
     await harness.library.reloadThemes()
 
     const templateContent = await readFile(join(harness.themesDir, '_TEMPLATE.iro'), 'utf8')
-    assert.match(templateContent, /# Core UI:/)
-    assert.match(templateContent, /flat_controls = false/)
-    assert.doesNotMatch(templateContent, /\[Spectrum\]\nbackground =/)
+    assert.match(templateContent, /# Start with \[App\]\./)
+    assert.match(templateContent, /^\[Controls\]$/m)
+    assert.match(templateContent, /^\[Spectrum\]$/m)
   } finally {
     await harness.cleanup()
   }
@@ -321,15 +352,39 @@ test('legacy migration can create an accent theme and make it active', async () 
     })
 
     assert.equal(migration.didMigrate, true)
-    assert.equal(migration.snapshot.activeThemeId, 'theme_migrated_accent')
-    assert.ok(migration.snapshot.themes.theme_migrated_accent)
+    assert.equal(migration.snapshot.activeThemeId, 'Migrated Accent')
+    assert.ok(migration.snapshot.themes['Migrated Accent'])
 
     const localState = JSON.parse(await readFile(harness.localStatePath, 'utf8')) as {
       activeThemeId: string | null
       migrationVersion: number
     }
-    assert.equal(localState.activeThemeId, 'theme_migrated_accent')
+    assert.equal(localState.activeThemeId, 'Migrated Accent')
     assert.equal(localState.migrationVersion, 1)
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('library remaps legacy active theme ids in local state to filename-derived keys', async () => {
+  const harness = await createHarness()
+
+  try {
+    await mkdir(dirname(harness.localStatePath), { recursive: true })
+    await writeFile(harness.localStatePath, JSON.stringify({
+      format: 'prism-theme-local',
+      version: 1,
+      migrationVersion: 0,
+      activeThemeId: 'theme_midnight',
+    }, null, 2))
+
+    const snapshot = await harness.library.getSnapshot()
+    assert.equal(snapshot.activeThemeId, 'Midnight')
+
+    const localState = JSON.parse(await readFile(harness.localStatePath, 'utf8')) as {
+      activeThemeId: string | null
+    }
+    assert.equal(localState.activeThemeId, 'Midnight')
   } finally {
     await harness.cleanup()
   }

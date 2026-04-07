@@ -1465,7 +1465,7 @@ select {
 }
 
 .bottom-bar__section--theme {
-  min-width: 228px;
+  min-width: 420px;
 }
 
 .bottom-bar__section--astra {
@@ -1488,6 +1488,14 @@ select {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+}
+
+.bottom-bar__section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -1519,6 +1527,26 @@ select {
 
 .bottom-bar__inline--theme {
   gap: 6px;
+}
+
+.bottom-bar__theme-credit {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.bottom-bar__theme-credit--link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+
+.bottom-bar__theme-credit--link:hover {
+  color: var(--accent);
 }
 
 .bottom-bar__inline--performance {

@@ -82,9 +82,9 @@ applyThemeToDOM(fallbackTheme)
 
 export const useThemeStore = create<ThemeState>((set) => ({
   themes: {
-    [fallbackTheme.id]: createDefaultTheme(),
+    [fallbackTheme.name]: createDefaultTheme(),
   },
-  activeThemeId: fallbackTheme.id,
+  activeThemeId: fallbackTheme.name,
   activeTheme: fallbackTheme,
   accent: fallbackTheme.interface.accent,
 

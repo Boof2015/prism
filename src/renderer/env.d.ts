@@ -73,6 +73,7 @@ declare global {
       importThemeDialog: () => Promise<ThemeLibrarySnapshot | null>
       revealThemesFolder: () => Promise<void>
       migrateLegacyTheme: (payload: LegacyThemeMigrationPayload) => Promise<LegacyThemeMigrationResult>
+      openExternalUrl: (url: string) => Promise<void>
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
       setSettingsHeight: (panelHeight: number) => void

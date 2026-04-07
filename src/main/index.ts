@@ -87,7 +87,6 @@ function getProfileLibrary(): FileBackedProfileLibrary {
     profileLibrary = new FileBackedProfileLibrary(
       join(app.getPath('documents'), 'Prism Profiles'),
       join(app.getPath('userData'), 'profile-state.json'),
-      async () => getThemeLibrary().getActiveThemeId(),
     )
   }
 
@@ -191,6 +190,23 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message
     ? error.message
     : fallback
+}
+
+function normalizeExternalHttpUrl(raw: string): string | null {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return null
+  }
+
+  try {
+    const parsed = new URL(raw.trim())
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.toString()
+    }
+  } catch {
+    return null
+  }
+
+  return null
 }
 
 async function processPendingProfileOpenPaths(): Promise<void> {
@@ -1250,6 +1266,15 @@ function setupIPC(): void {
     const migration = await getThemeLibrary().migrateLegacyTheme(payload)
     applyNativeThemeSnapshot(migration.snapshot)
     return migration
+  })
+
+  ipcMain.handle('shell:open-external', async (_event, rawUrl: string) => {
+    const url = normalizeExternalHttpUrl(rawUrl)
+    if (!url) {
+      throw new Error('Invalid external URL.')
+    }
+
+    await shell.openExternal(url)
   })
 
   ipcMain.on('profile-menu:open', (event, rawRequest: unknown) => {

@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importThemeDialog: () => ipcRenderer.invoke('themes:import-dialog') as Promise<ThemeLibrarySnapshot | null>,
   revealThemesFolder: () => ipcRenderer.invoke('themes:reveal-folder') as Promise<void>,
   migrateLegacyTheme: (payload: LegacyThemeMigrationPayload) => ipcRenderer.invoke('themes:migrate-legacy', payload) as Promise<LegacyThemeMigrationResult>,
+  openExternalUrl: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<void>,
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),

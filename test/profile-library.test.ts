@@ -26,31 +26,13 @@ async function createHarness(): Promise<{
   profilesDir: string
   rootDir: string
 }> {
-  return createHarnessWithOptions()
-}
-
-async function createHarnessWithOptions(options?: {
-  defaultThemeId?: string | null
-}): Promise<{
-  cleanup: () => Promise<void>
-  library: FileBackedProfileLibrary
-  localStatePath: string
-  profilesDir: string
-  rootDir: string
-}> {
   const rootDir = await mkdtemp(join(tmpdir(), 'prism-profile-library-'))
   const profilesDir = join(rootDir, 'Documents', 'Prism Profiles')
   const localStatePath = join(rootDir, 'userData', 'profile-state.json')
 
   return {
     cleanup: () => rm(rootDir, { recursive: true, force: true }),
-    library: new FileBackedProfileLibrary(
-      profilesDir,
-      localStatePath,
-      options && 'defaultThemeId' in options
-        ? async () => options.defaultThemeId ?? null
-        : undefined,
-    ),
+    library: new FileBackedProfileLibrary(profilesDir, localStatePath),
     localStatePath,
     profilesDir,
     rootDir,
@@ -59,7 +41,6 @@ async function createHarnessWithOptions(options?: {
 
 function createProfile(name: string): Profile {
   const profile = createDefaultProfile(name)
-  profile.themeId = 'theme_default'
   profile.scopePopouts.spectrum = {
     poppedOut: true,
     windowBounds: { x: 120, y: 40, width: 420, height: 240 },
@@ -77,7 +58,7 @@ test('profile file serialization excludes geometry and round-trips with local me
 
   assert.equal(file.format, PROFILE_FILE_FORMAT)
   assert.equal(file.version, PROFILE_FILE_VERSION)
-  assert.equal(file.themeId, 'theme_default')
+  assert.equal('themeId' in file, false)
   assert.equal(JSON.stringify(file).includes('windowBounds'), false)
   assert.equal(JSON.stringify(file).includes('frameTarget'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
@@ -137,19 +118,19 @@ test('astra stays opt-in for profile scope order normalization', () => {
   assert.equal(normalizeScopeOrder(['spectrum', 'astra']).includes('astra'), true)
 })
 
-test('default profile seeds with the current active theme when available', async () => {
-  const harness = await createHarnessWithOptions({ defaultThemeId: 'theme_midnight' })
+test('default profile omits theme metadata from runtime state and saved files', async () => {
+  const harness = await createHarness()
 
   try {
     const snapshot = await harness.library.getSnapshot()
-    assert.equal(snapshot.profiles[DEFAULT_PROFILE_ID]?.themeId, 'theme_midnight')
+    assert.equal('themeId' in snapshot.profiles[DEFAULT_PROFILE_ID]!, false)
 
     const defaultFile = JSON.parse(
       await readFile(join(harness.profilesDir, 'Default.prsm'), 'utf8'),
     ) as {
       themeId?: string | null
     }
-    assert.equal(defaultFile.themeId, 'theme_midnight')
+    assert.equal('themeId' in defaultFile, false)
   } finally {
     await harness.cleanup()
   }
@@ -233,6 +214,53 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     assert.equal(snapshotAfterFailure.activeProfileId, 'profile_partial')
     assert.notEqual(snapshotAfterFailure.activeProfileId, activeBeforeFailure)
     assert.equal(snapshotAfterFailure.profiles.profile_bad, undefined)
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('legacy profile files with themeId import successfully and ignore embedded theme metadata', async () => {
+  const harness = await createHarness()
+
+  try {
+    const legacyPath = join(harness.rootDir, 'legacy-theme.prsm')
+    await writeFile(legacyPath, `${JSON.stringify({
+      format: PROFILE_FILE_FORMAT,
+      version: PROFILE_FILE_VERSION,
+      id: 'profile_legacy_theme',
+      name: 'Legacy Theme',
+      themeId: 'theme_midnight',
+      scopeOrder: ['spectrum', 'oscilloscope'],
+      hiddenScopes: ['vectorscope', 'spectrogram', 'vumeter', 'lufsmeter', 'waveform', 'astra'],
+      widthWeights: {
+        spectrum: 1,
+        oscilloscope: 1,
+        vectorscope: 1,
+        spectrogram: 1,
+        vumeter: 0.5,
+        lufsmeter: 0.5,
+        waveform: 1,
+        astra: 1,
+      },
+      scopeSettings: createDefaultProfile('Legacy Theme').scopeSettings,
+      scopePopouts: {
+        spectrum: { poppedOut: false },
+        oscilloscope: { poppedOut: false },
+        vectorscope: { poppedOut: false },
+        spectrogram: { poppedOut: false },
+        vumeter: { poppedOut: false },
+        lufsmeter: { poppedOut: false },
+        waveform: { poppedOut: false },
+        astra: { poppedOut: false },
+      },
+    }, null, 2)}\n`, 'utf8')
+
+    const snapshot = await harness.library.importProfileFromPath(legacyPath)
+    const importedProfile = snapshot.profiles.profile_legacy_theme
+
+    assert.ok(importedProfile)
+    assert.equal(importedProfile.name, 'Legacy Theme')
+    assert.equal('themeId' in importedProfile, false)
   } finally {
     await harness.cleanup()
   }
