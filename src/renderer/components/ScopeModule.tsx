@@ -57,8 +57,46 @@ interface Visualizer {
   setOptions(options: Record<string, unknown>): void
 }
 
+interface CanvasResizeState {
+  cssWidth: number
+  cssHeight: number
+  pixelWidth: number
+  pixelHeight: number
+  dpr: number
+}
+
 function getScopeTheme(theme: PrismResolvedTheme, kind: ScopeKind): ScopeModuleTheme {
   return theme[kind] as ScopeModuleTheme
+}
+
+function measureCanvasResizeState(container: HTMLDivElement): CanvasResizeState {
+  const rect = container.getBoundingClientRect()
+  const cssWidth = Math.max(1, Math.floor(rect.width))
+  const cssHeight = Math.max(1, Math.floor(rect.height))
+  const dpr = window.devicePixelRatio || 1
+
+  return {
+    cssWidth,
+    cssHeight,
+    pixelWidth: Math.max(1, Math.floor(cssWidth * dpr)),
+    pixelHeight: Math.max(1, Math.floor(cssHeight * dpr)),
+    dpr,
+  }
+}
+
+function isSameCanvasResizeState(
+  left: CanvasResizeState | null,
+  right: CanvasResizeState | null,
+): boolean {
+  if (!left || !right) {
+    return false
+  }
+
+  return left.cssWidth === right.cssWidth
+    && left.cssHeight === right.cssHeight
+    && left.pixelWidth === right.pixelWidth
+    && left.pixelHeight === right.pixelHeight
+    && left.dpr === right.dpr
 }
 
 export function scopeSettingsToOptions(
@@ -257,6 +295,10 @@ export default function ScopeModule({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visualizerRef = useRef<Visualizer | null>(null)
   const initializedRef = useRef(false)
+  const pendingResizeRef = useRef<CanvasResizeState | null>(null)
+  const appliedResizeRef = useRef<CanvasResizeState | null>(null)
+  const resizeFrameRef = useRef<number | null>(null)
+  const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
   const activeTheme = useThemeStore((s) => s.activeTheme)
@@ -309,25 +351,85 @@ export default function ScopeModule({
     const canvas = canvasRef.current
     if (!container || !canvas) return
 
-    const resizeCanvas = (): void => {
-      const rect = container.getBoundingClientRect()
-      const width = Math.max(1, Math.floor(rect.width))
-      const height = Math.max(1, Math.floor(rect.height))
-      const dpr = window.devicePixelRatio || 1
+    const getSnapshotCanvas = (): HTMLCanvasElement => {
+      if (!snapshotCanvasRef.current) {
+        snapshotCanvasRef.current = document.createElement('canvas')
+      }
+      return snapshotCanvasRef.current
+    }
 
-      canvas.style.width = `${width}px`
-      canvas.style.height = `${height}px`
-      canvas.width = Math.max(1, Math.floor(width * dpr))
-      canvas.height = Math.max(1, Math.floor(height * dpr))
+    const applyResize = (): void => {
+      resizeFrameRef.current = null
+      const nextResize = pendingResizeRef.current
+      if (!nextResize || isSameCanvasResizeState(appliedResizeRef.current, nextResize)) {
+        return
+      }
 
+      canvas.style.width = `${nextResize.cssWidth}px`
+      canvas.style.height = `${nextResize.cssHeight}px`
+      const previousWidth = canvas.width
+      const previousHeight = canvas.height
+
+      if (previousWidth > 0 && previousHeight > 0) {
+        const snapshotCanvas = getSnapshotCanvas()
+        snapshotCanvas.width = previousWidth
+        snapshotCanvas.height = previousHeight
+        const snapshotContext = snapshotCanvas.getContext('2d')
+        snapshotContext?.clearRect(0, 0, previousWidth, previousHeight)
+        snapshotContext?.drawImage(canvas, 0, 0)
+      }
+      canvas.width = nextResize.pixelWidth
+      canvas.height = nextResize.pixelHeight
+
+      if (previousWidth > 0 && previousHeight > 0) {
+        const context = canvas.getContext('2d')
+        const snapshotCanvas = getSnapshotCanvas()
+        context?.drawImage(
+          snapshotCanvas,
+          0,
+          0,
+          previousWidth,
+          previousHeight,
+          0,
+          0,
+          nextResize.pixelWidth,
+          nextResize.pixelHeight,
+        )
+      }
+
+      appliedResizeRef.current = nextResize
       visualizerRef.current?.resize()
     }
 
-    const observer = new ResizeObserver(resizeCanvas)
-    observer.observe(container)
-    resizeCanvas()
+    const scheduleResize = (): void => {
+      pendingResizeRef.current = measureCanvasResizeState(container)
+      if (resizeFrameRef.current !== null) {
+        return
+      }
 
-    return () => observer.disconnect()
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        applyResize()
+      })
+    }
+
+    pendingResizeRef.current = measureCanvasResizeState(container)
+    applyResize()
+
+    const observer = new ResizeObserver(() => {
+      scheduleResize()
+    })
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
+      pendingResizeRef.current = null
+      appliedResizeRef.current = null
+      snapshotCanvasRef.current = null
+    }
   }, [])
 
   return (
