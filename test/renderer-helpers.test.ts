@@ -44,6 +44,13 @@ import {
 import { SCOPE_KINDS, type ScopeKind } from '../src/types/scope'
 import type { ScopePopoutStateMap, WindowBounds } from '../src/types/popout'
 import { RESIZE_DIRECTIONS } from '../src/types/windowResize'
+import {
+  DEFAULT_SPECTRUM_PEAK_INFO_MODE,
+  formatSpectrumPitchInfo,
+  normalizeSpectrumPeakInfoMode,
+  resolveSpectrumPitchInfo,
+  type SpectrumPeakInfo,
+} from '../src/types/spectrum'
 import { ScopePopoutDataSource } from '../src/renderer/popouts/ScopePopoutDataSource'
 import {
   VUMeterBallistics,
@@ -222,6 +229,45 @@ function createProgramSamples(length: number): { left: Float32Array; right: Floa
     const accent = Math.cos(index * 0.011) * 0.15
     left[index] = base
     right[index] = base * 0.65 + accent
+  }
+
+  return { left, right }
+}
+
+function createSineStereoChunk(frequencyHz: number, sampleRate: number, length: number): {
+  left: Float32Array
+  right: Float32Array
+} {
+  const left = new Float32Array(length)
+  const right = new Float32Array(length)
+
+  for (let index = 0; index < length; index += 1) {
+    const sample = Math.sin((2 * Math.PI * frequencyHz * index) / sampleRate) * 0.8
+    left[index] = sample
+    right[index] = sample
+  }
+
+  return { left, right }
+}
+
+function createCompositeStereoChunk(
+  partials: Array<{ frequencyHz: number; amplitude: number }>,
+  sampleRate: number,
+  length: number,
+): {
+  left: Float32Array
+  right: Float32Array
+} {
+  const left = new Float32Array(length)
+  const right = new Float32Array(length)
+
+  for (let index = 0; index < length; index += 1) {
+    let sample = 0
+    for (const partial of partials) {
+      sample += Math.sin((2 * Math.PI * partial.frequencyHz * index) / sampleRate) * partial.amplitude
+    }
+    left[index] = sample
+    right[index] = sample
   }
 
   return { left, right }
@@ -922,6 +968,19 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.gridColor, theme.spectrum.guides)
 })
 
+test('default profile starts with spectrum peak info disabled', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(profile.scopeSettings.spectrum.peakInfoMode, DEFAULT_SPECTRUM_PEAK_INFO_MODE)
+  assert.equal(normalizeSpectrumPeakInfoMode('nope'), DEFAULT_SPECTRUM_PEAK_INFO_MODE)
+})
+
+test('spectrum pitch helpers format nearest note with octave and cents', () => {
+  assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(440)), 'A4 0c')
+  assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(261.6255653005986)), 'C4 0c')
+  assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(Number.NaN)), '--')
+})
+
 test('SpectrumAnalyzer heatmap output does not change when only line smoothing changes', () => {
   const looseLine = renderSpectrumSnapshot({
     smoothing: 0,
@@ -1001,6 +1060,130 @@ test('SpectrumAnalyzer renders heatmap fill on the spectrum line', () => {
   })
 
   assertArraysAlmostEqual(snapshot.renderedHeatmapY, snapshot.primaryPointY, 1e-6, 'heatmap fill should use the line geometry')
+})
+
+test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const { left, right } = createSineStereoChunk(440, sampleRate, 4096)
+  let peakInfo: SpectrumPeakInfo | null = null
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [{ left, right }],
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    fftSize: 4096,
+    dataSource,
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      peakInfo = nextPeakInfo
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      drawFrame: () => void
+      primaryPointX: Float32Array
+      isLocalPeak: (index: number, pointCount: number) => boolean
+    }
+    state.drawFrame()
+
+    assert.ok(peakInfo, 'expected peak info to be reported')
+    assert.ok(peakInfo.frequencyHz > 420 && peakInfo.frequencyHz < 460, `expected peak frequency near 440 Hz, got ${peakInfo.frequencyHz}`)
+    assert.match(peakInfo.key, /^A4 [+-]?\d+c$/)
+    assert.ok(peakInfo.db > -20, `expected an audible peak dB, got ${peakInfo.db}`)
+    assert.ok(peakInfo.normalizedX >= 0 && peakInfo.normalizedX <= 1, 'peak x should be normalized')
+    assert.ok(peakInfo.normalizedY >= 0 && peakInfo.normalizedY <= 1, 'peak y should be normalized')
+
+    const selectedX = peakInfo.normalizedX * 320
+    let selectedIndex = 0
+    let smallestDistance = Number.POSITIVE_INFINITY
+    for (let index = 0; index < state.primaryPointX.length; index += 1) {
+      const distance = Math.abs(state.primaryPointX[index] - selectedX)
+      if (distance < smallestDistance) {
+        smallestDistance = distance
+        selectedIndex = index
+      }
+    }
+    assert.equal(
+      state.isLocalPeak(selectedIndex, state.primaryPointX.length),
+      true,
+      'reported peak should stay anchored to a local maximum on the rendered curve',
+    )
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer smooths peak selection without smoothing the reported position', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const frameA = createCompositeStereoChunk([
+    { frequencyHz: 440, amplitude: 0.95 },
+    { frequencyHz: 660, amplitude: 0.6 },
+  ], sampleRate, 4096)
+  const frameB = createCompositeStereoChunk([
+    { frequencyHz: 440, amplitude: 0.72 },
+    { frequencyHz: 660, amplitude: 0.84 },
+  ], sampleRate, 4096)
+  const frameC = createCompositeStereoChunk([
+    { frequencyHz: 440, amplitude: 0.28 },
+    { frequencyHz: 660, amplitude: 0.95 },
+  ], sampleRate, 4096)
+  const pendingFrames = [frameA, frameB, frameC]
+  const peakKeys: string[] = []
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => {
+      const nextFrame = pendingFrames.shift()
+      return nextFrame ? [nextFrame] : []
+    },
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    fftSize: 4096,
+    dataSource,
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      if (nextPeakInfo) {
+        peakKeys.push(nextPeakInfo.key)
+      }
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      drawFrame: () => void
+    }
+    state.drawFrame()
+    state.drawFrame()
+    state.drawFrame()
+
+    assert.match(peakKeys[0] ?? '', /^A4 [+-]?\d+c$/)
+    assert.match(peakKeys[1] ?? '', /^A4 [+-]?\d+c$/)
+    assert.match(peakKeys[2] ?? '', /^E5 [+-]?\d+c$/)
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
 })
 
 test('astra playback progress advances from updatedAt while playing', () => {
@@ -1267,6 +1450,18 @@ test('scopeSummary includes Stereo for waveform only when stereo mode is enabled
 
   profile.scopeSettings.waveform.multiband = true
   assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB · Stereo · RGB')
+})
+
+test('scopeSummary includes spectrum peak mode when enabled', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048')
+
+  profile.scopeSettings.spectrum.peakInfoMode = 'on'
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak')
+
+  profile.scopeSettings.spectrum.peakInfoMode = 'following'
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak Follow')
 })
 
 test('scopeSummary summarizes astra field visibility', () => {

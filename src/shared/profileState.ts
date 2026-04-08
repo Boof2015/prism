@@ -14,6 +14,7 @@ import {
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, type ScopeKind } from '../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
+import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -117,9 +118,16 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<ScopeSettings>
     : {}
+  const rawSpectrum: Partial<ScopeSettings['spectrum']> = typeof parsed.spectrum === 'object' && parsed.spectrum !== null
+    ? parsed.spectrum
+    : {}
 
   return {
-    spectrum: { ...DEFAULT_SCOPE_SETTINGS.spectrum, ...(parsed.spectrum ?? {}) },
+    spectrum: {
+      ...DEFAULT_SCOPE_SETTINGS.spectrum,
+      ...rawSpectrum,
+      peakInfoMode: normalizeSpectrumPeakInfoMode(rawSpectrum.peakInfoMode),
+    },
     oscilloscope: { ...DEFAULT_SCOPE_SETTINGS.oscilloscope, ...(parsed.oscilloscope ?? {}) },
     vectorscope: { ...DEFAULT_SCOPE_SETTINGS.vectorscope, ...(parsed.vectorscope ?? {}) },
     spectrogram: { ...DEFAULT_SCOPE_SETTINGS.spectrogram, ...(parsed.spectrogram ?? {}) },

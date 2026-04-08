@@ -35,7 +35,16 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     case 'spectrum': {
       const scopeSettings = settings as ScopeSettings['spectrum']
       const summary = `${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
-      return scopeSettings.showSideLine ? `${summary} · Side` : summary
+      const parts = [summary]
+      if (scopeSettings.showSideLine) {
+        parts.push('Side')
+      }
+      if (scopeSettings.peakInfoMode === 'on') {
+        parts.push('Peak')
+      } else if (scopeSettings.peakInfoMode === 'following') {
+        parts.push('Peak Follow')
+      }
+      return parts.join(' · ')
     }
     case 'oscilloscope': {
       const scopeSettings = settings as ScopeSettings['oscilloscope']
@@ -216,6 +225,18 @@ export default function ScopeSettingsSection({
                     {option}
                   </option>
                 ))}
+              </SelectControl>
+
+              <SelectControl
+                label="Peak"
+                value={current.peakInfoMode}
+                onChange={(value) => onUpdate('spectrum', {
+                  peakInfoMode: value as ScopeSettings['spectrum']['peakInfoMode'],
+                })}
+              >
+                <option value="off">Off</option>
+                <option value="on">On</option>
+                <option value="following">Following</option>
               </SelectControl>
 
               <ToggleGroup label="Display">

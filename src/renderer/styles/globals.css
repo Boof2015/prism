@@ -555,6 +555,52 @@ select {
   overflow: hidden;
 }
 
+.scope-module {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.scope-module__peak-info {
+  position: absolute;
+  z-index: 3;
+  min-width: 0;
+  max-width: calc(100% - 20px);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--scope-overlay-border);
+  border-radius: 6px;
+  background: var(--scope-overlay-bg);
+  color: var(--scope-overlay-text);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.scope-module__peak-info.is-corner {
+  top: 10px;
+  left: 10px;
+}
+
+.scope-module__peak-info-value,
+.scope-module__peak-info-separator {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.scope-module__peak-info-value {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.scope-module__peak-info-separator {
+  opacity: 0.38;
+  font-weight: 500;
+}
+
 .scope-strip__reorder-controls {
   position: absolute;
   bottom: 8px;

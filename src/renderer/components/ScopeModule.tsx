@@ -1,4 +1,4 @@
-import { useEffect, useRef, type JSX } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import type {
@@ -12,6 +12,7 @@ import type {
   ResolvedVUMeterTheme,
   ResolvedWaveformTheme,
 } from '../../types/theme'
+import type { SpectrumPeakInfo } from '../../types/spectrum'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import AstraScopeModule from './AstraScopeModule'
@@ -65,8 +66,82 @@ interface CanvasResizeState {
   dpr: number
 }
 
+const SPECTRUM_PEAK_OVERLAY_MARGIN_PX = 10
+const SPECTRUM_PEAK_OVERLAY_FALLBACK_WIDTH_PX = 248
+const SPECTRUM_PEAK_OVERLAY_FALLBACK_HEIGHT_PX = 42
+
+interface SizeMeasurement {
+  width: number
+  height: number
+}
+
 function getScopeTheme(theme: PrismResolvedTheme, kind: ScopeKind): ScopeModuleTheme {
   return theme[kind] as ScopeModuleTheme
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function formatSpectrumPeakDb(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '--'
+  }
+
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dB`
+}
+
+function formatSpectrumPeakFrequency(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '--'
+  }
+
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(2)}kHz`
+  }
+
+  return `${value.toFixed(2)}Hz`
+}
+
+function resolveFollowingPeakOverlayStyle(
+  peakInfo: SpectrumPeakInfo,
+  resizeState: CanvasResizeState | null,
+  overlaySize: SizeMeasurement | null,
+): CSSProperties {
+  if (!resizeState) {
+    return {
+      left: `${SPECTRUM_PEAK_OVERLAY_MARGIN_PX}px`,
+      top: `${SPECTRUM_PEAK_OVERLAY_MARGIN_PX}px`,
+    }
+  }
+
+  const width = resizeState.cssWidth
+  const height = resizeState.cssHeight
+  const overlayWidth = overlaySize?.width ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_WIDTH_PX
+  const overlayHeight = overlaySize?.height ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_HEIGHT_PX
+  const peakX = peakInfo.normalizedX * width
+  const peakY = peakInfo.normalizedY * height
+  const maxLeft = Math.max(
+    SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
+    width - overlayWidth - SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
+  )
+  const maxTop = Math.max(
+    SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
+    height - overlayHeight - SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
+  )
+
+  const canPlaceAbove = peakY - overlayHeight >= SPECTRUM_PEAK_OVERLAY_MARGIN_PX
+  const canPlaceBelow = peakY + overlayHeight <= height - SPECTRUM_PEAK_OVERLAY_MARGIN_PX
+
+  const left = peakX
+  const top = canPlaceAbove || !canPlaceBelow
+    ? peakY - overlayHeight
+    : peakY
+
+  return {
+    left: `${clampNumber(left, SPECTRUM_PEAK_OVERLAY_MARGIN_PX, maxLeft)}px`,
+    top: `${clampNumber(top, SPECTRUM_PEAK_OVERLAY_MARGIN_PX, maxTop)}px`,
+  }
 }
 
 function measureCanvasResizeState(container: HTMLDivElement): CanvasResizeState {
@@ -239,12 +314,16 @@ function createVisualizer(
   theme: ScopeModuleTheme,
   frameScheduler?: FrameScheduler,
   dataSource?: ScopeModuleProps['dataSource'],
+  onSpectrumPeakInfo?: (peakInfo: SpectrumPeakInfo | null) => void,
+  captureSpectrumPeakInfo = false,
 ): Visualizer | null {
   const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, theme), frameScheduler }
   switch (scopeKind) {
     case 'spectrum':
       return new SpectrumAnalyzer(canvas, {
         ...opts,
+        capturePeakInfo: captureSpectrumPeakInfo,
+        onPeakInfo: onSpectrumPeakInfo,
         ...(dataSource ? { dataSource: dataSource as SpectrumAnalyzerDataSource } : {}),
       })
     case 'oscilloscope':
@@ -299,11 +378,65 @@ export default function ScopeModule({
   const appliedResizeRef = useRef<CanvasResizeState | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const peakOverlayRef = useRef<HTMLDivElement | null>(null)
+  const [spectrumPeakInfo, setSpectrumPeakInfo] = useState<SpectrumPeakInfo | null>(null)
+  const [peakOverlaySize, setPeakOverlaySize] = useState<SizeMeasurement | null>(null)
 
   const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
   const activeTheme = useThemeStore((s) => s.activeTheme)
   const mySettings = settings ?? storeSettings
   const myTheme = theme ?? getScopeTheme(activeTheme, scopeKind)
+  const spectrumPeakMode = scopeKind === 'spectrum'
+    ? (mySettings as ScopeSettings['spectrum']).peakInfoMode
+    : 'off'
+  const captureSpectrumPeakInfo = scopeKind === 'spectrum' && spectrumPeakMode !== 'off'
+  const handleSpectrumPeakInfo = useCallback((nextPeakInfo: SpectrumPeakInfo | null): void => {
+    setSpectrumPeakInfo(nextPeakInfo)
+  }, [])
+
+  useEffect(() => {
+    if (!captureSpectrumPeakInfo) {
+      setSpectrumPeakInfo(null)
+    }
+  }, [captureSpectrumPeakInfo])
+
+  useLayoutEffect(() => {
+    const peakOverlay = peakOverlayRef.current
+    if (
+      scopeKind !== 'spectrum'
+      || spectrumPeakMode !== 'following'
+      || !spectrumPeakInfo
+      || !peakOverlay
+    ) {
+      setPeakOverlaySize(null)
+      return
+    }
+
+    const updatePeakOverlaySize = (): void => {
+      const nextWidth = peakOverlay.offsetWidth
+      const nextHeight = peakOverlay.offsetHeight
+      setPeakOverlaySize((previousSize) => {
+        if (previousSize?.width === nextWidth && previousSize?.height === nextHeight) {
+          return previousSize
+        }
+        return { width: nextWidth, height: nextHeight }
+      })
+    }
+
+    updatePeakOverlaySize()
+
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      updatePeakOverlaySize()
+    })
+    resizeObserver.observe(peakOverlay)
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [scopeKind, spectrumPeakMode, spectrumPeakInfo])
 
   if (scopeKind === 'astra') {
     return (
@@ -319,7 +452,16 @@ export default function ScopeModule({
     if (!canvas) return
 
     initializedRef.current = false
-    const viz = createVisualizer(scopeKind, canvas, mySettings, myTheme, frameScheduler, dataSource)
+    const viz = createVisualizer(
+      scopeKind,
+      canvas,
+      mySettings,
+      myTheme,
+      frameScheduler,
+      dataSource,
+      handleSpectrumPeakInfo,
+      captureSpectrumPeakInfo,
+    )
     if (!viz) return
 
     visualizerRef.current = viz
@@ -333,18 +475,25 @@ export default function ScopeModule({
       viz.dispose()
       visualizerRef.current = null
       initializedRef.current = false
+      setSpectrumPeakInfo(null)
     }
-  }, [dataSource, frameScheduler, myTheme, mySettings, scopeKind])
+  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, myTheme, mySettings, scopeKind])
 
   useEffect(() => {
     if (!visualizerRef.current || !initializedRef.current) return
     const opts = {
       ...scopeSettingsToOptions(scopeKind, mySettings, myTheme),
       frameScheduler,
+      ...(scopeKind === 'spectrum'
+        ? {
+            capturePeakInfo: captureSpectrumPeakInfo,
+            onPeakInfo: handleSpectrumPeakInfo,
+          }
+        : {}),
       ...(dataSource ? { dataSource } : {}),
     }
     visualizerRef.current.setOptions(opts)
-  }, [dataSource, frameScheduler, mySettings, myTheme, scopeKind])
+  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind])
 
   useEffect(() => {
     const container = containerRef.current
@@ -432,8 +581,15 @@ export default function ScopeModule({
     }
   }, [])
 
+  const spectrumPeakOverlayStyle = scopeKind === 'spectrum'
+    && spectrumPeakMode === 'following'
+    && spectrumPeakInfo
+    ? resolveFollowingPeakOverlayStyle(spectrumPeakInfo, appliedResizeRef.current, peakOverlaySize)
+    : undefined
+
   return (
     <div
+      className="scope-module"
       ref={containerRef}
       style={{
         minWidth: 0,
@@ -452,6 +608,22 @@ export default function ScopeModule({
           height: '100%',
         }}
       />
+      {scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
+        <div
+          ref={spectrumPeakMode === 'following' ? peakOverlayRef : null}
+          className={[
+            'scope-module__peak-info',
+            spectrumPeakMode === 'following' ? 'is-following' : 'is-corner',
+          ].join(' ')}
+          style={spectrumPeakOverlayStyle}
+        >
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakDb(spectrumPeakInfo.db)}</span>
+          <span className="scope-module__peak-info-separator">/</span>
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(spectrumPeakInfo.frequencyHz)}</span>
+          <span className="scope-module__peak-info-separator">/</span>
+          <span className="scope-module__peak-info-value">{spectrumPeakInfo.key}</span>
+        </div>
+      )}
     </div>
   )
 }
