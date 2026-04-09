@@ -60,6 +60,11 @@ type SpectrumPointFillResult = {
   peakInfo: SpectrumPeakInfo | null
 }
 
+type SpectrumRangePeak = {
+  rawDb: number
+  frequencyHz: number
+}
+
 type HeatStop = { at: number; color: [number, number, number] }
 
 const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
@@ -75,7 +80,7 @@ const SPECTRUM_DB_CEILING = 12
 const SIDE_LINE_WIDTH_RATIO = 0.75
 const PEAK_SELECTION_MAX_DISTANCE_OCTAVES = 0.5
 const PEAK_SELECTION_SWITCH_THRESHOLD_DB = 4
-const PEAK_SELECTION_LOW_FREQUENCY_BIAS_DB_PER_OCTAVE = 2.5
+const PEAK_SELECTION_LOW_FREQUENCY_BIAS_DB_PER_OCTAVE = 0.75
 const PEAK_SELECTION_UPWARD_SWITCH_THRESHOLD_DB = 2
 const NOOP_SPECTRUM_PEAK_INFO_CALLBACK = (_peakInfo: SpectrumPeakInfo | null): void => {}
 
@@ -506,26 +511,53 @@ export class SpectrumAnalyzer {
     return minFrequency + t * (maxFrequency - minFrequency)
   }
 
-  private getPeakInRange(data: Float32Array, startIndex: number, endIndex: number): number {
+  private resolvePeakInRange(
+    data: Float32Array,
+    startIndex: number,
+    endIndex: number,
+    binWidth: number,
+  ): SpectrumRangePeak {
     const clampedStart = Math.max(0, Math.min(data.length - 1, startIndex))
     const clampedEnd = Math.max(0, Math.min(data.length - 1, endIndex))
     const lo = Math.floor(Math.min(clampedStart, clampedEnd))
     const hi = Math.ceil(Math.max(clampedStart, clampedEnd))
 
     if (hi <= lo) {
-      return this.getInterpolatedValue(data, clampedStart)
+      const rawDb = this.getInterpolatedValue(data, clampedStart)
+      return {
+        rawDb,
+        frequencyHz: Math.max(0, clampedStart * binWidth),
+      }
     }
 
-    let peak = -Infinity
+    let peakBin = lo
+    let peakDb = Number.NEGATIVE_INFINITY
     for (let i = lo; i <= hi; i += 1) {
-      peak = Math.max(peak, data[i])
+      if (data[i] > peakDb) {
+        peakDb = data[i]
+        peakBin = i
+      }
     }
 
-    return Math.max(
-      peak,
-      this.getInterpolatedValue(data, clampedStart),
-      this.getInterpolatedValue(data, clampedEnd)
-    )
+    if (peakBin > 0 && peakBin < data.length - 1) {
+      const y1 = data[peakBin - 1]
+      const y2 = data[peakBin]
+      const y3 = data[peakBin + 1]
+      const denominator = y1 - (2 * y2) + y3
+      if (Math.abs(denominator) > 1e-9) {
+        const offset = Math.max(-0.5, Math.min(0.5, 0.5 * (y1 - y3) / denominator))
+        const interpolatedDb = y2 - (0.25 * (y1 - y3) * offset)
+        return {
+          rawDb: interpolatedDb,
+          frequencyHz: Math.max(0, (peakBin + offset) * binWidth),
+        }
+      }
+    }
+
+    return {
+      rawDb: peakDb,
+      frequencyHz: Math.max(0, peakBin * binWidth),
+    }
   }
 
   private applyTilt(db: number, frequency: number, tiltDbPerOctave = this.options.tiltDbPerOctave): number {
@@ -748,9 +780,12 @@ export class SpectrumAnalyzer {
       const bin1 = frequency1 / binWidth
       const centerBin = (bin0 + bin1) * 0.5
       const binSpan = Math.abs(bin1 - bin0)
+      const resolvedPeak = (capturePeakInfo || binSpan > 1)
+        ? this.resolvePeakInRange(frequencyData, bin0, bin1, binWidth)
+        : null
       const rawDb = binSpan <= 1
         ? this.getInterpolatedValue(frequencyData, Math.min(centerBin, bufferLength - 1))
-        : this.getPeakInRange(frequencyData, bin0, bin1)
+        : (resolvedPeak?.rawDb ?? this.getInterpolatedValue(frequencyData, Math.min(centerBin, bufferLength - 1)))
       const db = this.applyTilt(rawDb, centerFrequency, tiltDbPerOctave)
 
       const normalized = (db - this.options.minDecibels) / (this.options.maxDecibels - this.options.minDecibels)
@@ -764,13 +799,13 @@ export class SpectrumAnalyzer {
 
       if (capturePeakInfo) {
         this.primaryPointDb[index] = db
-        this.primaryPointFrequency[index] = centerFrequency
+        this.primaryPointFrequency[index] = resolvedPeak?.frequencyHz ?? centerFrequency
       }
     }
 
     return {
       pointCount: numPoints,
-      peakInfo: capturePeakInfo ? this.selectPeakInfo(numPoints, width, height) : null,
+      peakInfo: capturePeakInfo ? this.selectPeakInfo(numPoints, height) : null,
     }
   }
 
@@ -885,7 +920,7 @@ export class SpectrumAnalyzer {
     return bestIndex
   }
 
-  private selectPeakInfo(pointCount: number, _width: number, height: number): SpectrumPeakInfo | null {
+  private selectPeakInfo(pointCount: number, height: number): SpectrumPeakInfo | null {
     if (pointCount <= 0) {
       this.lastSelectedPeakInfo = null
       return null

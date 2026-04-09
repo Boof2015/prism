@@ -1092,32 +1092,38 @@ test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () =>
   try {
     const state = analyzer as unknown as {
       drawFrame: () => void
-      primaryPointX: Float32Array
+      primaryPointFrequency: Float32Array
       isLocalPeak: (index: number, pointCount: number) => boolean
     }
     state.drawFrame()
 
     assert.ok(peakInfo, 'expected peak info to be reported')
-    assert.ok(peakInfo.frequencyHz > 420 && peakInfo.frequencyHz < 460, `expected peak frequency near 440 Hz, got ${peakInfo.frequencyHz}`)
+    assert.ok(peakInfo.frequencyHz > 437 && peakInfo.frequencyHz < 443, `expected peak frequency near 440 Hz, got ${peakInfo.frequencyHz}`)
     assert.match(peakInfo.key, /^A4 [+-]?\d+c$/)
     assert.ok(peakInfo.db > -20, `expected an audible peak dB, got ${peakInfo.db}`)
     assert.ok(peakInfo.normalizedX >= 0 && peakInfo.normalizedX <= 1, 'peak x should be normalized')
     assert.ok(peakInfo.normalizedY >= 0 && peakInfo.normalizedY <= 1, 'peak y should be normalized')
 
-    const selectedX = peakInfo.normalizedX * 320
     let selectedIndex = 0
     let smallestDistance = Number.POSITIVE_INFINITY
-    for (let index = 0; index < state.primaryPointX.length; index += 1) {
-      const distance = Math.abs(state.primaryPointX[index] - selectedX)
+    for (let index = 0; index < state.primaryPointFrequency.length; index += 1) {
+      if (!state.isLocalPeak(index, state.primaryPointFrequency.length)) {
+        continue
+      }
+      const distance = Math.abs(state.primaryPointFrequency[index] - peakInfo.frequencyHz)
       if (distance < smallestDistance) {
         smallestDistance = distance
         selectedIndex = index
       }
     }
     assert.equal(
-      state.isLocalPeak(selectedIndex, state.primaryPointX.length),
+      state.isLocalPeak(selectedIndex, state.primaryPointFrequency.length),
       true,
       'reported peak should stay anchored to a local maximum on the rendered curve',
+    )
+    assert.ok(
+      smallestDistance < 3,
+      `expected reported peak frequency to stay near a local-peak candidate, got distance ${smallestDistance}`,
     )
   } finally {
     analyzer.dispose()
@@ -1180,6 +1186,52 @@ test('SpectrumAnalyzer smooths peak selection without smoothing the reported pos
     assert.match(peakKeys[0] ?? '', /^A4 [+-]?\d+c$/)
     assert.match(peakKeys[1] ?? '', /^A4 [+-]?\d+c$/)
     assert.match(peakKeys[2] ?? '', /^E5 [+-]?\d+c$/)
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer does not over-bias toward an octave-lower peak', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const frame = createCompositeStereoChunk([
+    { frequencyHz: 174.614, amplitude: 0.8 },
+    { frequencyHz: 349.228, amplitude: 1.0 },
+  ], sampleRate, 4096)
+  let peakInfo: SpectrumPeakInfo | null = null
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [frame],
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    fftSize: 4096,
+    dataSource,
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      peakInfo = nextPeakInfo
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as { drawFrame: () => void }
+    state.drawFrame()
+
+    assert.ok(peakInfo, 'expected peak info to be reported')
+    assert.match(peakInfo.key, /^F4 [+-]?\d+c$/)
+    assert.ok(
+      peakInfo.frequencyHz > 347 && peakInfo.frequencyHz < 351,
+      `expected peak frequency near 349 Hz, got ${peakInfo.frequencyHz}`,
+    )
   } finally {
     analyzer.dispose()
     dom.restore()
