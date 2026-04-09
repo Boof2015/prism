@@ -69,7 +69,10 @@ import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
-import { getVectorscopeLayout } from '../src/renderer/visualizers/vectorscopeGrids'
+import {
+  drawVectorscopeGridForMode,
+  getVectorscopeLayout,
+} from '../src/renderer/visualizers/vectorscopeGrids'
 import {
   MultibandBuffer,
   MultibandSplitter,
@@ -506,10 +509,38 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
   return Array.from(output.subarray(0, count))
 }
 
-function createFakeCanvasContext(): CanvasRenderingContext2D {
+interface FakeCanvasRecorder {
+  fillRects: Array<{ x: number; y: number; width: number; height: number }>
+  strokeRects: Array<{ x: number; y: number; width: number; height: number; lineDash: number[] }>
+  arcs: Array<{
+    x: number
+    y: number
+    radius: number
+    startAngle: number
+    endAngle: number
+    anticlockwise: boolean
+    lineDash: number[]
+  }>
+  lineDashes: number[][]
+}
+
+function createFakeCanvasRecorder(): FakeCanvasRecorder {
+  return {
+    fillRects: [],
+    strokeRects: [],
+    arcs: [],
+    lineDashes: [],
+  }
+}
+
+function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): CanvasRenderingContext2D {
+  let currentLineDash: number[] = []
+
   return {
     clearRect() {},
-    fillRect() {},
+    fillRect(x: number, y: number, width: number, height: number) {
+      recorder?.fillRects.push({ x, y, width, height })
+    },
     fillText() {},
     beginPath() {},
     closePath() {},
@@ -517,11 +548,24 @@ function createFakeCanvasContext(): CanvasRenderingContext2D {
     moveTo() {},
     lineTo() {},
     stroke() {},
+    strokeRect(x: number, y: number, width: number, height: number) {
+      recorder?.strokeRects.push({ x, y, width, height, lineDash: [...currentLineDash] })
+    },
+    arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, anticlockwise = false) {
+      recorder?.arcs.push({ x, y, radius, startAngle, endAngle, anticlockwise, lineDash: [...currentLineDash] })
+    },
     drawImage() {},
     save() {},
     restore() {},
     translate() {},
     rotate() {},
+    setLineDash(segments: number[]) {
+      currentLineDash = [...segments]
+      recorder?.lineDashes.push([...segments])
+    },
+    getLineDash() {
+      return [...currentLineDash]
+    },
     createLinearGradient() {
       return {
         addColorStop() {},
@@ -538,11 +582,13 @@ function createFakeCanvasContext(): CanvasRenderingContext2D {
     textBaseline: 'top',
     lineCap: 'butt',
     lineJoin: 'miter',
+    globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
   } as unknown as CanvasRenderingContext2D
 }
 
-function createFakeCanvas(): HTMLCanvasElement {
-  const context = createFakeCanvasContext()
+function createFakeCanvas(recorder: FakeCanvasRecorder | null = null): HTMLCanvasElement {
+  const context = createFakeCanvasContext(recorder)
   return {
     width: 320,
     height: 180,
@@ -1460,6 +1506,125 @@ test('Vectorscope uses the base layout radius for projection scale', () => {
 
     assert.equal(state.getProjectionScale(layout.radius), layout.radius)
     assert.equal(layout.radius, 81)
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
+})
+
+test('vectorscope adds a subtle dashed outer boundary without changing the base graph', () => {
+  const lissajousRecorder = createFakeCanvasRecorder()
+  drawVectorscopeGridForMode(
+    createFakeCanvasContext(lissajousRecorder),
+    320,
+    180,
+    'rgba(255, 255, 255, 0.12)',
+    'rgba(255, 255, 255, 0.05)',
+    'rgba(255, 255, 255, 0.2)',
+    'lissajous',
+  )
+  assert.equal(
+    lissajousRecorder.lineDashes.some((segments) => segments.length > 0),
+    false,
+    'lissajous should not render an outer headroom boundary',
+  )
+
+  const linearRecorder = createFakeCanvasRecorder()
+  drawVectorscopeGridForMode(
+    createFakeCanvasContext(linearRecorder),
+    320,
+    180,
+    'rgba(255, 255, 255, 0.12)',
+    'rgba(255, 255, 255, 0.05)',
+    'rgba(255, 255, 255, 0.2)',
+    'linear-bipolar',
+  )
+  assert.equal(
+    linearRecorder.lineDashes.some((segments) => segments.length > 0),
+    true,
+    'linear mode should render a dashed outer max boundary',
+  )
+
+  const polarRecorder = createFakeCanvasRecorder()
+  drawVectorscopeGridForMode(
+    createFakeCanvasContext(polarRecorder),
+    320,
+    180,
+    'rgba(255, 255, 255, 0.12)',
+    'rgba(255, 255, 255, 0.05)',
+    'rgba(255, 255, 255, 0.2)',
+    'polar-bipolar',
+  )
+  const polarLayout = getVectorscopeLayout(320, 180, 'polar-bipolar')
+  const dashedPolarArc = polarRecorder.arcs.find((arc) => arc.lineDash.length > 0)
+  const expectedPolarOverflowRadius = Math.min(
+    Math.min(polarLayout.centerX, 320 - polarLayout.centerX, polarLayout.centerY, 180 - polarLayout.centerY) * 0.98,
+    polarLayout.radius * 1.25,
+  )
+  assert.equal(
+    polarRecorder.lineDashes.some((segments) => segments.length > 0),
+    true,
+    'polar mode should render a dashed outer boundary',
+  )
+  assert.ok(
+    dashedPolarArc && dashedPolarArc.radius > polarLayout.radius,
+    'polar dashed boundary should sit outside the existing graph',
+  )
+  assertAlmostEqual(
+    dashedPolarArc?.radius ?? 0,
+    expectedPolarOverflowRadius,
+    1e-6,
+    'polar dashed boundary should follow the next relative grid step, clamped to the canvas',
+  )
+})
+
+test('Vectorscope keeps the original linear projection behavior', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource })
+
+  try {
+    const state = vectorscope as unknown as {
+      drawProjectedDot: (
+        ctx: CanvasRenderingContext2D,
+        left: number,
+        right: number,
+        mode: 'linear-bipolar',
+        centerX: number,
+        centerY: number,
+        scale: number,
+        dotSize: number,
+      ) => void
+      getProjectionScale: (radius: number) => number
+    }
+    const layout = getVectorscopeLayout(320, 180, 'linear-bipolar')
+    const recorder = createFakeCanvasRecorder()
+    const ctx = createFakeCanvasContext(recorder)
+    const scale = state.getProjectionScale(layout.radius)
+
+    state.drawProjectedDot(ctx, -1, 1, 'linear-bipolar', layout.centerX, layout.centerY, scale, 2)
+
+    assert.equal(recorder.fillRects.length, 1)
+    const rect = recorder.fillRects[0]
+    const projectedCenterX = rect.x + rect.width / 2
+    const projectedCenterY = rect.y + rect.height / 2
+    assertAlmostEqual(
+      projectedCenterX,
+      layout.centerX + layout.radius * Math.SQRT2,
+      1e-6,
+      'linear projection should preserve the original unscaled mapping',
+    )
+    assertAlmostEqual(
+      projectedCenterY,
+      layout.centerY,
+      1e-6,
+      'linear overs peak should stay on the side axis',
+    )
   } finally {
     vectorscope.dispose()
     dom.restore()

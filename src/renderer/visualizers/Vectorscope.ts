@@ -1,6 +1,10 @@
 import { audioRouter } from '../audio/AudioRouter'
 import { vectorscope as nativeVectorscope, isNativeAvailable } from '../audio/native'
-import { drawVectorscopeGridForMode, getVectorscopeLayout } from './vectorscopeGrids'
+import {
+  drawVectorscopeGridForMode,
+  getVectorscopeLayout,
+  transformPoint,
+} from './vectorscopeGrids'
 import { MultibandSplitter, MultibandBuffer, createMultibandChunk, type MultibandChunk } from './multibandSplitter'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
@@ -60,7 +64,6 @@ const defaultVectorscopeDataSource: VectorscopeDataSource = {
 }
 
 const BAND_ORDER = ['low', 'mid', 'high'] as const
-const INV_SQRT2 = 1 / Math.sqrt(2)
 
 export class Vectorscope {
   private canvas: HTMLCanvasElement
@@ -466,39 +469,12 @@ export class Vectorscope {
     scale: number,
     dotSize: number,
   ): void {
-    let dx: number
-    let dy: number
-
-    if (mode === 'lissajous') {
-      dx = right
-      dy = left
-    } else {
-      const mid = (left + right) * INV_SQRT2
-      const side = (right - left) * INV_SQRT2
-      const isUnipolar = mode === 'polar-unipolar' || mode === 'linear-unipolar'
-      if (isUnipolar && mid < 0) {
-        return
-      }
-
-      const isPolar = mode === 'polar-unipolar' || mode === 'polar-bipolar'
-      if (isPolar) {
-        const amplitudeSquared = (mid * mid) + (side * side)
-        if (amplitudeSquared < 1e-12) {
-          dx = 0
-          dy = 0
-        } else {
-          const amplitude = Math.sqrt(amplitudeSquared)
-          const scaledAmplitude = Math.pow(amplitude, 0.35)
-          const factor = scaledAmplitude / amplitude
-          dx = side * factor
-          dy = mid * factor
-        }
-      } else {
-        dx = side
-        dy = mid
-      }
+    const point = transformPoint(left, right, mode)
+    if (!point) {
+      return
     }
 
+    const { dx, dy } = point
     const px = centerX + dx * scale
     const py = centerY - dy * scale
     ctx.fillRect(px - dotSize / 2, py - dotSize / 2, dotSize, dotSize)
