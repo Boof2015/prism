@@ -27,6 +27,7 @@ import {
 } from '../src/shared/windowGeometry'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
 import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../src/shared/themeState'
+import { useAudioStore } from '../src/renderer/stores/audioStore'
 import { usePerformanceStore } from '../src/renderer/stores/performanceStore'
 import { buildProfileDraft, profilesMatch } from '../src/renderer/stores/profileDraft'
 import {
@@ -1573,6 +1574,33 @@ test('applying a profile snapshot does not change the machine-local frame target
       frameTarget: previousPerformanceState.frameTarget,
       dockedRenderFps: previousPerformanceState.dockedRenderFps,
     })
+    useSettingsStore.setState(previousSettingsState)
+  }
+})
+
+test('applying a profile snapshot does not change the machine-local trim', () => {
+  const previousAudioState = useAudioStore.getState()
+  const previousSettingsState = useSettingsStore.getState()
+
+  try {
+    useAudioStore.setState({ inputGainDb: 6.5 })
+
+    const defaultProfile = createDefaultProfile('Default')
+    const alternateProfile = createDefaultProfile('Live Mix')
+    alternateProfile.hiddenScopes = []
+    alternateProfile.scopeSettings.waveform.gainDb = 6
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: 'profile_live_mix',
+      profiles: {
+        profile_default: defaultProfile,
+        profile_live_mix: alternateProfile,
+      },
+    })
+
+    assert.equal(useAudioStore.getState().inputGainDb, 6.5)
+  } finally {
+    useAudioStore.setState(previousAudioState)
     useSettingsStore.setState(previousSettingsState)
   }
 })

@@ -61,6 +61,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal('themeId' in file, false)
   assert.equal(JSON.stringify(file).includes('windowBounds'), false)
   assert.equal(JSON.stringify(file).includes('frameTarget'), false)
+  assert.equal(JSON.stringify(file).includes('inputGainDb'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
   assert.equal(file.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(file.scopeOrder.includes('astra'), false)

@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { audioCapture } from '../src/renderer/audio/AudioCapture'
-import { useAudioStore } from '../src/renderer/stores/audioStore'
+import {
+  loadAudioPreferences,
+  normalizeAudioPreferences,
+  useAudioStore,
+} from '../src/renderer/stores/audioStore'
 import { useUiStore } from '../src/renderer/stores/uiStore'
 import type { CaptureBackendSupport } from '../src/types/capture'
+
+type GlobalWithStorage = typeof globalThis & {
+  localStorage?: Storage
+}
 
 const initialAudioState = {
   ...useAudioStore.getState(),
@@ -11,6 +19,54 @@ const initialAudioState = {
 
 const initialUiState = {
   ...useUiStore.getState(),
+}
+
+function installFakeLocalStorage(): {
+  getSetCount: () => number
+  getItem: (key: string) => string | null
+  restore: () => void
+} {
+  const storage = new Map<string, string>()
+  let setCount = 0
+  const globalWithStorage = globalThis as GlobalWithStorage
+  const previousLocalStorage = globalWithStorage.localStorage
+
+  globalWithStorage.localStorage = {
+    getItem(key: string): string | null {
+      return storage.get(key) ?? null
+    },
+    setItem(key: string, value: string): void {
+      setCount += 1
+      storage.set(key, value)
+    },
+    removeItem(key: string): void {
+      storage.delete(key)
+    },
+    clear(): void {
+      storage.clear()
+    },
+    key(index: number): string | null {
+      return [...storage.keys()][index] ?? null
+    },
+    get length(): number {
+      return storage.size
+    },
+  } as Storage
+
+  return {
+    getSetCount: () => setCount,
+    getItem(key: string): string | null {
+      return storage.get(key) ?? null
+    },
+    restore(): void {
+      if (previousLocalStorage === undefined) {
+        delete globalWithStorage.localStorage
+        return
+      }
+
+      globalWithStorage.localStorage = previousLocalStorage
+    },
+  }
 }
 
 function createBackendSupport(available: boolean, reason: string | null): CaptureBackendSupport {
@@ -29,6 +85,7 @@ function createBackendSupport(available: boolean, reason: string | null): Captur
 }
 
 function resetStores(): void {
+  audioCapture.setInputGain(0)
   useAudioStore.setState({
     ...initialAudioState,
     systemSources: [],
@@ -68,6 +125,7 @@ function installAudioCaptureHarness(options: {
     setCaptureMode: audioCapture.setCaptureMode,
     setSelectedDeviceId: audioCapture.setSelectedDeviceId,
     setSelectedSystemSourceId: audioCapture.setSelectedSystemSourceId,
+    setInputGain: audioCapture.setInputGain,
   }
 
   const calls = {
@@ -132,6 +190,7 @@ function installAudioCaptureHarness(options: {
       audioCapture.setCaptureMode = originalMethods.setCaptureMode
       audioCapture.setSelectedDeviceId = originalMethods.setSelectedDeviceId
       audioCapture.setSelectedSystemSourceId = originalMethods.setSelectedSystemSourceId
+      audioCapture.setInputGain = originalMethods.setInputGain
 
       void selectedDeviceId
       void selectedSystemSourceId
@@ -139,6 +198,65 @@ function installAudioCaptureHarness(options: {
     calls,
   }
 }
+
+test('loadAudioPreferences falls back to 0 dB when storage is unavailable', () => {
+  assert.deepEqual(loadAudioPreferences(null), { inputGainDb: 0 })
+})
+
+test('loadAudioPreferences falls back to 0 dB when stored JSON is invalid', () => {
+  const storage = {
+    getItem: () => '{not valid json',
+    setItem: () => {},
+  }
+
+  assert.deepEqual(loadAudioPreferences(storage), { inputGainDb: 0 })
+})
+
+test('normalizeAudioPreferences clamps out-of-range trim values', () => {
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: -18 }), { inputGainDb: -12 })
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 18 }), { inputGainDb: 12 })
+})
+
+test('normalizeAudioPreferences rounds trim values to 0.5 dB steps', () => {
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 6.24 }), { inputGainDb: 6 })
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 6.26 }), { inputGainDb: 6.5 })
+})
+
+test('audio store persists normalized trim values and forwards them to audioCapture', () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const originalSetInputGain = audioCapture.setInputGain
+  const forwardedValues: number[] = []
+
+  audioCapture.setInputGain = (db: number) => {
+    forwardedValues.push(db)
+  }
+
+  try {
+    useAudioStore.getState().setInputGain(6.26)
+
+    assert.equal(useAudioStore.getState().inputGainDb, 6.5)
+    assert.deepEqual(forwardedValues, [6.5])
+    assert.equal(fakeStorage.getItem('prism:audio'), JSON.stringify({ inputGainDb: 6.5 }))
+    assert.equal(fakeStorage.getSetCount(), 1)
+
+    useAudioStore.getState().setInputGain(6.49)
+
+    assert.deepEqual(forwardedValues, [6.5])
+    assert.equal(fakeStorage.getSetCount(), 1)
+
+    useAudioStore.getState().setInputGain(0)
+
+    assert.equal(useAudioStore.getState().inputGainDb, 0)
+    assert.deepEqual(forwardedValues, [6.5, 0])
+    assert.equal(fakeStorage.getItem('prism:audio'), JSON.stringify({ inputGainDb: 0 }))
+    assert.equal(fakeStorage.getSetCount(), 2)
+  } finally {
+    audioCapture.setInputGain = originalSetInputGain
+    fakeStorage.restore()
+    resetStores()
+  }
+})
 
 test('audio store auto-switches to device input when native system capture is unavailable on startup', async () => {
   resetStores()

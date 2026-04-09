@@ -8,6 +8,15 @@ import type {
 } from '../../types/capture'
 import { useUiStore } from './uiStore'
 
+const STORAGE_KEY = 'prism:audio'
+const INPUT_GAIN_MIN_DB = -12
+const INPUT_GAIN_MAX_DB = 12
+const INPUT_GAIN_STEP_DB = 0.5
+
+export interface PersistedAudioState {
+  inputGainDb: number
+}
+
 interface AudioState {
   systemSources: CaptureSourceDescriptor[]
   devices: MediaDeviceInfo[]
@@ -33,6 +42,11 @@ interface AudioState {
   setCaptureMode: (mode: CaptureMode) => void
   startCapture: () => Promise<void>
   stopCapture: () => void
+}
+
+interface StorageLike {
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
 }
 
 function applyCaptureStatus(status: CaptureManagerStatus): Partial<AudioState> {
@@ -75,6 +89,61 @@ function describeSystemSource(sourceId: string, sources: CaptureSourceDescriptor
   return sources.find((source) => source.id === sourceId)?.label ?? 'The selected output device'
 }
 
+function getStorage(): StorageLike | null {
+  if (typeof localStorage === 'undefined') {
+    return null
+  }
+
+  return localStorage
+}
+
+export function normalizeInputGainDb(raw: unknown): number {
+  const normalized = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
+  const clamped = Math.min(INPUT_GAIN_MAX_DB, Math.max(INPUT_GAIN_MIN_DB, normalized))
+  const rounded = Math.round(clamped / INPUT_GAIN_STEP_DB) * INPUT_GAIN_STEP_DB
+  return Object.is(rounded, -0) ? 0 : rounded
+}
+
+export function normalizeAudioPreferences(raw: unknown): PersistedAudioState {
+  const parsed = typeof raw === 'object' && raw !== null
+    ? raw as Partial<PersistedAudioState>
+    : {}
+
+  return {
+    inputGainDb: normalizeInputGainDb(parsed.inputGainDb),
+  }
+}
+
+export function loadAudioPreferences(storage = getStorage()): PersistedAudioState {
+  if (!storage) {
+    return normalizeAudioPreferences(null)
+  }
+
+  try {
+    const raw = storage.getItem(STORAGE_KEY)
+    if (!raw) {
+      return normalizeAudioPreferences(null)
+    }
+
+    return normalizeAudioPreferences(JSON.parse(raw))
+  } catch {
+    return normalizeAudioPreferences(null)
+  }
+}
+
+function persistAudioPreferences(inputGainDb: number, storage = getStorage()): void {
+  if (!storage) return
+
+  try {
+    storage.setItem(STORAGE_KEY, JSON.stringify({ inputGainDb }))
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+const storedPreferences = loadAudioPreferences()
+audioCapture.setInputGain(storedPreferences.inputGainDb)
+
 export const useAudioStore = create<AudioState>((set, get) => ({
   systemSources: [],
   devices: [],
@@ -89,11 +158,17 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   captureNotice: null,
   sampleRate: 48000,
   channelCount: 2,
-  inputGainDb: 0,
+  inputGainDb: storedPreferences.inputGainDb,
 
   setInputGain: (db: number) => {
-    audioCapture.setInputGain(db)
-    set({ inputGainDb: db })
+    const nextInputGainDb = normalizeInputGainDb(db)
+    if (get().inputGainDb === nextInputGainDb) {
+      return
+    }
+
+    persistAudioPreferences(nextInputGainDb)
+    audioCapture.setInputGain(nextInputGainDb)
+    set({ inputGainDb: nextInputGainDb })
   },
 
   clearCaptureNotice: () => {
