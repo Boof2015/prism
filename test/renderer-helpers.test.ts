@@ -995,7 +995,7 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'vumeter',
     'lufsmeter',
     'waveform',
-    'astra',
+    'nowPlaying',
   ])
 })
 
@@ -1682,12 +1682,12 @@ test('scopeSummary includes spectrum peak mode when enabled', () => {
   assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak Follow')
 })
 
-test('scopeSummary summarizes astra field visibility', () => {
+test('scopeSummary summarizes now playing field visibility', () => {
   const profile = createDefaultProfile('Default')
-  profile.scopeSettings.astra.showArtist = false
-  profile.scopeSettings.astra.showControls = false
+  profile.scopeSettings.nowPlaying.showArtist = false
+  profile.scopeSettings.nowPlaying.showControls = false
 
-  assert.equal(scopeSummary('astra', profile.scopeSettings.astra), 'Cover · Title · Bar · Time')
+  assert.equal(scopeSummary('nowPlaying', profile.scopeSettings.nowPlaying), 'Cover · Title · Bar · Time')
 })
 
 test('ScopePopoutDataSource switches waveform batches between mono and stereo queues', () => {
@@ -1897,7 +1897,7 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
 })
 
-test('toggleScope appends astra to the scope order when it is enabled from an opt-in profile', () => {
+test('toggleScope appends now playing to the scope order when it is enabled from an opt-in profile', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeWindow = installFakeElectronWindow()
 
@@ -1905,12 +1905,12 @@ test('toggleScope appends astra to the scope order when it is enabled from an op
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
     seedProfileDraftState(profile)
 
-    assert.equal(useSettingsStore.getState().scopeOrder.includes('astra'), false)
+    assert.equal(useSettingsStore.getState().scopeOrder.includes('nowPlaying'), false)
 
-    useSettingsStore.getState().toggleScope('astra')
+    useSettingsStore.getState().toggleScope('nowPlaying')
 
-    assert.equal(useSettingsStore.getState().scopeOrder.at(-1), 'astra')
-    assert.equal(useSettingsStore.getState().hiddenScopes.has('astra'), false)
+    assert.equal(useSettingsStore.getState().scopeOrder.at(-1), 'nowPlaying')
+    assert.equal(useSettingsStore.getState().hiddenScopes.has('nowPlaying'), false)
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()
@@ -2337,7 +2337,7 @@ test('moveDockedScopeOrder is a no-op at the docked boundaries', () => {
     initialOrder,
   )
   assert.equal(
-    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'astra', 'right'),
+    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'nowPlaying', 'right'),
     initialOrder,
   )
 })
@@ -2359,7 +2359,7 @@ test('moveDockedScopeOrder preserves hidden scope positions in the full order', 
     'vumeter',
     'lufsmeter',
     'waveform',
-    'astra',
+    'nowPlaying',
   ])
 })
 
@@ -2380,7 +2380,7 @@ test('moveDockedScopeOrder preserves popped-out scope positions in the full orde
     'vumeter',
     'lufsmeter',
     'waveform',
-    'astra',
+    'nowPlaying',
   ])
 })
 

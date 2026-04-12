@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { createEmptyWindowLocalState, normalizeWindowLocalState } from '../shared/windowState'
+import type { WindowBounds } from '../types/popout'
 import type { ScopeKind } from '../types/scope'
 import type { PrismWindowLocalStateV1 } from '../types/windowState'
 
@@ -23,6 +24,12 @@ export class FileBackedWindowStateStore {
 
   getPopoutAlwaysOnTop(kind: ScopeKind): boolean {
     return this.state.popoutAlwaysOnTop[kind] === true
+  }
+
+  getNowPlayingConfigWindowBounds(): WindowBounds | undefined {
+    return this.state.nowPlayingConfigWindowBounds
+      ? { ...this.state.nowPlayingConfigWindowBounds }
+      : undefined
   }
 
   async setMainAlwaysOnTop(alwaysOnTop: boolean): Promise<void> {
@@ -48,6 +55,15 @@ export class FileBackedWindowStateStore {
     this.state = normalizeWindowLocalState({
       ...this.state,
       popoutAlwaysOnTop,
+    })
+    await this.persistState()
+  }
+
+  async setNowPlayingConfigWindowBounds(bounds?: WindowBounds): Promise<void> {
+    await this.ensureInitialized()
+    this.state = normalizeWindowLocalState({
+      ...this.state,
+      nowPlayingConfigWindowBounds: bounds,
     })
     await this.persistState()
   }

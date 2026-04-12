@@ -1,11 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { extname, join, resolve } from 'path'
-import type {
-  AstraControlCommand,
-  AstraIntegrationConfig,
-  AstraIntegrationState,
-} from '../types/astra'
+import type { NowPlayingControlCommand, NowPlayingState } from '../types/nowPlaying'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -15,7 +11,7 @@ import type {
 } from '../types/popout'
 import type { ProfileMenuRequest } from '../types/profileMenu'
 import type { LegacyProfileMigrationPayload, Profile } from '../types/profile'
-import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
+import { SCOPE_KINDS, SCOPE_LABELS, type ScopeKind } from '../types/scope'
 import type {
   LegacyThemeMigrationPayload,
   ThemeLibrarySnapshot,
@@ -31,7 +27,7 @@ import {
 } from '../shared/windowGeometry'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
-import { AstraIntegrationService } from './services/astraIntegration'
+import { NowPlayingManager } from './services/nowPlayingManager'
 import { FileBackedThemeLibrary } from './themeLibrary'
 import { FileBackedWindowStateStore } from './windowStateStore'
 
@@ -55,6 +51,8 @@ const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
 const suppressNextPopoutBoundsEvents = new Set<ScopeKind>()
+let nowPlayingConfigWindow: BrowserWindow | null = null
+let nowPlayingConfigBoundsTimer: ReturnType<typeof setTimeout> | null = null
 const windowSettingsHeights = new Map<number, number>()
 const windowSettingsBottomAnchors = new Map<number, number>()
 const pendingProfileOpenPaths: string[] = []
@@ -62,7 +60,7 @@ const pendingThemeOpenPaths: string[] = []
 
 let profileLibrary: FileBackedProfileLibrary | null = null
 let themeLibrary: FileBackedThemeLibrary | null = null
-let astraIntegrationService: AstraIntegrationService | null = null
+let nowPlayingManager: NowPlayingManager | null = null
 let windowStateStore: FileBackedWindowStateStore | null = null
 
 const WINDOW_DEFAULTS = {
@@ -77,6 +75,13 @@ const POPOUT_DEFAULTS = {
   height: 240,
   minWidth: 220,
   minHeight: 160,
+}
+
+const NOW_PLAYING_CONFIG_DEFAULTS = {
+  width: 620,
+  height: 640,
+  minWidth: 520,
+  minHeight: 520,
 }
 
 const MAIN_WINDOW_SYNC_SUPPRESSION_MS = 180
@@ -114,24 +119,32 @@ function getWindowStateStore(): FileBackedWindowStateStore {
   return windowStateStore
 }
 
-function broadcastAstraState(state: AstraIntegrationState): void {
+function broadcastNowPlayingState(state: NowPlayingState): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed() || window.webContents.isDestroyed()) continue
-    window.webContents.send('astra:state-changed', state)
+    window.webContents.send('now-playing:state-changed', state)
   }
 }
 
-function getAstraIntegrationService(): AstraIntegrationService {
-  if (!astraIntegrationService) {
-    astraIntegrationService = new AstraIntegrationService({
-      configPath: join(app.getPath('userData'), 'astra-integration.json'),
+function getNowPlayingManager(): NowPlayingManager {
+  if (!nowPlayingManager) {
+    nowPlayingManager = new NowPlayingManager({
+      astraConfigPath: join(app.getPath('userData'), 'astra-integration.json'),
+      localStatePath: join(app.getPath('userData'), 'now-playing-state.json'),
     })
-    astraIntegrationService.subscribe((state) => {
-      broadcastAstraState(state)
+    nowPlayingManager.subscribe((state) => {
+      broadcastNowPlayingState(state)
     })
   }
 
-  return astraIntegrationService
+  return nowPlayingManager
+}
+
+function broadcastThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue
+    window.webContents.send('themes:external-activated', snapshot)
+  }
 }
 
 function queueProfileOpenPath(filePath: string): void {
@@ -245,7 +258,7 @@ async function processPendingThemeOpenPaths(): Promise<void> {
 
   applyNativeThemeSnapshot(latestSnapshot)
   focusMainWindow()
-  mainWindow.webContents.send('themes:external-activated', latestSnapshot)
+  broadcastThemeSnapshot(latestSnapshot)
 }
 
 function applyNativeThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
@@ -791,6 +804,9 @@ function createMainWindow(): void {
     for (const kind of SCOPE_KINDS) {
       destroyScopePopoutWindow(kind)
     }
+    if (nowPlayingConfigWindow && !nowPlayingConfigWindow.isDestroyed()) {
+      nowPlayingConfigWindow.close()
+    }
   })
 
   mainWindow.on('move', () => {
@@ -891,7 +907,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     minimizable: true,
     skipTaskbar: true,
     autoHideMenuBar: true,
-    title: `Prism ${kind}`,
+    title: `Prism ${SCOPE_LABELS[kind]}`,
     alwaysOnTop: getWindowStateStore().getPopoutAlwaysOnTop(kind),
     show: false,
     webPreferences: {
@@ -970,6 +986,132 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
       applyLogicalBounds(popoutWindow, nextBounds)
     }
   }
+}
+
+function normalizeNowPlayingConfigBounds(raw: unknown, fallback: WindowBounds): WindowBounds {
+  if (typeof raw !== 'object' || raw === null) {
+    return fallback
+  }
+
+  const candidate = raw as Partial<WindowBounds>
+  if (
+    typeof candidate.x !== 'number'
+    || typeof candidate.y !== 'number'
+    || typeof candidate.width !== 'number'
+    || typeof candidate.height !== 'number'
+  ) {
+    return fallback
+  }
+
+  return {
+    x: Math.round(candidate.x),
+    y: Math.round(candidate.y),
+    width: Math.max(NOW_PLAYING_CONFIG_DEFAULTS.minWidth, Math.round(candidate.width)),
+    height: Math.max(NOW_PLAYING_CONFIG_DEFAULTS.minHeight, Math.round(candidate.height)),
+  }
+}
+
+function scheduleNowPlayingConfigBoundsSave(window: BrowserWindow): void {
+  if (nowPlayingConfigBoundsTimer) {
+    clearTimeout(nowPlayingConfigBoundsTimer)
+  }
+
+  nowPlayingConfigBoundsTimer = setTimeout(() => {
+    nowPlayingConfigBoundsTimer = null
+    if (window.isDestroyed()) return
+    void getWindowStateStore().setNowPlayingConfigWindowBounds(window.getBounds()).catch((error) => {
+      console.warn('Could not persist now-playing config window bounds:', error)
+    })
+  }, 80)
+}
+
+function createNowPlayingConfigWindow(): BrowserWindow {
+  if (nowPlayingConfigWindow && !nowPlayingConfigWindow.isDestroyed()) {
+    return nowPlayingConfigWindow
+  }
+
+  const anchorBounds = mainWindow?.getBounds()
+  const fallbackBounds: WindowBounds = anchorBounds
+    ? {
+        x: anchorBounds.x + 40,
+        y: anchorBounds.y + 40,
+        width: NOW_PLAYING_CONFIG_DEFAULTS.width,
+        height: NOW_PLAYING_CONFIG_DEFAULTS.height,
+      }
+    : {
+        x: Math.round(screen.getPrimaryDisplay().workArea.x + 48),
+        y: Math.round(screen.getPrimaryDisplay().workArea.y + 48),
+        width: NOW_PLAYING_CONFIG_DEFAULTS.width,
+        height: NOW_PLAYING_CONFIG_DEFAULTS.height,
+      }
+  const bounds = normalizeNowPlayingConfigBounds(
+    getWindowStateStore().getNowPlayingConfigWindowBounds(),
+    fallbackBounds,
+  )
+
+  nowPlayingConfigWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: NOW_PLAYING_CONFIG_DEFAULTS.minWidth,
+    minHeight: NOW_PLAYING_CONFIG_DEFAULTS.minHeight,
+    ...getFramelessWindowChromeOptions(),
+    resizable: true,
+    fullscreenable: false,
+    maximizable: false,
+    minimizable: true,
+    autoHideMenuBar: true,
+    title: 'Prism Now Playing',
+    show: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  })
+
+  const configWindow = nowPlayingConfigWindow
+
+  configWindow.once('ready-to-show', () => {
+    if (!configWindow.isDestroyed()) {
+      configWindow.show()
+      configWindow.focus()
+    }
+  })
+
+  configWindow.on('move', () => {
+    scheduleNowPlayingConfigBoundsSave(configWindow)
+  })
+  configWindow.on('resize', () => {
+    scheduleNowPlayingConfigBoundsSave(configWindow)
+  })
+  configWindow.on('closed', () => {
+    if (resizeWindow === configWindow) {
+      stopWindowResizeController()
+    }
+    if (nowPlayingConfigBoundsTimer) {
+      clearTimeout(nowPlayingConfigBoundsTimer)
+      nowPlayingConfigBoundsTimer = null
+    }
+    windowSettingsHeights.delete(configWindow.id)
+    windowSettingsBottomAnchors.delete(configWindow.id)
+    nowPlayingConfigWindow = null
+  })
+
+  loadRendererTarget(configWindow, { window: 'now-playing-config' })
+  return configWindow
+}
+
+function openNowPlayingConfigWindow(): void {
+  const configWindow = createNowPlayingConfigWindow()
+  if (configWindow.isMinimized()) {
+    configWindow.restore()
+  }
+  configWindow.show()
+  configWindow.focus()
 }
 
 function setupPermissions(): void {
@@ -1095,25 +1237,38 @@ function setupIPC(): void {
     return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? false
   })
 
-  ipcMain.handle('astra:get-config', async () => {
-    return getAstraIntegrationService().getConfig()
+  ipcMain.handle('now-playing:get-state', async () => {
+    return getNowPlayingManager().getState()
   })
 
-  ipcMain.handle('astra:save-config', async (_event, rawConfig: AstraIntegrationConfig) => {
-    return getAstraIntegrationService().saveConfig(rawConfig)
+  ipcMain.handle('now-playing:set-active', async (event, active: boolean) => {
+    return getNowPlayingManager().setConsumerActive(event.sender.id, Boolean(active))
   })
 
-  ipcMain.handle('astra:get-state', async () => {
-    return getAstraIntegrationService().getState()
+  ipcMain.handle('now-playing:save-provider-config', async (_event, providerId: string, rawConfig: unknown) => {
+    if (providerId !== 'astra' && providerId !== 'spotify' && providerId !== 'tidal') {
+      throw new Error('Invalid now-playing provider.')
+    }
+    return getNowPlayingManager().saveProviderConfig(providerId, rawConfig)
   })
 
-  ipcMain.handle('astra:set-active', async (event, active: boolean) => {
-    return getAstraIntegrationService().setConsumerActive(event.sender.id, Boolean(active))
+  ipcMain.handle('now-playing:set-provider-priority', async (_event, providerPriority: string[]) => {
+    return getNowPlayingManager().setProviderPriority(providerPriority)
   })
 
-  ipcMain.handle('astra:send-control', async (_event, command: AstraControlCommand) => {
-    await getAstraIntegrationService().sendControl(command)
-    return getAstraIntegrationService().getState()
+  ipcMain.handle('now-playing:retry-provider', async (_event, providerId: string) => {
+    if (providerId !== 'astra' && providerId !== 'spotify' && providerId !== 'tidal') {
+      throw new Error('Invalid now-playing provider.')
+    }
+    return getNowPlayingManager().retryProvider(providerId)
+  })
+
+  ipcMain.handle('now-playing:send-control', async (_event, command: NowPlayingControlCommand) => {
+    return getNowPlayingManager().sendControl(command)
+  })
+
+  ipcMain.handle('now-playing:open-config-window', async () => {
+    openNowPlayingConfigWindow()
   })
 
   ipcMain.handle('profiles:get-snapshot', async () => {
@@ -1209,24 +1364,28 @@ function setupIPC(): void {
   ipcMain.handle('themes:load', async (_event, id: string) => {
     const snapshot = await getThemeLibrary().loadTheme(id)
     applyNativeThemeSnapshot(snapshot)
+    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
   ipcMain.handle('themes:rename', async (_event, id: string, name: string) => {
     const snapshot = await getThemeLibrary().renameTheme(id, name)
     applyNativeThemeSnapshot(snapshot)
+    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
   ipcMain.handle('themes:delete', async (_event, id: string) => {
     const snapshot = await getThemeLibrary().deleteTheme(id)
     applyNativeThemeSnapshot(snapshot)
+    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
   ipcMain.handle('themes:reload', async () => {
     const snapshot = await getThemeLibrary().reloadThemes()
     applyNativeThemeSnapshot(snapshot)
+    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
@@ -1251,6 +1410,7 @@ function setupIPC(): void {
 
     const snapshot = await getThemeLibrary().importThemeFromPath(result.filePaths[0])
     applyNativeThemeSnapshot(snapshot)
+    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
@@ -1265,6 +1425,7 @@ function setupIPC(): void {
   ipcMain.handle('themes:migrate-legacy', async (_event, payload: LegacyThemeMigrationPayload) => {
     const migration = await getThemeLibrary().migrateLegacyTheme(payload)
     applyNativeThemeSnapshot(migration.snapshot)
+    broadcastThemeSnapshot(migration.snapshot)
     return migration
   })
 
@@ -1425,7 +1586,7 @@ if (!hasSingleInstanceLock) {
 } else {
   app.whenReady().then(async () => {
     setupPermissions()
-    void getAstraIntegrationService().initialize()
+    void getNowPlayingManager().initialize()
     setupIPC()
     await getWindowStateStore().initialize()
     await syncNativeThemeAppearance()
@@ -1458,6 +1619,6 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on('window-all-closed', () => {
-  void astraIntegrationService?.dispose()
+  void nowPlayingManager?.dispose()
   app.quit()
 })

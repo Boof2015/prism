@@ -64,9 +64,9 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(JSON.stringify(file).includes('inputGainDb'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
   assert.equal(file.scopeSettings.spectrum.heatmapSmoothing, 0.67)
-  assert.equal(file.scopeOrder.includes('astra'), false)
-  assert.equal(file.hiddenScopes.includes('astra'), true)
-  assert.equal(file.widthWeights.astra, 1)
+  assert.equal(file.scopeOrder.includes('nowPlaying'), false)
+  assert.equal(file.hiddenScopes.includes('nowPlaying'), true)
+  assert.equal(file.widthWeights.nowPlaying, 1)
 
   const restored = profileFileToProfile(file, extractLocalProfileMetadata(profile))
   assert.deepEqual(restored.windowBounds, profile.windowBounds)
@@ -74,7 +74,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrum.showSideLine, true)
   assert.equal(restored.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
-  assert.equal(restored.scopeSettings.astra.showControls, true)
+  assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
 })
 
 test('library saves, renames, deletes, and resolves filename collisions', async () => {
@@ -111,12 +111,13 @@ test('library saves, renames, deletes, and resolves filename collisions', async 
   }
 })
 
-test('astra stays opt-in for profile scope order normalization', () => {
+test('now playing stays opt-in for profile scope order normalization', () => {
   const profile = createDefaultProfile('Default')
 
-  assert.equal(profile.scopeOrder.includes('astra'), false)
-  assert.equal(normalizeScopeOrder(undefined).includes('astra'), false)
-  assert.equal(normalizeScopeOrder(['spectrum', 'astra']).includes('astra'), true)
+  assert.equal(profile.scopeOrder.includes('nowPlaying'), false)
+  assert.equal(normalizeScopeOrder(undefined).includes('nowPlaying'), false)
+  assert.equal(normalizeScopeOrder(['spectrum', 'nowPlaying']).includes('nowPlaying'), true)
+  assert.equal(normalizeScopeOrder(['spectrum', 'astra']).includes('nowPlaying'), true)
 })
 
 test('default profile omits theme metadata from runtime state and saved files', async () => {
@@ -262,6 +263,9 @@ test('legacy profile files with themeId import successfully and ignore embedded 
     assert.ok(importedProfile)
     assert.equal(importedProfile.name, 'Legacy Theme')
     assert.equal('themeId' in importedProfile, false)
+    assert.equal(importedProfile.hiddenScopes.includes('nowPlaying'), true)
+    assert.equal(importedProfile.widthWeights.nowPlaying, 1)
+    assert.equal(importedProfile.scopePopouts.nowPlaying.poppedOut, false)
   } finally {
     await harness.cleanup()
   }

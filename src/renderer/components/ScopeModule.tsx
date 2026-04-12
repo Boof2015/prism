@@ -300,7 +300,7 @@ export function scopeSettingsToOptions(
         multiband: s.multiband,
       }
     }
-    case 'astra':
+    case 'nowPlaying':
       return {}
     default:
       return {}
@@ -356,7 +356,7 @@ function createVisualizer(
         ...opts,
         ...(dataSource ? { dataSource: dataSource as WaveformDataSource } : {}),
       })
-    case 'astra':
+    case 'nowPlaying':
       return null
     default:
       return null
@@ -438,11 +438,11 @@ export default function ScopeModule({
     }
   }, [scopeKind, spectrumPeakMode, spectrumPeakInfo])
 
-  if (scopeKind === 'astra') {
+  if (scopeKind === 'nowPlaying') {
     return (
       <AstraScopeModule
         theme={myTheme as ResolvedAstraTheme}
-        settings={mySettings as ScopeSettings['astra']}
+        settings={mySettings as ScopeSettings['nowPlaying']}
       />
     )
   }

@@ -13,6 +13,7 @@
     "test:audio-store": "node scripts/run-audio-store-tests.mjs",
     "test:astra": "node scripts/run-astra-integration-tests.mjs",
     "test:capture-support": "node scripts/run-capture-support-tests.mjs",
+    "test:now-playing": "node scripts/run-now-playing-manager-tests.mjs",
     "test:profiles": "node scripts/run-profile-library-tests.mjs",
     "test:themes": "node scripts/run-theme-library-tests.mjs",
     "test:window-state": "node scripts/run-window-state-tests.mjs",

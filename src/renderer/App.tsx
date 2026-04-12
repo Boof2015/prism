@@ -8,8 +8,8 @@ import WindowResizeOverlay from './components/WindowResizeOverlay'
 import AppBanner from './components/AppBanner'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
-import { useAstraStore } from './stores/astraStore'
 import { useAudioStore } from './stores/audioStore'
+import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
 
@@ -28,7 +28,7 @@ export default function App(): JSX.Element {
   const updateMainWindowBounds = useSettingsStore((s) => s.updateMainWindowBounds)
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
   const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
-  const initializeAstra = useAstraStore((s) => s.initialize)
+  const initializeNowPlaying = useNowPlayingStore((s) => s.initialize)
   const settingsOpen = useUiStore((s) => s.settingsOpen)
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
@@ -48,7 +48,7 @@ export default function App(): JSX.Element {
     void (async () => {
       await initializeThemes()
       await initializeProfiles()
-      await initializeAstra()
+      await initializeNowPlaying()
       if (!isDisposed) {
         window.electronAPI.notifyRendererReady()
       }
@@ -129,7 +129,7 @@ export default function App(): JSX.Element {
     importProfileFromPath,
     initializeProfiles,
     initializeThemes,
-    initializeAstra,
+    initializeNowPlaying,
     showBanner,
     showProfilesFolder,
     updateMainWindowBounds,

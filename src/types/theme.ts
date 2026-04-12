@@ -120,7 +120,7 @@ export interface ThemeWaveformTokens {
   guides?: string
 }
 
-export interface ThemeAstraTokens {
+export interface ThemeNowPlayingTokens {
   accent?: string
   background?: string
   surface?: string
@@ -133,6 +133,8 @@ export interface ThemeAstraTokens {
   statusOk?: string
   statusError?: string
 }
+
+export type ThemeAstraTokens = ThemeNowPlayingTokens
 
 export interface PrismTheme {
   name: string
@@ -149,7 +151,7 @@ export interface PrismTheme {
   vumeter: ThemeVUMeterTokens
   lufsmeter: ThemeLUFSMeterTokens
   waveform: ThemeWaveformTokens
-  astra: ThemeAstraTokens
+  nowPlaying: ThemeNowPlayingTokens
 }
 
 export interface PrismThemeLocalStateV1 {
@@ -305,7 +307,7 @@ export interface ResolvedWaveformTheme {
   bandHigh: string
 }
 
-export interface ResolvedAstraTheme {
+export interface ResolvedNowPlayingTheme {
   accent: string
   text: string
   subtext: string
@@ -323,6 +325,8 @@ export interface ResolvedAstraTheme {
   statusError: string
 }
 
+export type ResolvedAstraTheme = ResolvedNowPlayingTheme
+
 export interface PrismResolvedTheme {
   name: string
   credit?: string
@@ -336,5 +340,5 @@ export interface PrismResolvedTheme {
   vumeter: ResolvedVUMeterTheme
   lufsmeter: ResolvedLUFSMeterTheme
   waveform: ResolvedWaveformTheme
-  astra: ResolvedAstraTheme
+  nowPlaying: ResolvedNowPlayingTheme
 }

@@ -51,7 +51,7 @@ export interface ScopeSettings {
     gainDb: number
     multiband: boolean
   }
-  astra: {
+  nowPlaying: {
     showCoverArt: boolean
     showTitle: boolean
     showArtist: boolean
@@ -69,7 +69,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   vumeter: { mode: 'bar', orientation: 'horizontal' },
   lufsmeter: { mode: 'bar' },
   waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, gainDb: 0, multiband: false },
-  astra: {
+  nowPlaying: {
     showCoverArt: true,
     showTitle: true,
     showArtist: true,

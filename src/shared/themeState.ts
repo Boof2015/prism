@@ -9,7 +9,7 @@ import {
   type PrismResolvedTheme,
   type PrismTheme,
   type PrismThemeLocalStateV1,
-  type ResolvedAstraTheme,
+  type ResolvedNowPlayingTheme,
   type ResolvedInterfaceTheme,
   type ResolvedLUFSMeterTheme,
   type ResolvedOscilloscopeTheme,
@@ -29,7 +29,7 @@ import {
   type ThemeVectorscopeTokens,
   type ThemeVUMeterTokens,
   type ThemeWaveformTokens,
-  type ThemeAstraTokens,
+  type ThemeNowPlayingTokens,
 } from '../types/theme'
 
 const DEFAULT_ACCENT = '#38bdf8'
@@ -158,7 +158,7 @@ const WAVEFORM_SCHEMA = {
   guides: 'guides',
 } as const satisfies SectionSchema<ThemeWaveformTokens>
 
-const ASTRA_SCHEMA = {
+const NOW_PLAYING_SCHEMA = {
   accent: 'accent',
   background: 'background',
   surface: 'surface',
@@ -170,7 +170,7 @@ const ASTRA_SCHEMA = {
   button_border: 'buttonBorder',
   status_ok: 'statusOk',
   status_error: 'statusError',
-} as const satisfies SectionSchema<ThemeAstraTokens>
+} as const satisfies SectionSchema<ThemeNowPlayingTokens>
 
 const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   app: 'app',
@@ -183,7 +183,8 @@ const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   vumeter: 'vumeter',
   lufsmeter: 'lufsmeter',
   waveform: 'waveform',
-  astra: 'astra',
+  now_playing: 'nowPlaying',
+  astra: 'nowPlaying',
 }
 
 const SECTION_LABEL_MAP: Record<ThemeSectionName, string> = {
@@ -197,7 +198,7 @@ const SECTION_LABEL_MAP: Record<ThemeSectionName, string> = {
   vumeter: 'VUMeter',
   lufsmeter: 'LUFSMeter',
   waveform: 'Waveform',
-  astra: 'Astra',
+  nowPlaying: 'Now Playing',
 }
 
 const SECTION_SCHEMAS = {
@@ -211,7 +212,7 @@ const SECTION_SCHEMAS = {
   vumeter: VUMETER_SCHEMA,
   lufsmeter: LUFSMETER_SCHEMA,
   waveform: WAVEFORM_SCHEMA,
-  astra: ASTRA_SCHEMA,
+  nowPlaying: NOW_PLAYING_SCHEMA,
 } as const
 
 interface RgbaColor {
@@ -431,7 +432,7 @@ function createEmptyTheme(): PrismTheme {
     vumeter: {},
     lufsmeter: {},
     waveform: {},
-    astra: {},
+    nowPlaying: {},
   }
 }
 
@@ -547,7 +548,7 @@ export function createDefaultTheme(): PrismTheme {
       bandMid: DEFAULT_BAND_MID,
       bandHigh: DEFAULT_BAND_HIGH,
     },
-    astra: {
+    nowPlaying: {
       accent: DEFAULT_ACCENT,
       background: 'rgba(4, 8, 12, 0.9)',
       surface: 'rgba(10, 16, 24, 0.92)',
@@ -586,8 +587,8 @@ function createPresetTheme(name: string, accent: string): PrismTheme {
   base.lufsmeter.track = withAlpha(accent, 0.08)
   base.lufsmeter.target = withAlpha(accent, 0.25)
   base.waveform.line = accent
-  base.astra.accent = accent
-  base.astra.progressFill = accent
+  base.nowPlaying.accent = accent
+  base.nowPlaying.progressFill = accent
   return normalizeTheme(base, name)
 }
 
@@ -635,7 +636,11 @@ export function normalizeTheme(
   normalized.vumeter = normalizeSectionTokens(parsed.vumeter, VUMETER_SCHEMA)
   normalized.lufsmeter = normalizeSectionTokens(parsed.lufsmeter, LUFSMETER_SCHEMA)
   normalized.waveform = normalizeSectionTokens(parsed.waveform, WAVEFORM_SCHEMA)
-  normalized.astra = normalizeSectionTokens(parsed.astra, ASTRA_SCHEMA)
+  normalized.nowPlaying = normalizeSectionTokens(
+    (parsed as { nowPlaying?: unknown; astra?: unknown }).nowPlaying
+      ?? (parsed as { astra?: unknown }).astra,
+    NOW_PLAYING_SCHEMA,
+  )
   return normalized
 }
 
@@ -933,7 +938,11 @@ export function createTemplateThemeFile(): string {
     guides: resolved.waveform.guides,
   }, WAVEFORM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
 
-  const astraSection = serializeSection('Astra', { ...base.astra }, ASTRA_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const nowPlayingSection = serializeSection(
+    'Now Playing',
+    { ...base.nowPlaying },
+    NOW_PLAYING_SCHEMA as SectionSchema<Record<string, string | undefined>>,
+  )
 
   return `# Prism theme template
 #
@@ -963,7 +972,7 @@ ${[
   vumeterSection.join('\n'),
   lufsmeterSection.join('\n'),
   waveformSection.join('\n'),
-  astraSection.join('\n'),
+  nowPlayingSection.join('\n'),
 ].join('\n\n')}
 `
 }
@@ -1278,26 +1287,26 @@ function resolveAstraTheme(
   app: ResolvedAppTokens,
   controls: ResolvedControlsTokens,
   scopes: ResolvedScopesTokens,
-): ResolvedAstraTheme {
-  const accent = theme.astra.accent ?? app.accent
-  const text = theme.astra.text ?? app.text
-  const buttonBg = theme.astra.buttonSurface ?? controls.surface
+): ResolvedNowPlayingTheme {
+  const accent = theme.nowPlaying.accent ?? app.accent
+  const text = theme.nowPlaying.text ?? app.text
+  const buttonBg = theme.nowPlaying.buttonSurface ?? controls.surface
   return {
     accent,
     text,
     subtext: withAlpha(text, 0.7),
-    background: theme.astra.background ?? scopes.background,
-    surface: theme.astra.surface ?? 'rgba(10, 16, 24, 0.92)',
-    border: theme.astra.border ?? withAlpha(app.border, 0.9),
-    progressTrack: theme.astra.progressTrack ?? withAlpha(text, 0.18),
-    progressFill: theme.astra.progressFill ?? accent,
+    background: theme.nowPlaying.background ?? scopes.background,
+    surface: theme.nowPlaying.surface ?? 'rgba(10, 16, 24, 0.92)',
+    border: theme.nowPlaying.border ?? withAlpha(app.border, 0.9),
+    progressTrack: theme.nowPlaying.progressTrack ?? withAlpha(text, 0.18),
+    progressFill: theme.nowPlaying.progressFill ?? accent,
     buttonBg,
     buttonBgHover: withAlpha(mixColors(buttonBg, accent, 0.14), 0.94),
     buttonBgActive: withAlpha(accent, 0.16),
-    buttonBorder: theme.astra.buttonBorder ?? controls.border,
+    buttonBorder: theme.nowPlaying.buttonBorder ?? controls.border,
     buttonText: text,
-    statusOk: theme.astra.statusOk ?? app.success,
-    statusError: theme.astra.statusError ?? app.danger,
+    statusOk: theme.nowPlaying.statusOk ?? app.success,
+    statusError: theme.nowPlaying.statusError ?? app.danger,
   }
 }
 
@@ -1320,7 +1329,7 @@ export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
     vumeter: resolveVUMeterTheme(normalized, app, scopes),
     lufsmeter: resolveLUFSMeterTheme(normalized, app, scopes),
     waveform: resolveWaveformTheme(normalized, app, scopes),
-    astra: resolveAstraTheme(normalized, app, controls, scopes),
+    nowPlaying: resolveAstraTheme(normalized, app, controls, scopes),
   }
 }
 
@@ -1404,8 +1413,8 @@ export function createMigratedAccentTheme(accent: string): PrismTheme | null {
   base.lufsmeter.track = withAlpha(base.app.accent, 0.08)
   base.lufsmeter.target = withAlpha(base.app.accent, 0.25)
   base.waveform.line = base.app.accent
-  base.astra.accent = base.app.accent
-  base.astra.progressFill = base.app.accent
+  base.nowPlaying.accent = base.app.accent
+  base.nowPlaying.progressFill = base.app.accent
   return normalizeTheme(base, base.name)
 }
 

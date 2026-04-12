@@ -1,11 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type {
-  AstraControlCommand,
-  AstraIntegrationConfig,
-  AstraIntegrationState,
-} from '../types/astra'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
+import type {
+  NowPlayingControlCommand,
+  NowPlayingProviderConfigMap,
+  NowPlayingProviderId,
+  NowPlayingState,
+} from '../types/nowPlaying'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -48,11 +49,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
   getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
-  getAstraConfig: () => ipcRenderer.invoke('astra:get-config') as Promise<AstraIntegrationConfig>,
-  saveAstraConfig: (config: AstraIntegrationConfig) => ipcRenderer.invoke('astra:save-config', config) as Promise<AstraIntegrationConfig>,
-  getAstraState: () => ipcRenderer.invoke('astra:get-state') as Promise<AstraIntegrationState>,
-  setAstraActive: (active: boolean) => ipcRenderer.invoke('astra:set-active', active) as Promise<AstraIntegrationState>,
-  sendAstraControl: (command: AstraControlCommand) => ipcRenderer.invoke('astra:send-control', command) as Promise<AstraIntegrationState>,
+  getNowPlayingState: () => ipcRenderer.invoke('now-playing:get-state') as Promise<NowPlayingState>,
+  setNowPlayingConsumerActive: (active: boolean) => ipcRenderer.invoke('now-playing:set-active', active) as Promise<NowPlayingState>,
+  saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMap[K]) => {
+    return ipcRenderer.invoke('now-playing:save-provider-config', providerId, config) as Promise<NowPlayingState>
+  },
+  setNowPlayingProviderPriority: (providerPriority: NowPlayingProviderId[]) => {
+    return ipcRenderer.invoke('now-playing:set-provider-priority', providerPriority) as Promise<NowPlayingState>
+  },
+  retryNowPlayingProvider: (providerId: NowPlayingProviderId) => {
+    return ipcRenderer.invoke('now-playing:retry-provider', providerId) as Promise<NowPlayingState>
+  },
+  sendNowPlayingControl: (command: NowPlayingControlCommand) => {
+    return ipcRenderer.invoke('now-playing:send-control', command) as Promise<NowPlayingState>
+  },
+  openNowPlayingConfigWindow: () => ipcRenderer.invoke('now-playing:open-config-window') as Promise<void>,
   getProfileSnapshot: () => ipcRenderer.invoke('profiles:get-snapshot') as Promise<ProfileLibrarySnapshot>,
   saveNewProfile: (name: string, profile: Profile) => ipcRenderer.invoke('profiles:save-new', name, profile) as Promise<ProfileLibrarySnapshot>,
   overwriteProfile: (id: string, profile: Profile) => ipcRenderer.invoke('profiles:overwrite', id, profile) as Promise<ProfileLibrarySnapshot>,
@@ -98,10 +109,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('window:bounds-changed', handler)
     return () => ipcRenderer.removeListener('window:bounds-changed', handler)
   },
-  onAstraStateChanged: (callback: (state: AstraIntegrationState) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, state: AstraIntegrationState): void => callback(state)
-    ipcRenderer.on('astra:state-changed', handler)
-    return () => ipcRenderer.removeListener('astra:state-changed', handler)
+  onNowPlayingStateChanged: (callback: (state: NowPlayingState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: NowPlayingState): void => callback(state)
+    ipcRenderer.on('now-playing:state-changed', handler)
+    return () => ipcRenderer.removeListener('now-playing:state-changed', handler)
   },
   onMainCloseRequested: (callback: () => void) => {
     const handler = (): void => callback()

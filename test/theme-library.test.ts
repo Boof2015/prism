@@ -66,7 +66,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.equal(parsed.scopes.background, 'rgb(3, 7, 18)')
   assert.equal(parsed.spectrum.heatMid, 'rgb(200, 50, 120)')
   assert.equal(parsed.vumeter.track, 'rgb(17, 24, 39)')
-  assert.equal(parsed.astra.background, theme.astra.background)
+  assert.equal(parsed.nowPlaying.background, theme.nowPlaying.background)
 })
 
 test('theme files preserve optional credit and website metadata', () => {
@@ -81,6 +81,21 @@ test('theme files preserve optional credit and website metadata', () => {
   assert.match(serialized, /website = https:\/\/themes\.example\/night-shift/)
   assert.equal(parsed.credit, 'Night Shift')
   assert.equal(parsed.website, 'https://themes.example/night-shift')
+})
+
+test('parseThemeFileContent maps legacy Astra sections into now playing tokens', () => {
+  const parsed = parseThemeFileContent(`
+[Theme]
+format = prism-theme
+version = 2
+
+[Astra]
+background = 12, 18, 24, 255
+button_surface = 30, 40, 50, 230
+`, 'Legacy Astra')
+
+  assert.equal(parsed.nowPlaying.background, 'rgb(12, 18, 24)')
+  assert.equal(parsed.nowPlaying.buttonSurface, 'rgba(30, 40, 50, 0.902)')
 })
 
 test('parseThemeFileContent preserves passthrough controls tokens from .iro files', () => {
@@ -139,7 +154,7 @@ test('resolveTheme maps grouped app, controls, and scopes tokens into UI and sco
   theme.scopes.resizeHandle = 'rgb(38, 39, 40)'
   theme.vumeter.track = 'rgb(41, 42, 43)'
   theme.lufsmeter.track = 'rgb(44, 45, 46)'
-  theme.astra = {}
+  theme.nowPlaying = {}
 
   const resolved = resolveTheme(theme)
   assert.equal(resolved.interface.accent, 'rgb(255, 159, 67)')
@@ -161,9 +176,9 @@ test('resolveTheme maps grouped app, controls, and scopes tokens into UI and sco
   assert.equal(resolved.waveform.guides, 'rgba(100, 110, 120, 0.2)')
   assert.equal(resolved.vumeter.track, 'rgb(41, 42, 43)')
   assert.equal(resolved.lufsmeter.track, 'rgb(44, 45, 46)')
-  assert.equal(resolved.astra.accent, 'rgb(255, 159, 67)')
-  assert.equal(resolved.astra.background, 'rgb(29, 30, 31)')
-  assert.equal(resolved.astra.text, 'rgb(240, 244, 248)')
+  assert.equal(resolved.nowPlaying.accent, 'rgb(255, 159, 67)')
+  assert.equal(resolved.nowPlaying.background, 'rgb(29, 30, 31)')
+  assert.equal(resolved.nowPlaying.text, 'rgb(240, 244, 248)')
 })
 
 test('themeToCssVariables exposes grouped UI, control, and scope variables', () => {
@@ -208,20 +223,20 @@ test('createTemplateThemeFile presents a simplified recommended theme layout', (
   assert.equal(parsed.controls.flatControls, 'false')
 })
 
-test('resolveTheme exposes Astra-specific button tokens and derived button states', () => {
+test('resolveTheme exposes now playing button tokens and derived button states', () => {
   const theme = createDefaultTheme()
-  theme.astra.accent = 'rgb(100, 150, 200)'
-  theme.astra.text = 'rgb(240, 241, 242)'
-  theme.astra.buttonSurface = 'rgba(20, 30, 40, 0.9)'
-  theme.astra.buttonBorder = 'rgb(50, 60, 70)'
+  theme.nowPlaying.accent = 'rgb(100, 150, 200)'
+  theme.nowPlaying.text = 'rgb(240, 241, 242)'
+  theme.nowPlaying.buttonSurface = 'rgba(20, 30, 40, 0.9)'
+  theme.nowPlaying.buttonBorder = 'rgb(50, 60, 70)'
 
   const resolved = resolveTheme(theme)
 
-  assert.equal(resolved.astra.buttonBg, 'rgba(20, 30, 40, 0.902)')
-  assert.equal(resolved.astra.buttonBgHover, 'rgba(31, 47, 62, 0.94)')
-  assert.equal(resolved.astra.buttonBgActive, 'rgba(100, 150, 200, 0.16)')
-  assert.equal(resolved.astra.buttonBorder, 'rgb(50, 60, 70)')
-  assert.equal(resolved.astra.buttonText, 'rgb(240, 241, 242)')
+  assert.equal(resolved.nowPlaying.buttonBg, 'rgba(20, 30, 40, 0.902)')
+  assert.equal(resolved.nowPlaying.buttonBgHover, 'rgba(31, 47, 62, 0.94)')
+  assert.equal(resolved.nowPlaying.buttonBgActive, 'rgba(100, 150, 200, 0.16)')
+  assert.equal(resolved.nowPlaying.buttonBorder, 'rgb(50, 60, 70)')
+  assert.equal(resolved.nowPlaying.buttonText, 'rgb(240, 241, 242)')
 })
 
 test('Astra renderer consumes Astra-specific button theme vars', async () => {

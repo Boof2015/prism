@@ -83,6 +83,31 @@ test('popout always-on-top persists independently per scope kind', async () => {
   }
 })
 
+test('now playing config window bounds persist immediately and survive reload', async () => {
+  const harness = await createHarness()
+
+  try {
+    await harness.store.initialize()
+    await harness.store.setNowPlayingConfigWindowBounds({ x: 120, y: 80, width: 720, height: 560 })
+
+    const saved = JSON.parse(await readFile(harness.localStatePath, 'utf8')) as {
+      nowPlayingConfigWindowBounds?: {
+        x: number
+        y: number
+        width: number
+        height: number
+      }
+    }
+    assert.deepEqual(saved.nowPlayingConfigWindowBounds, { x: 120, y: 80, width: 720, height: 560 })
+
+    const reloaded = new FileBackedWindowStateStore(harness.localStatePath)
+    await reloaded.initialize()
+    assert.deepEqual(reloaded.getNowPlayingConfigWindowBounds(), { x: 120, y: 80, width: 720, height: 560 })
+  } finally {
+    await harness.cleanup()
+  }
+})
+
 test('turning a popout pin back off clears its saved local state without affecting others', async () => {
   const harness = await createHarness()
 
@@ -118,8 +143,15 @@ test('invalid saved window state normalizes to supported keys and boolean values
       mainAlwaysOnTop: true,
       popoutAlwaysOnTop: {
         spectrum: true,
+        astra: true,
         waveform: 'yes',
         invalid_scope: true,
+      },
+      nowPlayingConfigWindowBounds: {
+        x: 12.4,
+        y: 18.7,
+        width: 640.2,
+        height: 420.9,
       },
     }, null, 2)}\n`, 'utf8')
 
@@ -127,8 +159,15 @@ test('invalid saved window state normalizes to supported keys and boolean values
 
     assert.equal(harness.store.getMainAlwaysOnTop(), true)
     assert.equal(harness.store.getPopoutAlwaysOnTop('spectrum'), true)
+    assert.equal(harness.store.getPopoutAlwaysOnTop('nowPlaying'), true)
     assert.equal(harness.store.getPopoutAlwaysOnTop('waveform'), false)
     assert.equal(harness.store.getPopoutAlwaysOnTop('oscilloscope'), false)
+    assert.deepEqual(harness.store.getNowPlayingConfigWindowBounds(), {
+      x: 12,
+      y: 19,
+      width: 640,
+      height: 421,
+    })
   } finally {
     await harness.cleanup()
   }

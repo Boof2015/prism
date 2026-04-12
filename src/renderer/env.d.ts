@@ -1,13 +1,14 @@
 /// <reference types="vite/client" />
 
-import type {
-  AstraControlCommand,
-  AstraIntegrationConfig,
-  AstraIntegrationState,
-} from '../types/astra'
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
+import type {
+  NowPlayingControlCommand,
+  NowPlayingProviderConfigMap,
+  NowPlayingProviderId,
+  NowPlayingState,
+} from '../types/nowPlaying'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -49,11 +50,13 @@ declare global {
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
-      getAstraConfig: () => Promise<AstraIntegrationConfig>
-      saveAstraConfig: (config: AstraIntegrationConfig) => Promise<AstraIntegrationConfig>
-      getAstraState: () => Promise<AstraIntegrationState>
-      setAstraActive: (active: boolean) => Promise<AstraIntegrationState>
-      sendAstraControl: (command: AstraControlCommand) => Promise<AstraIntegrationState>
+      getNowPlayingState: () => Promise<NowPlayingState>
+      setNowPlayingConsumerActive: (active: boolean) => Promise<NowPlayingState>
+      saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMap[K]) => Promise<NowPlayingState>
+      setNowPlayingProviderPriority: (providerPriority: NowPlayingProviderId[]) => Promise<NowPlayingState>
+      retryNowPlayingProvider: (providerId: NowPlayingProviderId) => Promise<NowPlayingState>
+      sendNowPlayingControl: (command: NowPlayingControlCommand) => Promise<NowPlayingState>
+      openNowPlayingConfigWindow: () => Promise<void>
       getProfileSnapshot: () => Promise<ProfileLibrarySnapshot>
       saveNewProfile: (name: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
       overwriteProfile: (id: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
@@ -89,7 +92,7 @@ declare global {
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
-      onAstraStateChanged: (callback: (state: AstraIntegrationState) => void) => () => void
+      onNowPlayingStateChanged: (callback: (state: NowPlayingState) => void) => () => void
       onMainCloseRequested: (callback: () => void) => () => void
       onProfileMenuClosed: (callback: () => void) => () => void
       onProfileMenuLoad: (callback: (id: string) => void) => () => void
