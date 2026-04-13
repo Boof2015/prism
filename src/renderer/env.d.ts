@@ -6,6 +6,7 @@ import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
   NowPlayingControlCommand,
   NowPlayingProviderConfigMap,
+  NowPlayingProviderConfigMutationMap,
   NowPlayingProviderId,
   NowPlayingState,
 } from '../types/nowPlaying'
@@ -52,7 +53,7 @@ declare global {
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
       getNowPlayingState: () => Promise<NowPlayingState>
       setNowPlayingConsumerActive: (active: boolean) => Promise<NowPlayingState>
-      saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMap[K]) => Promise<NowPlayingState>
+      saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => Promise<NowPlayingState>
       setNowPlayingProviderPriority: (providerPriority: NowPlayingProviderId[]) => Promise<NowPlayingState>
       retryNowPlayingProvider: (providerId: NowPlayingProviderId) => Promise<NowPlayingState>
       sendNowPlayingControl: (command: NowPlayingControlCommand) => Promise<NowPlayingState>

@@ -39,7 +39,26 @@ function getFallbackTitle(
   providerId: NowPlayingProviderId | null,
   connectionState: 'disabled' | 'connecting' | 'connected' | 'error' | 'unavailable' | null,
 ): string {
-  if (providerId !== 'astra' || connectionState === null) {
+  if (connectionState === null) {
+    return 'Nothing playing'
+  }
+
+  if (providerId === 'spotify') {
+    switch (connectionState) {
+      case 'disabled':
+        return 'Spotify is idle'
+      case 'connecting':
+        return 'Checking Spotify'
+      case 'error':
+        return 'Spotify connection failed'
+      case 'connected':
+        return 'Nothing playing'
+      case 'unavailable':
+        return 'Spotify unavailable'
+    }
+  }
+
+  if (providerId !== 'astra') {
     return 'Nothing playing'
   }
 
@@ -61,7 +80,26 @@ function getFallbackDetail(
   providerId: NowPlayingProviderId | null,
   connectionState: 'disabled' | 'connecting' | 'connected' | 'error' | 'unavailable' | null,
 ): string {
-  if (providerId !== 'astra' || connectionState === null) {
+  if (connectionState === null) {
+    return ''
+  }
+
+  if (providerId === 'spotify') {
+    switch (connectionState) {
+      case 'disabled':
+        return 'Open Spotify on this Mac to show local playback here.'
+      case 'connecting':
+        return 'Waiting for the local Spotify app.'
+      case 'error':
+        return 'Check Spotify access in System Settings > Privacy & Security > Automation.'
+      case 'connected':
+        return ''
+      case 'unavailable':
+        return 'Install Spotify.app to enable this provider.'
+    }
+  }
+
+  if (providerId !== 'astra') {
     return ''
   }
 
@@ -84,7 +122,6 @@ export default function AstraScopeModule({
   settings,
 }: AstraScopeModuleProps): JSX.Element {
   const initialize = useNowPlayingStore((s) => s.initialize)
-  const setConsumerActive = useNowPlayingStore((s) => s.setConsumerActive)
   const nowPlayingState = useNowPlayingStore((s) => s.nowPlayingState)
   const isSendingControl = useNowPlayingStore((s) => s.isSendingControl)
   const sendControl = useNowPlayingStore((s) => s.sendControl)
@@ -95,11 +132,7 @@ export default function AstraScopeModule({
 
   useEffect(() => {
     void initialize()
-    void setConsumerActive(true)
-    return () => {
-      void setConsumerActive(false)
-    }
-  }, [initialize, setConsumerActive])
+  }, [initialize])
 
   const configuredProviderId = useMemo(
     () => getConfiguredProviderId(nowPlayingState),

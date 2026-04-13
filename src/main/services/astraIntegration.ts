@@ -1,9 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import type { NowPlayingProviderState } from '../../types/nowPlaying'
 import {
   DEFAULT_ASTRA_BASE_URL,
   type AstraControlCommand,
   type AstraIntegrationConfig,
+  type AstraIntegrationConfigMutation,
+  type AstraIntegrationPublicConfig,
   type AstraIntegrationState,
   type AstraNowPlayingSnapshot,
   type AstraPlaybackState,
@@ -11,9 +14,16 @@ import {
 } from '../../types/astra'
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000]
+const DEFAULT_ASTRA_SECRET_KEY = 'now-playing.astra.token'
 
 type FetchLike = typeof fetch
 type TimerHandle = ReturnType<typeof setTimeout>
+
+interface SecretVaultLike {
+  deleteSecret(key: string): Promise<void>
+  getSecret(key: string): Promise<string | null>
+  setSecret(key: string, value: string): Promise<void>
+}
 
 interface RemoteTrackSnapshot {
   id: string
@@ -37,10 +47,17 @@ interface RemoteNowPlayingSnapshot {
 
 interface AstraIntegrationServiceOptions {
   configPath: string
+  secretKey?: string
+  secretVault: SecretVaultLike
   fetchImpl?: FetchLike
   now?: () => number
   setTimeoutImpl?: typeof setTimeout
   clearTimeoutImpl?: typeof clearTimeout
+}
+
+interface PersistedAstraConfig {
+  baseUrl: string
+  token: string
 }
 
 function cloneTrackSnapshot(track: AstraTrackSnapshot | null): AstraTrackSnapshot | null {
@@ -118,9 +135,38 @@ export function normalizeAstraIntegrationConfig(raw: unknown): AstraIntegrationC
   }
 }
 
+export function normalizeAstraIntegrationConfigMutation(raw: unknown): AstraIntegrationConfigMutation {
+  const parsed = typeof raw === 'object' && raw !== null
+    ? raw as Partial<AstraIntegrationConfigMutation>
+    : {}
+  const normalizedToken = typeof parsed.token === 'string'
+    ? parsed.token.trim()
+    : ''
+
+  return {
+    baseUrl: normalizeBaseUrl(parsed.baseUrl),
+    token: normalizedToken.length > 0 ? normalizedToken : undefined,
+    clearToken: parsed.clearToken === true,
+  }
+}
+
+function toPublicConfig(config: PersistedAstraConfig): AstraIntegrationPublicConfig {
+  return {
+    baseUrl: config.baseUrl,
+    hasToken: config.token.trim().length > 0,
+  }
+}
+
+function createDefaultRuntimeConfig(): PersistedAstraConfig {
+  return {
+    baseUrl: DEFAULT_ASTRA_BASE_URL,
+    token: '',
+  }
+}
+
 function createDefaultState(): AstraIntegrationState {
   return {
-    config: normalizeAstraIntegrationConfig(null),
+    config: toPublicConfig(createDefaultRuntimeConfig()),
     connectionState: 'disabled',
     lastError: null,
     lastControlError: null,
@@ -229,7 +275,11 @@ function appendBasePath(baseUrl: string, path: string): string {
 }
 
 export class AstraIntegrationService {
+  readonly providerId = 'astra'
+
   private readonly configPath: string
+  private readonly secretKey: string
+  private readonly secretVault: SecretVaultLike
   private readonly fetchImpl: FetchLike
   private readonly now: () => number
   private readonly setTimeoutImpl: typeof setTimeout
@@ -237,6 +287,7 @@ export class AstraIntegrationService {
   private readonly listeners = new Set<(state: AstraIntegrationState) => void>()
   private readonly activeConsumers = new Set<number>()
 
+  private config = createDefaultRuntimeConfig()
   private state = createDefaultState()
   private remoteSnapshot: RemoteNowPlayingSnapshot | null = null
   private currentArtworkKey: string | null = null
@@ -250,6 +301,8 @@ export class AstraIntegrationService {
 
   constructor(options: AstraIntegrationServiceOptions) {
     this.configPath = options.configPath
+    this.secretKey = options.secretKey ?? DEFAULT_ASTRA_SECRET_KEY
+    this.secretVault = options.secretVault
     this.fetchImpl = options.fetchImpl ?? fetch
     this.now = options.now ?? (() => Date.now())
     this.setTimeoutImpl = options.setTimeoutImpl ?? setTimeout
@@ -257,12 +310,16 @@ export class AstraIntegrationService {
   }
 
   async initialize(): Promise<void> {
-    const config = await this.loadConfigFile()
+    const { config, migrationError } = await this.loadConfigFile()
     this.initialized = true
+    this.config = config
     this.state = {
       ...this.state,
-      config,
+      config: toPublicConfig(config),
       connectionState: 'disabled',
+      lastError: migrationError,
+      lastControlError: null,
+      snapshot: null,
     }
     this.emitState()
     if (this.isScopeActive()) {
@@ -288,8 +345,21 @@ export class AstraIntegrationService {
     return cloneState(this.state)
   }
 
-  getConfig(): AstraIntegrationConfig {
+  getPublicConfig(): AstraIntegrationPublicConfig {
     return { ...this.state.config }
+  }
+
+  getProviderState(): NowPlayingProviderState {
+    return {
+      providerId: 'astra',
+      connectionState: this.state.connectionState,
+      lastError: this.state.lastError,
+      lastControlError: this.state.lastControlError,
+      snapshot: cloneSnapshot(this.state.snapshot),
+      isConfigured: this.state.config.hasToken,
+      available: true,
+      supportsTransportControls: true,
+    }
   }
 
   async setConsumerActive(consumerId: number, active: boolean): Promise<AstraIntegrationState> {
@@ -311,19 +381,54 @@ export class AstraIntegrationService {
     return this.getState()
   }
 
-  async saveConfig(rawConfig: unknown): Promise<AstraIntegrationConfig> {
-    const config = normalizeAstraIntegrationConfig(rawConfig)
+  async saveConfig(rawConfig: unknown): Promise<AstraIntegrationPublicConfig> {
+    const configMutation = normalizeAstraIntegrationConfigMutation(rawConfig)
+    let secretError: Error | null = null
+
+    this.config = {
+      ...this.config,
+      baseUrl: configMutation.baseUrl,
+    }
+    await this.persistConfigFile(this.config)
+
+    try {
+      if (configMutation.clearToken) {
+        await this.secretVault.deleteSecret(this.secretKey)
+        this.config = {
+          ...this.config,
+          token: '',
+        }
+      } else if (configMutation.token) {
+        await this.secretVault.setSecret(this.secretKey, configMutation.token)
+        this.config = {
+          ...this.config,
+          token: configMutation.token,
+        }
+      }
+    } catch (error) {
+      secretError = new Error(getErrorMessage(error, 'Prism could not save the Astra token securely.'))
+    }
+
     this.state = {
       ...this.state,
-      config,
+      config: toPublicConfig(this.config),
       connectionState: this.isScopeActive() ? 'connecting' : 'disabled',
       lastError: null,
       lastControlError: null,
+      snapshot: null,
     }
     this.emitState()
-    await this.persistConfigFile(config)
     await this.restartConnection()
-    return { ...config }
+
+    if (secretError) {
+      throw secretError
+    }
+
+    return this.getPublicConfig()
+  }
+
+  async retry(): Promise<void> {
+    await this.restartConnection()
   }
 
   async sendControl(command: AstraControlCommand): Promise<void> {
@@ -337,7 +442,7 @@ export class AstraIntegrationService {
       throw new Error(errorMessage)
     }
 
-    if (!this.state.config.token) {
+    if (!this.config.token) {
       const errorMessage = 'An Astra API token is required before sending controls.'
       this.state = {
         ...this.state,
@@ -401,7 +506,7 @@ export class AstraIntegrationService {
       return
     }
 
-    if (!this.state.config.token) {
+    if (!this.config.token) {
       this.state = {
         ...this.state,
         connectionState: 'error',
@@ -415,6 +520,7 @@ export class AstraIntegrationService {
       ...this.state,
       connectionState: 'connecting',
       lastError: null,
+      snapshot: null,
     }
     this.failedArtworkKey = null
     this.emitState()
@@ -681,7 +787,7 @@ export class AstraIntegrationService {
 
   private buildAuthHeaders(extraHeaders?: Record<string, string>): HeadersInit {
     return {
-      Authorization: `Bearer ${this.state.config.token}`,
+      Authorization: `Bearer ${this.config.token}`,
       ...extraHeaders,
     }
   }
@@ -691,20 +797,57 @@ export class AstraIntegrationService {
   }
 
   private buildEndpoint(path: string): string {
-    return appendBasePath(this.state.config.baseUrl, path)
+    return appendBasePath(this.config.baseUrl, path)
   }
 
-  private async loadConfigFile(): Promise<AstraIntegrationConfig> {
+  private async loadConfigFile(): Promise<{
+    config: PersistedAstraConfig
+    migrationError: string | null
+  }> {
+    let persistedConfig = createDefaultRuntimeConfig()
+
     try {
       const raw = await readFile(this.configPath, 'utf8')
-      return normalizeAstraIntegrationConfig(JSON.parse(raw))
+      persistedConfig = normalizeAstraIntegrationConfig(JSON.parse(raw))
     } catch {
-      return normalizeAstraIntegrationConfig(null)
+      persistedConfig = createDefaultRuntimeConfig()
+    }
+
+    let token = ''
+    let migrationError: string | null = null
+
+    if (persistedConfig.token) {
+      try {
+        await this.secretVault.setSecret(this.secretKey, persistedConfig.token)
+        token = persistedConfig.token
+      } catch (error) {
+        migrationError = getErrorMessage(error, 'Prism could not migrate the Astra token into secure storage.')
+      }
+
+      persistedConfig = {
+        ...persistedConfig,
+        token: '',
+      }
+      await this.persistConfigFile(persistedConfig)
+    } else {
+      try {
+        token = await this.secretVault.getSecret(this.secretKey) ?? ''
+      } catch (error) {
+        migrationError = getErrorMessage(error, 'Prism could not read the stored Astra token.')
+      }
+    }
+
+    return {
+      config: {
+        baseUrl: persistedConfig.baseUrl,
+        token,
+      },
+      migrationError,
     }
   }
 
-  private async persistConfigFile(config: AstraIntegrationConfig): Promise<void> {
+  private async persistConfigFile(config: PersistedAstraConfig): Promise<void> {
     await mkdir(dirname(this.configPath), { recursive: true })
-    await writeFile(this.configPath, JSON.stringify(config, null, 2), 'utf8')
+    await writeFile(this.configPath, `${JSON.stringify({ baseUrl: config.baseUrl }, null, 2)}\n`, 'utf8')
   }
 }

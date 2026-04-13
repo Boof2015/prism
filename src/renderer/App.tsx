@@ -29,10 +29,17 @@ export default function App(): JSX.Element {
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
   const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
   const initializeNowPlaying = useNowPlayingStore((s) => s.initialize)
+  const setNowPlayingConsumerActive = useNowPlayingStore((s) => s.setConsumerActive)
+  const scopeOrder = useSettingsStore((s) => s.scopeOrder)
+  const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
+  const scopePopouts = useSettingsStore((s) => s.scopePopouts)
   const settingsOpen = useUiStore((s) => s.settingsOpen)
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const showBanner = useUiStore((s) => s.showBanner)
+
+  const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
+    && (scopeOrder.includes('nowPlaying') || scopePopouts.nowPlaying?.poppedOut === true)
 
   // Auto-capture on launch
   useEffect(() => {
@@ -134,6 +141,15 @@ export default function App(): JSX.Element {
     showProfilesFolder,
     updateMainWindowBounds,
   ])
+
+  useEffect(() => {
+    void initializeNowPlaying()
+      .then(() => setNowPlayingConsumerActive(isNowPlayingVisible))
+
+    return () => {
+      void setNowPlayingConsumerActive(false)
+    }
+  }, [initializeNowPlaying, isNowPlayingVisible, setNowPlayingConsumerActive])
 
   const settingsHeight = resolveMainWindowSettingsHeight(
     settingsOpen,

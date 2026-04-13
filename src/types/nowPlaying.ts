@@ -1,10 +1,10 @@
-import type { AstraIntegrationConfig } from './astra'
+import type { AstraIntegrationConfigMutation, AstraIntegrationPublicConfig } from './astra'
 
 export type NowPlayingProviderId = 'astra' | 'spotify' | 'tidal'
 export type NowPlayingPlaybackState = 'stopped' | 'playing' | 'paused' | 'loading'
 export type NowPlayingProviderConnectionState = 'disabled' | 'connecting' | 'connected' | 'error' | 'unavailable'
 export type NowPlayingControlCommand = 'play' | 'pause' | 'next' | 'previous'
-export type NowPlayingProviderAuthMode = 'token' | 'oauth' | 'none'
+export type NowPlayingProviderAuthMode = 'token' | 'oauth' | 'local' | 'none'
 
 export interface NowPlayingTrackSnapshot {
   id: string
@@ -40,7 +40,13 @@ export interface UnsupportedNowPlayingProviderConfig {
 }
 
 export interface NowPlayingProviderConfigMap {
-  astra: AstraIntegrationConfig
+  astra: AstraIntegrationPublicConfig
+  spotify: UnsupportedNowPlayingProviderConfig
+  tidal: UnsupportedNowPlayingProviderConfig
+}
+
+export interface NowPlayingProviderConfigMutationMap {
+  astra: AstraIntegrationConfigMutation
   spotify: UnsupportedNowPlayingProviderConfig
   tidal: UnsupportedNowPlayingProviderConfig
 }
@@ -84,17 +90,17 @@ export const NOW_PLAYING_PROVIDER_DEFINITIONS: NowPlayingProviderDefinitionMap =
   spotify: {
     id: 'spotify',
     label: 'Spotify',
-    description: 'Spotify integration is planned but not implemented yet.',
-    authMode: 'oauth',
-    available: false,
-    comingSoon: true,
-    supportsTransportControls: false,
+    description: 'Read track data and transport controls directly from the local Spotify macOS app.',
+    authMode: 'local',
+    available: true,
+    comingSoon: false,
+    supportsTransportControls: true,
   },
   tidal: {
     id: 'tidal',
     label: 'TIDAL',
     description: 'TIDAL integration is planned but not implemented yet.',
-    authMode: 'oauth',
+    authMode: 'none',
     available: false,
     comingSoon: true,
     supportsTransportControls: false,

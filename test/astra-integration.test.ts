@@ -1,11 +1,32 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { AstraIntegrationService, normalizeAstraIntegrationConfig } from '../src/main/services/astraIntegration'
 import { DEFAULT_ASTRA_BASE_URL, type AstraIntegrationConfig } from '../src/types/astra'
+
+class MemorySecretVault {
+  readonly secrets = new Map<string, string>()
+  setError: Error | null = null
+
+  async getSecret(key: string): Promise<string | null> {
+    return this.secrets.get(key) ?? null
+  }
+
+  async setSecret(key: string, value: string): Promise<void> {
+    if (this.setError) {
+      throw this.setError
+    }
+
+    this.secrets.set(key, value)
+  }
+
+  async deleteSecret(key: string): Promise<void> {
+    this.secrets.delete(key)
+  }
+}
 
 function createJsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -140,6 +161,7 @@ test('service initializes from config, hydrates artwork, and applies SSE updates
     baseUrl: DEFAULT_ASTRA_BASE_URL,
     token: 'secret-token',
   })
+  const secretVault = new MemorySecretVault()
   const sse = createSseStream()
   const artworkUrl = `${DEFAULT_ASTRA_BASE_URL}/v1/artwork/current?trackId=track-1`
   const calls: Array<{ init?: RequestInit; url: string }> = []
@@ -187,11 +209,19 @@ test('service initializes from config, hydrates artwork, and applies SSE updates
     configPath: harness.configPath,
     fetchImpl,
     now: () => 1000,
+    secretVault,
   })
 
   try {
     await service.initialize()
     assert.equal(service.getState().connectionState, 'disabled')
+    assert.deepEqual(service.getState().config, {
+      baseUrl: DEFAULT_ASTRA_BASE_URL,
+      hasToken: true,
+    })
+    assert.equal(secretVault.secrets.get('now-playing.astra.token'), 'secret-token')
+    const rawConfig = await readFile(harness.configPath, 'utf8')
+    assert.equal(rawConfig.includes('secret-token'), false)
     await service.setConsumerActive(1, true)
     await waitFor(() => service.getState().connectionState === 'connected', 'expected connected Astra state')
 
@@ -237,6 +267,7 @@ test('service emits a single state update when reusing cached artwork on SSE upd
     baseUrl: DEFAULT_ASTRA_BASE_URL,
     token: 'secret-token',
   })
+  const secretVault = new MemorySecretVault()
   const sse = createSseStream()
   const artworkUrl = `${DEFAULT_ASTRA_BASE_URL}/v1/artwork/current?trackId=track-1`
   let stateUpdateCount = 0
@@ -282,6 +313,7 @@ test('service emits a single state update when reusing cached artwork on SSE upd
     configPath: harness.configPath,
     fetchImpl,
     now: () => 1000,
+    secretVault,
   })
 
   try {
@@ -327,6 +359,7 @@ test('service does not refetch identical artwork after a failed attempt', async 
     baseUrl: DEFAULT_ASTRA_BASE_URL,
     token: 'secret-token',
   })
+  const secretVault = new MemorySecretVault()
   const sse = createSseStream()
   const artworkUrl = `${DEFAULT_ASTRA_BASE_URL}/v1/artwork/current?trackId=track-2`
   let artworkRequests = 0
@@ -365,6 +398,7 @@ test('service does not refetch identical artwork after a failed attempt', async 
   const service = new AstraIntegrationService({
     configPath: harness.configPath,
     fetchImpl,
+    secretVault,
   })
 
   try {
@@ -424,6 +458,7 @@ test('service schedules reconnect when the SSE stream closes', async () => {
     baseUrl: DEFAULT_ASTRA_BASE_URL,
     token: 'secret-token',
   })
+  const secretVault = new MemorySecretVault()
   const timers = createFakeTimers()
   const steadyStream = createSseStream()
   let eventStreamRequests = 0
@@ -471,6 +506,7 @@ test('service schedules reconnect when the SSE stream closes', async () => {
     fetchImpl,
     setTimeoutImpl: timers.setTimeoutImpl,
     clearTimeoutImpl: timers.clearTimeoutImpl,
+    secretVault,
   })
 
   try {
@@ -495,6 +531,7 @@ test('service surfaces 401 and 403 control errors and clears them after success'
     baseUrl: DEFAULT_ASTRA_BASE_URL,
     token: 'secret-token',
   })
+  const secretVault = new MemorySecretVault()
   const sse = createSseStream()
   let controlRequests = 0
 
@@ -545,6 +582,7 @@ test('service surfaces 401 and 403 control errors and clears them after success'
   const service = new AstraIntegrationService({
     configPath: harness.configPath,
     fetchImpl,
+    secretVault,
   })
 
   try {
@@ -560,6 +598,77 @@ test('service surfaces 401 and 403 control errors and clears them after success'
 
     await service.sendControl('play')
     assert.equal(service.getState().lastControlError, null)
+  } finally {
+    await service.dispose()
+    await harness.cleanup()
+  }
+})
+
+test('saveConfig preserves, replaces, and clears the stored Astra token explicitly', async () => {
+  const harness = await createConfigFile({
+    baseUrl: DEFAULT_ASTRA_BASE_URL,
+    token: '',
+  })
+  const secretVault = new MemorySecretVault()
+  secretVault.secrets.set('now-playing.astra.token', 'stored-token')
+  const service = new AstraIntegrationService({
+    configPath: harness.configPath,
+    fetchImpl: async () => createJsonResponse({}),
+    secretVault,
+  })
+
+  try {
+    await service.initialize()
+    assert.equal(service.getState().config.hasToken, true)
+
+    await service.saveConfig({
+      baseUrl: 'http://127.0.0.1:49000',
+      token: '',
+    })
+    assert.equal(secretVault.secrets.get('now-playing.astra.token'), 'stored-token')
+    assert.deepEqual(service.getState().config, {
+      baseUrl: 'http://127.0.0.1:49000',
+      hasToken: true,
+    })
+
+    await service.saveConfig({
+      baseUrl: 'http://127.0.0.1:49000',
+      token: 'replacement-token',
+    })
+    assert.equal(secretVault.secrets.get('now-playing.astra.token'), 'replacement-token')
+
+    await service.saveConfig({
+      baseUrl: 'http://127.0.0.1:49000',
+      clearToken: true,
+    })
+    assert.equal(secretVault.secrets.has('now-playing.astra.token'), false)
+    assert.equal(service.getState().config.hasToken, false)
+  } finally {
+    await service.dispose()
+    await harness.cleanup()
+  }
+})
+
+test('service strips plaintext tokens from legacy config even when secure storage migration fails', async () => {
+  const harness = await createConfigFile({
+    baseUrl: DEFAULT_ASTRA_BASE_URL,
+    token: 'legacy-token',
+  })
+  const secretVault = new MemorySecretVault()
+  secretVault.setError = new Error('Secure storage unavailable.')
+  const service = new AstraIntegrationService({
+    configPath: harness.configPath,
+    fetchImpl: async () => createJsonResponse({}),
+    secretVault,
+  })
+
+  try {
+    await service.initialize()
+    assert.equal(service.getState().config.hasToken, false)
+    assert.match(service.getState().lastError ?? '', /Secure storage unavailable\./)
+
+    const rawConfig = await readFile(harness.configPath, 'utf8')
+    assert.equal(rawConfig.includes('legacy-token'), false)
   } finally {
     await service.dispose()
     await harness.cleanup()

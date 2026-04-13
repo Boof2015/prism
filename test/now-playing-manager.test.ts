@@ -4,39 +4,68 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { NowPlayingManager } from '../src/main/services/nowPlayingManager'
+import type { NowPlayingProviderService } from '../src/main/services/nowPlayingProvider'
 import {
   DEFAULT_ASTRA_BASE_URL,
-  type AstraIntegrationConfig,
-  type AstraIntegrationState,
+  type AstraIntegrationConfigMutation,
+  type AstraIntegrationPublicConfig,
 } from '../src/types/astra'
+import type {
+  NowPlayingControlCommand,
+  NowPlayingProviderConfigMap,
+  NowPlayingProviderConfigMutationMap,
+  NowPlayingProviderId,
+  NowPlayingProviderState,
+} from '../src/types/nowPlaying'
 
-function createAstraState(overrides: Partial<AstraIntegrationState> = {}): AstraIntegrationState {
-  const config = overrides.config ?? {
-    baseUrl: DEFAULT_ASTRA_BASE_URL,
-    token: '',
-  }
-
+function createProviderState(
+  providerId: NowPlayingProviderId,
+  overrides: Partial<NowPlayingProviderState> = {},
+): NowPlayingProviderState {
   return {
+    providerId,
     connectionState: 'disabled',
     lastError: null,
     lastControlError: null,
     snapshot: null,
+    isConfigured: false,
+    available: providerId !== 'tidal',
+    supportsTransportControls: providerId !== 'tidal',
     ...overrides,
-    config,
   }
 }
 
-class StubAstraService {
-  state: AstraIntegrationState
-  consumerCalls: Array<{ consumerId: number, active: boolean }> = []
-  saveConfigCalls: unknown[] = []
-  controlCalls: string[] = []
+function cloneProviderState(state: NowPlayingProviderState): NowPlayingProviderState {
+  return {
+    ...state,
+    snapshot: state.snapshot
+      ? {
+          ...state.snapshot,
+          currentTrack: state.snapshot.currentTrack ? { ...state.snapshot.currentTrack } : null,
+        }
+      : null,
+  }
+}
+
+class StubProviderService<K extends 'astra' | 'spotify'> implements NowPlayingProviderService<K> {
+  readonly providerId: K
+  publicConfig: NowPlayingProviderConfigMap[K]
+  providerState: NowPlayingProviderState
+  consumerCalls: Array<{ consumerId: number; active: boolean }> = []
+  saveConfigCalls: Array<NowPlayingProviderConfigMutationMap[K]> = []
+  controlCalls: NowPlayingControlCommand[] = []
+  retryCalls = 0
   initializeCalls = 0
   disposeCalls = 0
   private readonly listeners = new Set<() => void>()
 
-  constructor(state: AstraIntegrationState) {
-    this.state = state
+  constructor(providerId: K, options: {
+    publicConfig: NowPlayingProviderConfigMap[K]
+    providerState: NowPlayingProviderState
+  }) {
+    this.providerId = providerId
+    this.publicConfig = options.publicConfig
+    this.providerState = options.providerState
   }
 
   subscribe(listener: () => void): () => void {
@@ -60,59 +89,94 @@ class StubAstraService {
     this.disposeCalls += 1
   }
 
-  getState(): AstraIntegrationState {
-    return this.state
+  getPublicConfig(): NowPlayingProviderConfigMap[K] {
+    return structuredClone(this.publicConfig)
   }
 
-  getConfig(): AstraIntegrationConfig {
-    return { ...this.state.config }
+  getProviderState(): NowPlayingProviderState {
+    return cloneProviderState(this.providerState)
   }
 
   async setConsumerActive(consumerId: number, active: boolean): Promise<void> {
     this.consumerCalls.push({ consumerId, active })
   }
 
-  async saveConfig(rawConfig: unknown): Promise<void> {
-    this.saveConfigCalls.push(rawConfig)
-    const patch = typeof rawConfig === 'object' && rawConfig !== null
-      ? rawConfig as Partial<AstraIntegrationConfig>
-      : {}
-    this.state = {
-      ...this.state,
-      config: {
-        ...this.state.config,
-        ...patch,
-      },
+  async saveConfig(rawConfig: NowPlayingProviderConfigMutationMap[K]): Promise<void> {
+    this.saveConfigCalls.push(structuredClone(rawConfig))
+
+    if (this.providerId === 'astra') {
+      const mutation = rawConfig as AstraIntegrationConfigMutation
+      const currentConfig = this.publicConfig as AstraIntegrationPublicConfig
+      this.publicConfig = {
+        baseUrl: mutation.baseUrl,
+        hasToken: mutation.clearToken
+          ? false
+          : mutation.token
+            ? true
+            : currentConfig.hasToken,
+      } as NowPlayingProviderConfigMap[K]
+      this.providerState = {
+        ...this.providerState,
+        isConfigured: (this.publicConfig as AstraIntegrationPublicConfig).hasToken,
+      }
+      this.emit()
     }
-    this.emit()
   }
 
-  async sendControl(command: 'play' | 'pause' | 'next' | 'previous'): Promise<void> {
+  async retry(): Promise<void> {
+    this.retryCalls += 1
+  }
+
+  async sendControl(command: NowPlayingControlCommand): Promise<void> {
     this.controlCalls.push(command)
   }
 }
 
-async function createHarness(state: AstraIntegrationState): Promise<{
+async function createHarness(options?: {
+  astraConfig?: AstraIntegrationPublicConfig
+  astraState?: Partial<NowPlayingProviderState>
+  spotifyState?: Partial<NowPlayingProviderState>
+}): Promise<{
+  astra: StubProviderService<'astra'>
   cleanup: () => Promise<void>
   manager: NowPlayingManager
-  stub: StubAstraService
+  spotify: StubProviderService<'spotify'>
 }> {
   const rootDir = await mkdtemp(join(tmpdir(), 'prism-now-playing-manager-'))
-  const stub = new StubAstraService(state)
+  const astra = new StubProviderService('astra', {
+    publicConfig: options?.astraConfig ?? {
+      baseUrl: DEFAULT_ASTRA_BASE_URL,
+      hasToken: false,
+    },
+    providerState: createProviderState('astra', {
+      isConfigured: options?.astraConfig?.hasToken ?? false,
+      ...options?.astraState,
+    }),
+  })
+  const spotify = new StubProviderService('spotify', {
+    publicConfig: {},
+    providerState: createProviderState('spotify', {
+      available: false,
+      supportsTransportControls: false,
+      isConfigured: false,
+      connectionState: 'unavailable',
+      ...options?.spotifyState,
+    }),
+  })
 
   return {
+    astra,
     cleanup: () => rm(rootDir, { recursive: true, force: true }),
     manager: new NowPlayingManager({
-      astraConfigPath: join(rootDir, 'astra-integration.json'),
       localStatePath: join(rootDir, 'now-playing-state.json'),
-      astraService: stub,
+      providerServices: [astra, spotify],
     }),
-    stub,
+    spotify,
   }
 }
 
 test('manager starts in onboarding mode until a supported provider is configured', async () => {
-  const harness = await createHarness(createAstraState())
+  const harness = await createHarness()
 
   try {
     await harness.manager.initialize()
@@ -122,142 +186,151 @@ test('manager starts in onboarding mode until a supported provider is configured
     assert.equal(state.hasConfiguredProvider, false)
     assert.equal(state.onboardingRequired, true)
     assert.equal(state.activeProviderId, null)
-    assert.equal(state.providers.astra.connectionState, 'disabled')
+    assert.deepEqual(state.configs.astra, {
+      baseUrl: DEFAULT_ASTRA_BASE_URL,
+      hasToken: false,
+    })
     assert.equal(state.providers.spotify.connectionState, 'unavailable')
-    assert.equal(state.providers.tidal.connectionState, 'unavailable')
   } finally {
     await harness.cleanup()
   }
 })
 
-test('coming-soon providers never outrank a configured Astra provider in arbitration', async () => {
-  const harness = await createHarness(createAstraState({
-    config: {
-      baseUrl: DEFAULT_ASTRA_BASE_URL,
-      token: 'secret-token',
+test('local Spotify can satisfy configuration without any OAuth setup', async () => {
+  const harness = await createHarness({
+    spotifyState: {
+      available: true,
+      supportsTransportControls: true,
+      isConfigured: true,
+      connectionState: 'disabled',
     },
-    connectionState: 'connected',
-    snapshot: {
-      playbackState: 'paused',
-      currentTime: 12,
-      duration: 120,
-      queueLength: 4,
-      outputDeviceLabel: 'Studio',
-      visualizerLineColor: '#38bdf8',
-      currentTrack: {
-        id: 'track-1',
-        title: 'Track',
-        artist: 'Artist',
-        album: 'Album',
-        isFavorite: false,
-        artworkDataUrl: null,
-      },
-      updatedAt: 1000,
-    },
-  }))
+  })
 
   try {
     await harness.manager.initialize()
-    await harness.manager.setProviderPriority(['spotify', 'tidal', 'astra'])
 
     const state = harness.manager.getState()
-    assert.deepEqual(state.providerPriority, ['spotify', 'tidal', 'astra'])
     assert.equal(state.hasConfiguredProvider, true)
     assert.equal(state.onboardingRequired, false)
-    assert.equal(state.activeProviderId, 'astra')
+    assert.equal(state.activeProviderId, null)
+    assert.equal(state.providers.spotify.isConfigured, true)
   } finally {
     await harness.cleanup()
   }
 })
 
-test('manager forwards consumer activity for multiple now-playing surfaces', async () => {
-  const harness = await createHarness(createAstraState())
-
-  try {
-    await harness.manager.initialize()
-    await harness.manager.setConsumerActive(101, true)
-    await harness.manager.setConsumerActive(202, true)
-    await harness.manager.setConsumerActive(101, false)
-
-    assert.deepEqual(harness.stub.consumerCalls, [
-      { consumerId: 101, active: true },
-      { consumerId: 202, active: true },
-      { consumerId: 101, active: false },
-    ])
-  } finally {
-    await harness.cleanup()
-  }
-})
-
-test('manager routes config retry, controls, and service updates through Astra', async () => {
-  const harness = await createHarness(createAstraState({
-    config: {
+test('manager prefers a playing Spotify provider over Astra when Spotify has higher priority', async () => {
+  const harness = await createHarness({
+    astraConfig: {
       baseUrl: DEFAULT_ASTRA_BASE_URL,
-      token: 'secret-token',
+      hasToken: true,
     },
-    connectionState: 'connected',
-    snapshot: {
-      playbackState: 'playing',
-      currentTime: 24,
-      duration: 180,
-      queueLength: 8,
-      outputDeviceLabel: 'Main Out',
-      visualizerLineColor: '#38bdf8',
-      currentTrack: {
-        id: 'track-2',
-        title: 'Playing Track',
-        artist: 'Artist',
-        album: 'Album',
-        isFavorite: true,
-        artworkDataUrl: null,
-      },
-      updatedAt: 2000,
-    },
-  }))
-
-  try {
-    await harness.manager.initialize()
-
-    const snapshots: Array<string | null> = []
-    const unsubscribe = harness.manager.subscribe((state) => {
-      snapshots.push(state.activeProviderId)
-    })
-
-    await harness.manager.retryProvider('astra')
-    await harness.manager.sendControl('next')
-
-    harness.stub.state = createAstraState({
-      config: {
-        baseUrl: DEFAULT_ASTRA_BASE_URL,
-        token: 'secret-token',
-      },
+    astraState: {
+      isConfigured: true,
       connectionState: 'connected',
       snapshot: {
         playbackState: 'paused',
-        currentTime: 48,
-        duration: 180,
-        queueLength: 8,
-        outputDeviceLabel: 'Main Out',
+        currentTime: 12,
+        duration: 120,
+        queueLength: 2,
+        outputDeviceLabel: 'Studio',
         visualizerLineColor: '#38bdf8',
         currentTrack: {
-          id: 'track-3',
-          title: 'Paused Track',
-          artist: 'Artist',
-          album: 'Album',
+          id: 'astra-track',
+          title: 'Astra Track',
+          artist: 'Astra Artist',
+          album: 'Astra Album',
           isFavorite: false,
           artworkDataUrl: null,
         },
-        updatedAt: 3000,
+        updatedAt: 1000,
       },
-    })
-    harness.stub.emit()
-    unsubscribe()
+    },
+    spotifyState: {
+      available: true,
+      supportsTransportControls: true,
+      isConfigured: true,
+      connectionState: 'connected',
+      snapshot: {
+        playbackState: 'playing',
+        currentTime: 30,
+        duration: 180,
+        queueLength: 0,
+        outputDeviceLabel: null,
+        visualizerLineColor: '#1ed760',
+        currentTrack: {
+          id: 'spotify-track',
+          title: 'Spotify Track',
+          artist: 'Spotify Artist',
+          album: 'Spotify Album',
+          isFavorite: true,
+          artworkDataUrl: null,
+        },
+        updatedAt: 2000,
+      },
+    },
+  })
 
-    assert.deepEqual(harness.stub.saveConfigCalls, [
-      { baseUrl: DEFAULT_ASTRA_BASE_URL, token: 'secret-token' },
-    ])
-    assert.deepEqual(harness.stub.controlCalls, ['next'])
-    assert.deepEqual(snapshots, ['astra', 'astra', 'astra'])
+  try {
+    await harness.manager.initialize()
+    await harness.manager.setProviderPriority(['spotify', 'astra', 'tidal'])
+
+    const state = harness.manager.getState()
+    assert.equal(state.activeProviderId, 'spotify')
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('manager forwards save, retry, and controls to the active provider services', async () => {
+  const harness = await createHarness({
+    astraConfig: {
+      baseUrl: DEFAULT_ASTRA_BASE_URL,
+      hasToken: true,
+    },
+    astraState: {
+      isConfigured: true,
+    },
+    spotifyState: {
+      available: true,
+      supportsTransportControls: true,
+      isConfigured: true,
+      connectionState: 'connected',
+      snapshot: {
+        playbackState: 'playing',
+        currentTime: 5,
+        duration: 200,
+        queueLength: 0,
+        outputDeviceLabel: null,
+        visualizerLineColor: '#1ed760',
+        currentTrack: {
+          id: 'spotify-track',
+          title: 'Spotify Track',
+          artist: 'Spotify Artist',
+          album: 'Spotify Album',
+          isFavorite: false,
+          artworkDataUrl: null,
+        },
+        updatedAt: 500,
+      },
+    },
+  })
+
+  try {
+    await harness.manager.initialize()
+    await harness.manager.saveProviderConfig('astra', {
+      baseUrl: 'http://127.0.0.1:5000',
+      token: 'replacement-token',
+    })
+    await harness.manager.retryProvider('spotify')
+    await harness.manager.sendControl('next')
+
+    assert.deepEqual(harness.astra.saveConfigCalls, [{
+      baseUrl: 'http://127.0.0.1:5000',
+      token: 'replacement-token',
+    }])
+    assert.equal(harness.spotify.retryCalls, 1)
+    assert.deepEqual(harness.spotify.controlCalls, ['next'])
   } finally {
     await harness.cleanup()
   }

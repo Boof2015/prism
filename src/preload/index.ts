@@ -3,7 +3,7 @@ import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
   NowPlayingControlCommand,
-  NowPlayingProviderConfigMap,
+  NowPlayingProviderConfigMutationMap,
   NowPlayingProviderId,
   NowPlayingState,
 } from '../types/nowPlaying'
@@ -51,7 +51,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
   getNowPlayingState: () => ipcRenderer.invoke('now-playing:get-state') as Promise<NowPlayingState>,
   setNowPlayingConsumerActive: (active: boolean) => ipcRenderer.invoke('now-playing:set-active', active) as Promise<NowPlayingState>,
-  saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMap[K]) => {
+  saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => {
     return ipcRenderer.invoke('now-playing:save-provider-config', providerId, config) as Promise<NowPlayingState>
   },
   setNowPlayingProviderPriority: (providerPriority: NowPlayingProviderId[]) => {

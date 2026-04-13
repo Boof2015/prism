@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { AstraIntegrationConfig, AstraIntegrationState } from '../../types/astra'
 import {
   NOW_PLAYING_PROVIDER_DEFINITIONS,
   NOW_PLAYING_PROVIDER_IDS,
@@ -12,27 +11,20 @@ import {
   type NowPlayingSnapshot,
   type NowPlayingState,
 } from '../../types/nowPlaying'
-import { AstraIntegrationService } from './astraIntegration'
+import type { ManagedNowPlayingProviderId, NowPlayingProviderService } from './nowPlayingProvider'
 
 interface NowPlayingManagerOptions {
-  astraConfigPath: string
   localStatePath: string
-  astraService?: AstraServiceLike
+  providerServices: NowPlayingProviderService[]
 }
+
+type ProviderServiceMap = Partial<{
+  astra: NowPlayingProviderService<'astra'>
+  spotify: NowPlayingProviderService<'spotify'>
+}>
 
 interface NowPlayingLocalState {
   providerPriority: NowPlayingProviderId[]
-}
-
-interface AstraServiceLike {
-  initialize(): Promise<void>
-  dispose(): Promise<void>
-  subscribe(listener: () => void): () => void
-  getState(): AstraIntegrationState
-  getConfig(): AstraIntegrationConfig
-  setConsumerActive(consumerId: number, active: boolean): Promise<unknown>
-  saveConfig(rawConfig: unknown): Promise<unknown>
-  sendControl(command: NowPlayingControlCommand): Promise<unknown>
 }
 
 function cloneSnapshot(snapshot: NowPlayingSnapshot | null): NowPlayingSnapshot | null {
@@ -104,29 +96,7 @@ function normalizeLocalState(raw: unknown): NowPlayingLocalState {
   }
 }
 
-function isConfiguredAstraProvider(config: AstraIntegrationConfig): boolean {
-  return typeof config.token === 'string' && config.token.trim().length > 0
-}
-
-function toAstraProviderState(state: AstraIntegrationState): NowPlayingProviderState {
-  return {
-    providerId: 'astra',
-    connectionState: state.connectionState,
-    lastError: state.lastError,
-    lastControlError: state.lastControlError,
-    snapshot: state.snapshot ? {
-      ...state.snapshot,
-      currentTrack: state.snapshot.currentTrack
-        ? { ...state.snapshot.currentTrack }
-        : null,
-    } : null,
-    isConfigured: isConfiguredAstraProvider(state.config),
-    available: true,
-    supportsTransportControls: true,
-  }
-}
-
-function createUnavailableProviderState(providerId: Exclude<NowPlayingProviderId, 'astra'>): NowPlayingProviderState {
+function createPlaceholderProviderState(providerId: Exclude<NowPlayingProviderId, ManagedNowPlayingProviderId>): NowPlayingProviderState {
   const definition = NOW_PLAYING_PROVIDER_DEFINITIONS[providerId]
   return {
     providerId,
@@ -141,36 +111,45 @@ function createUnavailableProviderState(providerId: Exclude<NowPlayingProviderId
 }
 
 export class NowPlayingManager {
-  private readonly astraService: AstraServiceLike
   private readonly localStatePath: string
   private readonly listeners = new Set<(state: NowPlayingState) => void>()
+  private readonly providerServices: ProviderServiceMap
   private providerPriority = [...NOW_PLAYING_PROVIDER_IDS]
   private initialized = false
 
   constructor(options: NowPlayingManagerOptions) {
-    this.astraService = options.astraService ?? new AstraIntegrationService({
-      configPath: options.astraConfigPath,
-    })
     this.localStatePath = options.localStatePath
-    this.astraService.subscribe(() => {
-      if (!this.initialized) {
-        return
+    this.providerServices = options.providerServices.reduce((acc, providerService) => {
+      if (providerService.providerId === 'astra') {
+        acc.astra = providerService as NowPlayingProviderService<'astra'>
+      } else if (providerService.providerId === 'spotify') {
+        acc.spotify = providerService as NowPlayingProviderService<'spotify'>
       }
-      this.emitState()
-    })
+      providerService.subscribe(() => {
+        if (!this.initialized) {
+          return
+        }
+        this.emitState()
+      })
+      return acc
+    }, {} as ProviderServiceMap)
   }
 
   async initialize(): Promise<void> {
     if (this.initialized) return
     const localState = await this.readLocalState()
     this.providerPriority = localState.providerPriority
-    await this.astraService.initialize()
+    await Promise.all(Object.values(this.providerServices).map(async (providerService) => {
+      await providerService?.initialize()
+    }))
     this.initialized = true
     this.emitState()
   }
 
   async dispose(): Promise<void> {
-    await this.astraService.dispose()
+    await Promise.all(Object.values(this.providerServices).map(async (providerService) => {
+      await providerService?.dispose()
+    }))
   }
 
   subscribe(listener: (state: NowPlayingState) => void): () => void {
@@ -187,7 +166,9 @@ export class NowPlayingManager {
 
   async setConsumerActive(consumerId: number, active: boolean): Promise<NowPlayingState> {
     await this.ensureInitialized()
-    await this.astraService.setConsumerActive(consumerId, active)
+    await Promise.all(Object.values(this.providerServices).map(async (providerService) => {
+      await providerService?.setConsumerActive(consumerId, active)
+    }))
     return this.getState()
   }
 
@@ -197,28 +178,24 @@ export class NowPlayingManager {
   ): Promise<NowPlayingState> {
     await this.ensureInitialized()
 
-    switch (providerId) {
-      case 'astra':
-        await this.astraService.saveConfig(rawConfig)
-        break
-      default:
-        throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[providerId].label} is not configurable yet.`)
+    const providerService = this.providerServices[providerId as ManagedNowPlayingProviderId]
+    if (!providerService) {
+      throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[providerId].label} is not configurable yet.`)
     }
 
+    await providerService.saveConfig(rawConfig as never)
     return this.getState()
   }
 
   async retryProvider(providerId: NowPlayingProviderId): Promise<NowPlayingState> {
     await this.ensureInitialized()
 
-    switch (providerId) {
-      case 'astra':
-        await this.astraService.saveConfig(this.astraService.getConfig())
-        break
-      default:
-        throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[providerId].label} is not available yet.`)
+    const providerService = this.providerServices[providerId as ManagedNowPlayingProviderId]
+    if (!providerService) {
+      throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[providerId].label} is not available yet.`)
     }
 
+    await providerService.retry()
     return this.getState()
   }
 
@@ -234,31 +211,52 @@ export class NowPlayingManager {
     await this.ensureInitialized()
 
     const activeProviderId = this.buildState().activeProviderId
-    switch (activeProviderId) {
-      case 'astra':
-        await this.astraService.sendControl(command)
-        break
-      case null:
-        throw new Error('No active now-playing provider is available.')
-      default:
-        throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[activeProviderId].label} controls are not available yet.`)
+    if (!activeProviderId) {
+      throw new Error('No active now-playing provider is available.')
     }
 
+    const providerService = this.providerServices[activeProviderId as ManagedNowPlayingProviderId]
+    if (!providerService) {
+      throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[activeProviderId].label} controls are not available yet.`)
+    }
+
+    await providerService.sendControl(command)
     return this.getState()
   }
 
   private buildState(): NowPlayingState {
-    const astraState = this.astraService.getState()
     const configs: NowPlayingProviderConfigMap = {
-      astra: { ...astraState.config },
-      spotify: {},
+      astra: this.providerServices.astra?.getPublicConfig() ?? {
+        baseUrl: 'http://127.0.0.1:38401',
+        hasToken: false,
+      },
+      spotify: this.providerServices.spotify?.getPublicConfig() ?? {},
       tidal: {},
     }
     const providers: NowPlayingProviderStateMap = {
-      astra: toAstraProviderState(astraState),
-      spotify: createUnavailableProviderState('spotify'),
-      tidal: createUnavailableProviderState('tidal'),
+      astra: this.providerServices.astra?.getProviderState() ?? {
+        providerId: 'astra',
+        connectionState: 'disabled',
+        lastError: null,
+        lastControlError: null,
+        snapshot: null,
+        isConfigured: false,
+        available: true,
+        supportsTransportControls: true,
+      },
+      spotify: this.providerServices.spotify?.getProviderState() ?? {
+        providerId: 'spotify',
+        connectionState: 'unavailable',
+        lastError: null,
+        lastControlError: null,
+        snapshot: null,
+        isConfigured: false,
+        available: false,
+        supportsTransportControls: true,
+      },
+      tidal: createPlaceholderProviderState('tidal'),
     }
+
     const hasConfiguredProvider = this.providerPriority.some((providerId) => {
       const provider = providers[providerId]
       return provider.available && provider.isConfigured

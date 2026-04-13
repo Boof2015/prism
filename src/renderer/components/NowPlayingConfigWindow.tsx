@@ -103,6 +103,10 @@ function getProviderStatusLabel(
     return 'Coming Soon'
   }
 
+  if (!provider.available) {
+    return 'Unavailable'
+  }
+
   if (!provider.isConfigured) {
     return 'Not Set Up'
   }
@@ -117,7 +121,7 @@ function getProviderStatusLabel(
     case 'error':
       return 'Error'
     case 'unavailable':
-      return 'Coming Soon'
+      return 'Unavailable'
   }
 }
 
@@ -126,11 +130,34 @@ function getProviderMetaText(
   provider: NowPlayingProviderState,
 ): string {
   if (definition.comingSoon) {
-    return 'OAuth login coming later'
+    return 'Local integration coming later'
+  }
+
+  if (!provider.available) {
+    return provider.providerId === 'spotify'
+      ? 'Local macOS app unavailable'
+      : 'Unavailable on this device'
   }
 
   if (!provider.isConfigured) {
     return 'Local API · Paste base URL and token'
+  }
+
+  if (definition.authMode === 'local') {
+    switch (provider.connectionState) {
+      case 'disabled':
+        return 'Local macOS app · Waiting for Spotify'
+      case 'connecting':
+        return 'Local macOS app · Checking playback'
+      case 'connected':
+        return provider.snapshot?.playbackState === 'playing'
+          ? 'Local macOS app · Playing now'
+          : 'Local macOS app · Ready'
+      case 'error':
+        return 'Local macOS app · Needs attention'
+      case 'unavailable':
+        return 'Local macOS app unavailable'
+    }
   }
 
   switch (provider.connectionState) {
@@ -192,7 +219,6 @@ export default function NowPlayingConfigWindow(): JSX.Element {
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
   const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
   const initializeNowPlaying = useNowPlayingStore((s) => s.initialize)
-  const setConsumerActive = useNowPlayingStore((s) => s.setConsumerActive)
   const nowPlayingState = useNowPlayingStore((s) => s.nowPlayingState)
   const saveProviderConfig = useNowPlayingStore((s) => s.saveProviderConfig)
   const setProviderPriority = useNowPlayingStore((s) => s.setProviderPriority)
@@ -210,7 +236,6 @@ export default function NowPlayingConfigWindow(): JSX.Element {
     void (async () => {
       await initializeThemes()
       await initializeNowPlaying()
-      await setConsumerActive(true)
     })().catch((error) => {
       if (disposed) return
       showBanner({
@@ -227,21 +252,19 @@ export default function NowPlayingConfigWindow(): JSX.Element {
     return () => {
       disposed = true
       unsubscribeTheme()
-      void setConsumerActive(false)
       window.electronAPI.stopWindowMove()
     }
   }, [
     applyExternalThemeSnapshot,
     initializeNowPlaying,
     initializeThemes,
-    setConsumerActive,
     showBanner,
   ])
 
   useEffect(() => {
     setAstraBaseUrlInput(nowPlayingState.configs.astra.baseUrl)
-    setAstraTokenInput(nowPlayingState.configs.astra.token)
-  }, [nowPlayingState.configs.astra.baseUrl, nowPlayingState.configs.astra.token])
+    setAstraTokenInput('')
+  }, [nowPlayingState.configs.astra.baseUrl, nowPlayingState.configs.astra.hasToken])
 
   const handleToolbarDragStart = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
     if (isToolbarInteractiveTarget(event.target) || event.button !== 0) return
@@ -263,6 +286,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
         baseUrl: astraBaseUrlInput,
         token: astraTokenInput,
       })
+      setAstraTokenInput('')
     } catch (error) {
       showBanner({
         tone: 'error',
@@ -271,6 +295,22 @@ export default function NowPlayingConfigWindow(): JSX.Element {
       })
     }
   }, [astraBaseUrlInput, astraTokenInput, saveProviderConfig, showBanner])
+
+  const handleClearAstraToken = useCallback(async (): Promise<void> => {
+    try {
+      await saveProviderConfig('astra', {
+        baseUrl: astraBaseUrlInput,
+        clearToken: true,
+      })
+      setAstraTokenInput('')
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not clear the Astra token.'),
+        actions: [],
+      })
+    }
+  }, [astraBaseUrlInput, saveProviderConfig, showBanner])
 
   const orderedProviders = useMemo(
     () => nowPlayingState.providerPriority.map((providerId) => ({
@@ -328,7 +368,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
           <div className="now-playing-config__toolbar-copy">
             <div className="now-playing-config__toolbar-title">Now Playing</div>
             <div className="now-playing-config__toolbar-subtitle">
-              Drag providers to set priority. Expand a row to configure keys or logins.
+              Drag providers to set priority. Expand a row to configure local integrations or tokens.
             </div>
           </div>
 
@@ -358,7 +398,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
           <div className="now-playing-config__stack">
             <div className="now-playing-config__intro">
               {nowPlayingState.onboardingRequired
-                ? 'Start with Astra. Spotify and TIDAL stay visible here for ordering, but their login flows are still coming later.'
+                ? 'Start with Astra or the local Spotify macOS app. TIDAL stays visible here for future priority.'
                 : 'The highest configured provider that starts playing takes over immediately.'}
             </div>
 
@@ -468,10 +508,16 @@ export default function NowPlayingConfigWindow(): JSX.Element {
                                 className="bottom-bar__text-input now-playing-config__input"
                                 type="password"
                                 value={astraTokenInput}
-                                placeholder="Astra API Token"
+                                placeholder={nowPlayingState.configs.astra.hasToken ? 'Leave blank to keep the stored token' : 'Astra API Token'}
                                 onChange={(event) => setAstraTokenInput(event.target.value)}
                               />
                             </label>
+                          </div>
+
+                          <div className="settings-info-text">
+                            {nowPlayingState.configs.astra.hasToken
+                              ? 'A token is already stored securely. Save with a blank field to keep it, or enter a new token to replace it.'
+                              : 'No Astra token is stored yet.'}
                           </div>
 
                           <div className="settings-inline-actions now-playing-config__provider-actions">
@@ -483,6 +529,16 @@ export default function NowPlayingConfigWindow(): JSX.Element {
                               }}
                             >
                               Save
+                            </button>
+                            <button
+                              type="button"
+                              className="settings-chip"
+                              disabled={!nowPlayingState.configs.astra.hasToken}
+                              onClick={() => {
+                                void handleClearAstraToken()
+                              }}
+                            >
+                              Clear Token
                             </button>
                             <button
                               type="button"
@@ -508,14 +564,53 @@ export default function NowPlayingConfigWindow(): JSX.Element {
                             </div>
                           ) : null}
                         </div>
-                      ) : (
+                      ) : definition.comingSoon ? (
                         <div className="now-playing-config__provider-body">
                           <div className="now-playing-config__coming-soon">
                             {definition.description}
                           </div>
                           <div className="settings-info-text">
-                            Login and connection flow land here later. For now, this row exists so you can set future priority.
+                            This row stays visible so you can set future priority before the integration lands.
                           </div>
+                        </div>
+                      ) : (
+                        <div className="now-playing-config__provider-body">
+                          <div className="now-playing-config__provider-body-copy">
+                            {definition.description}
+                          </div>
+                          <div className="settings-info-text">
+                            No Spotify developer account or API setup is required. Prism reads the local Spotify macOS app directly.
+                          </div>
+                          <div className="settings-inline-actions now-playing-config__provider-actions">
+                            <button
+                              type="button"
+                              className="settings-chip"
+                              disabled={!provider.available}
+                              onClick={() => {
+                                void retryProvider('spotify').catch((error) => {
+                                  showBanner({
+                                    tone: 'error',
+                                    message: getErrorMessage(error, 'Could not reconnect to Spotify.'),
+                                    actions: [],
+                                  })
+                                })
+                              }}
+                            >
+                              Retry
+                            </button>
+                          </div>
+                          {!provider.available ? (
+                            <div className="settings-info-text">
+                              {window.electronAPI.platform === 'darwin'
+                                ? 'Install Spotify.app in /Applications to enable this provider.'
+                                : 'This provider is currently available on macOS only.'}
+                          </div>
+                          ) : null}
+                          {provider.lastError || provider.lastControlError ? (
+                            <div className="settings-error-text now-playing-config__provider-error">
+                              {provider.lastError ?? provider.lastControlError}
+                            </div>
+                          ) : null}
                         </div>
                       )
                     ) : null}

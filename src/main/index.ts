@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, screen, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, safeStorage, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { extname, join, resolve } from 'path'
 import type { NowPlayingControlCommand, NowPlayingState } from '../types/nowPlaying'
@@ -28,6 +28,9 @@ import {
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
 import { NowPlayingManager } from './services/nowPlayingManager'
+import { AstraIntegrationService } from './services/astraIntegration'
+import { MacSpotifyProvider } from './services/macSpotifyProvider'
+import { SecretVault } from './services/secretVault'
 import { FileBackedThemeLibrary } from './themeLibrary'
 import { FileBackedWindowStateStore } from './windowStateStore'
 
@@ -62,6 +65,7 @@ let profileLibrary: FileBackedProfileLibrary | null = null
 let themeLibrary: FileBackedThemeLibrary | null = null
 let nowPlayingManager: NowPlayingManager | null = null
 let windowStateStore: FileBackedWindowStateStore | null = null
+let secretVault: SecretVault | null = null
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -126,11 +130,29 @@ function broadcastNowPlayingState(state: NowPlayingState): void {
   }
 }
 
+function getSecretVault(): SecretVault {
+  if (!secretVault) {
+    secretVault = new SecretVault({
+      path: join(app.getPath('userData'), 'secret-vault.json'),
+      platform: process.platform,
+      safeStorage,
+    })
+  }
+
+  return secretVault
+}
+
 function getNowPlayingManager(): NowPlayingManager {
   if (!nowPlayingManager) {
     nowPlayingManager = new NowPlayingManager({
-      astraConfigPath: join(app.getPath('userData'), 'astra-integration.json'),
       localStatePath: join(app.getPath('userData'), 'now-playing-state.json'),
+      providerServices: [
+        new AstraIntegrationService({
+          configPath: join(app.getPath('userData'), 'astra-integration.json'),
+          secretVault: getSecretVault(),
+        }),
+        new MacSpotifyProvider(),
+      ],
     })
     nowPlayingManager.subscribe((state) => {
       broadcastNowPlayingState(state)

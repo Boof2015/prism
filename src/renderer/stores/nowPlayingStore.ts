@@ -3,7 +3,7 @@ import {
   NOW_PLAYING_PROVIDER_DEFINITIONS,
   NOW_PLAYING_PROVIDER_IDS,
   type NowPlayingControlCommand,
-  type NowPlayingProviderConfigMap,
+  type NowPlayingProviderConfigMutationMap,
   type NowPlayingProviderId,
   type NowPlayingProviderStateMap,
   type NowPlayingState,
@@ -15,7 +15,7 @@ interface NowPlayingStoreState {
   isSendingControl: boolean
   initialize: () => Promise<void>
   setConsumerActive: (active: boolean) => Promise<void>
-  saveProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMap[K]) => Promise<void>
+  saveProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => Promise<void>
   setProviderPriority: (providerPriority: NowPlayingProviderId[]) => Promise<void>
   retryProvider: (providerId: NowPlayingProviderId) => Promise<void>
   sendControl: (command: NowPlayingControlCommand) => Promise<void>
@@ -46,7 +46,7 @@ function createDefaultNowPlayingState(): NowPlayingState {
     configs: {
       astra: {
         baseUrl: 'http://127.0.0.1:38401',
-        token: '',
+        hasToken: false,
       },
       spotify: {},
       tidal: {},
