@@ -6,6 +6,7 @@ import {
   DEFAULT_VISUALIZER_TINT,
   colorToRgbChannels,
   parseColorToRgb,
+  parseColorToRgba,
   resolveColorToRgb,
 } from '../src/renderer/utils/color'
 import {
@@ -68,6 +69,7 @@ import {
 import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
+import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
 import {
   drawVectorscopeGridForMode,
@@ -510,7 +512,7 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
 }
 
 interface FakeCanvasRecorder {
-  fillRects: Array<{ x: number; y: number; width: number; height: number }>
+  fillRects: Array<{ x: number; y: number; width: number; height: number; fillStyle: string }>
   strokeRects: Array<{ x: number; y: number; width: number; height: number; lineDash: number[] }>
   arcs: Array<{
     x: number
@@ -522,6 +524,8 @@ interface FakeCanvasRecorder {
     lineDash: number[]
   }>
   lineDashes: number[][]
+  imageDataWrites: Array<{ x: number; y: number; data: number[] }>
+  drawImageCalls: Array<{ compositeOperation: GlobalCompositeOperation }>
 }
 
 function createFakeCanvasRecorder(): FakeCanvasRecorder {
@@ -530,16 +534,21 @@ function createFakeCanvasRecorder(): FakeCanvasRecorder {
     strokeRects: [],
     arcs: [],
     lineDashes: [],
+    imageDataWrites: [],
+    drawImageCalls: [],
   }
 }
 
 function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): CanvasRenderingContext2D {
   let currentLineDash: number[] = []
+  let currentFillStyle = ''
+  let currentStrokeStyle = ''
+  let currentCompositeOperation: GlobalCompositeOperation = 'source-over'
 
-  return {
+  const context = {
     clearRect() {},
     fillRect(x: number, y: number, width: number, height: number) {
-      recorder?.fillRects.push({ x, y, width, height })
+      recorder?.fillRects.push({ x, y, width, height, fillStyle: currentFillStyle })
     },
     fillText() {},
     beginPath() {},
@@ -554,7 +563,12 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, anticlockwise = false) {
       recorder?.arcs.push({ x, y, radius, startAngle, endAngle, anticlockwise, lineDash: [...currentLineDash] })
     },
-    drawImage() {},
+    drawImage() {
+      recorder?.drawImageCalls.push({ compositeOperation: currentCompositeOperation })
+    },
+    putImageData(imageData: ImageData, x: number, y: number) {
+      recorder?.imageDataWrites.push({ x, y, data: Array.from(imageData.data) })
+    },
     save() {},
     restore() {},
     translate() {},
@@ -574,8 +588,6 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     measureText() {
       return { width: 0 } as TextMetrics
     },
-    fillStyle: '',
-    strokeStyle: '',
     lineWidth: 1,
     font: '',
     textAlign: 'left',
@@ -583,8 +595,28 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     lineCap: 'butt',
     lineJoin: 'miter',
     globalAlpha: 1,
-    globalCompositeOperation: 'source-over',
-  } as unknown as CanvasRenderingContext2D
+    imageSmoothingEnabled: false,
+    get fillStyle() {
+      return currentFillStyle
+    },
+    set fillStyle(value: string | CanvasGradient | CanvasPattern) {
+      currentFillStyle = typeof value === 'string' ? value : String(value)
+    },
+    get strokeStyle() {
+      return currentStrokeStyle
+    },
+    set strokeStyle(value: string | CanvasGradient | CanvasPattern) {
+      currentStrokeStyle = typeof value === 'string' ? value : String(value)
+    },
+    get globalCompositeOperation() {
+      return currentCompositeOperation
+    },
+    set globalCompositeOperation(value: GlobalCompositeOperation) {
+      currentCompositeOperation = value
+    },
+  }
+
+  return context as unknown as CanvasRenderingContext2D
 }
 
 function createFakeCanvas(recorder: FakeCanvasRecorder | null = null): HTMLCanvasElement {
@@ -596,12 +628,17 @@ function createFakeCanvas(recorder: FakeCanvasRecorder | null = null): HTMLCanva
   } as unknown as HTMLCanvasElement
 }
 
-function installFakeCanvasDom(): {
+function installFakeCanvasDom(createCanvas: () => HTMLCanvasElement = () => createFakeCanvas()): {
   restore: () => void
 } {
-  const globalWithDom = globalThis as typeof globalThis & { window?: Window; document?: Document }
+  const globalWithDom = globalThis as typeof globalThis & {
+    window?: Window
+    document?: Document
+    ImageData?: typeof ImageData
+  }
   const previousWindow = globalWithDom.window
   const previousDocument = globalWithDom.document
+  const previousImageData = globalWithDom.ImageData
 
   globalWithDom.window = {
     ...(previousWindow ?? globalThis),
@@ -613,9 +650,25 @@ function installFakeCanvasDom(): {
       if (tagName !== 'canvas') {
         throw new Error(`Unsupported element in test DOM: ${tagName}`)
       }
-      return createFakeCanvas()
+      return createCanvas()
     },
   } as Document
+
+  if (globalWithDom.ImageData === undefined) {
+    class FakeImageData {
+      data: Uint8ClampedArray
+      width: number
+      height: number
+
+      constructor(width: number, height: number) {
+        this.width = width
+        this.height = height
+        this.data = new Uint8ClampedArray(width * height * 4)
+      }
+    }
+
+    globalWithDom.ImageData = FakeImageData as unknown as typeof ImageData
+  }
 
   return {
     restore(): void {
@@ -629,6 +682,12 @@ function installFakeCanvasDom(): {
         delete globalWithDom.document
       } else {
         globalWithDom.document = previousDocument
+      }
+
+      if (previousImageData === undefined) {
+        delete globalWithDom.ImageData
+      } else {
+        globalWithDom.ImageData = previousImageData
       }
     },
   }
@@ -713,6 +772,119 @@ function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
     }
   } finally {
     analyzer.dispose()
+    dom.restore()
+  }
+}
+
+function renderSpectrumHeatmap(options: Partial<SpectrumAnalyzerOptions>, heatmapIntensity: number[]): FakeCanvasRecorder {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas(recorder)
+  canvas.width = heatmapIntensity.length
+  canvas.height = 24
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(canvas, {
+    showSideLine: true,
+    heatmapFill: true,
+    fillGradient: false,
+    showGrid: false,
+    dataSource,
+    ...options,
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      renderHeatmap: (
+        xPoints: Float32Array,
+        yPoints: Float32Array,
+        heatmapIntensity: Float32Array,
+        pointCount: number,
+        width: number,
+        height: number,
+      ) => void
+    }
+    state.renderHeatmap(
+      Float32Array.from(heatmapIntensity.map((_value, index) => index)),
+      Float32Array.from(heatmapIntensity.map(() => 0)),
+      Float32Array.from(heatmapIntensity),
+      heatmapIntensity.length,
+      canvas.width,
+      canvas.height,
+    )
+    return recorder
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+}
+
+function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, values: number[]): number[] {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const canvas = createFakeCanvas()
+  canvas.width = 1
+  canvas.height = values.length
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    ...options,
+  })
+
+  try {
+    const state = spectrogram as unknown as {
+      ensureColumnBuffers: (height: number) => void
+      shiftAndPaintColumn: (values: Float32Array) => void
+    }
+    state.ensureColumnBuffers(values.length)
+    state.shiftAndPaintColumn(Float32Array.from(values))
+    return recorder.imageDataWrites.at(-1)?.data ?? []
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+}
+
+function renderSpectrogramShift(options: Partial<SpectrogramOptions>, values: number[]): FakeCanvasRecorder {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const canvas = createFakeCanvas()
+  canvas.width = 4
+  canvas.height = values.length
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    ...options,
+  })
+
+  try {
+    const state = spectrogram as unknown as {
+      ensureColumnBuffers: (height: number) => void
+      shiftAndPaintColumn: (values: Float32Array) => void
+    }
+    state.ensureColumnBuffers(values.length)
+    state.shiftAndPaintColumn(Float32Array.from(values))
+    return recorder
+  } finally {
+    spectrogram.dispose()
     dom.restore()
   }
 }
@@ -1107,6 +1279,72 @@ test('SpectrumAnalyzer renders heatmap fill on the spectrum line', () => {
   })
 
   assertArraysAlmostEqual(snapshot.renderedHeatmapY, snapshot.primaryPointY, 1e-6, 'heatmap fill should use the line geometry')
+})
+
+test('SpectrumAnalyzer heatmap does not repaint the full viewport when heat base is omitted', () => {
+  const recorder = renderSpectrumHeatmap({}, [0.24, 0.62, 1])
+
+  assert.equal(
+    recorder.fillRects.some((rect) => rect.x === 0 && rect.y === 0 && rect.width === 3 && rect.height === 24),
+    false,
+  )
+})
+
+test('SpectrumAnalyzer heatmap honors authored token alpha for low-end heat colors', () => {
+  const recorder = renderSpectrumHeatmap({
+    heatColors: [
+      'rgba(15, 7, 33, 0)',
+      'rgba(163, 26, 121, 0.6)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0.48, 0.62, 1])
+
+  const renderedAlpha = recorder.fillRects
+    .map((rect) => parseColorToRgba(rect.fillStyle)?.a ?? null)
+    .filter((value): value is number => value !== null)
+
+  assert.equal(renderedAlpha.some((value) => value > 0 && value < 1), true)
+  assert.equal(renderedAlpha.some((value) => Math.abs(value - 1) < 1e-3), true)
+})
+
+test('Spectrogram heatmap preserves authored alpha in generated image data', () => {
+  const imageData = renderSpectrogramColumnImage({
+    heatColors: [
+      'rgba(15, 7, 33, 0)',
+      'rgba(163, 26, 121, 0.5)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0, 0.62, 1])
+
+  assert.equal(imageData[3], 0)
+  assert.equal(imageData[7] > 0 && imageData[7] < 255, true)
+  assert.equal(imageData[11], 255)
+})
+
+test('Spectrogram low-intensity heat stays mostly transparent with default RGB heat colors', () => {
+  const imageData = renderSpectrogramColumnImage({
+    heatColors: [
+      'rgb(15, 7, 33)',
+      'rgb(163, 26, 121)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0, 0.1, 1])
+
+  assert.equal(imageData[3], 0)
+  assert.equal(imageData[7] > 0 && imageData[7] < 40, true)
+  assert.equal(imageData[11], 255)
+})
+
+test('Spectrogram shifts existing columns with copy compositing to avoid transparent streaking', () => {
+  const recorder = renderSpectrogramShift({
+    heatColors: [
+      'rgba(15, 7, 33, 0)',
+      'rgba(163, 26, 121, 0.5)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0.2, 0.6, 1])
+
+  assert.equal(recorder.drawImageCalls.at(-1)?.compositeOperation, 'copy')
 })
 
 test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () => {

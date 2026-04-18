@@ -3,7 +3,7 @@ import { spectrum as nativeSpectrum, isNativeAvailable } from '../audio/native'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
-import { resolveColorToRgb } from '../utils/color'
+import { parseColorToRgba } from '../utils/color'
 import {
   DEFAULT_SPECTRUM_TILT_DB_PER_OCTAVE,
   DEFAULT_SPECTRUM_HEATMAP_TILT_DB_PER_OCTAVE,
@@ -65,7 +65,8 @@ type SpectrumRangePeak = {
   frequencyHz: number
 }
 
-type HeatStop = { at: number; color: [number, number, number] }
+type HeatColor = [number, number, number, number]
+type HeatStop = { at: number; color: HeatColor }
 
 const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
   'rgb(15, 7, 33)',
@@ -158,10 +159,36 @@ function fft(re: Float32Array, im: Float32Array): void {
 
 function isLegacyDefaultHeatColors(colors: [string, string, string]): boolean {
   return colors.every((color, index) => {
-    const left = resolveColorToRgb(color)
-    const right = resolveColorToRgb(LEGACY_DEFAULT_HEAT_COLORS[index])
-    return left.r === right.r && left.g === right.g && left.b === right.b
+    const left = parseColorToRgba(color)
+    const right = parseColorToRgba(LEGACY_DEFAULT_HEAT_COLORS[index])
+    return !!left
+      && !!right
+      && left.r === right.r
+      && left.g === right.g
+      && left.b === right.b
+      && Math.round(left.a * 255) === Math.round(right.a * 255)
   })
+}
+
+function resolveHeatColor(color: string, fallback: string): HeatColor {
+  const parsed = parseColorToRgba(color) ?? parseColorToRgba(fallback)
+  if (!parsed) {
+    return [0, 0, 0, 255]
+  }
+  return [parsed.r, parsed.g, parsed.b, Math.round(parsed.a * 255)]
+}
+
+function scaleHeatColor(color: HeatColor, factor: number): HeatColor {
+  return [
+    Math.round(color[0] * factor),
+    Math.round(color[1] * factor),
+    Math.round(color[2] * factor),
+    Math.round(color[3] * factor),
+  ]
+}
+
+function lerpChannel(start: number, end: number, amount: number): number {
+  return Math.round(start + ((end - start) * amount))
 }
 
 function buildHeatStops(colors: [string, string, string]): HeatStop[] {
@@ -169,32 +196,32 @@ function buildHeatStops(colors: [string, string, string]): HeatStop[] {
     // Preserve Prism's original default spectrum heatmap instead of flattening it
     // into the generic themed stop builder.
     return [
-      { at: 0, color: [0, 0, 0] },
-      { at: 0.14, color: [15, 7, 33] },
-      { at: 0.32, color: [61, 11, 94] },
-      { at: 0.54, color: [163, 26, 121] },
-      { at: 0.74, color: [255, 82, 87] },
-      { at: 0.9, color: [255, 166, 63] },
-      { at: 1, color: [255, 241, 209] },
+      { at: 0, color: [0, 0, 0, 0] },
+      { at: 0.14, color: [15, 7, 33, 255] },
+      { at: 0.32, color: [61, 11, 94, 255] },
+      { at: 0.54, color: [163, 26, 121, 255] },
+      { at: 0.74, color: [255, 82, 87, 255] },
+      { at: 0.9, color: [255, 166, 63, 255] },
+      { at: 1, color: [255, 241, 209, 255] },
     ]
   }
 
-  const low = resolveColorToRgb(colors[0])
-  const mid = resolveColorToRgb(colors[1])
-  const high = resolveColorToRgb(colors[2])
+  const low = resolveHeatColor(colors[0], LEGACY_DEFAULT_HEAT_COLORS[0])
+  const mid = resolveHeatColor(colors[1], LEGACY_DEFAULT_HEAT_COLORS[1])
+  const high = resolveHeatColor(colors[2], LEGACY_DEFAULT_HEAT_COLORS[2])
 
   return [
-    { at: 0, color: [0, 0, 0] },
-    { at: 0.2, color: [Math.round(low.r * 0.5), Math.round(low.g * 0.5), Math.round(low.b * 0.5)] },
-    { at: 0.48, color: [low.r, low.g, low.b] },
-    { at: 0.76, color: [mid.r, mid.g, mid.b] },
-    { at: 1, color: [high.r, high.g, high.b] },
+    { at: 0, color: [0, 0, 0, 0] },
+    { at: 0.2, color: scaleHeatColor(low, 0.5) },
+    { at: 0.48, color: low },
+    { at: 0.76, color: mid },
+    { at: 1, color: high },
   ]
 }
 
-function buildHeatLUT(colors: [string, string, string]): Uint8Array {
+function buildHeatLUT(colors: [string, string, string]): Uint8ClampedArray {
   const heatStops = buildHeatStops(colors)
-  const lut = new Uint8Array(256 * 3)
+  const lut = new Uint8ClampedArray(256 * 4)
   for (let i = 0; i < 256; i += 1) {
     const t = i / 255
     let start = heatStops[0]
@@ -208,9 +235,10 @@ function buildHeatLUT(colors: [string, string, string]): Uint8Array {
     }
 
     const amount = Math.max(0, Math.min(1, (t - start.at) / Math.max(1e-6, end.at - start.at)))
-    lut[i * 3] = Math.round(start.color[0] + (end.color[0] - start.color[0]) * amount)
-    lut[i * 3 + 1] = Math.round(start.color[1] + (end.color[1] - start.color[1]) * amount)
-    lut[i * 3 + 2] = Math.round(start.color[2] + (end.color[2] - start.color[2]) * amount)
+    lut[i * 4] = lerpChannel(start.color[0], end.color[0], amount)
+    lut[i * 4 + 1] = lerpChannel(start.color[1], end.color[1], amount)
+    lut[i * 4 + 2] = lerpChannel(start.color[2], end.color[2], amount)
+    lut[i * 4 + 3] = lerpChannel(start.color[3], end.color[3], amount)
   }
   return lut
 }
@@ -258,7 +286,7 @@ export class SpectrumAnalyzer {
   private nativeInitialized = false
   private sampleRate = 48000
   private lastSampleRate = 0
-  private heatLut: Uint8Array
+  private heatLut: Uint8ClampedArray
   private staticLayerCanvas: HTMLCanvasElement
   private staticLayerCtx: CanvasRenderingContext2D
   private staticLayerKey = ''
@@ -976,7 +1004,8 @@ export class SpectrumAnalyzer {
 
   private renderHeatmap(xPoints: Float32Array, yPoints: Float32Array, heatmapIntensity: Float32Array, pointCount: number, width: number, height: number): void {
     const baseColor = this.options.heatBaseColor
-    if (baseColor && baseColor !== 'transparent') {
+    const parsedBaseColor = baseColor ? parseColorToRgba(baseColor) : null
+    if (baseColor && baseColor !== 'transparent' && (!parsedBaseColor || parsedBaseColor.a > 0)) {
       this.ctx.fillStyle = baseColor
       this.ctx.fillRect(0, 0, width, height)
     }
@@ -992,11 +1021,17 @@ export class SpectrumAnalyzer {
       }
 
       const lutIndex = Math.round(heatmapIntensity[index] * 255)
-      const r = this.heatLut[lutIndex * 3]
-      const g = this.heatLut[lutIndex * 3 + 1]
-      const b = this.heatLut[lutIndex * 3 + 2]
+      const r = this.heatLut[lutIndex * 4]
+      const g = this.heatLut[lutIndex * 4 + 1]
+      const b = this.heatLut[lutIndex * 4 + 2]
+      const a = Math.round((this.heatLut[lutIndex * 4 + 3] * heatmapIntensity[index]))
+      if (a <= 0) {
+        continue
+      }
 
-      this.ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.85)`
+      this.ctx.fillStyle = a >= 255
+        ? `rgb(${r}, ${g}, ${b})`
+        : `rgba(${r}, ${g}, ${b}, ${Number((a / 255).toFixed(3))})`
       this.ctx.fillRect(x, Math.floor(y), columnWidth, Math.ceil(fillHeight))
     }
   }

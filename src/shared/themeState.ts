@@ -971,6 +971,8 @@ export function createTemplateThemeFile(): string {
 #
 # [Controls] and [Scopes] are shared override groups.
 # Module sections show the full set of supported tokens for each module.
+# Spectrum and Spectrogram heat token alpha is honored directly.
+# Leave Spectrum heat_base commented unless you want an explicit underlay beneath the heatmap.
 #
 # Comment out any optional token to let Prism inherit or derive it.
 # Leave an entire optional section commented if that area should use Prism's defaults.
@@ -1196,7 +1198,7 @@ function resolveSpectrumTheme(
       section.heatMid ?? DEFAULT_HEAT_MID,
       section.heatHigh ?? DEFAULT_HEAT_HIGH,
     ],
-    heatBase: section.heatBase ?? background,
+    heatBase: section.heatBase ?? 'transparent',
   }
 }
 

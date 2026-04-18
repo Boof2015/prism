@@ -116,6 +116,41 @@ flat_controls = true
   assert.equal(resolved.interface.glassHighlightStrong, 'transparent')
 })
 
+test('resolveTheme preserves alpha-bearing heat tokens and defaults spectrum heat base to transparent', () => {
+  const parsed = parseThemeFileContent(`
+[Theme]
+format = prism-theme
+version = 2
+
+[Spectrum]
+heat_low = 10, 20, 30, 0
+heat_mid = 40, 50, 60, 64
+heat_high = 70, 80, 90, 204
+heat_base = 1, 2, 3, 32
+
+[Spectrogram]
+heat_low = 11, 21, 31, 16
+heat_mid = 41, 51, 61, 96
+heat_high = 71, 81, 91, 255
+`, 'Alpha Heat')
+
+  const resolved = resolveTheme(parsed)
+  const defaultResolved = resolveTheme(createDefaultTheme())
+
+  assert.deepEqual(resolved.spectrum.heatColors, [
+    'rgba(10, 20, 30, 0)',
+    'rgba(40, 50, 60, 0.251)',
+    'rgba(70, 80, 90, 0.8)',
+  ])
+  assert.equal(resolved.spectrum.heatBase, 'rgba(1, 2, 3, 0.125)')
+  assert.deepEqual(resolved.spectrogram.heatColors, [
+    'rgba(11, 21, 31, 0.063)',
+    'rgba(41, 51, 61, 0.376)',
+    'rgb(71, 81, 91)',
+  ])
+  assert.equal(defaultResolved.spectrum.heatBase, 'transparent')
+})
+
 test('parseThemeFileContent derives the theme name from the filename stem and ignores legacy header names', () => {
   const parsed = parseThemeFileContent(`
 [Theme]
@@ -210,6 +245,8 @@ test('createTemplateThemeFile presents a simplified recommended theme layout', (
   assert.match(template, /# Uncomment the tokens you want to customize and leave the rest commented to inherit defaults\./)
   assert.match(template, /# \[Controls\] and \[Scopes\] are shared override groups\./)
   assert.match(template, /# Module sections show the full set of supported tokens for each module\./)
+  assert.match(template, /# Spectrum and Spectrogram heat token alpha is honored directly\./)
+  assert.match(template, /# Leave Spectrum heat_base commented unless you want an explicit underlay beneath the heatmap\./)
   assert.match(template, /# Comment out any optional token to let Prism inherit or derive it\./)
   assert.match(template, /# Leave an entire optional section commented if that area should use Prism's defaults\./)
   assert.match(template, /# Optional palette extras:/)
