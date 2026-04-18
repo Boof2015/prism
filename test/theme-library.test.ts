@@ -69,18 +69,21 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.equal(parsed.nowPlaying.background, theme.nowPlaying.background)
 })
 
-test('theme files preserve optional credit and website metadata', () => {
+test('theme files preserve optional credit, website, and description metadata', () => {
   const theme = createDefaultTheme()
   theme.credit = 'Night Shift'
   theme.website = 'https://themes.example/night-shift'
+  theme.description = 'Soft neon palette for late sessions'
 
   const serialized = serializeThemeFile(theme)
   const parsed = parseThemeFileContent(serialized, DEFAULT_THEME_NAME)
 
   assert.match(serialized, /credit = Night Shift/)
   assert.match(serialized, /website = https:\/\/themes\.example\/night-shift/)
+  assert.match(serialized, /description = Soft neon palette for late sessions/)
   assert.equal(parsed.credit, 'Night Shift')
   assert.equal(parsed.website, 'https://themes.example/night-shift')
+  assert.equal(parsed.description, 'Soft neon palette for late sessions')
 })
 
 test('parseThemeFileContent maps legacy Astra sections into now playing tokens', () => {

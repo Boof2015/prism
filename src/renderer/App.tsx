@@ -27,7 +27,6 @@ export default function App(): JSX.Element {
   const showProfilesFolder = useSettingsStore((s) => s.showProfilesFolder)
   const updateMainWindowBounds = useSettingsStore((s) => s.updateMainWindowBounds)
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
-  const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
   const initializeNowPlaying = useNowPlayingStore((s) => s.initialize)
   const setNowPlayingConsumerActive = useNowPlayingStore((s) => s.setConsumerActive)
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -63,9 +62,6 @@ export default function App(): JSX.Element {
 
     const unsubscribeProfile = window.electronAPI.onExternalProfileActivated((snapshot) => {
       applyExternalProfileSnapshot(snapshot)
-    })
-    const unsubscribeTheme = window.electronAPI.onExternalThemeActivated((snapshot) => {
-      applyExternalThemeSnapshot(snapshot)
     })
     const unsubscribeBounds = window.electronAPI.onMainWindowBoundsChanged((bounds) => {
       updateMainWindowBounds(bounds)
@@ -124,14 +120,12 @@ export default function App(): JSX.Element {
     return () => {
       isDisposed = true
       unsubscribeProfile()
-      unsubscribeTheme()
       unsubscribeBounds()
       unsubscribeExternalOpenRequested()
       unsubscribeCloseRequested()
     }
   }, [
     applyExternalProfileSnapshot,
-    applyExternalThemeSnapshot,
     guardProfileTransition,
     importProfileFromPath,
     initializeProfiles,

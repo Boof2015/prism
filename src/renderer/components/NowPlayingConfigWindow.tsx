@@ -217,7 +217,6 @@ function ProviderIcon({ providerId }: { providerId: NowPlayingProviderId }): JSX
 
 export default function NowPlayingConfigWindow(): JSX.Element {
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
-  const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
   const initializeNowPlaying = useNowPlayingStore((s) => s.initialize)
   const nowPlayingState = useNowPlayingStore((s) => s.nowPlayingState)
   const saveProviderConfig = useNowPlayingStore((s) => s.saveProviderConfig)
@@ -245,17 +244,11 @@ export default function NowPlayingConfigWindow(): JSX.Element {
       })
     })
 
-    const unsubscribeTheme = window.electronAPI.onExternalThemeActivated((snapshot) => {
-      applyExternalThemeSnapshot(snapshot)
-    })
-
     return () => {
       disposed = true
-      unsubscribeTheme()
       window.electronAPI.stopWindowMove()
     }
   }, [
-    applyExternalThemeSnapshot,
     initializeNowPlaying,
     initializeThemes,
     showBanner,

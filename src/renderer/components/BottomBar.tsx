@@ -47,38 +47,43 @@ function getErrorMessage(error: unknown, fallback: string): string {
 type ThemeCreditSource = {
   credit?: string
   website?: string
+  description?: string
 } | null | undefined
 
 export function resolveThemeCreditDetails(theme: ThemeCreditSource): {
   credit: string | null
   url: string | null
+  description: string | null
 } {
   const credit = typeof theme?.credit === 'string' && theme.credit.trim()
     ? theme.credit.trim()
     : null
 
   if (!credit) {
-    return { credit: null, url: null }
+    return { credit: null, url: null, description: null }
   }
 
   const website = typeof theme?.website === 'string' && theme.website.trim()
     ? theme.website.trim()
     : null
+  const description = typeof theme?.description === 'string' && theme.description.trim()
+    ? theme.description.trim()
+    : null
 
   if (!website) {
-    return { credit, url: null }
+    return { credit, url: null, description }
   }
 
   try {
     const parsed = new URL(website)
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return { credit, url: parsed.toString() }
+      return { credit, url: parsed.toString(), description }
     }
   } catch {
     // Invalid URLs fall back to plain credit text.
   }
 
-  return { credit, url: null }
+  return { credit, url: null, description }
 }
 
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
@@ -368,20 +373,28 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
             <div className="bottom-bar__section-header">
               <div className="bottom-bar__section-title">Theme</div>
               {themeCredit.credit ? (
-                themeCredit.url ? (
-                  <a
-                    className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
-                    href={themeCredit.url}
-                    onClick={(event) => {
-                      event.preventDefault()
-                      void handleOpenThemeWebsite(themeCredit.url!)
-                    }}
-                  >
-                    By {themeCredit.credit}
-                  </a>
-                ) : (
-                  <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
-                )
+                <span className="bottom-bar__theme-metadata">
+                  {themeCredit.url ? (
+                    <a
+                      className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
+                      href={themeCredit.url}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        void handleOpenThemeWebsite(themeCredit.url!)
+                      }}
+                    >
+                      By {themeCredit.credit}
+                    </a>
+                  ) : (
+                    <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
+                  )}
+                  {themeCredit.description ? (
+                    <span className="bottom-bar__theme-description">
+                      <span className="bottom-bar__theme-separator" aria-hidden="true">·</span>
+                      <span>{themeCredit.description}</span>
+                    </span>
+                  ) : null}
+                </span>
               ) : null}
             </div>
             <div className="bottom-bar__section-body">

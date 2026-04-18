@@ -2113,33 +2113,53 @@ test('resolveNativeThemeSource follows the active theme brightness for native UI
   assert.equal(resolveNativeThemeSource(lightTheme), 'light')
 })
 
-test('resolveThemeCreditDetails enables links only for valid http and https theme websites', () => {
+test('resolveThemeCreditDetails normalizes descriptions and enables links only for valid http and https theme websites', () => {
   assert.deepEqual(
-    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'https://themes.example/night' }),
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'https://themes.example/night',
+      description: '  Soft neon palette  ',
+    }),
     {
       credit: 'Night Shift',
       url: 'https://themes.example/night',
+      description: 'Soft neon palette',
     },
   )
   assert.deepEqual(
-    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'http://themes.example/night' }),
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'http://themes.example/night',
+      description: 'Soft neon palette',
+    }),
     {
       credit: 'Night Shift',
       url: 'http://themes.example/night',
+      description: 'Soft neon palette',
     },
   )
   assert.deepEqual(
-    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'ftp://themes.example/night' }),
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'ftp://themes.example/night',
+      description: 'Soft neon palette',
+    }),
     {
       credit: 'Night Shift',
       url: null,
+      description: 'Soft neon palette',
     },
   )
   assert.deepEqual(
-    resolveThemeCreditDetails({ credit: 'Night Shift', website: 'not a url' }),
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'not a url',
+      description: 'Soft neon palette',
+    }),
     {
       credit: 'Night Shift',
       url: null,
+      description: 'Soft neon palette',
     },
   )
   assert.deepEqual(
@@ -2147,6 +2167,15 @@ test('resolveThemeCreditDetails enables links only for valid http and https them
     {
       credit: null,
       url: null,
+      description: null,
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({ description: 'Soft neon palette' }),
+    {
+      credit: null,
+      url: null,
+      description: null,
     },
   )
 })
@@ -2157,11 +2186,17 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
 
   assert.match(componentSource, /const themeCredit = resolveThemeCreditDetails\(activeTheme\)/)
   assert.match(componentSource, /window\.electronAPI\.openExternalUrl\(url\)/)
+  assert.match(componentSource, /bottom-bar__theme-metadata/)
   assert.match(componentSource, /By \{themeCredit\.credit\}/)
+  assert.match(componentSource, /themeCredit\.description \?/)
+  assert.match(componentSource, /bottom-bar__theme-description/)
+  assert.match(componentSource, /bottom-bar__theme-separator/)
   assert.match(componentSource, /bottom-bar__section-header/)
   assert.match(componentSource, /bottom-bar__theme-credit--link/)
   assert.match(stylesSource, /\.bottom-bar__section--theme \{[\s\S]*min-width: 420px;/)
   assert.match(stylesSource, /\.bottom-bar__section-header \{/)
+  assert.match(stylesSource, /\.bottom-bar__theme-metadata \{/)
+  assert.match(stylesSource, /\.bottom-bar__theme-description \{/)
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
 })
 

@@ -72,12 +72,6 @@
         "name": "Prism Profile",
         "description": "Prism shareable profile",
         "role": "Editor"
-      },
-      {
-        "ext": "iro",
-        "name": "Prism Theme",
-        "description": "Prism shareable theme",
-        "role": "Editor"
       }
     ],
     "files": [

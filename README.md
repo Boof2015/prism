@@ -40,7 +40,7 @@ Save your entire layout — scope arrangement, visibility, sizes, per-scope sett
 
 ## Themes
 
-The whole interface is themeable through `.iro` files. Themes control everything — spectrum heatmap gradients, oscilloscope trace color, vectorscope bands, all of it. Build your own or import someone else's.
+The whole interface is themeable through editable `.iro` files. Themes control everything — spectrum heatmap gradients, oscilloscope trace color, vectorscope bands, all of it. Build your own in an editor, drop it into the `Prism Themes` folder, or import it from Prism.
 
 <!-- ![Prism themes](assets/themes.png) -->
 

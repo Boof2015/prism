@@ -105,7 +105,6 @@ declare global {
       onProfileMenuShowFolder: (callback: () => void) => () => void
       onExternalProfileOpenRequested: (callback: (path: string) => void) => () => void
       onExternalProfileActivated: (callback: (snapshot: ProfileLibrarySnapshot) => void) => () => void
-      onExternalThemeActivated: (callback: (snapshot: ThemeLibrarySnapshot) => void) => () => void
       onScopePopoutReady: (callback: (kind: ScopeKind) => void) => () => void
       onScopePopoutCloseRequested: (callback: (kind: ScopeKind) => void) => () => void
       onScopePopoutBoundsChanged: (callback: (kind: ScopeKind, bounds: WindowBounds) => void) => () => void

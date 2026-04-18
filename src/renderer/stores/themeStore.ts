@@ -20,7 +20,6 @@ interface ThemeState {
   activeTheme: PrismResolvedTheme
   accent: string
   initializeThemes: () => Promise<void>
-  applyExternalThemeSnapshot: (snapshot: ThemeLibrarySnapshot) => void
   loadTheme: (id: string) => Promise<void>
   renameTheme: (id: string, name: string) => Promise<void>
   deleteTheme: (id: string) => Promise<void>
@@ -101,10 +100,6 @@ export const useThemeStore = create<ThemeState>((set) => ({
       clearLegacyThemeStorage()
     }
 
-    applyThemeSnapshot(set, snapshot)
-  },
-
-  applyExternalThemeSnapshot: (snapshot) => {
     applyThemeSnapshot(set, snapshot)
   },
 

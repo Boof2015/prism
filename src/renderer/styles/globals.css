@@ -1604,7 +1604,9 @@ select {
   gap: 6px;
 }
 
-.bottom-bar__theme-credit {
+.bottom-bar__theme-metadata {
+  min-width: 0;
+  margin-left: auto;
   color: var(--text-tertiary);
   font-size: 10px;
   line-height: 1.4;
@@ -1612,6 +1614,18 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: right;
+}
+
+.bottom-bar__theme-credit {
+  color: inherit;
+}
+
+.bottom-bar__theme-description {
+  color: var(--text-tertiary);
+}
+
+.bottom-bar__theme-separator {
+  margin: 0 4px;
 }
 
 .bottom-bar__theme-credit--link {

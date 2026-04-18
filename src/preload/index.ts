@@ -169,11 +169,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('profiles:external-activated', handler)
     return () => ipcRenderer.removeListener('profiles:external-activated', handler)
   },
-  onExternalThemeActivated: (callback: (snapshot: ThemeLibrarySnapshot) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, snapshot: ThemeLibrarySnapshot): void => callback(snapshot)
-    ipcRenderer.on('themes:external-activated', handler)
-    return () => ipcRenderer.removeListener('themes:external-activated', handler)
-  },
   onScopePopoutReady: (callback: (kind: ScopeKind) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind): void => callback(kind)
     ipcRenderer.on('scope-popout:ready', handler)

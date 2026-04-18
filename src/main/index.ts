@@ -59,7 +59,6 @@ let nowPlayingConfigBoundsTimer: ReturnType<typeof setTimeout> | null = null
 const windowSettingsHeights = new Map<number, number>()
 const windowSettingsBottomAnchors = new Map<number, number>()
 const pendingProfileOpenPaths: string[] = []
-const pendingThemeOpenPaths: string[] = []
 
 let profileLibrary: FileBackedProfileLibrary | null = null
 let themeLibrary: FileBackedThemeLibrary | null = null
@@ -162,13 +161,6 @@ function getNowPlayingManager(): NowPlayingManager {
   return nowPlayingManager
 }
 
-function broadcastThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed() || window.webContents.isDestroyed()) continue
-    window.webContents.send('themes:external-activated', snapshot)
-  }
-}
-
 function queueProfileOpenPath(filePath: string): void {
   if (extname(filePath).toLowerCase() !== '.prsm') return
 
@@ -184,30 +176,9 @@ function queueProfileOpenPaths(paths: string[]): void {
   }
 }
 
-function queueThemeOpenPath(filePath: string): void {
-  if (extname(filePath).toLowerCase() !== '.iro') return
-
-  const resolvedPath = resolve(filePath)
-  if (!pendingThemeOpenPaths.includes(resolvedPath)) {
-    pendingThemeOpenPaths.push(resolvedPath)
-  }
-}
-
-function queueThemeOpenPaths(paths: string[]): void {
-  for (const filePath of paths) {
-    queueThemeOpenPath(filePath)
-  }
-}
-
 function extractProfilePathsFromArgv(argv: string[]): string[] {
   return argv
     .filter((value) => extname(value).toLowerCase() === '.prsm')
-    .map((value) => resolve(value))
-}
-
-function extractThemePathsFromArgv(argv: string[]): string[] {
-  return argv
-    .filter((value) => extname(value).toLowerCase() === '.iro')
     .map((value) => resolve(value))
 }
 
@@ -219,12 +190,6 @@ function focusMainWindow(): void {
   mainWindow.show()
   mainWindow.focus()
   raiseMainWindowAboveNormalPopouts()
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message
-    ? error.message
-    : fallback
 }
 
 function normalizeExternalHttpUrl(raw: string): string | null {
@@ -255,32 +220,6 @@ async function processPendingProfileOpenPaths(): Promise<void> {
   for (const filePath of paths) {
     mainWindow.webContents.send('profiles:open-requested', filePath)
   }
-}
-
-async function processPendingThemeOpenPaths(): Promise<void> {
-  if (pendingThemeOpenPaths.length === 0) return
-
-  const paths = [...pendingThemeOpenPaths]
-  pendingThemeOpenPaths.length = 0
-
-  let latestSnapshot: ThemeLibrarySnapshot | null = null
-
-  for (const filePath of paths) {
-    try {
-      latestSnapshot = await getThemeLibrary().importThemeFromPath(filePath)
-    } catch (error) {
-      dialog.showErrorBox(
-        'Could Not Open Theme',
-        getErrorMessage(error, `Prism could not open ${filePath}.`),
-      )
-    }
-  }
-
-  if (!latestSnapshot || !mainWindow || mainWindow.isDestroyed()) return
-
-  applyNativeThemeSnapshot(latestSnapshot)
-  focusMainWindow()
-  broadcastThemeSnapshot(latestSnapshot)
 }
 
 function applyNativeThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
@@ -1386,28 +1325,24 @@ function setupIPC(): void {
   ipcMain.handle('themes:load', async (_event, id: string) => {
     const snapshot = await getThemeLibrary().loadTheme(id)
     applyNativeThemeSnapshot(snapshot)
-    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
   ipcMain.handle('themes:rename', async (_event, id: string, name: string) => {
     const snapshot = await getThemeLibrary().renameTheme(id, name)
     applyNativeThemeSnapshot(snapshot)
-    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
   ipcMain.handle('themes:delete', async (_event, id: string) => {
     const snapshot = await getThemeLibrary().deleteTheme(id)
     applyNativeThemeSnapshot(snapshot)
-    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
   ipcMain.handle('themes:reload', async () => {
     const snapshot = await getThemeLibrary().reloadThemes()
     applyNativeThemeSnapshot(snapshot)
-    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
@@ -1432,7 +1367,6 @@ function setupIPC(): void {
 
     const snapshot = await getThemeLibrary().importThemeFromPath(result.filePaths[0])
     applyNativeThemeSnapshot(snapshot)
-    broadcastThemeSnapshot(snapshot)
     return snapshot
   })
 
@@ -1447,7 +1381,6 @@ function setupIPC(): void {
   ipcMain.handle('themes:migrate-legacy', async (_event, payload: LegacyThemeMigrationPayload) => {
     const migration = await getThemeLibrary().migrateLegacyTheme(payload)
     applyNativeThemeSnapshot(migration.snapshot)
-    broadcastThemeSnapshot(migration.snapshot)
     return migration
   })
 
@@ -1614,28 +1547,22 @@ if (!hasSingleInstanceLock) {
     await syncNativeThemeAppearance()
     createMainWindow()
     queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
-    queueThemeOpenPaths(extractThemePathsFromArgv(process.argv))
     void processPendingProfileOpenPaths()
-    void processPendingThemeOpenPaths()
   })
 
   app.on('open-file', (event, filePath) => {
     event.preventDefault()
     queueProfileOpenPath(filePath)
-    queueThemeOpenPath(filePath)
     if (app.isReady()) {
       void processPendingProfileOpenPaths()
-      void processPendingThemeOpenPaths()
     }
   })
 
   app.on('second-instance', (_event, argv) => {
     queueProfileOpenPaths(extractProfilePathsFromArgv(argv))
-    queueThemeOpenPaths(extractThemePathsFromArgv(argv))
     if (app.isReady()) {
       focusMainWindow()
       void processPendingProfileOpenPaths()
-      void processPendingThemeOpenPaths()
     }
   })
 }
