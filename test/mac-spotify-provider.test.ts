@@ -104,7 +104,7 @@ test('provider reads local Spotify playback and hydrates artwork while active', 
     createStatusPayload({
       playbackState: 'playing',
       position: 42,
-      duration: 180,
+      duration: 180000,
       id: 'spotify:track:123',
       title: 'Song One',
       artist: 'Artist One',
@@ -137,6 +137,8 @@ test('provider reads local Spotify playback and hydrates artwork while active', 
     assert.equal(state.snapshot?.currentTrack?.isFavorite, true)
     assert.match(state.snapshot?.currentTrack?.artworkDataUrl ?? '', /^data:image\/png;base64,/)
     assert.equal(state.snapshot?.playbackState, 'playing')
+    assert.equal(state.snapshot?.currentTime, 42)
+    assert.equal(state.snapshot?.duration, 180)
   } finally {
     await provider.dispose()
   }
@@ -183,7 +185,7 @@ test('provider routes transport controls through AppleScript and records control
     createStatusPayload({
       playbackState: 'paused',
       position: 0,
-      duration: 180,
+      duration: 180000,
       id: 'spotify:track:123',
       title: 'Song One',
       artist: 'Artist One',

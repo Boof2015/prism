@@ -123,6 +123,10 @@ function toSafeNumber(value: string | undefined): number {
   return Math.max(0, numeric)
 }
 
+function millisecondsToSeconds(value: string | undefined): number {
+  return toSafeNumber(value) / 1000
+}
+
 function toOptionalUrl(value: string | undefined): string | null {
   const normalized = normalizeString(value)
   if (!normalized) {
@@ -160,7 +164,7 @@ function parseSpotifyStatusOutput(output: string, now: () => number): LocalSpoti
     ? parts[1]
     : 'stopped'
   const currentTime = toSafeNumber(parts[2])
-  const duration = toSafeNumber(parts[3])
+  const duration = millisecondsToSeconds(parts[3])
   const trackId = normalizeString(parts[4])
   const title = normalizeString(parts[5])
   const artist = normalizeString(parts[6])
