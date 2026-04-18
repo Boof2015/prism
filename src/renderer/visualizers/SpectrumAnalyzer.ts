@@ -1005,10 +1005,7 @@ export class SpectrumAnalyzer {
   private renderHeatmap(xPoints: Float32Array, yPoints: Float32Array, heatmapIntensity: Float32Array, pointCount: number, width: number, height: number): void {
     const baseColor = this.options.heatBaseColor
     const parsedBaseColor = baseColor ? parseColorToRgba(baseColor) : null
-    if (baseColor && baseColor !== 'transparent' && (!parsedBaseColor || parsedBaseColor.a > 0)) {
-      this.ctx.fillStyle = baseColor
-      this.ctx.fillRect(0, 0, width, height)
-    }
+    const shouldRenderBaseColor = !!baseColor && baseColor !== 'transparent' && (!parsedBaseColor || parsedBaseColor.a > 0)
 
     for (let index = 0; index < pointCount; index += 1) {
       const x = Math.floor(xPoints[index])
@@ -1018,6 +1015,11 @@ export class SpectrumAnalyzer {
       const fillHeight = height - y
       if (fillHeight <= 0) {
         continue
+      }
+
+      if (shouldRenderBaseColor) {
+        this.ctx.fillStyle = baseColor
+        this.ctx.fillRect(x, Math.floor(y), columnWidth, Math.ceil(fillHeight))
       }
 
       const lutIndex = Math.round(heatmapIntensity[index] * 255)

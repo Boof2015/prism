@@ -776,7 +776,11 @@ function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
   }
 }
 
-function renderSpectrumHeatmap(options: Partial<SpectrumAnalyzerOptions>, heatmapIntensity: number[]): FakeCanvasRecorder {
+function renderSpectrumHeatmap(
+  options: Partial<SpectrumAnalyzerOptions>,
+  heatmapIntensity: number[],
+  yPoints: number[] = heatmapIntensity.map(() => 0),
+): FakeCanvasRecorder {
   const recorder = createFakeCanvasRecorder()
   const dom = installFakeCanvasDom()
   const canvas = createFakeCanvas(recorder)
@@ -812,7 +816,7 @@ function renderSpectrumHeatmap(options: Partial<SpectrumAnalyzerOptions>, heatma
     }
     state.renderHeatmap(
       Float32Array.from(heatmapIntensity.map((_value, index) => index)),
-      Float32Array.from(heatmapIntensity.map(() => 0)),
+      Float32Array.from(yPoints),
       Float32Array.from(heatmapIntensity),
       heatmapIntensity.length,
       canvas.width,
@@ -1305,6 +1309,32 @@ test('SpectrumAnalyzer heatmap honors authored token alpha for low-end heat colo
 
   assert.equal(renderedAlpha.some((value) => value > 0 && value < 1), true)
   assert.equal(renderedAlpha.some((value) => Math.abs(value - 1) < 1e-3), true)
+})
+
+test('SpectrumAnalyzer heat base only fills the visible heatmap area under the curve', () => {
+  const recorder = renderSpectrumHeatmap(
+    {
+      heatBaseColor: 'rgb(12, 34, 56)',
+      heatColors: [
+        'rgba(15, 7, 33, 0)',
+        'rgba(163, 26, 121, 0)',
+        'rgba(255, 241, 209, 0)',
+      ],
+    },
+    [0, 0, 0],
+    [8, 12, 16],
+  )
+
+  const baseRects = recorder.fillRects.filter((rect) => rect.fillStyle === 'rgb(12, 34, 56)')
+  assert.equal(baseRects.length, 3)
+  assert.deepEqual(
+    baseRects.map((rect) => ({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })),
+    [
+      { x: 0, y: 8, width: 1, height: 16 },
+      { x: 1, y: 12, width: 1, height: 12 },
+      { x: 2, y: 16, width: 1, height: 8 },
+    ],
+  )
 })
 
 test('Spectrogram heatmap preserves authored alpha in generated image data', () => {
