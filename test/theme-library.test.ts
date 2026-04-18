@@ -206,21 +206,40 @@ test('createTemplateThemeFile presents a simplified recommended theme layout', (
   const parsed = parseThemeFileContent(template, 'Template Theme')
 
   assert.match(template, /# Start with \[App\]\./)
-  assert.match(template, /# Everything else below is optional and can be removed to inherit defaults\./)
+  assert.match(template, /# Everything else below is optional and starts commented out\./)
+  assert.match(template, /# Uncomment the tokens you want to customize and leave the rest commented to inherit defaults\./)
   assert.match(template, /# \[Controls\] and \[Scopes\] are shared override groups\./)
   assert.match(template, /# Module sections show the full set of supported tokens for each module\./)
-  assert.match(template, /# Remove any token to let Prism inherit or derive it\./)
-  assert.match(template, /# Remove an entire section if that area should use Prism's defaults\./)
+  assert.match(template, /# Comment out any optional token to let Prism inherit or derive it\./)
+  assert.match(template, /# Leave an entire optional section commented if that area should use Prism's defaults\./)
   assert.match(template, /# Optional palette extras:/)
   assert.match(template, /# Optional shell overrides:/)
   assert.match(template, /^\[Controls\]$/m)
   assert.match(template, /^\[Scopes\]$/m)
   assert.match(template, /^\[Spectrum\]$/m)
-  assert.match(template, /^flat_controls = false$/m)
-  assert.match(template, /^toolbar_bg = 4, 8, 12, 199$/m)
+  assert.match(template, /^# flat_controls = false$/m)
+  assert.match(template, /^# toolbar_bg = 4, 8, 12, 199$/m)
   assert.equal(parsed.app.accent, 'rgb(56, 189, 248)')
-  assert.equal(parsed.app.textMuted, 'rgba(255, 255, 255, 0.42)')
-  assert.equal(parsed.controls.flatControls, 'false')
+  assert.equal(parsed.app.textMuted, undefined)
+  assert.equal(parsed.controls.flatControls, undefined)
+  assert.equal(parsed.spectrum.line, undefined)
+  assert.equal(parsed.nowPlaying.background, undefined)
+})
+
+test('parsed template keeps module colors and backgrounds derived from starter app tokens', () => {
+  const parsed = parseThemeFileContent(createTemplateThemeFile(), 'Template Theme')
+  parsed.app.accent = 'rgb(74, 222, 128)'
+  parsed.app.background = 'rgb(3, 7, 18)'
+
+  const resolved = resolveTheme(parsed)
+
+  assert.equal(resolved.spectrum.line, 'rgb(74, 222, 128)')
+  assert.equal(resolved.oscilloscope.line, 'rgb(74, 222, 128)')
+  assert.equal(resolved.vectorscope.trace, 'rgb(74, 222, 128)')
+  assert.equal(resolved.waveform.line, 'rgb(74, 222, 128)')
+  assert.equal(resolved.interface.scopeBackground, 'rgb(3, 7, 18)')
+  assert.equal(resolved.spectrum.background, 'rgb(3, 7, 18)')
+  assert.equal(resolved.nowPlaying.background, 'rgb(3, 7, 18)')
 })
 
 test('resolveTheme exposes now playing button tokens and derived button states', () => {
@@ -287,6 +306,7 @@ test('library seeds default themes and template file', async () => {
     assert.match(templateContent, /\[App\]/)
     assert.match(templateContent, /^\[Controls\]$/m)
     assert.match(templateContent, /^\[Scopes\]$/m)
+    assert.match(templateContent, /^# flat_controls = false$/m)
   } finally {
     await harness.cleanup()
   }
@@ -352,6 +372,7 @@ test('library refreshes the managed template when its generated layout changes',
     assert.match(templateContent, /# Start with \[App\]\./)
     assert.match(templateContent, /^\[Controls\]$/m)
     assert.match(templateContent, /^\[Spectrum\]$/m)
+    assert.match(templateContent, /^# flat_controls = false$/m)
   } finally {
     await harness.cleanup()
   }

@@ -824,6 +824,16 @@ function serializeSection<T extends SectionTokenMap>(
   return lines
 }
 
+function commentExampleTokens(lines: string[]): string[] {
+  return lines.map((line) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';') || /^\[.+\]$/.test(trimmed)) {
+      return line
+    }
+    return `# ${line}`
+  })
+}
+
 export function serializeThemeFile(theme: PrismTheme): string {
   const normalized = normalizeTheme(theme, theme.name)
   const sections: string[] = [
@@ -871,78 +881,84 @@ export function createTemplateThemeFile(): string {
     `text = ${toThemeChannels(base.app.text ?? 'rgb(255, 255, 255)')}`,
     '',
     '# Optional palette extras:',
-    `text_muted = ${toThemeChannels(base.app.textMuted ?? 'rgba(255, 255, 255, 0.42)')}`,
-    `success = ${toThemeChannels(base.app.success ?? DEFAULT_SUCCESS)}`,
-    `warning = ${toThemeChannels(base.app.warning ?? DEFAULT_WARNING)}`,
-    `danger = ${toThemeChannels(base.app.danger ?? DEFAULT_DANGER)}`,
+    ...commentExampleTokens([
+      `text_muted = ${toThemeChannels(base.app.textMuted ?? 'rgba(255, 255, 255, 0.42)')}`,
+      `success = ${toThemeChannels(base.app.success ?? DEFAULT_SUCCESS)}`,
+      `warning = ${toThemeChannels(base.app.warning ?? DEFAULT_WARNING)}`,
+      `danger = ${toThemeChannels(base.app.danger ?? DEFAULT_DANGER)}`,
+    ]),
     '',
     '# Optional shell overrides:',
-    `toolbar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.78))}`,
-    `settings_bg_top = ${toThemeChannels(base.app.surface ?? 'rgba(8, 11, 16, 0.92)')}`,
-    `settings_bg_bottom = ${toThemeChannels(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)')}`,
-    `bottom_bar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.98))}`,
+    ...commentExampleTokens([
+      `toolbar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.78))}`,
+      `settings_bg_top = ${toThemeChannels(base.app.surface ?? 'rgba(8, 11, 16, 0.92)')}`,
+      `settings_bg_bottom = ${toThemeChannels(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)')}`,
+      `bottom_bar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.98))}`,
+    ]),
   ]
 
-  const controlsSection = serializeSection('Controls', {
+  const controlsSection = commentExampleTokens(serializeSection('Controls', {
     ...base.controls,
     flatControls: 'false',
-  }, CONTROLS_SCHEMA as SectionSchema<Record<string, string | undefined>>)
-  controlsSection.splice(1, 0, '# Entire section optional. Remove tokens or the whole section to use Prism defaults.')
+  }, CONTROLS_SCHEMA as SectionSchema<Record<string, string | undefined>>))
+  controlsSection.splice(1, 0, '# Entire section optional. Uncomment tokens here only if you want to override Prism defaults.')
 
-  const scopesSection = serializeSection('Scopes', { ...base.scopes }, SCOPES_SCHEMA as SectionSchema<Record<string, string | undefined>>)
-  scopesSection.splice(1, 0, '# Entire section optional. Remove tokens or the whole section to use Prism defaults.')
+  const scopesSection = commentExampleTokens(
+    serializeSection('Scopes', { ...base.scopes }, SCOPES_SCHEMA as SectionSchema<Record<string, string | undefined>>),
+  )
+  scopesSection.splice(1, 0, '# Entire section optional. Uncomment tokens here only if you want to override Prism defaults.')
 
-  const spectrumSection = serializeSection('Spectrum', {
+  const spectrumSection = commentExampleTokens(serializeSection('Spectrum', {
     ...base.spectrum,
     background: resolved.spectrum.background,
     guides: resolved.spectrum.guides,
     labels: resolved.spectrum.labels,
     heatBase: resolved.spectrum.heatBase,
-  }, SPECTRUM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, SPECTRUM_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const oscilloscopeSection = serializeSection('Oscilloscope', {
+  const oscilloscopeSection = commentExampleTokens(serializeSection('Oscilloscope', {
     ...base.oscilloscope,
     background: resolved.oscilloscope.background,
     guides: resolved.oscilloscope.guides,
-  }, OSCILLOSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, OSCILLOSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const vectorscopeSection = serializeSection('Vectorscope', {
+  const vectorscopeSection = commentExampleTokens(serializeSection('Vectorscope', {
     ...base.vectorscope,
     background: resolved.vectorscope.background,
     guides: resolved.vectorscope.guides,
     labels: resolved.vectorscope.labels,
-  }, VECTORSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, VECTORSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const spectrogramSection = serializeSection('Spectrogram', {
+  const spectrogramSection = commentExampleTokens(serializeSection('Spectrogram', {
     ...base.spectrogram,
     background: resolved.spectrogram.background,
-  }, SPECTROGRAM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, SPECTROGRAM_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const vumeterSection = serializeSection('VUMeter', {
+  const vumeterSection = commentExampleTokens(serializeSection('VUMeter', {
     ...base.vumeter,
     background: resolved.vumeter.background,
     scale: resolved.vumeter.scale,
     labels: resolved.vumeter.labels,
-  }, VUMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, VUMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const lufsmeterSection = serializeSection('LUFSMeter', {
+  const lufsmeterSection = commentExampleTokens(serializeSection('LUFSMeter', {
     ...base.lufsmeter,
     background: resolved.lufsmeter.background,
     scale: resolved.lufsmeter.scale,
     labels: resolved.lufsmeter.labels,
-  }, LUFSMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, LUFSMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const waveformSection = serializeSection('Waveform', {
+  const waveformSection = commentExampleTokens(serializeSection('Waveform', {
     ...base.waveform,
     background: resolved.waveform.background,
     guides: resolved.waveform.guides,
-  }, WAVEFORM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, WAVEFORM_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const nowPlayingSection = serializeSection(
+  const nowPlayingSection = commentExampleTokens(serializeSection(
     'Now Playing',
     { ...base.nowPlaying },
     NOW_PLAYING_SCHEMA as SectionSchema<Record<string, string | undefined>>,
-  )
+  ))
 
   return `# Prism theme template
 #
@@ -950,13 +966,14 @@ export function createTemplateThemeFile(): string {
 # CSS colors like #hex, rgb(), and rgba() also work
 #
 # Start with [App].
-# Everything else below is optional and can be removed to inherit defaults.
+# Everything else below is optional and starts commented out.
+# Uncomment the tokens you want to customize and leave the rest commented to inherit defaults.
 #
 # [Controls] and [Scopes] are shared override groups.
 # Module sections show the full set of supported tokens for each module.
 #
-# Remove any token to let Prism inherit or derive it.
-# Remove an entire section if that area should use Prism's defaults.
+# Comment out any optional token to let Prism inherit or derive it.
+# Leave an entire optional section commented if that area should use Prism's defaults.
 #
 ${[
   themeSection.join('\n'),
@@ -964,7 +981,7 @@ ${[
   controlsSection.join('\n'),
   scopesSection.join('\n'),
   '# Module sections below are optional overrides.',
-  '# Keep the tokens you want to customize and delete the rest.',
+  '# Uncomment the tokens you want to customize and leave the rest as examples.',
   spectrumSection.join('\n'),
   oscilloscopeSection.join('\n'),
   vectorscopeSection.join('\n'),
