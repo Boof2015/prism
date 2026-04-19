@@ -28,12 +28,14 @@ import {
 } from '../shared/windowGeometry'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
+import { loadNativeWindowsMediaApi } from './nativeWindowsMedia'
 import { NowPlayingManager } from './services/nowPlayingManager'
 import { AstraIntegrationService } from './services/astraIntegration'
 import { MacSpotifyProvider } from './services/macSpotifyProvider'
 import { SecretVault } from './services/secretVault'
 import { FileBackedThemeLibrary } from './themeLibrary'
 import { FileBackedWindowStateStore } from './windowStateStore'
+import type { NativeWindowsMediaAPI } from '../types/nativeWindowsMedia'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
@@ -66,6 +68,7 @@ let themeLibrary: FileBackedThemeLibrary | null = null
 let nowPlayingManager: NowPlayingManager | null = null
 let windowStateStore: FileBackedWindowStateStore | null = null
 let secretVault: SecretVault | null = null
+let nativeWindowsMediaApi: NativeWindowsMediaAPI | null | undefined
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -147,6 +150,15 @@ function getSecretVault(): SecretVault {
   return secretVault
 }
 
+function getNativeWindowsMediaApi(): NativeWindowsMediaAPI | null {
+  if (nativeWindowsMediaApi !== undefined) {
+    return nativeWindowsMediaApi
+  }
+
+  nativeWindowsMediaApi = loadNativeWindowsMediaApi()
+  return nativeWindowsMediaApi
+}
+
 function getNowPlayingManager(): NowPlayingManager {
   if (!nowPlayingManager) {
     nowPlayingManager = new NowPlayingManager({
@@ -156,7 +168,9 @@ function getNowPlayingManager(): NowPlayingManager {
           configPath: join(app.getPath('userData'), 'astra-integration.json'),
           secretVault: getSecretVault(),
         }),
-        new MacSpotifyProvider(),
+        new MacSpotifyProvider({
+          windowsMediaApi: getNativeWindowsMediaApi(),
+        }),
       ],
     })
     nowPlayingManager.subscribe((state) => {

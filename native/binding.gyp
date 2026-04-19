@@ -49,12 +49,13 @@
           "libraries": [
             "ole32.lib",
             "avrt.lib",
+            "runtimeobject.lib",
             "uuid.lib"
           ],
           "msvs_settings": {
             "VCCLCompilerTool": {
               "ExceptionHandling": 1,
-              "AdditionalOptions": ["/O2"]
+              "AdditionalOptions": ["/O2", "/std:c++17"]
             }
           }
         }],
