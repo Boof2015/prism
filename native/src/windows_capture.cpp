@@ -1102,14 +1102,29 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
         const auto timeline = session->GetTimelineProperties();
         const auto mediaProperties = session->TryGetMediaPropertiesAsync().get();
 
-        const auto positionMs = std::max<int64_t>(
-            0,
-            std::chrono::duration_cast<std::chrono::milliseconds>(timeline.Position()).count());
         const auto durationMs = std::max<int64_t>(
             0,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 timeline.EndTime() - timeline.StartTime())
                 .count());
+
+        // Position() is stamped at LastUpdatedTime(); extrapolate forward when playing.
+        int64_t positionMs;
+        if (playbackInfo.PlaybackStatus() ==
+            GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
+            const auto elapsed = winrt::clock::now() - timeline.LastUpdatedTime();
+            const auto extrapolated = timeline.Position() + elapsed;
+            positionMs = std::min(
+                durationMs,
+                std::max<int64_t>(
+                    0,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(extrapolated).count()));
+        } else {
+            positionMs = std::max<int64_t>(
+                0,
+                std::chrono::duration_cast<std::chrono::milliseconds>(timeline.Position())
+                    .count());
+        }
 
         Napi::Object payload = Napi::Object::New(env);
         payload.Set(
