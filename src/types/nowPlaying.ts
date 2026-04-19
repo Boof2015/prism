@@ -90,7 +90,7 @@ export const NOW_PLAYING_PROVIDER_DEFINITIONS: NowPlayingProviderDefinitionMap =
   spotify: {
     id: 'spotify',
     label: 'Spotify',
-    description: 'Read track data and transport controls directly from the local Spotify macOS app.',
+    description: 'Read track data and transport controls directly from the local Spotify app on supported desktop platforms.',
     authMode: 'local',
     available: true,
     comingSoon: false,

@@ -96,6 +96,82 @@ function getErrorMessage(error: unknown, fallback: string): string {
     : fallback
 }
 
+function isMacOSPlatform(platform: string): boolean {
+  return platform === 'darwin'
+}
+
+function isLinuxPlatform(platform: string): boolean {
+  return platform === 'linux'
+}
+
+function isWindowsPlatform(platform: string): boolean {
+  return platform === 'win32'
+}
+
+function getSpotifyIntegrationLabel(platform: string): string {
+  if (isMacOSPlatform(platform)) {
+    return 'Local macOS app'
+  }
+
+  if (isLinuxPlatform(platform)) {
+    return 'Local Linux MPRIS'
+  }
+
+  if (isWindowsPlatform(platform)) {
+    return 'Local Windows media session'
+  }
+
+  return 'Local Spotify integration'
+}
+
+function getSpotifyUnavailableMetaText(platform: string): string {
+  if (isMacOSPlatform(platform)) {
+    return 'Local macOS app unavailable'
+  }
+
+  if (isLinuxPlatform(platform)) {
+    return 'Local Linux MPRIS unavailable'
+  }
+
+  if (isWindowsPlatform(platform)) {
+    return 'Local Windows media session unavailable'
+  }
+
+  return 'Local Spotify integration unavailable'
+}
+
+function getSpotifyAvailabilityDetail(platform: string): string {
+  if (isMacOSPlatform(platform)) {
+    return 'Install Spotify.app in /Applications to enable this provider.'
+  }
+
+  if (isLinuxPlatform(platform)) {
+    return 'This provider needs a Linux desktop session with Spotify MPRIS access.'
+  }
+
+  if (isWindowsPlatform(platform)) {
+    return 'This provider needs Windows system media controls to expose a Spotify session.'
+  }
+
+  return 'This provider is currently available on macOS, Linux, and Windows.'
+}
+
+function getSpotifyProviderCopy(platform: string): string {
+  if (isMacOSPlatform(platform)) {
+    return 'No Spotify developer account or API setup is required. Prism reads the local Spotify macOS app directly.'
+  }
+
+  if (isLinuxPlatform(platform)) {
+    return 'No Spotify developer account or API setup is required. Prism reads Spotify through the local Linux MPRIS session.'
+  }
+
+  if (isWindowsPlatform(platform)) {
+    return 'No Spotify developer account or API setup is required. Prism reads Spotify through the local Windows media session.'
+  }
+
+  return 'No Spotify developer account or API setup is required. On supported systems, Prism reads the local Spotify app directly.'
+}
+
 function getProviderStatusLabel(
   definition: NowPlayingProviderDefinition,
   provider: NowPlayingProviderState,
@@ -129,6 +205,7 @@ function getProviderStatusLabel(
 function getProviderMetaText(
   definition: NowPlayingProviderDefinition,
   provider: NowPlayingProviderState,
+  platform: string,
 ): string {
   if (definition.comingSoon) {
     return 'Local integration coming later'
@@ -136,7 +213,7 @@ function getProviderMetaText(
 
   if (!provider.available) {
     return provider.providerId === 'spotify'
-      ? 'Local macOS app unavailable'
+      ? getSpotifyUnavailableMetaText(platform)
       : 'Unavailable on this device'
   }
 
@@ -145,19 +222,20 @@ function getProviderMetaText(
   }
 
   if (definition.authMode === 'local') {
+    const integrationLabel = getSpotifyIntegrationLabel(platform)
     switch (provider.connectionState) {
       case 'disabled':
-        return 'Local macOS app · Waiting for Spotify'
+        return `${integrationLabel} · Waiting for Spotify`
       case 'connecting':
-        return 'Local macOS app · Checking playback'
+        return `${integrationLabel} · Checking playback`
       case 'connected':
         return provider.snapshot?.playbackState === 'playing'
-          ? 'Local macOS app · Playing now'
-          : 'Local macOS app · Ready'
+          ? `${integrationLabel} · Playing now`
+          : `${integrationLabel} · Ready`
       case 'error':
-        return 'Local macOS app · Needs attention'
+        return `${integrationLabel} · Needs attention`
       case 'unavailable':
-        return 'Local macOS app unavailable'
+        return getSpotifyUnavailableMetaText(platform)
     }
   }
 
@@ -230,6 +308,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
   const [draggedProviderId, setDraggedProviderId] = useState<NowPlayingProviderId | null>(null)
   const [dropTargetProviderId, setDropTargetProviderId] = useState<NowPlayingProviderId | null>(null)
   const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
+  const platform = window.electronAPI.platform
 
   useEffect(() => {
     let disposed = false
@@ -397,7 +476,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
           <div className="now-playing-config__stack">
             <div className="now-playing-config__intro">
               {nowPlayingState.onboardingRequired
-                ? 'Start with Astra or the local Spotify macOS app. TIDAL stays visible here for future priority.'
+                ? 'Start with Astra or the local Spotify integration. TIDAL stays visible here for future priority.'
                 : 'The highest configured provider that starts playing takes over immediately.'}
             </div>
 
@@ -467,7 +546,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
                             ) : null}
                           </span>
                           <span className="now-playing-config__provider-meta">
-                            {getProviderMetaText(definition, provider)}
+                            {getProviderMetaText(definition, provider, platform)}
                           </span>
                         </span>
 
@@ -578,7 +657,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
                             {definition.description}
                           </div>
                           <div className="settings-info-text">
-                            No Spotify developer account or API setup is required. Prism reads the local Spotify macOS app directly.
+                            {getSpotifyProviderCopy(platform)}
                           </div>
                           <div className="settings-inline-actions now-playing-config__provider-actions">
                             <button
@@ -600,9 +679,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
                           </div>
                           {!provider.available ? (
                             <div className="settings-info-text">
-                              {window.electronAPI.platform === 'darwin'
-                                ? 'Install Spotify.app in /Applications to enable this provider.'
-                                : 'This provider is currently available on macOS only.'}
+                              {getSpotifyAvailabilityDetail(platform)}
                           </div>
                           ) : null}
                           {provider.lastError || provider.lastControlError ? (

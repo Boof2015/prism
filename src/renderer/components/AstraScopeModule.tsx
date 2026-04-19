@@ -17,6 +17,18 @@ function getErrorMessage(error: unknown, fallback: string): string {
     : fallback
 }
 
+function isMacOSPlatform(platform: string): boolean {
+  return platform === 'darwin'
+}
+
+function isLinuxPlatform(platform: string): boolean {
+  return platform === 'linux'
+}
+
+function isWindowsPlatform(platform: string): boolean {
+  return platform === 'win32'
+}
+
 function hasVisibleFields(settings: ScopeSettings['nowPlaying']): boolean {
   return settings.showCoverArt
     || settings.showTitle
@@ -38,6 +50,7 @@ function getConfiguredProviderId(
 function getFallbackTitle(
   providerId: NowPlayingProviderId | null,
   connectionState: 'disabled' | 'connecting' | 'connected' | 'error' | 'unavailable' | null,
+  platform: string,
 ): string {
   if (connectionState === null) {
     return 'Nothing playing'
@@ -54,6 +67,18 @@ function getFallbackTitle(
       case 'connected':
         return 'Nothing playing'
       case 'unavailable':
+        if (isMacOSPlatform(platform)) {
+          return 'Spotify unavailable'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Spotify MPRIS unavailable'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Spotify media session unavailable'
+        }
+
         return 'Spotify unavailable'
     }
   }
@@ -79,6 +104,7 @@ function getFallbackTitle(
 function getFallbackDetail(
   providerId: NowPlayingProviderId | null,
   connectionState: 'disabled' | 'connecting' | 'connected' | 'error' | 'unavailable' | null,
+  platform: string,
 ): string {
   if (connectionState === null) {
     return ''
@@ -87,15 +113,63 @@ function getFallbackDetail(
   if (providerId === 'spotify') {
     switch (connectionState) {
       case 'disabled':
-        return 'Open Spotify on this Mac to show local playback here.'
+        if (isMacOSPlatform(platform)) {
+          return 'Open Spotify on this Mac to show local playback here.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Open Spotify on this Linux desktop to show local playback here.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Open Spotify on this PC to show local playback here.'
+        }
+
+        return 'Open Spotify to show local playback here.'
       case 'connecting':
-        return 'Waiting for the local Spotify app.'
+        if (isMacOSPlatform(platform)) {
+          return 'Waiting for the local Spotify app.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Waiting for the local Spotify MPRIS session.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Waiting for the local Windows media session.'
+        }
+
+        return 'Waiting for the local Spotify integration.'
       case 'error':
-        return 'Check Spotify access in System Settings > Privacy & Security > Automation.'
+        if (isMacOSPlatform(platform)) {
+          return 'Check Spotify access in System Settings > Privacy & Security > Automation.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Check that your Linux desktop session exposes Spotify over MPRIS.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Check that Windows media controls can see a Spotify session.'
+        }
+
+        return 'Check that Spotify is available through the local system media controls.'
       case 'connected':
         return ''
       case 'unavailable':
-        return 'Install Spotify.app to enable this provider.'
+        if (isMacOSPlatform(platform)) {
+          return 'Install Spotify.app to enable this provider.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Linux desktop media controls are unavailable for Spotify on this system.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Windows system media controls are unavailable for Spotify on this system.'
+        }
+
+        return 'This local Spotify integration is currently available on macOS, Linux, and Windows.'
     }
   }
 
@@ -145,6 +219,7 @@ export default function AstraScopeModule({
   const providerDefinition = displayProviderId
     ? nowPlayingState.definitions[displayProviderId]
     : null
+  const platform = window.electronAPI.platform
 
   useEffect(() => {
     if (providerState?.snapshot?.playbackState !== 'playing') {
@@ -170,7 +245,7 @@ export default function AstraScopeModule({
   const detailMessage = currentTrack?.artist
     ?? (providerState?.connectionState === 'connected'
       ? null
-      : getFallbackDetail(displayProviderId, providerState?.connectionState ?? null))
+      : getFallbackDetail(displayProviderId, providerState?.connectionState ?? null, platform))
   const style = {
     '--astra-accent': theme.accent,
     '--astra-bg': theme.background,
@@ -250,8 +325,8 @@ export default function AstraScopeModule({
           {(settings.showTitle || settings.showArtist) && (
             <div className="astra-scope__meta">
               {settings.showTitle && (
-                <div className="astra-scope__title" title={currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null)}>
-                  {currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null)}
+                <div className="astra-scope__title" title={currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}>
+                  {currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}
                 </div>
               )}
               {settings.showArtist && detailMessage && (
