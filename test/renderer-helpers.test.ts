@@ -3158,7 +3158,7 @@ test('LUFSMeter keeps integrated history bounded over long runs', () => {
   assert.equal(Number.isFinite((meter as unknown as { integratedLUFS: number }).integratedLUFS), true)
 })
 
-test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-document polls and cancels on stop', async () => {
+test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-document backoff, and cancels on stop', async () => {
   const timers = installFakeTimeouts()
 
   try {
@@ -3166,13 +3166,22 @@ test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-docume
 
     const drainResults = [
       {
-        chunks: [{
-          left: new Float32Array([0.1, 0.2]),
-          right: new Float32Array([0.3, 0.4]),
-          channelCount: 2,
-          capturedAtMilliseconds: 5,
-          sequence: 1,
-        }],
+        chunks: [
+          {
+            left: new Float32Array([0.1, 0.2]),
+            right: new Float32Array([0.3, 0.4]),
+            channelCount: 2,
+            capturedAtMilliseconds: 5,
+            sequence: 1,
+          },
+          {
+            left: new Float32Array([0.5, 0.6]),
+            right: new Float32Array([0.7, 0.8]),
+            channelCount: 2,
+            capturedAtMilliseconds: 15,
+            sequence: 2,
+          },
+        ],
         overwriteCount: 0,
         queueDepth: 0,
       },
@@ -3224,15 +3233,18 @@ test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-docume
       reason: null,
     })
     const receivedSequences: number[] = []
+    const receivedChunkTimes: number[] = []
     backend.subscribe((chunk) => {
       receivedSequences.push(chunk.sequence)
+      receivedChunkTimes.push(chunk.capturedAt)
     })
 
     await backend.start()
     assert.equal(timers.nextDelay(), 0)
 
     timers.runNext()
-    assert.deepEqual(receivedSequences, [1])
+    assert.deepEqual(receivedSequences, [1, 2])
+    assert.equal(receivedChunkTimes.length, 2)
     assert.equal(timers.nextDelay(), 0)
 
     timers.runNext()
@@ -3241,6 +3253,137 @@ test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-docume
     timers.setHidden(true)
     timers.runNext()
     assert.equal(timers.nextDelay(), 16)
+
+    await backend.stop()
+    assert.equal(timers.pendingCount(), 0)
+  } finally {
+    timers.restore()
+  }
+})
+
+test('NativePolledCaptureBackend trims stale backlog to the newest live slice when catch-up mode is enabled', async () => {
+  const timers = installFakeTimeouts()
+
+  try {
+    const { NativePolledCaptureBackend } = await import('../src/renderer/audio/AudioCapture')
+
+    const drainResults = [
+      {
+        chunks: [
+          {
+            left: new Float32Array([0.1]),
+            right: new Float32Array([0.1]),
+            channelCount: 2,
+            capturedAtMilliseconds: 0,
+            sequence: 1,
+          },
+          {
+            left: new Float32Array([0.2]),
+            right: new Float32Array([0.2]),
+            channelCount: 2,
+            capturedAtMilliseconds: 10,
+            sequence: 2,
+          },
+          {
+            left: new Float32Array([0.3]),
+            right: new Float32Array([0.3]),
+            channelCount: 2,
+            capturedAtMilliseconds: 30,
+            sequence: 3,
+          },
+          {
+            left: new Float32Array([0.4]),
+            right: new Float32Array([0.4]),
+            channelCount: 2,
+            capturedAtMilliseconds: 70,
+            sequence: 4,
+          },
+          {
+            left: new Float32Array([0.5]),
+            right: new Float32Array([0.5]),
+            channelCount: 2,
+            capturedAtMilliseconds: 90,
+            sequence: 5,
+          },
+        ],
+        overwriteCount: 0,
+        queueDepth: 3,
+      },
+      {
+        chunks: [{
+          left: new Float32Array([0.6]),
+          right: new Float32Array([0.6]),
+          channelCount: 2,
+          capturedAtMilliseconds: 120,
+          sequence: 6,
+        }],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+      {
+        chunks: [],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+    ]
+
+    const nativeModule = {
+      getSupport: () => ({ available: true, reason: null }),
+      listOutputDevices: () => [],
+      start: () => ({
+        sampleRate: 48000,
+        channelCount: 2,
+        deviceId: 'device',
+        deviceLabel: 'Device',
+      }),
+      stop: () => {},
+      drain: () => drainResults.shift() ?? {
+        chunks: [],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+      nowMilliseconds: () => 0,
+    }
+
+    class TestNativeBackend extends NativePolledCaptureBackend {
+      readonly kind = 'native-linux' as const
+
+      protected getNativeCaptureModule() {
+        return nativeModule
+      }
+
+      protected getBackendLabel(): string {
+        return 'Test Native'
+      }
+
+      protected shouldTrimBacklogForLiveCapture(): boolean {
+        return true
+      }
+    }
+
+    const backend = new TestNativeBackend({
+      kind: 'native-linux',
+      available: true,
+      reason: null,
+    })
+    const receivedSequences: number[] = []
+    backend.subscribe((chunk) => {
+      receivedSequences.push(chunk.sequence)
+    })
+
+    await backend.start()
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.deepEqual(receivedSequences, [4, 5])
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.deepEqual(receivedSequences, [4, 5, 6])
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.equal(timers.nextDelay(), 2)
 
     await backend.stop()
     assert.equal(timers.pendingCount(), 0)

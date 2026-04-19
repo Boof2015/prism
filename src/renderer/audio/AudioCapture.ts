@@ -53,15 +53,58 @@ interface CaptureBackend {
   getStatus(): CaptureBackendStatus
 }
 
+const NATIVE_BACKLOG_CATCH_UP_CHUNK_THRESHOLD = 4
+const NATIVE_BACKLOG_LIVE_WINDOW_MS = 50
+
 function isDocumentHidden(): boolean {
   return typeof document !== 'undefined' && document.hidden === true
 }
 
-function resolveNativeCapturePollDelay(chunkCount: number): number {
+function resolveNativeCapturePollDelay(chunkCount: number, queueDepth = 0): number {
   if (isDocumentHidden()) {
     return 16
   }
-  return chunkCount > 0 ? 0 : 2
+  return chunkCount > 0 || queueDepth > 0 ? 0 : 2
+}
+
+function trimNativeChunksToLiveWindow(chunks: NativeCaptureDrainResult['chunks']): NativeCaptureDrainResult['chunks'] {
+  if (chunks.length <= 1) {
+    return chunks
+  }
+
+  const latestChunk = chunks[chunks.length - 1]
+  const latestCapturedAt = latestChunk?.capturedAtMilliseconds ?? NaN
+  if (!Number.isFinite(latestCapturedAt)) {
+    return latestChunk ? [latestChunk] : []
+  }
+
+  const firstLiveChunkIndex = chunks.findIndex((chunk) => (
+    Number.isFinite(chunk.capturedAtMilliseconds)
+      ? latestCapturedAt - chunk.capturedAtMilliseconds <= NATIVE_BACKLOG_LIVE_WINDOW_MS
+      : false
+  ))
+
+  if (firstLiveChunkIndex === -1) {
+    return latestChunk ? [latestChunk] : []
+  }
+
+  return chunks.slice(firstLiveChunkIndex)
+}
+
+function selectNativeChunksForDelivery(
+  result: NativeCaptureDrainResult,
+  trimBacklog: boolean,
+): NativeCaptureDrainResult['chunks'] {
+  if (!trimBacklog) {
+    return result.chunks
+  }
+
+  const shouldCatchUp = result.queueDepth > 0 || result.chunks.length > NATIVE_BACKLOG_CATCH_UP_CHUNK_THRESHOLD
+  if (!shouldCatchUp) {
+    return result.chunks
+  }
+
+  return trimNativeChunksToLiveWindow(result.chunks)
 }
 
 function resolvePlatform(): string {
@@ -400,6 +443,10 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
     }
   }
 
+  protected shouldTrimBacklogForLiveCapture(): boolean {
+    return false
+  }
+
   private startPolling(): void {
     this.stopPolling()
 
@@ -407,11 +454,17 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
       if (!this.active) return
 
       let chunkCount = 0
+      let queueDepth = 0
       try {
         const result = this.getNativeCaptureModule()?.drain(32) as NativeCaptureDrainResult | undefined
         chunkCount = result?.chunks.length ?? 0
+        queueDepth = result?.queueDepth ?? 0
         if (result) {
-          for (const chunk of result.chunks) {
+          const deliveredChunks = selectNativeChunksForDelivery(
+            result,
+            this.shouldTrimBacklogForLiveCapture(),
+          )
+          for (const chunk of deliveredChunks) {
             const routedChunk: CaptureChunk = {
               left: chunk.left,
               right: chunk.right,
@@ -432,7 +485,7 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
         return
       }
 
-      this.pollTimer = window.setTimeout(poll, resolveNativeCapturePollDelay(chunkCount))
+      this.pollTimer = window.setTimeout(poll, resolveNativeCapturePollDelay(chunkCount, queueDepth))
     }
 
     this.pollTimer = window.setTimeout(poll, 0)
@@ -482,6 +535,10 @@ class NativeLinuxCaptureBackend extends NativePolledCaptureBackend {
 
   protected getBackendLabel(): string {
     return 'Native Linux'
+  }
+
+  protected shouldTrimBacklogForLiveCapture(): boolean {
+    return true
   }
 }
 

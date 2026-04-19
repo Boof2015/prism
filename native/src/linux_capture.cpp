@@ -17,6 +17,7 @@ namespace {
 
 constexpr size_t kMaxQueuedChunks = 256;
 constexpr size_t kDefaultDrainChunkLimit = 64;
+constexpr pa_usec_t kTargetRecordFragmentMicroseconds = 10000;
 
 struct OutputDeviceInfo {
     std::string id;
@@ -574,6 +575,21 @@ private:
         return std::string(prefix) + " " + pulseError;
     }
 
+    static pa_buffer_attr buildRecordBufferAttr(const pa_sample_spec& sampleSpec) {
+        pa_buffer_attr attr{};
+        attr.maxlength = UINT32_MAX;
+        attr.tlength = UINT32_MAX;
+        attr.prebuf = UINT32_MAX;
+        attr.minreq = UINT32_MAX;
+
+        const size_t requestedFragSize =
+            pa_usec_to_bytes(kTargetRecordFragmentMicroseconds, &sampleSpec);
+        attr.fragsize = requestedFragSize == 0
+            ? 1
+            : static_cast<uint32_t>(std::min<size_t>(requestedFragSize, UINT32_MAX));
+        return attr;
+    }
+
     bool startInternal(const std::string& requestedDeviceId, std::string* outErrorMessage) {
         stopInternal();
 
@@ -645,13 +661,14 @@ private:
         pa_stream_set_state_callback(stream_, &HandleStreamState, connection_.mainloop());
         pa_stream_set_read_callback(stream_, &HandleStreamRead, this);
 
+        const pa_buffer_attr requestedBufferAttr = buildRecordBufferAttr(selected->sampleSpec);
         const pa_stream_flags_t flags = static_cast<pa_stream_flags_t>(
             PA_STREAM_ADJUST_LATENCY |
             PA_STREAM_AUTO_TIMING_UPDATE |
             PA_STREAM_INTERPOLATE_TIMING |
             PA_STREAM_DONT_MOVE);
         const int connectResult = pa_stream_connect_record(
-            stream_, selected->monitorSourceName.c_str(), nullptr, flags);
+            stream_, selected->monitorSourceName.c_str(), &requestedBufferAttr, flags);
         if (connectResult < 0) {
             const std::string errorMessage = buildContextErrorMessage(
                 connection_.context(), "Could not start Linux monitor capture.");
@@ -685,6 +702,12 @@ private:
             sampleSpec_ = *activeSpec;
         } else {
             sampleSpec_ = selected->sampleSpec;
+        }
+        const pa_buffer_attr* activeBufferAttr = pa_stream_get_buffer_attr(stream_);
+        if (activeBufferAttr != nullptr) {
+            bufferAttr_ = *activeBufferAttr;
+        } else {
+            bufferAttr_ = requestedBufferAttr;
         }
 
         {
@@ -751,6 +774,7 @@ private:
             channelCount_ = 2;
             sequence_ = 0;
             sampleSpec_ = pa_sample_spec{};
+            bufferAttr_ = pa_buffer_attr{};
         }
 
         {
@@ -856,6 +880,7 @@ private:
     uint32_t channelCount_ = 2;
     uint64_t sequence_ = 0;
     pa_sample_spec sampleSpec_{};
+    pa_buffer_attr bufferAttr_{};
     std::deque<CapturedChunk> chunkQueue_;
     size_t overwriteCount_ = 0;
 };
