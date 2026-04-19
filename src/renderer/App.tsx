@@ -8,10 +8,11 @@ import WindowResizeOverlay from './components/WindowResizeOverlay'
 import AppBanner from './components/AppBanner'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
-import { useAstraStore } from './stores/astraStore'
 import { useAudioStore } from './stores/audioStore'
+import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
+import { getRendererWindowCapabilities } from './windowCapabilities'
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -27,12 +28,19 @@ export default function App(): JSX.Element {
   const showProfilesFolder = useSettingsStore((s) => s.showProfilesFolder)
   const updateMainWindowBounds = useSettingsStore((s) => s.updateMainWindowBounds)
   const initializeThemes = useThemeStore((s) => s.initializeThemes)
-  const applyExternalThemeSnapshot = useThemeStore((s) => s.applyExternalThemeSnapshot)
-  const initializeAstra = useAstraStore((s) => s.initialize)
+  const initializeNowPlaying = useNowPlayingStore((s) => s.initialize)
+  const setNowPlayingConsumerActive = useNowPlayingStore((s) => s.setConsumerActive)
+  const scopeOrder = useSettingsStore((s) => s.scopeOrder)
+  const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
+  const scopePopouts = useSettingsStore((s) => s.scopePopouts)
   const settingsOpen = useUiStore((s) => s.settingsOpen)
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const showBanner = useUiStore((s) => s.showBanner)
+  const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
+
+  const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
+    && (scopeOrder.includes('nowPlaying') || scopePopouts.nowPlaying?.poppedOut === true)
 
   // Auto-capture on launch
   useEffect(() => {
@@ -48,7 +56,7 @@ export default function App(): JSX.Element {
     void (async () => {
       await initializeThemes()
       await initializeProfiles()
-      await initializeAstra()
+      await initializeNowPlaying()
       if (!isDisposed) {
         window.electronAPI.notifyRendererReady()
       }
@@ -56,9 +64,6 @@ export default function App(): JSX.Element {
 
     const unsubscribeProfile = window.electronAPI.onExternalProfileActivated((snapshot) => {
       applyExternalProfileSnapshot(snapshot)
-    })
-    const unsubscribeTheme = window.electronAPI.onExternalThemeActivated((snapshot) => {
-      applyExternalThemeSnapshot(snapshot)
     })
     const unsubscribeBounds = window.electronAPI.onMainWindowBoundsChanged((bounds) => {
       updateMainWindowBounds(bounds)
@@ -117,23 +122,30 @@ export default function App(): JSX.Element {
     return () => {
       isDisposed = true
       unsubscribeProfile()
-      unsubscribeTheme()
       unsubscribeBounds()
       unsubscribeExternalOpenRequested()
       unsubscribeCloseRequested()
     }
   }, [
     applyExternalProfileSnapshot,
-    applyExternalThemeSnapshot,
     guardProfileTransition,
     importProfileFromPath,
     initializeProfiles,
     initializeThemes,
-    initializeAstra,
+    initializeNowPlaying,
     showBanner,
     showProfilesFolder,
     updateMainWindowBounds,
   ])
+
+  useEffect(() => {
+    void initializeNowPlaying()
+      .then(() => setNowPlayingConsumerActive(isNowPlayingVisible))
+
+    return () => {
+      void setNowPlayingConsumerActive(false)
+    }
+  }, [initializeNowPlaying, isNowPlayingVisible, setNowPlayingConsumerActive])
 
   const settingsHeight = resolveMainWindowSettingsHeight(
     settingsOpen,
@@ -170,15 +182,23 @@ export default function App(): JSX.Element {
   }, [setSettingsOpen])
 
   const handleAltDragStart = useCallback((event: React.MouseEvent) => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     if (event.altKey && event.button === 0) {
       event.preventDefault()
       window.electronAPI.startWindowMove()
     }
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleAltDragEnd = useCallback(() => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     window.electronAPI.stopWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   useEffect(() => {
     return () => {
@@ -194,8 +214,8 @@ export default function App(): JSX.Element {
       className="prism-app"
       onMouseEnter={showToolbar}
       onMouseLeave={scheduleHide}
-      onMouseDown={handleAltDragStart}
-      onMouseUp={handleAltDragEnd}
+      onMouseDown={useNativeDragRegions ? undefined : handleAltDragStart}
+      onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
     >
       <div
         className={`prism-toolbar-layer ${toolbarVisible ? 'is-visible' : ''}`.trim()}

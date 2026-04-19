@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import test from 'node:test'
 import {
   DEFAULT_VISUALIZER_TINT,
   colorToRgbChannels,
   parseColorToRgb,
+  parseColorToRgba,
   resolveColorToRgb,
 } from '../src/renderer/utils/color'
 import {
@@ -18,6 +21,7 @@ import {
 import {
   createDefaultProfile,
 } from '../src/shared/profileState'
+import { resolveWindowCapabilities } from '../src/shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
   raiseWindowAboveNormalPopouts,
@@ -25,12 +29,15 @@ import {
 } from '../src/shared/windowGeometry'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
 import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../src/shared/themeState'
+import { useAudioStore } from '../src/renderer/stores/audioStore'
 import { usePerformanceStore } from '../src/renderer/stores/performanceStore'
 import { buildProfileDraft, profilesMatch } from '../src/renderer/stores/profileDraft'
 import {
   moveDockedScopeOrder,
   useSettingsStore,
 } from '../src/renderer/stores/settingsStore'
+import { useThemeStore } from '../src/renderer/stores/themeStore'
+import { resolveThemeCreditDetails } from '../src/renderer/components/BottomBar'
 import { scopeSettingsToOptions } from '../src/renderer/components/ScopeModule'
 import { scopeSummary } from '../src/renderer/components/ScopeSettingsSection'
 import {
@@ -40,6 +47,13 @@ import {
 import { SCOPE_KINDS, type ScopeKind } from '../src/types/scope'
 import type { ScopePopoutStateMap, WindowBounds } from '../src/types/popout'
 import { RESIZE_DIRECTIONS } from '../src/types/windowResize'
+import {
+  DEFAULT_SPECTRUM_PEAK_INFO_MODE,
+  formatSpectrumPitchInfo,
+  normalizeSpectrumPeakInfoMode,
+  resolveSpectrumPitchInfo,
+  type SpectrumPeakInfo,
+} from '../src/types/spectrum'
 import { ScopePopoutDataSource } from '../src/renderer/popouts/ScopePopoutDataSource'
 import {
   VUMeterBallistics,
@@ -54,7 +68,14 @@ import {
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
 import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
+import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
+import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
+import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
+import {
+  drawVectorscopeGridForMode,
+  getVectorscopeLayout,
+} from '../src/renderer/visualizers/vectorscopeGrids'
 import {
   MultibandBuffer,
   MultibandSplitter,
@@ -65,12 +86,16 @@ import {
   DEFAULT_PROFILE_NAME,
   type Profile,
 } from '../src/types/profile'
+import type { WindowCapabilities } from '../src/types/windowCapabilities'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
+type FakeElectronAPI = {
+  platform: string
+  windowCapabilities: WindowCapabilities
+  [key: string]: unknown
+}
 type WindowWithTimers = typeof globalThis & Pick<Window, 'setTimeout' | 'clearTimeout'> & {
-  electronAPI: {
-    platform: string
-  }
+  electronAPI: FakeElectronAPI
 }
 type GlobalWithStorage = typeof globalThis & {
   localStorage?: Storage
@@ -134,7 +159,10 @@ function installFakeTimeouts(hidden = false): {
 
   globalWithWindow.window = {
     ...globalThis,
-    electronAPI: { platform: 'darwin' },
+    electronAPI: {
+      platform: 'darwin',
+      windowCapabilities: resolveWindowCapabilities({ platform: 'darwin' }),
+    },
     setTimeout(callback: TimerHandler, delay?: number): number {
       const timerId = nextTimerId
       nextTimerId += 1
@@ -220,6 +248,45 @@ function createProgramSamples(length: number): { left: Float32Array; right: Floa
   return { left, right }
 }
 
+function createSineStereoChunk(frequencyHz: number, sampleRate: number, length: number): {
+  left: Float32Array
+  right: Float32Array
+} {
+  const left = new Float32Array(length)
+  const right = new Float32Array(length)
+
+  for (let index = 0; index < length; index += 1) {
+    const sample = Math.sin((2 * Math.PI * frequencyHz * index) / sampleRate) * 0.8
+    left[index] = sample
+    right[index] = sample
+  }
+
+  return { left, right }
+}
+
+function createCompositeStereoChunk(
+  partials: Array<{ frequencyHz: number; amplitude: number }>,
+  sampleRate: number,
+  length: number,
+): {
+  left: Float32Array
+  right: Float32Array
+} {
+  const left = new Float32Array(length)
+  const right = new Float32Array(length)
+
+  for (let index = 0; index < length; index += 1) {
+    let sample = 0
+    for (const partial of partials) {
+      sample += Math.sin((2 * Math.PI * partial.frequencyHz * index) / sampleRate) * partial.amplitude
+    }
+    left[index] = sample
+    right[index] = sample
+  }
+
+  return { left, right }
+}
+
 function createScopePopouts(poppedOutScopes: ScopeKind[] = []): ScopePopoutStateMap {
   const poppedOutSet = new Set(poppedOutScopes)
   return SCOPE_KINDS.reduce((acc, kind) => {
@@ -290,8 +357,9 @@ function installFakeElectronWindow(overrides: Record<string, unknown> = {}): {
     ...globalThis,
     electronAPI: {
       platform: 'darwin',
+      windowCapabilities: resolveWindowCapabilities({ platform: 'darwin' }),
       ...overrides,
-    },
+    } as FakeElectronAPI,
   } as WindowWithTimers
 
   return {
@@ -308,7 +376,6 @@ function installFakeElectronWindow(overrides: Record<string, unknown> = {}): {
 
 function seedProfileDraftState(profile: Profile): void {
   useSettingsStore.setState({
-    themeId: profile.themeId,
     scopeOrder: [...profile.scopeOrder],
     hiddenScopes: new Set(profile.hiddenScopes),
     widthWeights: { ...profile.widthWeights },
@@ -453,10 +520,45 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
   return Array.from(output.subarray(0, count))
 }
 
-function createFakeCanvasContext(): CanvasRenderingContext2D {
+interface FakeCanvasRecorder {
+  fillRects: Array<{ x: number; y: number; width: number; height: number; fillStyle: string }>
+  strokeRects: Array<{ x: number; y: number; width: number; height: number; lineDash: number[] }>
+  arcs: Array<{
+    x: number
+    y: number
+    radius: number
+    startAngle: number
+    endAngle: number
+    anticlockwise: boolean
+    lineDash: number[]
+  }>
+  lineDashes: number[][]
+  imageDataWrites: Array<{ x: number; y: number; data: number[] }>
+  drawImageCalls: Array<{ compositeOperation: GlobalCompositeOperation }>
+}
+
+function createFakeCanvasRecorder(): FakeCanvasRecorder {
   return {
+    fillRects: [],
+    strokeRects: [],
+    arcs: [],
+    lineDashes: [],
+    imageDataWrites: [],
+    drawImageCalls: [],
+  }
+}
+
+function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): CanvasRenderingContext2D {
+  let currentLineDash: number[] = []
+  let currentFillStyle = ''
+  let currentStrokeStyle = ''
+  let currentCompositeOperation: GlobalCompositeOperation = 'source-over'
+
+  const context = {
     clearRect() {},
-    fillRect() {},
+    fillRect(x: number, y: number, width: number, height: number) {
+      recorder?.fillRects.push({ x, y, width, height, fillStyle: currentFillStyle })
+    },
     fillText() {},
     beginPath() {},
     closePath() {},
@@ -464,11 +566,29 @@ function createFakeCanvasContext(): CanvasRenderingContext2D {
     moveTo() {},
     lineTo() {},
     stroke() {},
-    drawImage() {},
+    strokeRect(x: number, y: number, width: number, height: number) {
+      recorder?.strokeRects.push({ x, y, width, height, lineDash: [...currentLineDash] })
+    },
+    arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, anticlockwise = false) {
+      recorder?.arcs.push({ x, y, radius, startAngle, endAngle, anticlockwise, lineDash: [...currentLineDash] })
+    },
+    drawImage() {
+      recorder?.drawImageCalls.push({ compositeOperation: currentCompositeOperation })
+    },
+    putImageData(imageData: ImageData, x: number, y: number) {
+      recorder?.imageDataWrites.push({ x, y, data: Array.from(imageData.data) })
+    },
     save() {},
     restore() {},
     translate() {},
     rotate() {},
+    setLineDash(segments: number[]) {
+      currentLineDash = [...segments]
+      recorder?.lineDashes.push([...segments])
+    },
+    getLineDash() {
+      return [...currentLineDash]
+    },
     createLinearGradient() {
       return {
         addColorStop() {},
@@ -477,19 +597,39 @@ function createFakeCanvasContext(): CanvasRenderingContext2D {
     measureText() {
       return { width: 0 } as TextMetrics
     },
-    fillStyle: '',
-    strokeStyle: '',
     lineWidth: 1,
     font: '',
     textAlign: 'left',
     textBaseline: 'top',
     lineCap: 'butt',
     lineJoin: 'miter',
-  } as unknown as CanvasRenderingContext2D
+    globalAlpha: 1,
+    imageSmoothingEnabled: false,
+    get fillStyle() {
+      return currentFillStyle
+    },
+    set fillStyle(value: string | CanvasGradient | CanvasPattern) {
+      currentFillStyle = typeof value === 'string' ? value : String(value)
+    },
+    get strokeStyle() {
+      return currentStrokeStyle
+    },
+    set strokeStyle(value: string | CanvasGradient | CanvasPattern) {
+      currentStrokeStyle = typeof value === 'string' ? value : String(value)
+    },
+    get globalCompositeOperation() {
+      return currentCompositeOperation
+    },
+    set globalCompositeOperation(value: GlobalCompositeOperation) {
+      currentCompositeOperation = value
+    },
+  }
+
+  return context as unknown as CanvasRenderingContext2D
 }
 
-function createFakeCanvas(): HTMLCanvasElement {
-  const context = createFakeCanvasContext()
+function createFakeCanvas(recorder: FakeCanvasRecorder | null = null): HTMLCanvasElement {
+  const context = createFakeCanvasContext(recorder)
   return {
     width: 320,
     height: 180,
@@ -497,12 +637,17 @@ function createFakeCanvas(): HTMLCanvasElement {
   } as unknown as HTMLCanvasElement
 }
 
-function installFakeCanvasDom(): {
+function installFakeCanvasDom(createCanvas: () => HTMLCanvasElement = () => createFakeCanvas()): {
   restore: () => void
 } {
-  const globalWithDom = globalThis as typeof globalThis & { window?: Window; document?: Document }
+  const globalWithDom = globalThis as typeof globalThis & {
+    window?: Window
+    document?: Document
+    ImageData?: typeof ImageData
+  }
   const previousWindow = globalWithDom.window
   const previousDocument = globalWithDom.document
+  const previousImageData = globalWithDom.ImageData
 
   globalWithDom.window = {
     ...(previousWindow ?? globalThis),
@@ -514,9 +659,25 @@ function installFakeCanvasDom(): {
       if (tagName !== 'canvas') {
         throw new Error(`Unsupported element in test DOM: ${tagName}`)
       }
-      return createFakeCanvas()
+      return createCanvas()
     },
   } as Document
+
+  if (globalWithDom.ImageData === undefined) {
+    class FakeImageData {
+      data: Uint8ClampedArray
+      width: number
+      height: number
+
+      constructor(width: number, height: number) {
+        this.width = width
+        this.height = height
+        this.data = new Uint8ClampedArray(width * height * 4)
+      }
+    }
+
+    globalWithDom.ImageData = FakeImageData as unknown as typeof ImageData
+  }
 
   return {
     restore(): void {
@@ -530,6 +691,12 @@ function installFakeCanvasDom(): {
         delete globalWithDom.document
       } else {
         globalWithDom.document = previousDocument
+      }
+
+      if (previousImageData === undefined) {
+        delete globalWithDom.ImageData
+      } else {
+        globalWithDom.ImageData = previousImageData
       }
     },
   }
@@ -614,6 +781,123 @@ function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
     }
   } finally {
     analyzer.dispose()
+    dom.restore()
+  }
+}
+
+function renderSpectrumHeatmap(
+  options: Partial<SpectrumAnalyzerOptions>,
+  heatmapIntensity: number[],
+  yPoints: number[] = heatmapIntensity.map(() => 0),
+): FakeCanvasRecorder {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas(recorder)
+  canvas.width = heatmapIntensity.length
+  canvas.height = 24
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(canvas, {
+    showSideLine: true,
+    heatmapFill: true,
+    fillGradient: false,
+    showGrid: false,
+    dataSource,
+    ...options,
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      renderHeatmap: (
+        xPoints: Float32Array,
+        yPoints: Float32Array,
+        heatmapIntensity: Float32Array,
+        pointCount: number,
+        width: number,
+        height: number,
+      ) => void
+    }
+    state.renderHeatmap(
+      Float32Array.from(heatmapIntensity.map((_value, index) => index)),
+      Float32Array.from(yPoints),
+      Float32Array.from(heatmapIntensity),
+      heatmapIntensity.length,
+      canvas.width,
+      canvas.height,
+    )
+    return recorder
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+}
+
+function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, values: number[]): number[] {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const canvas = createFakeCanvas()
+  canvas.width = 1
+  canvas.height = values.length
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    ...options,
+  })
+
+  try {
+    const state = spectrogram as unknown as {
+      ensureColumnBuffers: (height: number) => void
+      shiftAndPaintColumn: (values: Float32Array) => void
+    }
+    state.ensureColumnBuffers(values.length)
+    state.shiftAndPaintColumn(Float32Array.from(values))
+    return recorder.imageDataWrites.at(-1)?.data ?? []
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+}
+
+function renderSpectrogramShift(options: Partial<SpectrogramOptions>, values: number[]): FakeCanvasRecorder {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const canvas = createFakeCanvas()
+  canvas.width = 4
+  canvas.height = values.length
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    ...options,
+  })
+
+  try {
+    const state = spectrogram as unknown as {
+      ensureColumnBuffers: (height: number) => void
+      shiftAndPaintColumn: (values: Float32Array) => void
+    }
+    state.ensureColumnBuffers(values.length)
+    state.shiftAndPaintColumn(Float32Array.from(values))
+    return recorder
+  } finally {
+    spectrogram.dispose()
     dom.restore()
   }
 }
@@ -896,7 +1180,7 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'vumeter',
     'lufsmeter',
     'waveform',
-    'astra',
+    'nowPlaying',
   ])
 })
 
@@ -914,6 +1198,19 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.lineColor, theme.spectrum.line)
   assert.equal(options.backgroundColor, theme.spectrum.background)
   assert.equal(options.gridColor, theme.spectrum.guides)
+})
+
+test('default profile starts with spectrum peak info disabled', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(profile.scopeSettings.spectrum.peakInfoMode, DEFAULT_SPECTRUM_PEAK_INFO_MODE)
+  assert.equal(normalizeSpectrumPeakInfoMode('nope'), DEFAULT_SPECTRUM_PEAK_INFO_MODE)
+})
+
+test('spectrum pitch helpers format nearest note with octave and cents', () => {
+  assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(440)), 'A4 0c')
+  assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(261.6255653005986)), 'C4 0c')
+  assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(Number.NaN)), '--')
 })
 
 test('SpectrumAnalyzer heatmap output does not change when only line smoothing changes', () => {
@@ -995,6 +1292,274 @@ test('SpectrumAnalyzer renders heatmap fill on the spectrum line', () => {
   })
 
   assertArraysAlmostEqual(snapshot.renderedHeatmapY, snapshot.primaryPointY, 1e-6, 'heatmap fill should use the line geometry')
+})
+
+test('SpectrumAnalyzer heatmap does not repaint the full viewport when heat base is omitted', () => {
+  const recorder = renderSpectrumHeatmap({}, [0.24, 0.62, 1])
+
+  assert.equal(
+    recorder.fillRects.some((rect) => rect.x === 0 && rect.y === 0 && rect.width === 3 && rect.height === 24),
+    false,
+  )
+})
+
+test('SpectrumAnalyzer heatmap honors authored token alpha for low-end heat colors', () => {
+  const recorder = renderSpectrumHeatmap({
+    heatColors: [
+      'rgba(15, 7, 33, 0)',
+      'rgba(163, 26, 121, 0.6)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0.48, 0.62, 1])
+
+  const renderedAlpha = recorder.fillRects
+    .map((rect) => parseColorToRgba(rect.fillStyle)?.a ?? null)
+    .filter((value): value is number => value !== null)
+
+  assert.equal(renderedAlpha.some((value) => value > 0 && value < 1), true)
+  assert.equal(renderedAlpha.some((value) => Math.abs(value - 1) < 1e-3), true)
+})
+
+test('SpectrumAnalyzer heat base only fills the visible heatmap area under the curve', () => {
+  const recorder = renderSpectrumHeatmap(
+    {
+      heatBaseColor: 'rgb(12, 34, 56)',
+      heatColors: [
+        'rgba(15, 7, 33, 0)',
+        'rgba(163, 26, 121, 0)',
+        'rgba(255, 241, 209, 0)',
+      ],
+    },
+    [0, 0, 0],
+    [8, 12, 16],
+  )
+
+  const baseRects = recorder.fillRects.filter((rect) => rect.fillStyle === 'rgb(12, 34, 56)')
+  assert.equal(baseRects.length, 3)
+  assert.deepEqual(
+    baseRects.map((rect) => ({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })),
+    [
+      { x: 0, y: 8, width: 1, height: 16 },
+      { x: 1, y: 12, width: 1, height: 12 },
+      { x: 2, y: 16, width: 1, height: 8 },
+    ],
+  )
+})
+
+test('Spectrogram heatmap preserves authored alpha in generated image data', () => {
+  const imageData = renderSpectrogramColumnImage({
+    heatColors: [
+      'rgba(15, 7, 33, 0)',
+      'rgba(163, 26, 121, 0.5)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0, 0.62, 1])
+
+  assert.equal(imageData[3], 0)
+  assert.equal(imageData[7] > 0 && imageData[7] < 255, true)
+  assert.equal(imageData[11], 255)
+})
+
+test('Spectrogram low-intensity heat stays mostly transparent with default RGB heat colors', () => {
+  const imageData = renderSpectrogramColumnImage({
+    heatColors: [
+      'rgb(15, 7, 33)',
+      'rgb(163, 26, 121)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0, 0.1, 1])
+
+  assert.equal(imageData[3], 0)
+  assert.equal(imageData[7] > 0 && imageData[7] < 40, true)
+  assert.equal(imageData[11], 255)
+})
+
+test('Spectrogram shifts existing columns with copy compositing to avoid transparent streaking', () => {
+  const recorder = renderSpectrogramShift({
+    heatColors: [
+      'rgba(15, 7, 33, 0)',
+      'rgba(163, 26, 121, 0.5)',
+      'rgb(255, 241, 209)',
+    ],
+  }, [0.2, 0.6, 1])
+
+  assert.equal(recorder.drawImageCalls.at(-1)?.compositeOperation, 'copy')
+})
+
+test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const { left, right } = createSineStereoChunk(440, sampleRate, 4096)
+  let peakInfo: SpectrumPeakInfo | null = null
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [{ left, right }],
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    fftSize: 4096,
+    dataSource,
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      peakInfo = nextPeakInfo
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      drawFrame: () => void
+      primaryPointFrequency: Float32Array
+      isLocalPeak: (index: number, pointCount: number) => boolean
+    }
+    state.drawFrame()
+
+    assert.ok(peakInfo, 'expected peak info to be reported')
+    assert.ok(peakInfo.frequencyHz > 437 && peakInfo.frequencyHz < 443, `expected peak frequency near 440 Hz, got ${peakInfo.frequencyHz}`)
+    assert.match(peakInfo.key, /^A4 [+-]?\d+c$/)
+    assert.ok(peakInfo.db > -20, `expected an audible peak dB, got ${peakInfo.db}`)
+    assert.ok(peakInfo.normalizedX >= 0 && peakInfo.normalizedX <= 1, 'peak x should be normalized')
+    assert.ok(peakInfo.normalizedY >= 0 && peakInfo.normalizedY <= 1, 'peak y should be normalized')
+
+    let selectedIndex = 0
+    let smallestDistance = Number.POSITIVE_INFINITY
+    for (let index = 0; index < state.primaryPointFrequency.length; index += 1) {
+      if (!state.isLocalPeak(index, state.primaryPointFrequency.length)) {
+        continue
+      }
+      const distance = Math.abs(state.primaryPointFrequency[index] - peakInfo.frequencyHz)
+      if (distance < smallestDistance) {
+        smallestDistance = distance
+        selectedIndex = index
+      }
+    }
+    assert.equal(
+      state.isLocalPeak(selectedIndex, state.primaryPointFrequency.length),
+      true,
+      'reported peak should stay anchored to a local maximum on the rendered curve',
+    )
+    assert.ok(
+      smallestDistance < 3,
+      `expected reported peak frequency to stay near a local-peak candidate, got distance ${smallestDistance}`,
+    )
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer smooths peak selection without smoothing the reported position', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const frameA = createCompositeStereoChunk([
+    { frequencyHz: 440, amplitude: 0.95 },
+    { frequencyHz: 660, amplitude: 0.6 },
+  ], sampleRate, 4096)
+  const frameB = createCompositeStereoChunk([
+    { frequencyHz: 440, amplitude: 0.72 },
+    { frequencyHz: 660, amplitude: 0.84 },
+  ], sampleRate, 4096)
+  const frameC = createCompositeStereoChunk([
+    { frequencyHz: 440, amplitude: 0.28 },
+    { frequencyHz: 660, amplitude: 0.95 },
+  ], sampleRate, 4096)
+  const pendingFrames = [frameA, frameB, frameC]
+  const peakKeys: string[] = []
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => {
+      const nextFrame = pendingFrames.shift()
+      return nextFrame ? [nextFrame] : []
+    },
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    fftSize: 4096,
+    dataSource,
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      if (nextPeakInfo) {
+        peakKeys.push(nextPeakInfo.key)
+      }
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      drawFrame: () => void
+    }
+    state.drawFrame()
+    state.drawFrame()
+    state.drawFrame()
+
+    assert.match(peakKeys[0] ?? '', /^A4 [+-]?\d+c$/)
+    assert.match(peakKeys[1] ?? '', /^A4 [+-]?\d+c$/)
+    assert.match(peakKeys[2] ?? '', /^E5 [+-]?\d+c$/)
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer does not over-bias toward an octave-lower peak', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const frame = createCompositeStereoChunk([
+    { frequencyHz: 174.614, amplitude: 0.8 },
+    { frequencyHz: 349.228, amplitude: 1.0 },
+  ], sampleRate, 4096)
+  let peakInfo: SpectrumPeakInfo | null = null
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [frame],
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    fftSize: 4096,
+    dataSource,
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      peakInfo = nextPeakInfo
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as { drawFrame: () => void }
+    state.drawFrame()
+
+    assert.ok(peakInfo, 'expected peak info to be reported')
+    assert.match(peakInfo.key, /^F4 [+-]?\d+c$/)
+    assert.ok(
+      peakInfo.frequencyHz > 347 && peakInfo.frequencyHz < 351,
+      `expected peak frequency near 349 Hz, got ${peakInfo.frequencyHz}`,
+    )
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
 })
 
 test('astra playback progress advances from updatedAt while playing', () => {
@@ -1177,6 +1742,172 @@ test('scopeSettingsToOptions forwards shared scope background and guides to osci
   assert.equal(vectorscope.labelColor, theme.vectorscope.labels)
 })
 
+test('Oscilloscope projects raw sample amplitude without renderer gain', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingOscilloscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const oscilloscope = new Oscilloscope(createFakeCanvas(), { dataSource })
+
+  try {
+    const state = oscilloscope as unknown as {
+      projectSampleY: (sample: number, height: number) => number
+    }
+
+    assert.equal(state.projectSampleY(0.5, 180), 45)
+    assert.equal(state.projectSampleY(-0.5, 180), 135)
+  } finally {
+    oscilloscope.dispose()
+    dom.restore()
+  }
+})
+
+test('Vectorscope uses the base layout radius for projection scale', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource })
+
+  try {
+    const state = vectorscope as unknown as {
+      getProjectionScale: (radius: number) => number
+    }
+    const layout = getVectorscopeLayout(320, 180, 'lissajous')
+
+    assert.equal(state.getProjectionScale(layout.radius), layout.radius)
+    assert.equal(layout.radius, 81)
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
+})
+
+test('vectorscope adds a subtle dashed outer boundary without changing the base graph', () => {
+  const lissajousRecorder = createFakeCanvasRecorder()
+  drawVectorscopeGridForMode(
+    createFakeCanvasContext(lissajousRecorder),
+    320,
+    180,
+    'rgba(255, 255, 255, 0.12)',
+    'rgba(255, 255, 255, 0.05)',
+    'rgba(255, 255, 255, 0.2)',
+    'lissajous',
+  )
+  assert.equal(
+    lissajousRecorder.lineDashes.some((segments) => segments.length > 0),
+    false,
+    'lissajous should not render an outer headroom boundary',
+  )
+
+  const linearRecorder = createFakeCanvasRecorder()
+  drawVectorscopeGridForMode(
+    createFakeCanvasContext(linearRecorder),
+    320,
+    180,
+    'rgba(255, 255, 255, 0.12)',
+    'rgba(255, 255, 255, 0.05)',
+    'rgba(255, 255, 255, 0.2)',
+    'linear-bipolar',
+  )
+  assert.equal(
+    linearRecorder.lineDashes.some((segments) => segments.length > 0),
+    true,
+    'linear mode should render a dashed outer max boundary',
+  )
+
+  const polarRecorder = createFakeCanvasRecorder()
+  drawVectorscopeGridForMode(
+    createFakeCanvasContext(polarRecorder),
+    320,
+    180,
+    'rgba(255, 255, 255, 0.12)',
+    'rgba(255, 255, 255, 0.05)',
+    'rgba(255, 255, 255, 0.2)',
+    'polar-bipolar',
+  )
+  const polarLayout = getVectorscopeLayout(320, 180, 'polar-bipolar')
+  const dashedPolarArc = polarRecorder.arcs.find((arc) => arc.lineDash.length > 0)
+  const expectedPolarOverflowRadius = Math.min(
+    Math.min(polarLayout.centerX, 320 - polarLayout.centerX, polarLayout.centerY, 180 - polarLayout.centerY) * 0.98,
+    polarLayout.radius * 1.25,
+  )
+  assert.equal(
+    polarRecorder.lineDashes.some((segments) => segments.length > 0),
+    true,
+    'polar mode should render a dashed outer boundary',
+  )
+  assert.ok(
+    dashedPolarArc && dashedPolarArc.radius > polarLayout.radius,
+    'polar dashed boundary should sit outside the existing graph',
+  )
+  assertAlmostEqual(
+    dashedPolarArc?.radius ?? 0,
+    expectedPolarOverflowRadius,
+    1e-6,
+    'polar dashed boundary should follow the next relative grid step, clamped to the canvas',
+  )
+})
+
+test('Vectorscope keeps the original linear projection behavior', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource })
+
+  try {
+    const state = vectorscope as unknown as {
+      drawProjectedDot: (
+        ctx: CanvasRenderingContext2D,
+        left: number,
+        right: number,
+        mode: 'linear-bipolar',
+        centerX: number,
+        centerY: number,
+        scale: number,
+        dotSize: number,
+      ) => void
+      getProjectionScale: (radius: number) => number
+    }
+    const layout = getVectorscopeLayout(320, 180, 'linear-bipolar')
+    const recorder = createFakeCanvasRecorder()
+    const ctx = createFakeCanvasContext(recorder)
+    const scale = state.getProjectionScale(layout.radius)
+
+    state.drawProjectedDot(ctx, -1, 1, 'linear-bipolar', layout.centerX, layout.centerY, scale, 2)
+
+    assert.equal(recorder.fillRects.length, 1)
+    const rect = recorder.fillRects[0]
+    const projectedCenterX = rect.x + rect.width / 2
+    const projectedCenterY = rect.y + rect.height / 2
+    assertAlmostEqual(
+      projectedCenterX,
+      layout.centerX + layout.radius * Math.SQRT2,
+      1e-6,
+      'linear projection should preserve the original unscaled mapping',
+    )
+    assertAlmostEqual(
+      projectedCenterY,
+      layout.centerY,
+      1e-6,
+      'linear overs peak should stay on the side axis',
+    )
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
+})
+
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
   const authoredTheme = createDefaultTheme()
@@ -1216,12 +1947,24 @@ test('scopeSummary includes Stereo for waveform only when stereo mode is enabled
   assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB · Stereo · RGB')
 })
 
-test('scopeSummary summarizes astra field visibility', () => {
+test('scopeSummary includes spectrum peak mode when enabled', () => {
   const profile = createDefaultProfile('Default')
-  profile.scopeSettings.astra.showArtist = false
-  profile.scopeSettings.astra.showControls = false
 
-  assert.equal(scopeSummary('astra', profile.scopeSettings.astra), 'Cover · Title · Bar · Time')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048')
+
+  profile.scopeSettings.spectrum.peakInfoMode = 'on'
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak')
+
+  profile.scopeSettings.spectrum.peakInfoMode = 'following'
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak Follow')
+})
+
+test('scopeSummary summarizes now playing field visibility', () => {
+  const profile = createDefaultProfile('Default')
+  profile.scopeSettings.nowPlaying.showArtist = false
+  profile.scopeSettings.nowPlaying.showControls = false
+
+  assert.equal(scopeSummary('nowPlaying', profile.scopeSettings.nowPlaying), 'Cover · Title · Bar · Time')
 })
 
 test('ScopePopoutDataSource switches waveform batches between mono and stereo queues', () => {
@@ -1277,9 +2020,35 @@ test('applying a profile snapshot does not change the machine-local frame target
   }
 })
 
+test('applying a profile snapshot does not change the machine-local trim', () => {
+  const previousAudioState = useAudioStore.getState()
+  const previousSettingsState = useSettingsStore.getState()
+
+  try {
+    useAudioStore.setState({ inputGainDb: 6.5 })
+
+    const defaultProfile = createDefaultProfile('Default')
+    const alternateProfile = createDefaultProfile('Live Mix')
+    alternateProfile.hiddenScopes = []
+    alternateProfile.scopeSettings.waveform.gainDb = 6
+
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: 'profile_live_mix',
+      profiles: {
+        profile_default: defaultProfile,
+        profile_live_mix: alternateProfile,
+      },
+    })
+
+    assert.equal(useAudioStore.getState().inputGainDb, 6.5)
+  } finally {
+    useAudioStore.setState(previousAudioState)
+    useSettingsStore.setState(previousSettingsState)
+  }
+})
+
 test('profile draft comparisons return to clean after reverting a change', () => {
   const baselineProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-  baselineProfile.themeId = 'theme_default'
   baselineProfile.windowBounds = { x: 24, y: 48, width: 900, height: 180 }
   baselineProfile.scopePopouts.spectrum = {
     poppedOut: true,
@@ -1287,7 +2056,6 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   }
 
   const baselineDraft = buildProfileDraft({
-    themeId: baselineProfile.themeId,
     scopeOrder: baselineProfile.scopeOrder,
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
@@ -1297,7 +2065,6 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   }, baselineProfile.name)
 
   const changedDraft = buildProfileDraft({
-    themeId: baselineProfile.themeId,
     scopeOrder: baselineProfile.scopeOrder,
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
@@ -1313,7 +2080,6 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   }, baselineProfile.name)
 
   const revertedDraft = buildProfileDraft({
-    themeId: baselineProfile.themeId,
     scopeOrder: baselineProfile.scopeOrder,
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
@@ -1326,12 +2092,10 @@ test('profile draft comparisons return to clean after reverting a change', () =>
   assert.equal(profilesMatch(baselineDraft, revertedDraft), true)
 })
 
-test('buildProfileDraft preserves unlinked themes instead of coercing the active theme', () => {
+test('buildProfileDraft omits theme metadata from the runtime draft', () => {
   const profile = createDefaultProfile('Live Mix')
-  profile.themeId = null
 
   const draft = buildProfileDraft({
-    themeId: profile.themeId,
     scopeOrder: profile.scopeOrder,
     hiddenScopes: profile.hiddenScopes,
     widthWeights: profile.widthWeights,
@@ -1340,7 +2104,7 @@ test('buildProfileDraft preserves unlinked themes instead of coercing the active
     windowBounds: profile.windowBounds,
   }, profile.name)
 
-  assert.equal(draft.themeId, null)
+  assert.equal('themeId' in draft, false)
 })
 
 test('resolveNativeThemeSource follows the active theme brightness for native UI', () => {
@@ -1358,21 +2122,202 @@ test('resolveNativeThemeSource follows the active theme brightness for native UI
   assert.equal(resolveNativeThemeSource(lightTheme), 'light')
 })
 
-test('toggleScope appends astra to the scope order when it is enabled from an opt-in profile', () => {
+test('resolveThemeCreditDetails normalizes descriptions and enables links only for valid http and https theme websites', () => {
+  assert.deepEqual(
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'https://themes.example/night',
+      description: '  Soft neon palette  ',
+    }),
+    {
+      credit: 'Night Shift',
+      url: 'https://themes.example/night',
+      description: 'Soft neon palette',
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'http://themes.example/night',
+      description: 'Soft neon palette',
+    }),
+    {
+      credit: 'Night Shift',
+      url: 'http://themes.example/night',
+      description: 'Soft neon palette',
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'ftp://themes.example/night',
+      description: 'Soft neon palette',
+    }),
+    {
+      credit: 'Night Shift',
+      url: null,
+      description: 'Soft neon palette',
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({
+      credit: 'Night Shift',
+      website: 'not a url',
+      description: 'Soft neon palette',
+    }),
+    {
+      credit: 'Night Shift',
+      url: null,
+      description: 'Soft neon palette',
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({ credit: '   ', website: 'https://themes.example/night' }),
+    {
+      credit: null,
+      url: null,
+      description: null,
+    },
+  )
+  assert.deepEqual(
+    resolveThemeCreditDetails({ description: 'Soft neon palette' }),
+    {
+      credit: null,
+      url: null,
+      description: null,
+    },
+  )
+})
+
+test('BottomBar theme section renders compact credit metadata and opens valid links through Electron', async () => {
+  const componentSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  assert.match(componentSource, /const themeCredit = resolveThemeCreditDetails\(activeTheme\)/)
+  assert.match(componentSource, /window\.electronAPI\.openExternalUrl\(url\)/)
+  assert.match(componentSource, /bottom-bar__theme-metadata/)
+  assert.match(componentSource, /By \{themeCredit\.credit\}/)
+  assert.match(componentSource, /themeCredit\.description \?/)
+  assert.match(componentSource, /bottom-bar__theme-description/)
+  assert.match(componentSource, /bottom-bar__theme-separator/)
+  assert.match(componentSource, /bottom-bar__section-header/)
+  assert.match(componentSource, /bottom-bar__theme-credit--link/)
+  assert.match(stylesSource, /\.bottom-bar__section--theme \{[\s\S]*min-width: 420px;/)
+  assert.match(stylesSource, /\.bottom-bar__section-header \{/)
+  assert.match(stylesSource, /\.bottom-bar__theme-metadata \{/)
+  assert.match(stylesSource, /\.bottom-bar__theme-description \{/)
+  assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
+})
+
+test('resolveWindowCapabilities detects native Wayland sessions on Linux', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'linux',
+      argv: [],
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+    {
+      displayServer: 'wayland',
+      useNativeDragRegions: true,
+      supportsProgrammaticReposition: false,
+      supportsGeometryPersistence: false,
+    },
+  )
+})
+
+test('resolveWindowCapabilities respects --ozone-platform=x11 in a Wayland session', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'linux',
+      argv: ['--ozone-platform=x11'],
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+        DISPLAY: ':0',
+      },
+    }),
+    {
+      displayServer: 'x11',
+      useNativeDragRegions: false,
+      supportsProgrammaticReposition: true,
+      supportsGeometryPersistence: true,
+    },
+  )
+})
+
+test('resolveWindowCapabilities detects X11 sessions on Linux', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'linux',
+      argv: [],
+      env: {
+        XDG_SESSION_TYPE: 'x11',
+        DISPLAY: ':0',
+      },
+    }),
+    {
+      displayServer: 'x11',
+      useNativeDragRegions: false,
+      supportsProgrammaticReposition: true,
+      supportsGeometryPersistence: true,
+    },
+  )
+})
+
+test('resolveWindowCapabilities leaves non-Linux platforms on the full-featured path', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'darwin',
+      argv: [],
+      env: {},
+    }),
+    {
+      displayServer: 'other',
+      useNativeDragRegions: false,
+      supportsProgrammaticReposition: true,
+      supportsGeometryPersistence: true,
+    },
+  )
+})
+
+test('Wayland window controls use native drag regions and omit unsupported reposition/geometry paths', async () => {
+  const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
+  const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
+  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
+  const nowPlayingSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'NowPlayingConfigWindow.tsx'), 'utf8')
+  const bridgeSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ScopePopoutBridge.tsx'), 'utf8')
+  const stripSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Strip.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  assert.match(toolbarSource, /WAYLAND_REPOSITION_UNAVAILABLE_MESSAGE/)
+  assert.match(toolbarSource, /disabled=\{!supportsProgrammaticReposition\}/)
+  assert.match(toolbarSource, /useNativeDragRegions \? 'is-native-drag' : ''/)
+  assert.match(appSource, /onMouseDown=\{useNativeDragRegions \? undefined : handleAltDragStart\}/)
+  assert.match(popoutSource, /scope-popout__header \$\{useNativeDragRegions \? 'is-native-drag' : ''\}/)
+  assert.match(nowPlayingSource, /now-playing-config__toolbar \$\{useNativeDragRegions \? 'is-native-drag' : ''\}/)
+  assert.match(bridgeSource, /bounds: supportsGeometryPersistence\s*\?\s*scopePopouts\[kind\]\?\.windowBounds\s*:\s*undefined/)
+  assert.match(stripSource, /if \(!supportsGeometryPersistence\) \{\s*popOutScope\(kind\)/)
+  assert.match(stylesSource, /\.toolbar\.is-native-drag \{/)
+  assert.match(stylesSource, /\.scope-popout__header\.is-native-drag \{/)
+})
+
+test('toggleScope appends now playing to the scope order when it is enabled from an opt-in profile', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeWindow = installFakeElectronWindow()
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     seedProfileDraftState(profile)
 
-    assert.equal(useSettingsStore.getState().scopeOrder.includes('astra'), false)
+    assert.equal(useSettingsStore.getState().scopeOrder.includes('nowPlaying'), false)
 
-    useSettingsStore.getState().toggleScope('astra')
+    useSettingsStore.getState().toggleScope('nowPlaying')
 
-    assert.equal(useSettingsStore.getState().scopeOrder.at(-1), 'astra')
-    assert.equal(useSettingsStore.getState().hiddenScopes.has('astra'), false)
+    assert.equal(useSettingsStore.getState().scopeOrder.at(-1), 'nowPlaying')
+    assert.equal(useSettingsStore.getState().hiddenScopes.has('nowPlaying'), false)
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()
@@ -1458,7 +2403,6 @@ test('main-window bounds updates persist working state in Electron mode', () => 
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
     seedProfileDraftState(profile)
 
@@ -1480,6 +2424,36 @@ test('main-window bounds updates persist working state in Electron mode', () => 
   }
 })
 
+test('native Wayland main-window bounds updates do not dirty or persist geometry', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const fakeWindow = installFakeElectronWindow({
+    platform: 'linux',
+    windowCapabilities: resolveWindowCapabilities({
+      platform: 'linux',
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 24, y: 20, width: 900, height: 180 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.deepEqual(useSettingsStore.getState().windowBounds, profile.windowBounds)
+    assert.equal(fakeStorage.getSetCount(), 0)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
 test('initializeProfiles restores persisted dirty window bounds while keeping the saved profile as baseline', async () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeStorage = installFakeLocalStorage()
@@ -1488,7 +2462,6 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
   const fakeWindow = installFakeElectronWindow({
     getProfileSnapshot: async () => {
       const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-      profile.themeId = 'theme_default'
       profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
       return {
@@ -1506,11 +2479,9 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
     fakeStorage.setItem('prism:settings', JSON.stringify({
-      themeId: profile.themeId,
       scopeOrder: profile.scopeOrder,
       hiddenScopes: profile.hiddenScopes,
       widthWeights: profile.widthWeights,
@@ -1534,6 +2505,124 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
   }
 })
 
+test('initializeProfiles ignores persisted geometry on native Wayland and keeps the saved profile clean', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const savedBounds = { x: 10, y: 20, width: 900, height: 180 }
+  const savedPopoutBounds = { x: 140, y: 60, width: 420, height: 240 }
+  const restoredBounds: WindowBounds[] = []
+  let getWindowBoundsCalls = 0
+  const fakeWindow = installFakeElectronWindow({
+    platform: 'linux',
+    windowCapabilities: resolveWindowCapabilities({
+      platform: 'linux',
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+    getProfileSnapshot: async () => {
+      const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+      profile.windowBounds = savedBounds
+      profile.scopePopouts.spectrum = {
+        poppedOut: true,
+        windowBounds: savedPopoutBounds,
+      }
+
+      return {
+        activeProfileId: DEFAULT_PROFILE_ID,
+        profiles: {
+          [DEFAULT_PROFILE_ID]: profile,
+        },
+      }
+    },
+    getWindowBounds: async () => {
+      getWindowBoundsCalls += 1
+      return { x: 44, y: 55, width: 900, height: 180 }
+    },
+    setWindowBounds: (bounds: WindowBounds) => {
+      restoredBounds.push(bounds)
+    },
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.windowBounds = savedBounds
+    profile.scopePopouts.spectrum = {
+      poppedOut: true,
+      windowBounds: savedPopoutBounds,
+    }
+
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      scopeOrder: profile.scopeOrder,
+      hiddenScopes: profile.hiddenScopes,
+      widthWeights: profile.widthWeights,
+      scopeSettings: profile.scopeSettings,
+      scopePopouts: {
+        ...profile.scopePopouts,
+        spectrum: {
+          poppedOut: true,
+          windowBounds: { x: 188, y: 92, width: 440, height: 260 },
+        },
+      },
+      windowBounds: { x: 44, y: 55, width: 900, height: 180 },
+    }))
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.activeProfileId, DEFAULT_PROFILE_ID)
+    assert.deepEqual(state.windowBounds, savedBounds)
+    assert.deepEqual(state.scopePopouts.spectrum.windowBounds, savedPopoutBounds)
+    assert.equal(state.hasUnsavedProfileChanges, false)
+    assert.deepEqual(restoredBounds, [])
+    assert.equal(getWindowBoundsCalls, 0)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles ignores stale persisted theme-only state and loads the saved profile normally', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const savedBounds = { x: 10, y: 20, width: 900, height: 180 }
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => {
+      const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+      profile.windowBounds = savedBounds
+
+      return {
+        activeProfileId: DEFAULT_PROFILE_ID,
+        profiles: {
+          [DEFAULT_PROFILE_ID]: profile,
+        },
+      }
+    },
+    getWindowBounds: async () => savedBounds,
+    setWindowBounds: () => {},
+  })
+
+  try {
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      themeId: 'theme_midnight',
+    }))
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.activeProfileId, DEFAULT_PROFILE_ID)
+    assert.deepEqual(state.windowBounds, savedBounds)
+    assert.deepEqual(state.savedProfileBaseline?.windowBounds, savedBounds)
+    assert.equal(state.hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
 test('profiles without saved window bounds mark the first user move dirty after load sync completes', async () => {
   const previousSettingsState = useSettingsStore.getState()
   const currentBounds = { x: 10, y: 20, width: 900, height: 180 }
@@ -1544,7 +2633,6 @@ test('profiles without saved window bounds mark the first user move dirty after 
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
       activeProfileId: DEFAULT_PROFILE_ID,
@@ -1577,7 +2665,6 @@ test('loading a profile syncs the live window bounds without marking the draft d
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
@@ -1599,8 +2686,9 @@ test('loading a profile syncs the live window bounds without marking the draft d
   }
 })
 
-test('switching to a non-default profile with an unlinked theme does not mark it dirty', async () => {
+test('switching profiles leaves the global theme alone and does not mark the profile dirty', async () => {
   const previousSettingsState = useSettingsStore.getState()
+  const previousThemeState = useThemeStore.getState()
   const fakeWindow = installFakeElectronWindow({
     getWindowBounds: async () => ({ x: 10, y: 20, width: 900, height: 180 }),
     setWindowBounds: () => {},
@@ -1608,10 +2696,20 @@ test('switching to a non-default profile with an unlinked theme does not mark it
 
   try {
     const defaultProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    defaultProfile.themeId = 'theme_default'
-
     const liveMixProfile = createDefaultProfile('Live Mix')
-    liveMixProfile.themeId = null
+    const midnightTheme = createDefaultTheme()
+    midnightTheme.name = 'Midnight'
+    midnightTheme.credit = 'Night Shift'
+    midnightTheme.app.background = 'rgb(6, 10, 20)'
+    useThemeStore.setState({
+      themes: {
+        Default: createDefaultTheme(),
+        Midnight: midnightTheme,
+      },
+      activeThemeId: 'Midnight',
+      activeTheme: resolveTheme(midnightTheme),
+      accent: resolveTheme(midnightTheme).interface.accent,
+    })
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
       activeProfileId: 'profile_live_mix',
@@ -1624,11 +2722,11 @@ test('switching to a non-default profile with an unlinked theme does not mark it
     await Promise.resolve()
     await Promise.resolve()
 
-    assert.equal(useSettingsStore.getState().themeId, null)
-    assert.equal(useSettingsStore.getState().savedProfileBaseline?.themeId, null)
+    assert.equal(useThemeStore.getState().activeThemeId, 'Midnight')
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
   } finally {
     useSettingsStore.setState(previousSettingsState)
+    useThemeStore.setState(previousThemeState)
     fakeWindow.restore()
   }
 })
@@ -1642,7 +2740,6 @@ test('profile load absorbs immediate macOS-style window bound adjustments withou
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
@@ -1671,7 +2768,6 @@ test('profile load absorbs immediate popout bound adjustments without marking di
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.scopePopouts.spectrum = {
       poppedOut: true,
       windowBounds: { x: 140, y: 60, width: 420, height: 240 },
@@ -1700,7 +2796,6 @@ test('geometry sync window extends while load-time macOS bound updates continue'
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     seedProfileDraftState(profile)
 
     useSettingsStore.setState((state) => ({
@@ -1726,7 +2821,6 @@ test('popout bounds updates persist working state in Electron mode', () => {
 
   try {
     const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.themeId = 'theme_default'
     profile.scopePopouts.spectrum = {
       poppedOut: true,
       windowBounds: { x: 140, y: 60, width: 420, height: 240 },
@@ -1751,6 +2845,39 @@ test('popout bounds updates persist working state in Electron mode', () => {
   }
 })
 
+test('native Wayland popout bounds updates do not dirty or persist geometry', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const fakeWindow = installFakeElectronWindow({
+    platform: 'linux',
+    windowCapabilities: resolveWindowCapabilities({
+      platform: 'linux',
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.scopePopouts.spectrum = {
+      poppedOut: true,
+      windowBounds: { x: 140, y: 60, width: 420, height: 240 },
+    }
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 156, y: 58, width: 420, height: 240 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.deepEqual(useSettingsStore.getState().scopePopouts.spectrum.windowBounds, profile.scopePopouts.spectrum.windowBounds)
+    assert.equal(fakeStorage.getSetCount(), 0)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
 test('moveDockedScopeOrder is a no-op at the docked boundaries', () => {
   const initialOrder = [...SCOPE_KINDS]
 
@@ -1759,7 +2886,7 @@ test('moveDockedScopeOrder is a no-op at the docked boundaries', () => {
     initialOrder,
   )
   assert.equal(
-    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'astra', 'right'),
+    moveDockedScopeOrder(initialOrder, new Set<ScopeKind>(), createScopePopouts(), 'nowPlaying', 'right'),
     initialOrder,
   )
 })
@@ -1781,7 +2908,7 @@ test('moveDockedScopeOrder preserves hidden scope positions in the full order', 
     'vumeter',
     'lufsmeter',
     'waveform',
-    'astra',
+    'nowPlaying',
   ])
 })
 
@@ -1802,7 +2929,7 @@ test('moveDockedScopeOrder preserves popped-out scope positions in the full orde
     'vumeter',
     'lufsmeter',
     'waveform',
-    'astra',
+    'nowPlaying',
   ])
 })
 
@@ -2031,7 +3158,7 @@ test('LUFSMeter keeps integrated history bounded over long runs', () => {
   assert.equal(Number.isFinite((meter as unknown as { integratedLUFS: number }).integratedLUFS), true)
 })
 
-test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-document polls and cancels on stop', async () => {
+test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-document backoff, and cancels on stop', async () => {
   const timers = installFakeTimeouts()
 
   try {
@@ -2039,13 +3166,22 @@ test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-docume
 
     const drainResults = [
       {
-        chunks: [{
-          left: new Float32Array([0.1, 0.2]),
-          right: new Float32Array([0.3, 0.4]),
-          channelCount: 2,
-          capturedAtMilliseconds: 5,
-          sequence: 1,
-        }],
+        chunks: [
+          {
+            left: new Float32Array([0.1, 0.2]),
+            right: new Float32Array([0.3, 0.4]),
+            channelCount: 2,
+            capturedAtMilliseconds: 5,
+            sequence: 1,
+          },
+          {
+            left: new Float32Array([0.5, 0.6]),
+            right: new Float32Array([0.7, 0.8]),
+            channelCount: 2,
+            capturedAtMilliseconds: 15,
+            sequence: 2,
+          },
+        ],
         overwriteCount: 0,
         queueDepth: 0,
       },
@@ -2097,15 +3233,18 @@ test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-docume
       reason: null,
     })
     const receivedSequences: number[] = []
+    const receivedChunkTimes: number[] = []
     backend.subscribe((chunk) => {
       receivedSequences.push(chunk.sequence)
+      receivedChunkTimes.push(chunk.capturedAt)
     })
 
     await backend.start()
     assert.equal(timers.nextDelay(), 0)
 
     timers.runNext()
-    assert.deepEqual(receivedSequences, [1])
+    assert.deepEqual(receivedSequences, [1, 2])
+    assert.equal(receivedChunkTimes.length, 2)
     assert.equal(timers.nextDelay(), 0)
 
     timers.runNext()
@@ -2114,6 +3253,137 @@ test('NativePolledCaptureBackend schedules immediate, backoff, and hidden-docume
     timers.setHidden(true)
     timers.runNext()
     assert.equal(timers.nextDelay(), 16)
+
+    await backend.stop()
+    assert.equal(timers.pendingCount(), 0)
+  } finally {
+    timers.restore()
+  }
+})
+
+test('NativePolledCaptureBackend trims stale backlog to the newest live slice when catch-up mode is enabled', async () => {
+  const timers = installFakeTimeouts()
+
+  try {
+    const { NativePolledCaptureBackend } = await import('../src/renderer/audio/AudioCapture')
+
+    const drainResults = [
+      {
+        chunks: [
+          {
+            left: new Float32Array([0.1]),
+            right: new Float32Array([0.1]),
+            channelCount: 2,
+            capturedAtMilliseconds: 0,
+            sequence: 1,
+          },
+          {
+            left: new Float32Array([0.2]),
+            right: new Float32Array([0.2]),
+            channelCount: 2,
+            capturedAtMilliseconds: 10,
+            sequence: 2,
+          },
+          {
+            left: new Float32Array([0.3]),
+            right: new Float32Array([0.3]),
+            channelCount: 2,
+            capturedAtMilliseconds: 30,
+            sequence: 3,
+          },
+          {
+            left: new Float32Array([0.4]),
+            right: new Float32Array([0.4]),
+            channelCount: 2,
+            capturedAtMilliseconds: 70,
+            sequence: 4,
+          },
+          {
+            left: new Float32Array([0.5]),
+            right: new Float32Array([0.5]),
+            channelCount: 2,
+            capturedAtMilliseconds: 90,
+            sequence: 5,
+          },
+        ],
+        overwriteCount: 0,
+        queueDepth: 3,
+      },
+      {
+        chunks: [{
+          left: new Float32Array([0.6]),
+          right: new Float32Array([0.6]),
+          channelCount: 2,
+          capturedAtMilliseconds: 120,
+          sequence: 6,
+        }],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+      {
+        chunks: [],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+    ]
+
+    const nativeModule = {
+      getSupport: () => ({ available: true, reason: null }),
+      listOutputDevices: () => [],
+      start: () => ({
+        sampleRate: 48000,
+        channelCount: 2,
+        deviceId: 'device',
+        deviceLabel: 'Device',
+      }),
+      stop: () => {},
+      drain: () => drainResults.shift() ?? {
+        chunks: [],
+        overwriteCount: 0,
+        queueDepth: 0,
+      },
+      nowMilliseconds: () => 0,
+    }
+
+    class TestNativeBackend extends NativePolledCaptureBackend {
+      readonly kind = 'native-linux' as const
+
+      protected getNativeCaptureModule() {
+        return nativeModule
+      }
+
+      protected getBackendLabel(): string {
+        return 'Test Native'
+      }
+
+      protected shouldTrimBacklogForLiveCapture(): boolean {
+        return true
+      }
+    }
+
+    const backend = new TestNativeBackend({
+      kind: 'native-linux',
+      available: true,
+      reason: null,
+    })
+    const receivedSequences: number[] = []
+    backend.subscribe((chunk) => {
+      receivedSequences.push(chunk.sequence)
+    })
+
+    await backend.start()
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.deepEqual(receivedSequences, [4, 5])
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.deepEqual(receivedSequences, [4, 5, 6])
+    assert.equal(timers.nextDelay(), 0)
+
+    timers.runNext()
+    assert.equal(timers.nextDelay(), 2)
 
     await backend.stop()
     assert.equal(timers.pendingCount(), 0)

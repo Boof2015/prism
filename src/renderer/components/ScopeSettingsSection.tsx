@@ -19,7 +19,7 @@ function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): strin
   }
 }
 
-function astraVisibleLabels(settings: ScopeSettings['astra']): string[] {
+function nowPlayingVisibleLabels(settings: ScopeSettings['nowPlaying']): string[] {
   const labels: string[] = []
   if (settings.showCoverArt) labels.push('Cover')
   if (settings.showTitle) labels.push('Title')
@@ -35,7 +35,16 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     case 'spectrum': {
       const scopeSettings = settings as ScopeSettings['spectrum']
       const summary = `${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
-      return scopeSettings.showSideLine ? `${summary} · Side` : summary
+      const parts = [summary]
+      if (scopeSettings.showSideLine) {
+        parts.push('Side')
+      }
+      if (scopeSettings.peakInfoMode === 'on') {
+        parts.push('Peak')
+      } else if (scopeSettings.peakInfoMode === 'following') {
+        parts.push('Peak Follow')
+      }
+      return parts.join(' · ')
     }
     case 'oscilloscope': {
       const scopeSettings = settings as ScopeSettings['oscilloscope']
@@ -69,8 +78,8 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       }
       return summary.join(' · ')
     }
-    case 'astra': {
-      const visible = astraVisibleLabels(settings as ScopeSettings['astra'])
+    case 'nowPlaying': {
+      const visible = nowPlayingVisibleLabels(settings as ScopeSettings['nowPlaying'])
       return visible.length > 0 ? visible.join(' · ') : 'Hidden'
     }
   }
@@ -216,6 +225,18 @@ export default function ScopeSettingsSection({
                     {option}
                   </option>
                 ))}
+              </SelectControl>
+
+              <SelectControl
+                label="Peak"
+                value={current.peakInfoMode}
+                onChange={(value) => onUpdate('spectrum', {
+                  peakInfoMode: value as ScopeSettings['spectrum']['peakInfoMode'],
+                })}
+              >
+                <option value="off">Off</option>
+                <option value="on">On</option>
+                <option value="following">Following</option>
               </SelectControl>
 
               <ToggleGroup label="Display">
@@ -527,39 +548,39 @@ export default function ScopeSettingsSection({
           )
         })()}
 
-        {kind === 'astra' && (() => {
-          const current = settings as ScopeSettings['astra']
+        {kind === 'nowPlaying' && (() => {
+          const current = settings as ScopeSettings['nowPlaying']
           return (
             <ToggleGroup label="Visible Elements">
               <ToggleChip
                 label="Cover"
                 active={current.showCoverArt}
-                onClick={() => onUpdate('astra', { showCoverArt: !current.showCoverArt })}
+                onClick={() => onUpdate('nowPlaying', { showCoverArt: !current.showCoverArt })}
               />
               <ToggleChip
                 label="Title"
                 active={current.showTitle}
-                onClick={() => onUpdate('astra', { showTitle: !current.showTitle })}
+                onClick={() => onUpdate('nowPlaying', { showTitle: !current.showTitle })}
               />
               <ToggleChip
                 label="Artist"
                 active={current.showArtist}
-                onClick={() => onUpdate('astra', { showArtist: !current.showArtist })}
+                onClick={() => onUpdate('nowPlaying', { showArtist: !current.showArtist })}
               />
               <ToggleChip
                 label="Bar"
                 active={current.showProgress}
-                onClick={() => onUpdate('astra', { showProgress: !current.showProgress })}
+                onClick={() => onUpdate('nowPlaying', { showProgress: !current.showProgress })}
               />
               <ToggleChip
                 label="Time"
                 active={current.showTime}
-                onClick={() => onUpdate('astra', { showTime: !current.showTime })}
+                onClick={() => onUpdate('nowPlaying', { showTime: !current.showTime })}
               />
               <ToggleChip
                 label="Controls"
                 active={current.showControls}
-                onClick={() => onUpdate('astra', { showControls: !current.showControls })}
+                onClick={() => onUpdate('nowPlaying', { showControls: !current.showControls })}
               />
             </ToggleGroup>
           )

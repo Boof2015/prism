@@ -8,6 +8,7 @@ import ScopeSettingsSection from '../components/ScopeSettingsSection'
 import WindowResizeOverlay from '../components/WindowResizeOverlay'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useUiStore } from '../stores/uiStore'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
 
@@ -73,6 +74,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   const setMiniSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const frameScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
+  const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
 
   useEffect(() => {
     void window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
@@ -129,21 +131,25 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   }
 
   const handleDragStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
-    if (event.button !== 0) return
+    if (useNativeDragRegions || event.button !== 0) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     window.electronAPI.startWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleDragEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     window.electronAPI.stopWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleAltDragStart = useCallback((event: ReactMouseEvent<HTMLDivElement>): void => {
-    if (!event.altKey || event.button !== 0) return
+    if (useNativeDragRegions || !event.altKey || event.button !== 0) return
 
     const target = event.target
     if (target instanceof Element && target.closest('.scope-popout__drag-handle')) {
@@ -152,11 +158,15 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
 
     event.preventDefault()
     window.electronAPI.startWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleAltDragEnd = useCallback((): void => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     window.electronAPI.stopWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   useLayoutEffect(() => {
     if (miniSettingsOpen && !prevMiniSettingsOpenRef.current) {
@@ -180,8 +190,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   return (
     <div
       className="scope-popout"
-      onMouseDown={handleAltDragStart}
-      onMouseUp={handleAltDragEnd}
+      onMouseDown={useNativeDragRegions ? undefined : handleAltDragStart}
+      onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
     >
       <div
         className="scope-popout__viewport"
@@ -193,15 +203,15 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
             miniSettingsOpen ? 'is-expanded' : '',
           ].join(' ').trim()}
         >
-          <header className="scope-popout__header">
+          <header className={`scope-popout__header ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}>
             <div className="scope-popout__drag">
               <button
                 type="button"
-                className="scope-popout__drag-handle"
-                onPointerDown={handleDragStart}
-                onPointerUp={handleDragEnd}
-                onPointerCancel={handleDragEnd}
-                onLostPointerCapture={handleDragEnd}
+                className={`scope-popout__drag-handle ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}
+                onPointerDown={useNativeDragRegions ? undefined : handleDragStart}
+                onPointerUp={useNativeDragRegions ? undefined : handleDragEnd}
+                onPointerCancel={useNativeDragRegions ? undefined : handleDragEnd}
+                onLostPointerCapture={useNativeDragRegions ? undefined : handleDragEnd}
                 aria-label="Drag window"
                 title="Drag window"
               >

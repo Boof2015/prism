@@ -1,13 +1,24 @@
 export type CaptureMode = 'system' | 'device'
 
-export type CaptureBackendPolicy = 'auto' | 'native' | 'electron'
-
-export type CaptureBackendKind =
-  | 'electron-system'
-  | 'electron-device'
+export type NativeSystemCaptureBackendKind =
   | 'native-macos'
   | 'native-windows'
   | 'native-linux'
+
+export type CaptureBackendKind =
+  | 'device-input'
+  | NativeSystemCaptureBackendKind
+
+export function resolveNativeBackendKind(platform: string): NativeSystemCaptureBackendKind {
+  switch (platform) {
+    case 'darwin':
+      return 'native-macos'
+    case 'win32':
+      return 'native-windows'
+    default:
+      return 'native-linux'
+  }
+}
 
 export interface CaptureSourceDescriptor {
   id: string
@@ -25,8 +36,6 @@ export interface CaptureBackendSupportEntry {
 }
 
 export interface CaptureBackendSupport {
-  policyOptions: CaptureBackendPolicy[]
   nativeBackend: CaptureBackendSupportEntry
-  electronSystem: CaptureBackendSupportEntry
-  electronDevice: CaptureBackendSupportEntry
+  deviceInput: CaptureBackendSupportEntry
 }

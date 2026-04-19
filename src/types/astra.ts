@@ -29,8 +29,19 @@ export interface AstraIntegrationConfig {
   token: string
 }
 
+export interface AstraIntegrationPublicConfig {
+  baseUrl: string
+  hasToken: boolean
+}
+
+export interface AstraIntegrationConfigMutation {
+  baseUrl: string
+  token?: string
+  clearToken?: boolean
+}
+
 export interface AstraIntegrationState {
-  config: AstraIntegrationConfig
+  config: AstraIntegrationPublicConfig
   connectionState: AstraConnectionState
   lastError: string | null
   lastControlError: string | null

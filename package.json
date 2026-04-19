@@ -10,9 +10,14 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test:audio-router": "node scripts/run-audio-router-tests.mjs",
+    "test:audio-store": "node scripts/run-audio-store-tests.mjs",
     "test:astra": "node scripts/run-astra-integration-tests.mjs",
+    "test:capture-support": "node scripts/run-capture-support-tests.mjs",
+    "test:spotify-provider": "node scripts/run-mac-spotify-provider-tests.mjs",
+    "test:now-playing": "node scripts/run-now-playing-manager-tests.mjs",
     "test:profiles": "node scripts/run-profile-library-tests.mjs",
     "test:themes": "node scripts/run-theme-library-tests.mjs",
+    "test:secret-vault": "node scripts/run-secret-vault-tests.mjs",
     "test:window-state": "node scripts/run-window-state-tests.mjs",
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
     "build:native": "cd native && node-gyp rebuild",
@@ -66,12 +71,6 @@
         "ext": "prsm",
         "name": "Prism Profile",
         "description": "Prism shareable profile",
-        "role": "Editor"
-      },
-      {
-        "ext": "iro",
-        "name": "Prism Theme",
-        "description": "Prism shareable theme",
         "role": "Editor"
       }
     ],

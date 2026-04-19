@@ -3,6 +3,7 @@ import { multiplyColorAlpha } from '../utils/color'
 
 const INV_SQRT2 = 1 / Math.sqrt(2)
 const COS45 = Math.SQRT2 / 2 // 0.7071...
+const OVERFLOW_BOUNDARY_STEP = 0.25
 
 export interface VectorscopeLayout {
   centerX: number
@@ -86,6 +87,32 @@ export function transformPoint(
   return { dx: side, dy: mid }
 }
 
+function getOverflowBoundaryLayout(
+  width: number,
+  height: number,
+  mode: VectorscopeMode,
+): VectorscopeLayout | null {
+  if (mode === 'lissajous') {
+    return null
+  }
+
+  const layout = getVectorscopeLayout(width, height, mode)
+  const maxXRadius = Math.min(layout.centerX, width - layout.centerX)
+  const maxYRadius = mode === 'polar-unipolar' || mode === 'linear-unipolar'
+    ? layout.centerY
+    : Math.min(layout.centerY, height - layout.centerY)
+  const maxRadius = Math.min(maxXRadius, maxYRadius) * 0.98
+  // Continue the existing quarter-step grid spacing, then clamp to the
+  // drawable area if the next full step would fall off-canvas.
+  const overflowRadius = Math.min(maxRadius, layout.radius * (1 + OVERFLOW_BOUNDARY_STEP))
+
+  if (overflowRadius <= layout.radius + 1) {
+    return null
+  }
+
+  return { ...layout, radius: overflowRadius }
+}
+
 /**
  * Draw the Lissajous grid: crosshairs + box boundary.
  */
@@ -141,6 +168,56 @@ export function drawLissajousGrid(
   ctx.textAlign = 'center'
   ctx.fillText('L', centerX, centerY - radius - 6 * dpr)
   ctx.fillText('R', centerX + radius + 12 * dpr, centerY + 4 * dpr)
+}
+
+function drawDashedOuterBoundary(
+  ctx: CanvasRenderingContext2D,
+  layout: VectorscopeLayout,
+  mode: VectorscopeMode,
+  color: string,
+  dpr: number,
+): void {
+  const { centerX, centerY, radius } = layout
+  const dashLength = Math.max(2, Math.round(4 * dpr))
+  const gapLength = Math.max(2, Math.round(3 * dpr))
+
+  ctx.strokeStyle = color
+  ctx.lineWidth = dpr
+  ctx.setLineDash([dashLength, gapLength])
+
+  switch (mode) {
+    case 'polar-unipolar':
+      ctx.beginPath()
+      ctx.arc(centerX, centerY, radius, Math.PI, 0, false)
+      ctx.stroke()
+      break
+    case 'polar-bipolar':
+      ctx.beginPath()
+      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+      ctx.stroke()
+      break
+    case 'linear-unipolar':
+      ctx.beginPath()
+      ctx.moveTo(centerX, centerY - radius)
+      ctx.lineTo(centerX - radius, centerY)
+      ctx.lineTo(centerX + radius, centerY)
+      ctx.closePath()
+      ctx.stroke()
+      break
+    case 'linear-bipolar':
+      ctx.beginPath()
+      ctx.moveTo(centerX, centerY - radius)
+      ctx.lineTo(centerX + radius, centerY)
+      ctx.lineTo(centerX, centerY + radius)
+      ctx.lineTo(centerX - radius, centerY)
+      ctx.closePath()
+      ctx.stroke()
+      break
+    default:
+      break
+  }
+
+  ctx.setLineDash([])
 }
 
 /**
@@ -307,6 +384,8 @@ export function drawVectorscopeGridForMode(
   dpr: number = 1
 ): void {
   const layout = getVectorscopeLayout(width, height, mode)
+  const overflowLayout = getOverflowBoundaryLayout(width, height, mode)
+  const outerBoundaryColor = multiplyColorAlpha(gridMajorColor, 1.25)
 
   switch (mode) {
     case 'lissajous':
@@ -324,5 +403,9 @@ export function drawVectorscopeGridForMode(
     case 'linear-bipolar':
       drawLinearGrid(ctx, layout, gridMajorColor, gridMinorColor, labelColor, false, dpr)
       break
+  }
+
+  if (overflowLayout) {
+    drawDashedOuterBoundary(ctx, overflowLayout, mode, outerBoundaryColor, dpr)
   }
 }

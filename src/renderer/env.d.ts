@@ -1,13 +1,15 @@
 /// <reference types="vite/client" />
 
-import type {
-  AstraControlCommand,
-  AstraIntegrationConfig,
-  AstraIntegrationState,
-} from '../types/astra'
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
+import type {
+  NowPlayingControlCommand,
+  NowPlayingProviderConfigMap,
+  NowPlayingProviderConfigMutationMap,
+  NowPlayingProviderId,
+  NowPlayingState,
+} from '../types/nowPlaying'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -29,6 +31,7 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
 
 declare global {
@@ -37,6 +40,7 @@ declare global {
     nativeCaptureAPI: NativeCaptureAPI | null
     electronAPI: {
       platform: string
+      windowCapabilities: WindowCapabilities
       minimize: () => void
       close: () => void
       startWindowMove: () => void
@@ -48,13 +52,14 @@ declare global {
       repositionWindow: (position: 'top' | 'bottom') => void
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
-      getDesktopSources: () => Promise<{ id: string; name: string }[]>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
-      getAstraConfig: () => Promise<AstraIntegrationConfig>
-      saveAstraConfig: (config: AstraIntegrationConfig) => Promise<AstraIntegrationConfig>
-      getAstraState: () => Promise<AstraIntegrationState>
-      setAstraActive: (active: boolean) => Promise<AstraIntegrationState>
-      sendAstraControl: (command: AstraControlCommand) => Promise<AstraIntegrationState>
+      getNowPlayingState: () => Promise<NowPlayingState>
+      setNowPlayingConsumerActive: (active: boolean) => Promise<NowPlayingState>
+      saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => Promise<NowPlayingState>
+      setNowPlayingProviderPriority: (providerPriority: NowPlayingProviderId[]) => Promise<NowPlayingState>
+      retryNowPlayingProvider: (providerId: NowPlayingProviderId) => Promise<NowPlayingState>
+      sendNowPlayingControl: (command: NowPlayingControlCommand) => Promise<NowPlayingState>
+      openNowPlayingConfigWindow: () => Promise<void>
       getProfileSnapshot: () => Promise<ProfileLibrarySnapshot>
       saveNewProfile: (name: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
       overwriteProfile: (id: string, profile: Profile) => Promise<ProfileLibrarySnapshot>
@@ -74,6 +79,7 @@ declare global {
       importThemeDialog: () => Promise<ThemeLibrarySnapshot | null>
       revealThemesFolder: () => Promise<void>
       migrateLegacyTheme: (payload: LegacyThemeMigrationPayload) => Promise<LegacyThemeMigrationResult>
+      openExternalUrl: (url: string) => Promise<void>
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
       setSettingsHeight: (panelHeight: number) => void
@@ -89,7 +95,7 @@ declare global {
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
-      onAstraStateChanged: (callback: (state: AstraIntegrationState) => void) => () => void
+      onNowPlayingStateChanged: (callback: (state: NowPlayingState) => void) => () => void
       onMainCloseRequested: (callback: () => void) => () => void
       onProfileMenuClosed: (callback: () => void) => () => void
       onProfileMenuLoad: (callback: (id: string) => void) => () => void
@@ -101,7 +107,6 @@ declare global {
       onProfileMenuShowFolder: (callback: () => void) => () => void
       onExternalProfileOpenRequested: (callback: (path: string) => void) => () => void
       onExternalProfileActivated: (callback: (snapshot: ProfileLibrarySnapshot) => void) => () => void
-      onExternalThemeActivated: (callback: (snapshot: ThemeLibrarySnapshot) => void) => () => void
       onScopePopoutReady: (callback: (kind: ScopeKind) => void) => () => void
       onScopePopoutCloseRequested: (callback: (kind: ScopeKind) => void) => () => void
       onScopePopoutBoundsChanged: (callback: (kind: ScopeKind, bounds: WindowBounds) => void) => () => void

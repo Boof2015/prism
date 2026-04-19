@@ -1,4 +1,5 @@
-import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
+import { normalizeScopeKind, type ScopeKind } from '../types/scope'
+import { normalizeWindowBounds } from './profileState'
 import {
   WINDOW_LOCAL_STATE_FORMAT,
   WINDOW_LOCAL_STATE_VERSION,
@@ -11,6 +12,7 @@ export function createEmptyWindowLocalState(): PrismWindowLocalStateV1 {
     version: WINDOW_LOCAL_STATE_VERSION,
     mainAlwaysOnTop: false,
     popoutAlwaysOnTop: {},
+    nowPlayingConfigWindowBounds: undefined,
   }
 }
 
@@ -20,8 +22,9 @@ export function normalizeWindowLocalState(raw: unknown): PrismWindowLocalStateV1
     : {}
 
   const popoutAlwaysOnTop = typeof parsed.popoutAlwaysOnTop === 'object' && parsed.popoutAlwaysOnTop !== null
-    ? SCOPE_KINDS.reduce((acc, kind) => {
-        if ((parsed.popoutAlwaysOnTop as Partial<Record<ScopeKind, unknown>>)[kind] === true) {
+    ? Object.entries(parsed.popoutAlwaysOnTop).reduce((acc, [rawKind, value]) => {
+        const kind = normalizeScopeKind(rawKind)
+        if (kind && value === true) {
           acc[kind] = true
         }
         return acc
@@ -33,5 +36,6 @@ export function normalizeWindowLocalState(raw: unknown): PrismWindowLocalStateV1
     version: WINDOW_LOCAL_STATE_VERSION,
     mainAlwaysOnTop: parsed.mainAlwaysOnTop === true,
     popoutAlwaysOnTop,
+    nowPlayingConfigWindowBounds: normalizeWindowBounds(parsed.nowPlayingConfigWindowBounds),
   }
 }

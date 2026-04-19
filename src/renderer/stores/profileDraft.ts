@@ -9,7 +9,6 @@ import {
 } from '../../shared/profileState'
 
 export interface ProfileDraftSource {
-  themeId: string | null
   scopeOrder: ScopeKind[]
   hiddenScopes: Iterable<ScopeKind>
   widthWeights: Record<ScopeKind, number>
@@ -24,7 +23,6 @@ export function buildProfileDraft(
 ): Profile {
   return normalizeProfile({
     name,
-    themeId: source.themeId,
     scopeOrder: [...source.scopeOrder],
     hiddenScopes: Array.from(source.hiddenScopes),
     widthWeights: { ...source.widthWeights },

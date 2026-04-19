@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import ScopePopoutWindow from './popouts/ScopePopoutWindow'
 import DialogApp from './components/DialogApp'
+import NowPlayingConfigWindow from './components/NowPlayingConfigWindow'
 import './styles/globals.css'
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
@@ -22,6 +23,8 @@ const scopeKind = params.get('scope')
 let root: React.ReactElement
 if (windowMode === 'dialog') {
   root = <DialogApp />
+} else if (windowRole === 'now-playing-config') {
+  root = <NowPlayingConfigWindow />
 } else if (windowRole === 'scope-popout') {
   root = isScopeKind(scopeKind)
     ? <ScopePopoutWindow scopeKind={scopeKind} />

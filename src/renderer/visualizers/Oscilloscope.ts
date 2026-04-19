@@ -187,6 +187,10 @@ export class Oscilloscope {
     return this.renderBuffer
   }
 
+  private projectSampleY(sample: number, height: number): number {
+    return ((1 - sample) / 2) * height
+  }
+
   private concatMonoChunks(chunks: Float32Array[]): Float32Array {
     if (chunks.length === 1) return chunks[0]
 
@@ -266,14 +270,13 @@ export class Oscilloscope {
 
     const sliceWidth = width / sampleCount
     const centerY = height / 2
-    const visualGain = 1.8
 
     if (options.underfillEnabled) {
       ctx.beginPath()
       ctx.moveTo(0, centerY)
       for (let i = 0; i < sampleCount; i += 1) {
         const x = i * sliceWidth
-        const y = ((1 - renderData[i] * visualGain) / 2) * height
+        const y = this.projectSampleY(renderData[i], height)
         ctx.lineTo(x, y)
       }
       ctx.lineTo((sampleCount - 1) * sliceWidth, centerY)
@@ -298,10 +301,10 @@ export class Oscilloscope {
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.beginPath()
-    ctx.moveTo(0, ((1 - renderData[0] * visualGain) / 2) * height)
+    ctx.moveTo(0, this.projectSampleY(renderData[0], height))
     for (let i = 1; i < sampleCount; i += 1) {
       const x = i * sliceWidth
-      const y = ((1 - renderData[i] * visualGain) / 2) * height
+      const y = this.projectSampleY(renderData[i], height)
       ctx.lineTo(x, y)
     }
     ctx.stroke()

@@ -12,8 +12,9 @@ import {
   type PrismProfileFileV2,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
-import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, type ScopeKind } from '../types/scope'
+import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
+import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -26,11 +27,11 @@ export const DEFAULT_SCOPE_WIDTH_WEIGHTS: Record<ScopeKind, number> = {
   vumeter: 0.5,
   lufsmeter: 0.5,
   waveform: 1,
-  astra: 1,
+  nowPlaying: 1,
 }
 
 export function isScopeKind(value: unknown): value is ScopeKind {
-  return typeof value === 'string' && SCOPE_KINDS.includes(value as ScopeKind)
+  return normalizeScopeKind(value) !== null
 }
 
 export function cloneScopeSettings(settings: ScopeSettings): ScopeSettings {
@@ -72,11 +73,12 @@ export function normalizeWindowBounds(
 export function normalizeScopeOrder(raw: unknown): ScopeKind[] {
   if (!Array.isArray(raw)) return [...DEFAULT_SCOPE_ORDER]
 
-  const valid = raw.filter(isScopeKind)
   const seen = new Set<ScopeKind>()
   const normalized: ScopeKind[] = []
 
-  for (const kind of valid) {
+  for (const rawKind of raw) {
+    const kind = normalizeScopeKind(rawKind)
+    if (!kind) continue
     if (seen.has(kind)) continue
     seen.add(kind)
     normalized.push(kind)
@@ -96,16 +98,25 @@ export function normalizeHiddenScopes(raw: unknown): ScopeKind[] {
     return SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind))
   }
 
-  return raw.filter(isScopeKind)
+  const seen = new Set<ScopeKind>()
+  const normalized: ScopeKind[] = []
+  for (const rawKind of raw) {
+    const kind = normalizeScopeKind(rawKind)
+    if (!kind || seen.has(kind)) continue
+    seen.add(kind)
+    normalized.push(kind)
+  }
+  return normalized
 }
 
 export function normalizeWidthWeights(raw: unknown): Record<ScopeKind, number> {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<Record<ScopeKind, unknown>>
     : {}
+  const legacyParsed = parsed as Partial<Record<ScopeKind | 'astra', unknown>>
 
   return SCOPE_KINDS.reduce((acc, kind) => {
-    const value = parsed[kind]
+    const value = legacyParsed[kind] ?? (kind === 'nowPlaying' ? legacyParsed.astra : undefined)
     acc[kind] = typeof value === 'number' && Number.isFinite(value)
       ? Math.max(0.1, value)
       : DEFAULT_SCOPE_WIDTH_WEIGHTS[kind]
@@ -117,16 +128,29 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<ScopeSettings>
     : {}
+  const legacyParsed = parsed as Partial<ScopeSettings> & {
+    astra?: Partial<ScopeSettings['nowPlaying']>
+  }
+  const rawSpectrum: Partial<ScopeSettings['spectrum']> = typeof parsed.spectrum === 'object' && parsed.spectrum !== null
+    ? parsed.spectrum
+    : {}
+  const rawNowPlaying: Partial<ScopeSettings['nowPlaying']> = typeof legacyParsed.nowPlaying === 'object' && legacyParsed.nowPlaying !== null
+    ? legacyParsed.nowPlaying
+    : (typeof legacyParsed.astra === 'object' && legacyParsed.astra !== null ? legacyParsed.astra : {})
 
   return {
-    spectrum: { ...DEFAULT_SCOPE_SETTINGS.spectrum, ...(parsed.spectrum ?? {}) },
+    spectrum: {
+      ...DEFAULT_SCOPE_SETTINGS.spectrum,
+      ...rawSpectrum,
+      peakInfoMode: normalizeSpectrumPeakInfoMode(rawSpectrum.peakInfoMode),
+    },
     oscilloscope: { ...DEFAULT_SCOPE_SETTINGS.oscilloscope, ...(parsed.oscilloscope ?? {}) },
     vectorscope: { ...DEFAULT_SCOPE_SETTINGS.vectorscope, ...(parsed.vectorscope ?? {}) },
     spectrogram: { ...DEFAULT_SCOPE_SETTINGS.spectrogram, ...(parsed.spectrogram ?? {}) },
     vumeter: { ...DEFAULT_SCOPE_SETTINGS.vumeter, ...(parsed.vumeter ?? {}) },
     lufsmeter: { ...DEFAULT_SCOPE_SETTINGS.lufsmeter, ...(parsed.lufsmeter ?? {}) },
     waveform: { ...DEFAULT_SCOPE_SETTINGS.waveform, ...(parsed.waveform ?? {}) },
-    astra: { ...DEFAULT_SCOPE_SETTINGS.astra, ...(parsed.astra ?? {}) },
+    nowPlaying: { ...DEFAULT_SCOPE_SETTINGS.nowPlaying, ...rawNowPlaying },
   }
 }
 
@@ -135,9 +159,10 @@ export function normalizeScopePopouts(raw: unknown): ScopePopoutStateMap {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<Record<ScopeKind, Partial<ScopePopoutStateMap[ScopeKind]>>>
     : {}
+  const legacyParsed = parsed as Partial<Record<ScopeKind | 'astra', Partial<ScopePopoutStateMap[ScopeKind]>>>
 
   for (const kind of SCOPE_KINDS) {
-    const value = parsed[kind]
+    const value = legacyParsed[kind] ?? (kind === 'nowPlaying' ? legacyParsed.astra : undefined)
     defaults[kind] = {
       poppedOut: Boolean(value?.poppedOut),
       windowBounds: normalizeWindowBounds(value?.windowBounds),
@@ -156,7 +181,6 @@ export function normalizeProfileName(value: unknown, fallback = DEFAULT_PROFILE_
 export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): Profile {
   return {
     name,
-    themeId: null,
     scopeOrder: [...DEFAULT_SCOPE_ORDER],
     hiddenScopes: SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind)),
     widthWeights: { ...DEFAULT_SCOPE_WIDTH_WEIGHTS },
@@ -172,9 +196,6 @@ export function normalizeProfile(raw: unknown, fallbackName = DEFAULT_PROFILE_NA
 
   return {
     name: normalizeProfileName(parsed.name, fallbackName),
-    themeId: typeof parsed.themeId === 'string' && parsed.themeId.trim()
-      ? parsed.themeId.trim()
-      : null,
     scopeOrder: normalizeScopeOrder(parsed.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
@@ -188,19 +209,13 @@ export function normalizeProfileFileScopePopouts(raw: unknown): PrismProfileFile
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<Record<ScopeKind, { poppedOut?: unknown }>>
     : {}
+  const legacyParsed = parsed as Partial<Record<ScopeKind | 'astra', { poppedOut?: unknown }>>
 
   return SCOPE_KINDS.reduce((acc, kind) => {
-    acc[kind] = { poppedOut: Boolean(parsed[kind]?.poppedOut) }
+    const value = legacyParsed[kind] ?? (kind === 'nowPlaying' ? legacyParsed.astra : undefined)
+    acc[kind] = { poppedOut: Boolean(value?.poppedOut) }
     return acc
   }, {} as PrismProfileFileScopePopoutMap)
-}
-
-function readProfileFileThemeId(file: Partial<PrismProfileFile> | PrismProfileFile): string | null {
-  if (!('themeId' in file)) return null
-  const { themeId } = file
-  return typeof themeId === 'string' && themeId.trim()
-    ? themeId.trim()
-    : null
 }
 
 export function normalizeProfileFile(
@@ -223,7 +238,6 @@ export function normalizeProfileFile(
     version: PROFILE_FILE_VERSION,
     id,
     name,
-    themeId: readProfileFileThemeId(parsed),
     scopeOrder: normalizeScopeOrder(parsed.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
@@ -240,7 +254,6 @@ export function profileToFileData(id: string, profile: Profile): PrismProfileFil
     version: PROFILE_FILE_VERSION,
     id,
     name: normalized.name,
-    themeId: normalized.themeId,
     scopeOrder: [...normalized.scopeOrder],
     hiddenScopes: [...normalized.hiddenScopes],
     widthWeights: { ...normalized.widthWeights },
@@ -259,7 +272,10 @@ export function normalizeProfileLocalMetadata(raw: unknown): ProfileLocalMetadat
 
   const scopePopoutBounds = typeof parsed.scopePopoutBounds === 'object' && parsed.scopePopoutBounds !== null
     ? SCOPE_KINDS.reduce((acc, kind) => {
-        const bounds = normalizeWindowBounds(parsed.scopePopoutBounds?.[kind])
+        const legacyBounds = parsed.scopePopoutBounds as Partial<Record<ScopeKind | 'astra', unknown>> | undefined
+        const bounds = normalizeWindowBounds(
+          legacyBounds?.[kind] ?? (kind === 'nowPlaying' ? legacyBounds?.astra : undefined),
+        )
         if (bounds) {
           acc[kind] = bounds
         }
@@ -333,7 +349,6 @@ export function profileFileToProfile(
 
   return {
     name: normalizeProfileName(file.name, DEFAULT_PROFILE_NAME),
-    themeId: readProfileFileThemeId(file),
     scopeOrder: normalizeScopeOrder(file.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(file.hiddenScopes),
     widthWeights: normalizeWidthWeights(file.widthWeights),

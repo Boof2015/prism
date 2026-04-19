@@ -7,6 +7,7 @@ import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
 import { audioRouter } from '../audio/AudioRouter'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { FrameScheduler } from '../visualizers/frameScheduler'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 
 export default function Strip(): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -23,6 +24,7 @@ export default function Strip(): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null)
   const scopeRefs = useRef<Partial<Record<ScopeKind, HTMLDivElement | null>>>({})
   const [handleOffsets, setHandleOffsets] = useState<number[]>([])
+  const supportsGeometryPersistence = getRendererWindowCapabilities().supportsGeometryPersistence
   const dockedScopes = useMemo(
     () => scopeOrder.filter((k) => !hiddenScopes.has(k) && !scopePopouts[k]?.poppedOut),
     [hiddenScopes, scopeOrder, scopePopouts],
@@ -189,6 +191,11 @@ export default function Strip(): JSX.Element {
   }, [dockedScopes, setScopeWidthWeight])
 
   const handlePopoutScope = useCallback(async (kind: ScopeKind): Promise<void> => {
+    if (!supportsGeometryPersistence) {
+      popOutScope(kind)
+      return
+    }
+
     const element = scopeRefs.current[kind]
     const rect = element?.getBoundingClientRect()
     const windowBounds = await window.electronAPI.getWindowBounds()
@@ -204,7 +211,7 @@ export default function Strip(): JSX.Element {
     }
 
     popOutScope(kind, nextBounds)
-  }, [popOutScope])
+  }, [popOutScope, supportsGeometryPersistence])
 
   return (
     <div ref={stripRef} className="scope-strip">

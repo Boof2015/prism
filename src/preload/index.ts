@@ -1,11 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type {
-  AstraControlCommand,
-  AstraIntegrationConfig,
-  AstraIntegrationState,
-} from '../types/astra'
-import type { CaptureBackendSupport, CaptureBackendSupportEntry } from '../types/capture'
+import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
+import type {
+  NowPlayingControlCommand,
+  NowPlayingProviderConfigMutationMap,
+  NowPlayingProviderId,
+  NowPlayingState,
+} from '../types/nowPlaying'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -27,14 +28,23 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
+import { resolveWindowCapabilities } from '../shared/windowCapabilities'
+import { getCaptureBackendSupport } from './captureSupport'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
+const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
+  platform: process.platform,
+  argv: process.argv,
+  env: process.env,
+})
 
 // Expose Electron API to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  windowCapabilities,
   minimize: () => ipcRenderer.send('window:minimize'),
   close: () => ipcRenderer.send('window:close'),
   startWindowMove: () => ipcRenderer.send('window:start-move'),
@@ -46,19 +56,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
-  getDesktopSources: () => ipcRenderer.invoke('audio:get-desktop-sources') as Promise<{ id: string; name: string }[]>,
-  getCaptureBackendSupport: async () => {
-    const support = await ipcRenderer.invoke('capture:get-backend-support') as CaptureBackendSupport
-    return {
-      ...support,
-      nativeBackend: resolveNativeCaptureSupport(support.nativeBackend),
-    } satisfies CaptureBackendSupport
+  getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
+  getNowPlayingState: () => ipcRenderer.invoke('now-playing:get-state') as Promise<NowPlayingState>,
+  setNowPlayingConsumerActive: (active: boolean) => ipcRenderer.invoke('now-playing:set-active', active) as Promise<NowPlayingState>,
+  saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => {
+    return ipcRenderer.invoke('now-playing:save-provider-config', providerId, config) as Promise<NowPlayingState>
   },
-  getAstraConfig: () => ipcRenderer.invoke('astra:get-config') as Promise<AstraIntegrationConfig>,
-  saveAstraConfig: (config: AstraIntegrationConfig) => ipcRenderer.invoke('astra:save-config', config) as Promise<AstraIntegrationConfig>,
-  getAstraState: () => ipcRenderer.invoke('astra:get-state') as Promise<AstraIntegrationState>,
-  setAstraActive: (active: boolean) => ipcRenderer.invoke('astra:set-active', active) as Promise<AstraIntegrationState>,
-  sendAstraControl: (command: AstraControlCommand) => ipcRenderer.invoke('astra:send-control', command) as Promise<AstraIntegrationState>,
+  setNowPlayingProviderPriority: (providerPriority: NowPlayingProviderId[]) => {
+    return ipcRenderer.invoke('now-playing:set-provider-priority', providerPriority) as Promise<NowPlayingState>
+  },
+  retryNowPlayingProvider: (providerId: NowPlayingProviderId) => {
+    return ipcRenderer.invoke('now-playing:retry-provider', providerId) as Promise<NowPlayingState>
+  },
+  sendNowPlayingControl: (command: NowPlayingControlCommand) => {
+    return ipcRenderer.invoke('now-playing:send-control', command) as Promise<NowPlayingState>
+  },
+  openNowPlayingConfigWindow: () => ipcRenderer.invoke('now-playing:open-config-window') as Promise<void>,
   getProfileSnapshot: () => ipcRenderer.invoke('profiles:get-snapshot') as Promise<ProfileLibrarySnapshot>,
   saveNewProfile: (name: string, profile: Profile) => ipcRenderer.invoke('profiles:save-new', name, profile) as Promise<ProfileLibrarySnapshot>,
   overwriteProfile: (id: string, profile: Profile) => ipcRenderer.invoke('profiles:overwrite', id, profile) as Promise<ProfileLibrarySnapshot>,
@@ -80,6 +93,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importThemeDialog: () => ipcRenderer.invoke('themes:import-dialog') as Promise<ThemeLibrarySnapshot | null>,
   revealThemesFolder: () => ipcRenderer.invoke('themes:reveal-folder') as Promise<void>,
   migrateLegacyTheme: (payload: LegacyThemeMigrationPayload) => ipcRenderer.invoke('themes:migrate-legacy', payload) as Promise<LegacyThemeMigrationResult>,
+  openExternalUrl: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<void>,
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),
@@ -103,10 +117,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('window:bounds-changed', handler)
     return () => ipcRenderer.removeListener('window:bounds-changed', handler)
   },
-  onAstraStateChanged: (callback: (state: AstraIntegrationState) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, state: AstraIntegrationState): void => callback(state)
-    ipcRenderer.on('astra:state-changed', handler)
-    return () => ipcRenderer.removeListener('astra:state-changed', handler)
+  onNowPlayingStateChanged: (callback: (state: NowPlayingState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: NowPlayingState): void => callback(state)
+    ipcRenderer.on('now-playing:state-changed', handler)
+    return () => ipcRenderer.removeListener('now-playing:state-changed', handler)
   },
   onMainCloseRequested: (callback: () => void) => {
     const handler = (): void => callback()
@@ -162,11 +176,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: ProfileLibrarySnapshot): void => callback(snapshot)
     ipcRenderer.on('profiles:external-activated', handler)
     return () => ipcRenderer.removeListener('profiles:external-activated', handler)
-  },
-  onExternalThemeActivated: (callback: (snapshot: ThemeLibrarySnapshot) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, snapshot: ThemeLibrarySnapshot): void => callback(snapshot)
-    ipcRenderer.on('themes:external-activated', handler)
-    return () => ipcRenderer.removeListener('themes:external-activated', handler)
   },
   onScopePopoutReady: (callback: (kind: ScopeKind) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, kind: ScopeKind): void => callback(kind)
@@ -224,48 +233,6 @@ try {
   console.warn('Native DSP module not available — using JS fallback')
 }
 
-function resolveNativeCaptureSupport(
-  fallbackEntry: CaptureBackendSupportEntry,
-): CaptureBackendSupportEntry {
-  if (process.platform === 'darwin') {
-    const macosCapture = nativeAddonModule?.macosCapture
-    if (!macosCapture) {
-      return {
-        kind: 'native-macos',
-        available: false,
-        reason: 'Native capture module is not available in this build.',
-      }
-    }
-
-    const support = macosCapture.getSupport()
-    return {
-      kind: 'native-macos',
-      available: support.available,
-      reason: support.reason,
-    }
-  }
-
-  if (process.platform === 'win32') {
-    const windowsCapture = nativeAddonModule?.windowsCapture
-    if (!windowsCapture) {
-      return {
-        kind: 'native-windows',
-        available: false,
-        reason: 'Native capture module is not available in this build.',
-      }
-    }
-
-    const support = windowsCapture.getSupport()
-    return {
-      kind: 'native-windows',
-      available: support.available,
-      reason: support.reason,
-    }
-  }
-
-  return fallbackEntry
-}
-
 const visualizerAPI = nativeAddonModule
   ? {
       oscilloscope: nativeAddonModule.oscilloscope,
@@ -278,6 +245,7 @@ const nativeCaptureAPI = nativeAddonModule
   ? {
       macosCapture: nativeAddonModule.macosCapture,
       windowsCapture: nativeAddonModule.windowsCapture,
+      linuxCapture: nativeAddonModule.linuxCapture,
     }
   : null
 

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type WheelEvent } from 'react'
-import { useAstraStore } from '../stores/astraStore'
+import { useNowPlayingStore } from '../stores/nowPlayingStore'
 import { useAudioStore } from '../stores/audioStore'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -9,7 +9,6 @@ import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { SCOPE_KINDS } from '../../types/scope'
-import type { AstraIntegrationConfig } from '../../types/astra'
 import ThemedSelect from './ThemedSelect'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -20,7 +19,7 @@ const SCOPE_LABELS: Record<ScopeKind, string> = {
   vumeter: 'VU Meter',
   lufsmeter: 'LUFS Meter',
   waveform: 'Waveform',
-  astra: 'Astra',
+  nowPlaying: 'Now Playing',
 }
 
 interface BottomBarProps {
@@ -45,10 +44,50 @@ function getErrorMessage(error: unknown, fallback: string): string {
     : fallback
 }
 
+type ThemeCreditSource = {
+  credit?: string
+  website?: string
+  description?: string
+} | null | undefined
+
+export function resolveThemeCreditDetails(theme: ThemeCreditSource): {
+  credit: string | null
+  url: string | null
+  description: string | null
+} {
+  const credit = typeof theme?.credit === 'string' && theme.credit.trim()
+    ? theme.credit.trim()
+    : null
+
+  if (!credit) {
+    return { credit: null, url: null, description: null }
+  }
+
+  const website = typeof theme?.website === 'string' && theme.website.trim()
+    ? theme.website.trim()
+    : null
+  const description = typeof theme?.description === 'string' && theme.description.trim()
+    ? theme.description.trim()
+    : null
+
+  if (!website) {
+    return { credit, url: null, description }
+  }
+
+  try {
+    const parsed = new URL(website)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return { credit, url: parsed.toString(), description }
+    }
+  } catch {
+    // Invalid URLs fall back to plain credit text.
+  }
+
+  return { credit, url: null, description }
+}
+
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const [astraBaseUrlInput, setAstraBaseUrlInput] = useState('')
-  const [astraTokenInput, setAstraTokenInput] = useState('')
   const [isRefreshingThemes, setIsRefreshingThemes] = useState(false)
 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
@@ -57,16 +96,17 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
   const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
-  const setThemeId = useSettingsStore((s) => s.setThemeId)
   const {
     themes,
+    activeTheme,
     activeThemeId,
     loadTheme,
     reloadThemes,
     showThemesFolder,
   } = useThemeStore()
-  const astraState = useAstraStore((s) => s.integrationState)
-  const saveAstraConfig = useAstraStore((s) => s.saveConfig)
+  const nowPlayingState = useNowPlayingStore((s) => s.nowPlayingState)
+  const retryNowPlayingProvider = useNowPlayingStore((s) => s.retryProvider)
+  const openNowPlayingConfigWindow = useNowPlayingStore((s) => s.openConfigWindow)
 
   const {
     systemSources,
@@ -89,18 +129,12 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     setInputGain,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
-  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
 
   useEffect(() => {
     void refreshBackendSupport()
     void refreshSystemSources()
     void refreshDevices()
   }, [refreshBackendSupport, refreshSystemSources, refreshDevices])
-
-  useEffect(() => {
-    setAstraBaseUrlInput(astraState.config.baseUrl)
-    setAstraTokenInput(astraState.config.token)
-  }, [astraState.config.baseUrl, astraState.config.token])
 
   useLayoutEffect(() => {
     if (!onHeightChange || !rootRef.current) return
@@ -164,26 +198,10 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
   const roundedDockedRenderFps = Math.max(0, Math.round(dockedRenderFps))
   const themeEntries = Object.entries(themes)
+  const themeCredit = resolveThemeCreditDetails(activeTheme)
 
   const handleThemeChange = async (value: string): Promise<void> => {
     await loadTheme(value)
-    setThemeId(value)
-  }
-
-  const handleSaveAstraConfig = async (): Promise<void> => {
-    const nextConfig: AstraIntegrationConfig = {
-      baseUrl: astraBaseUrlInput,
-      token: astraTokenInput,
-    }
-    try {
-      await saveAstraConfig(nextConfig)
-    } catch (error) {
-      showBanner({
-        tone: 'error',
-        message: getErrorMessage(error, 'Could not save the Astra settings.'),
-        actions: [],
-      })
-    }
   }
 
   const handleRetryCapture = async (): Promise<void> => {
@@ -201,8 +219,27 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     await startCapture()
   }
 
-  const handleRetryAstra = async (): Promise<void> => {
-    await handleSaveAstraConfig()
+  const handleRetryNowPlaying = async (): Promise<void> => {
+    const providerId = nowPlayingState.activeProviderId
+      ?? nowPlayingState.providerPriority.find((candidate) => {
+        const provider = nowPlayingState.providers[candidate]
+        return provider.available && provider.isConfigured
+      })
+
+    if (!providerId) {
+      await openNowPlayingConfigWindow()
+      return
+    }
+
+    try {
+      await retryNowPlayingProvider(providerId)
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not reconnect the provider.'),
+        actions: [],
+      })
+    }
   }
 
   const handleShowThemesFolder = async (): Promise<void> => {
@@ -236,6 +273,18 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     }
   }
 
+  const handleOpenThemeWebsite = async (url: string): Promise<void> => {
+    try {
+      await window.electronAPI.openExternalUrl(url)
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not open the theme website.'),
+        actions: [],
+      })
+    }
+  }
+
   const handleRailWheel = (event: WheelEvent<HTMLDivElement>): void => {
     const railElement = event.currentTarget
     const target = event.target
@@ -258,15 +307,36 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     event.preventDefault()
   }
 
-  const astraStatusLabel = astraState.connectionState === 'connected'
-    ? 'Connected'
-    : astraState.connectionState === 'connecting'
-      ? 'Connecting'
-      : astraState.connectionState === 'error'
-        ? 'Error'
-        : 'Off'
+  const currentNowPlayingProviderId = nowPlayingState.activeProviderId
+    ?? nowPlayingState.providerPriority.find((providerId) => {
+      const provider = nowPlayingState.providers[providerId]
+      return provider.available && provider.isConfigured
+    })
+    ?? null
+  const currentNowPlayingProvider = currentNowPlayingProviderId
+    ? nowPlayingState.providers[currentNowPlayingProviderId]
+    : null
+  const nowPlayingStatusLabel = nowPlayingState.onboardingRequired
+    ? 'Not Set Up'
+    : currentNowPlayingProvider?.connectionState === 'connected'
+      ? 'Connected'
+      : currentNowPlayingProvider?.connectionState === 'connecting'
+        ? 'Connecting'
+        : currentNowPlayingProvider?.connectionState === 'error'
+          ? 'Error'
+          : 'Idle'
+  const nowPlayingSummary = nowPlayingState.onboardingRequired
+    ? 'Set up Astra to enable live track data.'
+    : `Priority: ${nowPlayingState.providerPriority
+      .map((providerId) => nowPlayingState.definitions[providerId].label)
+      .join(' → ')}`
   const captureMessage = captureError ?? captureNotice
-  const astraErrorMessage = astraState.lastError ?? astraState.lastControlError
+  const nowPlayingErrorMessage = currentNowPlayingProvider?.lastError ?? currentNowPlayingProvider?.lastControlError ?? null
+  const nowPlayingDetail = nowPlayingErrorMessage
+    ? `${currentNowPlayingProviderId ? `${nowPlayingState.definitions[currentNowPlayingProviderId].label} · ` : ''}${nowPlayingErrorMessage}`
+    : currentNowPlayingProviderId
+      ? `${nowPlayingState.definitions[currentNowPlayingProviderId].label} · ${nowPlayingSummary}`
+      : nowPlayingSummary
   const canUseDefaultSource = captureMode === 'system'
     ? selectedSystemSourceId !== defaultSystemSourceId
     : selectedDeviceId !== null
@@ -300,7 +370,33 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
           <div className="bottom-bar__divider" />
 
           <section className="bottom-bar__section bottom-bar__section--theme">
-            <div className="bottom-bar__section-title">Theme</div>
+            <div className="bottom-bar__section-header">
+              <div className="bottom-bar__section-title">Theme</div>
+              {themeCredit.credit ? (
+                <span className="bottom-bar__theme-metadata">
+                  {themeCredit.url ? (
+                    <a
+                      className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
+                      href={themeCredit.url}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        void handleOpenThemeWebsite(themeCredit.url!)
+                      }}
+                    >
+                      By {themeCredit.credit}
+                    </a>
+                  ) : (
+                    <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
+                  )}
+                  {themeCredit.description ? (
+                    <span className="bottom-bar__theme-description">
+                      <span className="bottom-bar__theme-separator" aria-hidden="true">·</span>
+                      <span>{themeCredit.description}</span>
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--theme">
                 <ThemedSelect
@@ -341,65 +437,45 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
 
           <div className="bottom-bar__divider" />
 
-          <section className="bottom-bar__section bottom-bar__section--astra">
-            <div className="bottom-bar__section-title">Astra</div>
+          <section className="bottom-bar__section bottom-bar__section--now-playing">
+            <div className="bottom-bar__section-header bottom-bar__section-header--now-playing">
+              <div className="bottom-bar__section-title">Now Playing</div>
+              <div
+                className={`${nowPlayingErrorMessage ? 'bottom-bar__now-playing-summary is-error' : 'bottom-bar__now-playing-summary'}`.trim()}
+                title={nowPlayingDetail}
+              >
+                {nowPlayingDetail}
+              </div>
+            </div>
             <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--theme">
-                <input
-                  className="bottom-bar__text-input bottom-bar__text-input--url"
-                  type="text"
-                  value={astraBaseUrlInput}
-                  placeholder="Astra Base URL"
-                  onChange={(event) => setAstraBaseUrlInput(event.target.value)}
-                />
+              <div className="bottom-bar__inline bottom-bar__inline--now-playing">
+                <div className={`settings-status-pill ${currentNowPlayingProvider?.connectionState === 'disabled' || !currentNowPlayingProvider ? '' : `is-${currentNowPlayingProvider.connectionState}`}`.trim()}>
+                  <span className="settings-status-pill__dot" />
+                  <span>{nowPlayingStatusLabel}</span>
+                </div>
 
-                <input
-                  className="bottom-bar__text-input bottom-bar__text-input--token"
-                  type="password"
-                  value={astraTokenInput}
-                  placeholder="Astra API Token"
-                  onChange={(event) => setAstraTokenInput(event.target.value)}
-                />
+                {nowPlayingErrorMessage ? (
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      void handleRetryNowPlaying()
+                    }}
+                  >
+                    Retry
+                  </button>
+                ) : null}
 
                 <button
                   type="button"
                   className="settings-chip"
                   onClick={() => {
-                    void handleSaveAstraConfig()
+                    void openNowPlayingConfigWindow()
                   }}
                 >
-                  Save
+                  Configure...
                 </button>
-
-                <div className={`settings-status-pill ${astraState.connectionState === 'disabled' ? '' : `is-${astraState.connectionState}`}`.trim()}>
-                  <span className="settings-status-pill__dot" />
-                  <span>{astraStatusLabel}</span>
-                </div>
               </div>
-
-              {astraErrorMessage ? (
-                <>
-                  <div className="settings-error-text bottom-bar__error-text">{astraErrorMessage}</div>
-                  <div className="settings-inline-actions">
-                    <button
-                      type="button"
-                      className="settings-chip"
-                      onClick={() => {
-                        void handleRetryAstra()
-                      }}
-                    >
-                      Retry
-                    </button>
-                    <button
-                      type="button"
-                      className="settings-chip"
-                      onClick={() => setSettingsOpen(true)}
-                    >
-                      Open Settings
-                    </button>
-                  </div>
-                </>
-              ) : null}
             </div>
           </section>
 

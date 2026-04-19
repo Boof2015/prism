@@ -1,6 +1,10 @@
 import { audioRouter } from '../audio/AudioRouter'
 import { vectorscope as nativeVectorscope, isNativeAvailable } from '../audio/native'
-import { drawVectorscopeGridForMode, getVectorscopeLayout } from './vectorscopeGrids'
+import {
+  drawVectorscopeGridForMode,
+  getVectorscopeLayout,
+  transformPoint,
+} from './vectorscopeGrids'
 import { MultibandSplitter, MultibandBuffer, createMultibandChunk, type MultibandChunk } from './multibandSplitter'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
@@ -60,7 +64,6 @@ const defaultVectorscopeDataSource: VectorscopeDataSource = {
 }
 
 const BAND_ORDER = ['low', 'mid', 'high'] as const
-const INV_SQRT2 = 1 / Math.sqrt(2)
 
 export class Vectorscope {
   private canvas: HTMLCanvasElement
@@ -186,18 +189,20 @@ export class Vectorscope {
     this.invalidate()
   }
 
+  private getProjectionScale(radius: number): number {
+    return radius
+  }
+
   private drawFrame = (): void => {
     const { canvas, ctx, offscreenCanvas, offscreenCtx, options } = this
     const width = canvas.width
     const height = canvas.height
     if (width <= 0 || height <= 0) return
 
-    const isPolar = options.mode === 'polar-unipolar' || options.mode === 'polar-bipolar'
-    const visualGain = isPolar ? 1.2 : 1.5
     const layout = getVectorscopeLayout(width, height, options.mode)
     const centerX = layout.centerX
     const centerY = layout.centerY
-    const scale = layout.radius * visualGain
+    const scale = this.getProjectionScale(layout.radius)
 
     if (offscreenCanvas.width !== width || offscreenCanvas.height !== height) {
       offscreenCanvas.width = width
@@ -464,39 +469,12 @@ export class Vectorscope {
     scale: number,
     dotSize: number,
   ): void {
-    let dx: number
-    let dy: number
-
-    if (mode === 'lissajous') {
-      dx = right
-      dy = left
-    } else {
-      const mid = (left + right) * INV_SQRT2
-      const side = (right - left) * INV_SQRT2
-      const isUnipolar = mode === 'polar-unipolar' || mode === 'linear-unipolar'
-      if (isUnipolar && mid < 0) {
-        return
-      }
-
-      const isPolar = mode === 'polar-unipolar' || mode === 'polar-bipolar'
-      if (isPolar) {
-        const amplitudeSquared = (mid * mid) + (side * side)
-        if (amplitudeSquared < 1e-12) {
-          dx = 0
-          dy = 0
-        } else {
-          const amplitude = Math.sqrt(amplitudeSquared)
-          const scaledAmplitude = Math.pow(amplitude, 0.35)
-          const factor = scaledAmplitude / amplitude
-          dx = side * factor
-          dy = mid * factor
-        }
-      } else {
-        dx = side
-        dy = mid
-      }
+    const point = transformPoint(left, right, mode)
+    if (!point) {
+      return
     }
 
+    const { dx, dy } = point
     const px = centerX + dx * scale
     const py = centerY - dy * scale
     ctx.fillRect(px - dotSize / 2, py - dotSize / 2, dotSize, dotSize)

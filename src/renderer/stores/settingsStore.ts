@@ -7,7 +7,7 @@ import {
   type Profile,
   type ProfileLibrarySnapshot,
 } from '../../types/profile'
-import type { ScopeKind } from '../../types/scope'
+import { SCOPE_KINDS, type ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import {
   createDefaultProfile,
@@ -18,7 +18,7 @@ import {
   normalizeScopePopouts,
   normalizeWidthWeights,
 } from '../../shared/profileState'
-import { useThemeStore } from './themeStore'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { buildProfileDraft, profilesMatch } from './profileDraft'
 import { useUiStore } from './uiStore'
 
@@ -30,7 +30,6 @@ const ACTIVE_PROFILE_KEY = 'prism:activeProfile'
 const PROFILE_GEOMETRY_SYNC_WINDOW_MS = 800
 
 interface PersistedSettingsState {
-  themeId: string | null
   scopeOrder: ScopeKind[]
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>
@@ -40,7 +39,6 @@ interface PersistedSettingsState {
 }
 
 interface WorkingSettingsState {
-  themeId: string | null
   scopeOrder: ScopeKind[]
   hiddenScopes: Set<ScopeKind>
   widthWeights: Record<ScopeKind, number>
@@ -58,7 +56,6 @@ interface SettingsState extends WorkingSettingsState {
   geometrySyncUntil: number
   initializeProfiles: () => Promise<void>
   applyExternalProfileSnapshot: (snapshot: ProfileLibrarySnapshot) => void
-  setThemeId: (themeId: string | null) => void
   toggleScope: (kind: ScopeKind) => void
   moveDockedScope: (kind: ScopeKind, direction: 'left' | 'right') => void
   setScopeWidthWeight: (kind: ScopeKind, weight: number) => void
@@ -88,10 +85,63 @@ function canUseBrowserStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
 }
 
+function supportsWindowGeometryPersistence(): boolean {
+  return getRendererWindowCapabilities().supportsGeometryPersistence
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message
     ? error.message
     : fallback
+}
+
+function stripScopePopoutBounds(scopePopouts: ScopePopoutStateMap): ScopePopoutStateMap {
+  return SCOPE_KINDS.reduce((acc, kind) => {
+    acc[kind] = {
+      ...scopePopouts[kind],
+      windowBounds: undefined,
+    }
+    return acc
+  }, {} as ScopePopoutStateMap)
+}
+
+function buildPersistedScopePopouts(scopePopouts: ScopePopoutStateMap): ScopePopoutStateMap {
+  const normalizedScopePopouts = normalizeScopePopouts(scopePopouts)
+  return supportsWindowGeometryPersistence()
+    ? normalizedScopePopouts
+    : stripScopePopoutBounds(normalizedScopePopouts)
+}
+
+function restoreBaselineScopePopoutBounds(
+  scopePopouts: ScopePopoutStateMap,
+  baseline: Profile | null,
+): ScopePopoutStateMap {
+  if (supportsWindowGeometryPersistence() || !baseline) {
+    return scopePopouts
+  }
+
+  return SCOPE_KINDS.reduce((acc, kind) => {
+    acc[kind] = {
+      ...scopePopouts[kind],
+      windowBounds: baseline.scopePopouts[kind]?.windowBounds,
+    }
+    return acc
+  }, {} as ScopePopoutStateMap)
+}
+
+function restoreBaselineGeometry(
+  state: Pick<SettingsState, 'savedProfileBaseline'>,
+  workingState: WorkingSettingsState,
+): WorkingSettingsState {
+  if (supportsWindowGeometryPersistence()) {
+    return workingState
+  }
+
+  return {
+    ...workingState,
+    scopePopouts: restoreBaselineScopePopoutBounds(workingState.scopePopouts, state.savedProfileBaseline),
+    windowBounds: state.savedProfileBaseline?.windowBounds,
+  }
 }
 
 function loadFromStorage(): Partial<PersistedSettingsState> {
@@ -121,14 +171,18 @@ function saveToStorage(state: WorkingSettingsState): void {
   }
 
   try {
+    const scopePopouts = buildPersistedScopePopouts(state.scopePopouts)
+    const windowBounds = supportsWindowGeometryPersistence()
+      ? state.windowBounds
+      : undefined
+
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      themeId: state.themeId,
       scopeOrder: state.scopeOrder,
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: state.widthWeights,
       scopeSettings: state.scopeSettings,
-      scopePopouts: state.scopePopouts,
-      windowBounds: state.windowBounds,
+      scopePopouts,
+      windowBounds,
     }))
   } catch {
     // Ignore localStorage write failures.
@@ -140,8 +194,7 @@ function persistWorkingState(state: WorkingSettingsState): void {
 }
 
 function hasPersistedWorkingState(state: Partial<PersistedSettingsState>): boolean {
-  return 'themeId' in state
-    || 'scopeOrder' in state
+  return 'scopeOrder' in state
     || 'hiddenScopes' in state
     || 'widthWeights' in state
     || 'scopeSettings' in state
@@ -179,24 +232,10 @@ function clearLegacyProfileStorage(): void {
   }
 }
 
-function normalizeLoadedProfileForBaseline(profile: Profile, activeProfileId: string | null): Profile {
-  const normalizedProfile = normalizeProfile(profile, profile.name)
-  if (activeProfileId !== DEFAULT_PROFILE_ID || normalizedProfile.themeId) {
-    return normalizedProfile
-  }
-
-  const activeThemeId = useThemeStore.getState().activeThemeId
-  return normalizeProfile({
-    ...normalizedProfile,
-    themeId: activeThemeId,
-  }, normalizedProfile.name)
-}
-
 function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
   const normalizedProfile = normalizeProfile(profile, profile.name)
 
   return {
-    themeId: normalizedProfile.themeId,
     scopeOrder: normalizeScopeOrder(normalizedProfile.scopeOrder),
     hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(normalizedProfile.hiddenScopes)),
     widthWeights: normalizeWidthWeights(normalizedProfile.widthWeights),
@@ -208,15 +247,14 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
 
 function createWorkingStateFromPersistedState(state: Partial<PersistedSettingsState>): WorkingSettingsState {
   return {
-    themeId: typeof state.themeId === 'string' && state.themeId.trim()
-      ? state.themeId.trim()
-      : null,
     scopeOrder: normalizeScopeOrder(state.scopeOrder),
     hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(state.hiddenScopes)),
     widthWeights: normalizeWidthWeights(state.widthWeights),
     scopeSettings: mergeScopeSettings(state.scopeSettings),
-    scopePopouts: normalizeScopePopouts(state.scopePopouts),
-    windowBounds: state.windowBounds,
+    scopePopouts: buildPersistedScopePopouts(normalizeScopePopouts(state.scopePopouts)),
+    windowBounds: supportsWindowGeometryPersistence()
+      ? state.windowBounds
+      : undefined,
   }
 }
 
@@ -332,13 +370,8 @@ function syncMissingBaselinePopoutBounds(
 }
 
 function applyLoadedProfileEffects(profile: Profile | null): void {
-  if (!profile) {
+  if (!profile || !supportsWindowGeometryPersistence()) {
     return
-  }
-
-  const { activeThemeId, themes, loadTheme } = useThemeStore.getState()
-  if (profile.themeId && profile.themeId !== activeThemeId && themes[profile.themeId]) {
-    void loadTheme(profile.themeId)
   }
 
   if (profile.windowBounds && canUseElectronAPI()) {
@@ -349,7 +382,7 @@ function applyLoadedProfileEffects(profile: Profile | null): void {
 function syncCurrentMainWindowBounds(
   set: (updater: (state: SettingsState) => SettingsState) => void,
 ): void {
-  if (!canUseElectronAPI()) {
+  if (!canUseElectronAPI() || !supportsWindowGeometryPersistence()) {
     return
   }
 
@@ -388,7 +421,7 @@ function applyProfileSnapshot(
     ? snapshot.profiles[snapshot.activeProfileId] ?? null
     : null
   const baselineProfile = activeProfile
-    ? normalizeLoadedProfileForBaseline(activeProfile, snapshot.activeProfileId)
+    ? normalizeProfile(activeProfile, activeProfile.name)
     : null
 
   set((state) => {
@@ -472,12 +505,7 @@ async function restoreSavedProfileBaseline(
     return
   }
 
-  const currentThemeId = useThemeStore.getState().activeThemeId
-  if (baseline.themeId && baseline.themeId !== currentThemeId && useThemeStore.getState().themes[baseline.themeId]) {
-    await useThemeStore.getState().loadTheme(baseline.themeId)
-  }
-
-  if (baseline.windowBounds && canUseElectronAPI()) {
+  if (baseline.windowBounds && canUseElectronAPI() && supportsWindowGeometryPersistence()) {
     window.electronAPI.setWindowBounds(baseline.windowBounds)
   }
 
@@ -493,7 +521,9 @@ async function restoreSavedProfileBaseline(
     return nextState
   })
 
-  syncCurrentMainWindowBounds(set)
+  if (supportsWindowGeometryPersistence()) {
+    syncCurrentMainWindowBounds(set)
+  }
 }
 
 const stored = loadFromStorage()
@@ -536,34 +566,29 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const hasStoredWorkingState = hasPersistedWorkingState(storedWorkingState)
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: !hasStoredWorkingState })
     if (hasStoredWorkingState) {
-      set((state) => commitWorkingState(
-        state,
-        createWorkingStateFromPersistedState(storedWorkingState),
-        state.savedProfileBaseline,
-      ))
+      set((state) => {
+        const nextWorkingState = restoreBaselineGeometry(
+          state,
+          createWorkingStateFromPersistedState(storedWorkingState),
+        )
+        return commitWorkingState(state, nextWorkingState, state.savedProfileBaseline)
+      })
 
-      // Restore window position: use the working-state bounds (last known position,
-      // possibly dirty) or fall back to the saved profile's bounds if none exist.
-      const state = get()
-      const boundsToApply = state.windowBounds ?? state.savedProfileBaseline?.windowBounds ?? null
-      if (boundsToApply) {
-        window.electronAPI.setWindowBounds(boundsToApply)
-      }
-      syncCurrentMainWindowBounds(set)
-      const { themeId } = state
-      const { themes, loadTheme, activeThemeId } = useThemeStore.getState()
-      if (themeId && themeId !== activeThemeId && themes[themeId]) {
-        void loadTheme(themeId)
+      if (supportsWindowGeometryPersistence()) {
+        // Restore window position: use the working-state bounds (last known position,
+        // possibly dirty) or fall back to the saved profile's bounds if none exist.
+        const state = get()
+        const boundsToApply = state.windowBounds ?? state.savedProfileBaseline?.windowBounds ?? null
+        if (boundsToApply) {
+          window.electronAPI.setWindowBounds(boundsToApply)
+        }
+        syncCurrentMainWindowBounds(set)
       }
     }
   },
 
   applyExternalProfileSnapshot: (snapshot: ProfileLibrarySnapshot) => {
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: true })
-  },
-
-  setThemeId: (themeId: string | null) => {
-    set((state) => commitWorkingState(state, { themeId }))
   },
 
   toggleScope: (kind: ScopeKind) => {
@@ -657,6 +682,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => {
     set((state) => {
+      if (!supportsWindowGeometryPersistence()) {
+        return state
+      }
+
       const isSyncingGeometry = isWithinGeometrySyncWindow(state)
       const nextBaseline = syncMissingBaselinePopoutBounds(state, kind, bounds)
       const nextState = commitWorkingState(state, {
@@ -679,6 +708,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   updateMainWindowBounds: (bounds: WindowBounds) => {
     set((state) => {
+      if (!supportsWindowGeometryPersistence()) {
+        return state
+      }
+
       const isSyncingGeometry = isWithinGeometrySyncWindow(state)
       const nextBaseline = syncMissingBaselineWindowBounds(state, bounds)
       const nextState = commitWorkingState(state, { windowBounds: bounds }, nextBaseline)

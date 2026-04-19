@@ -1,5 +1,5 @@
 import { audioRouter } from '../audio/AudioRouter'
-import { resolveColorToRgb } from '../utils/color'
+import { parseColorToRgba, resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
@@ -215,7 +215,7 @@ function getHannWindow(size: number): Float32Array {
 
 type ColorStop = {
   at: number
-  color: [number, number, number]
+  color: [number, number, number, number]
 }
 
 const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
@@ -226,35 +226,57 @@ const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
 
 function isLegacyDefaultHeatColors(colors: [string, string, string]): boolean {
   return colors.every((color, index) => {
-    const left = resolveColorToRgb(color)
-    const right = resolveColorToRgb(LEGACY_DEFAULT_HEAT_COLORS[index])
-    return left.r === right.r && left.g === right.g && left.b === right.b
+    const left = parseColorToRgba(color)
+    const right = parseColorToRgba(LEGACY_DEFAULT_HEAT_COLORS[index])
+    return !!left
+      && !!right
+      && left.r === right.r
+      && left.g === right.g
+      && left.b === right.b
+      && Math.round(left.a * 255) === Math.round(right.a * 255)
   })
+}
+
+function resolveHeatColor(color: string, fallback: string): [number, number, number, number] {
+  const parsed = parseColorToRgba(color) ?? parseColorToRgba(fallback)
+  if (!parsed) {
+    return [0, 0, 0, 255]
+  }
+  return [parsed.r, parsed.g, parsed.b, Math.round(parsed.a * 255)]
+}
+
+function scaleHeatColor(color: [number, number, number, number], factor: number): [number, number, number, number] {
+  return [
+    Math.round(color[0] * factor),
+    Math.round(color[1] * factor),
+    Math.round(color[2] * factor),
+    Math.round(color[3] * factor),
+  ]
 }
 
 function buildHeatStops(colors: [string, string, string]): ColorStop[] {
   if (isLegacyDefaultHeatColors(colors)) {
     return [
-      { at: 0, color: [0, 0, 0] },
-      { at: 0.14, color: [15, 7, 33] },
-      { at: 0.32, color: [61, 11, 94] },
-      { at: 0.54, color: [163, 26, 121] },
-      { at: 0.74, color: [255, 82, 87] },
-      { at: 0.9, color: [255, 166, 63] },
-      { at: 1, color: [255, 241, 209] },
+      { at: 0, color: [0, 0, 0, 0] },
+      { at: 0.14, color: [15, 7, 33, 255] },
+      { at: 0.32, color: [61, 11, 94, 255] },
+      { at: 0.54, color: [163, 26, 121, 255] },
+      { at: 0.74, color: [255, 82, 87, 255] },
+      { at: 0.9, color: [255, 166, 63, 255] },
+      { at: 1, color: [255, 241, 209, 255] },
     ]
   }
 
-  const low = resolveColorToRgb(colors[0])
-  const mid = resolveColorToRgb(colors[1])
-  const high = resolveColorToRgb(colors[2])
+  const low = resolveHeatColor(colors[0], LEGACY_DEFAULT_HEAT_COLORS[0])
+  const mid = resolveHeatColor(colors[1], LEGACY_DEFAULT_HEAT_COLORS[1])
+  const high = resolveHeatColor(colors[2], LEGACY_DEFAULT_HEAT_COLORS[2])
 
   return [
-    { at: 0, color: [0, 0, 0] },
-    { at: 0.2, color: [Math.round(low.r * 0.5), Math.round(low.g * 0.5), Math.round(low.b * 0.5)] },
-    { at: 0.48, color: [low.r, low.g, low.b] },
-    { at: 0.76, color: [mid.r, mid.g, mid.b] },
-    { at: 1, color: [high.r, high.g, high.b] },
+    { at: 0, color: [0, 0, 0, 0] },
+    { at: 0.2, color: scaleHeatColor(low, 0.5) },
+    { at: 0.48, color: low },
+    { at: 0.76, color: mid },
+    { at: 1, color: high },
   ]
 }
 
@@ -262,9 +284,9 @@ function lerpChannel(start: number, end: number, amount: number): number {
   return Math.round(start + ((end - start) * amount))
 }
 
-function buildHeatLUT(colors: [string, string, string]): Uint8Array {
+function buildHeatLUT(colors: [string, string, string]): Uint8ClampedArray {
   const heatStops = buildHeatStops(colors)
-  const lut = new Uint8Array(256 * 3)
+  const lut = new Uint8ClampedArray(256 * 4)
 
   for (let index = 0; index < 256; index += 1) {
     const t = index / 255
@@ -282,9 +304,10 @@ function buildHeatLUT(colors: [string, string, string]): Uint8Array {
 
     const span = Math.max(1e-6, end.at - start.at)
     const amount = Math.max(0, Math.min(1, (t - start.at) / span))
-    lut[index * 3] = lerpChannel(start.color[0], end.color[0], amount)
-    lut[index * 3 + 1] = lerpChannel(start.color[1], end.color[1], amount)
-    lut[index * 3 + 2] = lerpChannel(start.color[2], end.color[2], amount)
+    lut[index * 4] = lerpChannel(start.color[0], end.color[0], amount)
+    lut[index * 4 + 1] = lerpChannel(start.color[1], end.color[1], amount)
+    lut[index * 4 + 2] = lerpChannel(start.color[2], end.color[2], amount)
+    lut[index * 4 + 3] = lerpChannel(start.color[3], end.color[3], amount)
   }
 
   return lut
@@ -315,7 +338,7 @@ export class Spectrogram {
   private columnValues = new Float32Array(0)
   private rawColumnValues = new Float32Array(0)
   private columnImageData: ImageData | null = null
-  private heatLut: Uint8Array
+  private heatLut: Uint8ClampedArray
 
   private lastWidth = 0
   private lastHeight = 0
@@ -443,7 +466,10 @@ export class Spectrogram {
     this.paintColumnImage(values)
 
     // Shift existing content left by 1 pixel
+    const previousCompositeOperation = this.waterfallCtx.globalCompositeOperation
+    this.waterfallCtx.globalCompositeOperation = 'copy'
     this.waterfallCtx.drawImage(this.waterfallCanvas, -1, 0)
+    this.waterfallCtx.globalCompositeOperation = previousCompositeOperation
 
     // Paint new column at right edge
     this.waterfallCtx.putImageData(this.columnImageData, width - 1, 0)
@@ -566,16 +592,16 @@ export class Spectrogram {
       const dataIndex = row * 4
 
       if (this.options.colorScheme === 'heat') {
-        imageData[dataIndex] = this.heatLut[lutIndex * 3]
-        imageData[dataIndex + 1] = this.heatLut[(lutIndex * 3) + 1]
-        imageData[dataIndex + 2] = this.heatLut[(lutIndex * 3) + 2]
+        imageData[dataIndex] = this.heatLut[lutIndex * 4]
+        imageData[dataIndex + 1] = this.heatLut[(lutIndex * 4) + 1]
+        imageData[dataIndex + 2] = this.heatLut[(lutIndex * 4) + 2]
+        imageData[dataIndex + 3] = Math.round(this.heatLut[(lutIndex * 4) + 3] * intensity)
       } else {
         imageData[dataIndex] = Math.round(tintR * intensity)
         imageData[dataIndex + 1] = Math.round(tintG * intensity)
         imageData[dataIndex + 2] = Math.round(tintB * intensity)
+        imageData[dataIndex + 3] = 255
       }
-
-      imageData[dataIndex + 3] = 255
     }
   }
 

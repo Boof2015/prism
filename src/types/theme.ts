@@ -5,7 +5,6 @@ export const THEME_FILE_VERSION = 2
 export const THEME_LOCAL_STATE_FORMAT = 'prism-theme-local'
 export const THEME_LOCAL_STATE_VERSION = 1
 export const LEGACY_THEME_MIGRATION_VERSION = 1
-export const DEFAULT_THEME_ID = 'theme_default'
 export const DEFAULT_THEME_NAME = 'Default'
 
 export type ThemeSectionName =
@@ -121,7 +120,7 @@ export interface ThemeWaveformTokens {
   guides?: string
 }
 
-export interface ThemeAstraTokens {
+export interface ThemeNowPlayingTokens {
   accent?: string
   background?: string
   surface?: string
@@ -135,8 +134,9 @@ export interface ThemeAstraTokens {
   statusError?: string
 }
 
+export type ThemeAstraTokens = ThemeNowPlayingTokens
+
 export interface PrismTheme {
-  id: string
   name: string
   credit?: string
   website?: string
@@ -151,7 +151,7 @@ export interface PrismTheme {
   vumeter: ThemeVUMeterTokens
   lufsmeter: ThemeLUFSMeterTokens
   waveform: ThemeWaveformTokens
-  astra: ThemeAstraTokens
+  nowPlaying: ThemeNowPlayingTokens
 }
 
 export interface PrismThemeLocalStateV1 {
@@ -162,7 +162,6 @@ export interface PrismThemeLocalStateV1 {
 }
 
 export interface ThemeSummary {
-  id: string
   name: string
   isDefault: boolean
 }
@@ -308,7 +307,7 @@ export interface ResolvedWaveformTheme {
   bandHigh: string
 }
 
-export interface ResolvedAstraTheme {
+export interface ResolvedNowPlayingTheme {
   accent: string
   text: string
   subtext: string
@@ -326,8 +325,9 @@ export interface ResolvedAstraTheme {
   statusError: string
 }
 
+export type ResolvedAstraTheme = ResolvedNowPlayingTheme
+
 export interface PrismResolvedTheme {
-  id: string
   name: string
   credit?: string
   website?: string
@@ -340,5 +340,5 @@ export interface PrismResolvedTheme {
   vumeter: ResolvedVUMeterTheme
   lufsmeter: ResolvedLUFSMeterTheme
   waveform: ResolvedWaveformTheme
-  astra: ResolvedAstraTheme
+  nowPlaying: ResolvedNowPlayingTheme
 }

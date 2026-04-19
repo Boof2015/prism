@@ -1,5 +1,4 @@
 import {
-  DEFAULT_THEME_ID,
   DEFAULT_THEME_NAME,
   LEGACY_THEME_MIGRATION_VERSION,
   THEME_FILE_FORMAT,
@@ -10,7 +9,7 @@ import {
   type PrismResolvedTheme,
   type PrismTheme,
   type PrismThemeLocalStateV1,
-  type ResolvedAstraTheme,
+  type ResolvedNowPlayingTheme,
   type ResolvedInterfaceTheme,
   type ResolvedLUFSMeterTheme,
   type ResolvedOscilloscopeTheme,
@@ -30,7 +29,7 @@ import {
   type ThemeVectorscopeTokens,
   type ThemeVUMeterTokens,
   type ThemeWaveformTokens,
-  type ThemeAstraTokens,
+  type ThemeNowPlayingTokens,
 } from '../types/theme'
 
 const DEFAULT_ACCENT = '#38bdf8'
@@ -159,7 +158,7 @@ const WAVEFORM_SCHEMA = {
   guides: 'guides',
 } as const satisfies SectionSchema<ThemeWaveformTokens>
 
-const ASTRA_SCHEMA = {
+const NOW_PLAYING_SCHEMA = {
   accent: 'accent',
   background: 'background',
   surface: 'surface',
@@ -171,7 +170,7 @@ const ASTRA_SCHEMA = {
   button_border: 'buttonBorder',
   status_ok: 'statusOk',
   status_error: 'statusError',
-} as const satisfies SectionSchema<ThemeAstraTokens>
+} as const satisfies SectionSchema<ThemeNowPlayingTokens>
 
 const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   app: 'app',
@@ -184,7 +183,8 @@ const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   vumeter: 'vumeter',
   lufsmeter: 'lufsmeter',
   waveform: 'waveform',
-  astra: 'astra',
+  now_playing: 'nowPlaying',
+  astra: 'nowPlaying',
 }
 
 const SECTION_LABEL_MAP: Record<ThemeSectionName, string> = {
@@ -198,7 +198,7 @@ const SECTION_LABEL_MAP: Record<ThemeSectionName, string> = {
   vumeter: 'VUMeter',
   lufsmeter: 'LUFSMeter',
   waveform: 'Waveform',
-  astra: 'Astra',
+  nowPlaying: 'Now Playing',
 }
 
 const SECTION_SCHEMAS = {
@@ -212,7 +212,7 @@ const SECTION_SCHEMAS = {
   vumeter: VUMETER_SCHEMA,
   lufsmeter: LUFSMETER_SCHEMA,
   waveform: WAVEFORM_SCHEMA,
-  astra: ASTRA_SCHEMA,
+  nowPlaying: NOW_PLAYING_SCHEMA,
 } as const
 
 interface RgbaColor {
@@ -421,7 +421,6 @@ function blendText(primary: string, muted: string, amount: number): string {
 
 function createEmptyTheme(): PrismTheme {
   return {
-    id: DEFAULT_THEME_ID,
     name: DEFAULT_THEME_NAME,
     app: {},
     controls: {},
@@ -433,7 +432,7 @@ function createEmptyTheme(): PrismTheme {
     vumeter: {},
     lufsmeter: {},
     waveform: {},
-    astra: {},
+    nowPlaying: {},
   }
 }
 
@@ -473,7 +472,6 @@ function normalizeSectionTokens<T extends SectionTokenMap>(
 
 export function createDefaultTheme(): PrismTheme {
   return normalizeTheme({
-    id: DEFAULT_THEME_ID,
     name: DEFAULT_THEME_NAME,
     credit: 'Prism',
     app: {
@@ -550,7 +548,7 @@ export function createDefaultTheme(): PrismTheme {
       bandMid: DEFAULT_BAND_MID,
       bandHigh: DEFAULT_BAND_HIGH,
     },
-    astra: {
+    nowPlaying: {
       accent: DEFAULT_ACCENT,
       background: 'rgba(4, 8, 12, 0.9)',
       surface: 'rgba(10, 16, 24, 0.92)',
@@ -563,16 +561,15 @@ export function createDefaultTheme(): PrismTheme {
       statusOk: DEFAULT_SUCCESS,
       statusError: DEFAULT_DANGER,
     },
-  }, DEFAULT_THEME_ID, DEFAULT_THEME_NAME)
+  }, DEFAULT_THEME_NAME)
 }
 
 function cloneTheme(theme: PrismTheme): PrismTheme {
   return JSON.parse(JSON.stringify(theme)) as PrismTheme
 }
 
-function createPresetTheme(id: string, name: string, accent: string): PrismTheme {
+function createPresetTheme(name: string, accent: string): PrismTheme {
   const base = cloneTheme(createDefaultTheme())
-  base.id = id
   base.name = name
   base.app.accent = accent
   base.controls.surfaceActive = withAlpha(accent, 0.12)
@@ -590,41 +587,35 @@ function createPresetTheme(id: string, name: string, accent: string): PrismTheme
   base.lufsmeter.track = withAlpha(accent, 0.08)
   base.lufsmeter.target = withAlpha(accent, 0.25)
   base.waveform.line = accent
-  base.astra.accent = accent
-  base.astra.progressFill = accent
-  return normalizeTheme(base, id, name)
+  base.nowPlaying.accent = accent
+  base.nowPlaying.progressFill = accent
+  return normalizeTheme(base, name)
 }
 
 export function createBundledThemes(): PrismTheme[] {
   return [
     createDefaultTheme(),
-    createPresetTheme('theme_graphite', 'Graphite', '#4fc3f7'),
-    createPresetTheme('theme_midnight', 'Midnight', '#4f9bff'),
-    createPresetTheme('theme_green', 'Green', '#4ade80'),
-    createPresetTheme('theme_purple', 'Purple', '#a78bfa'),
-    createPresetTheme('theme_rose', 'Rose', '#fb7185'),
+    createPresetTheme('Graphite', '#4fc3f7'),
+    createPresetTheme('Midnight', '#4f9bff'),
+    createPresetTheme('Green', '#4ade80'),
+    createPresetTheme('Purple', '#a78bfa'),
+    createPresetTheme('Rose', '#fb7185'),
   ]
 }
 
 export function normalizeTheme(
   raw: unknown,
-  fallbackId = DEFAULT_THEME_ID,
   fallbackName = DEFAULT_THEME_NAME,
 ): PrismTheme {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<PrismTheme>
     : {}
 
-  const id = typeof parsed.id === 'string' && parsed.id.trim()
-    ? parsed.id.trim()
-    : fallbackId
-
   const name = typeof parsed.name === 'string' && parsed.name.trim()
     ? parsed.name.trim()
     : fallbackName
 
   const normalized = createEmptyTheme()
-  normalized.id = id
   normalized.name = name
   normalized.credit = typeof parsed.credit === 'string' && parsed.credit.trim()
     ? parsed.credit.trim()
@@ -645,7 +636,11 @@ export function normalizeTheme(
   normalized.vumeter = normalizeSectionTokens(parsed.vumeter, VUMETER_SCHEMA)
   normalized.lufsmeter = normalizeSectionTokens(parsed.lufsmeter, LUFSMETER_SCHEMA)
   normalized.waveform = normalizeSectionTokens(parsed.waveform, WAVEFORM_SCHEMA)
-  normalized.astra = normalizeSectionTokens(parsed.astra, ASTRA_SCHEMA)
+  normalized.nowPlaying = normalizeSectionTokens(
+    (parsed as { nowPlaying?: unknown; astra?: unknown }).nowPlaying
+      ?? (parsed as { astra?: unknown }).astra,
+    NOW_PLAYING_SCHEMA,
+  )
   return normalized
 }
 
@@ -700,9 +695,8 @@ function parseSectionValue(section: ThemeSectionName, key: string): string | nul
   return mapped ?? null
 }
 
-function parseThemeContent(content: string, fallbackId: string, fallbackName: string): PrismTheme {
+function parseThemeContent(content: string, fallbackName: string): PrismTheme {
   const nextTheme = createEmptyTheme()
-  nextTheme.id = fallbackId
   nextTheme.name = fallbackName
 
   let currentSection: ThemeSectionName | 'theme' | null = null
@@ -741,12 +735,6 @@ function parseThemeContent(content: string, fallbackId: string, fallbackName: st
           }
           break
         }
-        case 'id':
-          nextTheme.id = value
-          break
-        case 'name':
-          nextTheme.name = value
-          break
         case 'credit':
           nextTheme.credit = value
           break
@@ -775,15 +763,45 @@ function parseThemeContent(content: string, fallbackId: string, fallbackName: st
     getSectionTokenRecord(nextTheme, currentSection)[tokenKey] = toCssColor(quantizeThemeColor(parsedColor))
   }
 
-  return normalizeTheme(nextTheme, fallbackId, fallbackName)
+  return normalizeTheme(nextTheme, fallbackName)
+}
+
+export function extractLegacyThemeFileId(content: string): string | null {
+  let currentSection: ThemeSectionName | 'theme' | null = null
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue
+
+    const sectionMatch = /^\[(.+)\]$/.exec(line)
+    if (sectionMatch) {
+      const sectionKey = normalizeKey(sectionMatch[1] ?? '')
+      currentSection = sectionKey === 'theme'
+        ? 'theme'
+        : (SECTION_KEY_MAP[sectionKey] ?? null)
+      continue
+    }
+
+    if (currentSection !== 'theme') continue
+
+    const equalsIndex = line.indexOf('=')
+    if (equalsIndex === -1) continue
+
+    const key = normalizeKey(line.slice(0, equalsIndex))
+    const value = line.slice(equalsIndex + 1).trim()
+    if (key !== 'id' || !value) continue
+
+    return value
+  }
+
+  return null
 }
 
 export function parseThemeFileContent(
   content: string,
-  fallbackId: string,
   fallbackName = DEFAULT_THEME_NAME,
 ): PrismTheme {
-  return parseThemeContent(content, fallbackId, fallbackName)
+  return parseThemeContent(content, fallbackName)
 }
 
 function serializeSection<T extends SectionTokenMap>(
@@ -806,14 +824,22 @@ function serializeSection<T extends SectionTokenMap>(
   return lines
 }
 
+function commentExampleTokens(lines: string[]): string[] {
+  return lines.map((line) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';') || /^\[.+\]$/.test(trimmed)) {
+      return line
+    }
+    return `# ${line}`
+  })
+}
+
 export function serializeThemeFile(theme: PrismTheme): string {
-  const normalized = normalizeTheme(theme, theme.id, theme.name)
+  const normalized = normalizeTheme(theme, theme.name)
   const sections: string[] = [
     '[Theme]',
     `format = ${THEME_FILE_FORMAT}`,
     `version = ${THEME_FILE_VERSION}`,
-    `id = ${normalized.id}`,
-    `name = ${normalized.name}`,
   ]
 
   if (normalized.credit) sections.push(`credit = ${normalized.credit}`)
@@ -834,129 +860,130 @@ export function serializeThemeFile(theme: PrismTheme): string {
 
 export function createTemplateThemeFile(): string {
   const base = createDefaultTheme()
+  const resolved = resolveTheme(base)
   const themeSection = [
     '[Theme]',
     `format = ${THEME_FILE_FORMAT}`,
     `version = ${THEME_FILE_VERSION}`,
-    'id = theme_template',
-    'name = Template Theme',
-    'credit = Your Name',
-    'website = https://example.com',
-    'description = Custom Prism theme',
+    '# Optional metadata:',
+    '# credit = Your Name',
+    '# website = https://example.com',
+    '# description = Custom Prism theme',
+  ]
+  const appSection = [
+    '[App]',
+    '# Start here. These are the main palette tokens.',
+    `accent = ${toThemeChannels(base.app.accent ?? DEFAULT_ACCENT)}`,
+    `background = ${toThemeChannels(base.app.background ?? 'rgb(0, 0, 0)')}`,
+    `surface = ${toThemeChannels(base.app.surface ?? 'rgba(8, 11, 16, 0.92)')}`,
+    `surface_alt = ${toThemeChannels(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)')}`,
+    `border = ${toThemeChannels(base.app.border ?? 'rgba(255, 255, 255, 0.09)')}`,
+    `text = ${toThemeChannels(base.app.text ?? 'rgb(255, 255, 255)')}`,
+    '',
+    '# Optional palette extras:',
+    ...commentExampleTokens([
+      `text_muted = ${toThemeChannels(base.app.textMuted ?? 'rgba(255, 255, 255, 0.42)')}`,
+      `success = ${toThemeChannels(base.app.success ?? DEFAULT_SUCCESS)}`,
+      `warning = ${toThemeChannels(base.app.warning ?? DEFAULT_WARNING)}`,
+      `danger = ${toThemeChannels(base.app.danger ?? DEFAULT_DANGER)}`,
+    ]),
+    '',
+    '# Optional shell overrides:',
+    ...commentExampleTokens([
+      `toolbar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.78))}`,
+      `settings_bg_top = ${toThemeChannels(base.app.surface ?? 'rgba(8, 11, 16, 0.92)')}`,
+      `settings_bg_bottom = ${toThemeChannels(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)')}`,
+      `bottom_bar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.98))}`,
+    ]),
   ]
 
-  const appSection = serializeSection('App', {
-    accent: base.app.accent,
-    success: base.app.success,
-    warning: base.app.warning,
-    danger: base.app.danger,
-    background: base.app.background,
-    surface: base.app.surface,
-    surfaceAlt: base.app.surfaceAlt,
-    border: base.app.border,
-    text: base.app.text,
-    textMuted: base.app.textMuted,
-  }, APP_SCHEMA as SectionSchema<Record<string, string | undefined>>)
-
-  appSection.push(
-    '# Optional shell overrides:',
-    `# toolbar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.78))}`,
-    `# settings_bg_top = ${toThemeChannels(base.app.surface ?? 'rgba(8, 11, 16, 0.92)')}`,
-    `# settings_bg_bottom = ${toThemeChannels(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)')}`,
-    `# bottom_bar_bg = ${toThemeChannels(withAlpha(base.app.surfaceAlt ?? 'rgba(4, 8, 12, 0.98)', 0.98))}`,
-  )
-
-  const controlsSection = serializeSection('Controls', {
+  const controlsSection = commentExampleTokens(serializeSection('Controls', {
     ...base.controls,
     flatControls: 'false',
-  }, CONTROLS_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  }, CONTROLS_SCHEMA as SectionSchema<Record<string, string | undefined>>))
+  controlsSection.splice(1, 0, '# Entire section optional. Uncomment tokens here only if you want to override Prism defaults.')
 
-  const scopesSection = serializeSection('Scopes', { ...base.scopes }, SCOPES_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const scopesSection = commentExampleTokens(
+    serializeSection('Scopes', { ...base.scopes }, SCOPES_SCHEMA as SectionSchema<Record<string, string | undefined>>),
+  )
+  scopesSection.splice(1, 0, '# Entire section optional. Uncomment tokens here only if you want to override Prism defaults.')
 
-  const spectrumSection = serializeSection('Spectrum', {
-    line: base.spectrum.line,
-    sideLine: base.spectrum.sideLine,
-    fill: base.spectrum.fill,
-    heatLow: base.spectrum.heatLow,
-    heatMid: base.spectrum.heatMid,
-    heatHigh: base.spectrum.heatHigh,
-    heatBase: base.scopes.background,
-  }, SPECTRUM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const spectrumSection = commentExampleTokens(serializeSection('Spectrum', {
+    ...base.spectrum,
+    background: resolved.spectrum.background,
+    guides: resolved.spectrum.guides,
+    labels: resolved.spectrum.labels,
+    heatBase: resolved.spectrum.heatBase,
+  }, SPECTRUM_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const oscilloscopeSection = serializeSection('Oscilloscope', {
-    line: base.oscilloscope.line,
-    fill: base.oscilloscope.fill,
-  }, OSCILLOSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const oscilloscopeSection = commentExampleTokens(serializeSection('Oscilloscope', {
+    ...base.oscilloscope,
+    background: resolved.oscilloscope.background,
+    guides: resolved.oscilloscope.guides,
+  }, OSCILLOSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const vectorscopeSection = serializeSection('Vectorscope', {
-    trace: base.vectorscope.trace,
-    bandLow: base.vectorscope.bandLow,
-    bandMid: base.vectorscope.bandMid,
-    bandHigh: base.vectorscope.bandHigh,
-    labels: base.scopes.guides,
-  }, VECTORSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const vectorscopeSection = commentExampleTokens(serializeSection('Vectorscope', {
+    ...base.vectorscope,
+    background: resolved.vectorscope.background,
+    guides: resolved.vectorscope.guides,
+    labels: resolved.vectorscope.labels,
+  }, VECTORSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const spectrogramSection = serializeSection('Spectrogram', {
-    mono: base.spectrogram.mono,
-    heatLow: base.spectrogram.heatLow,
-    heatMid: base.spectrogram.heatMid,
-    heatHigh: base.spectrogram.heatHigh,
-  }, SPECTROGRAM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const spectrogramSection = commentExampleTokens(serializeSection('Spectrogram', {
+    ...base.spectrogram,
+    background: resolved.spectrogram.background,
+  }, SPECTROGRAM_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const vumeterSection = serializeSection('VUMeter', {
-    level: base.vumeter.level,
-    track: base.vumeter.track,
-    peak: base.vumeter.peak,
-    clip: base.vumeter.clip,
-    scale: base.scopes.guides,
-    labels: blendText(base.app.text ?? 'rgb(255, 255, 255)', base.app.textMuted ?? 'rgba(255, 255, 255, 0.42)', 0.35),
-  }, VUMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const vumeterSection = commentExampleTokens(serializeSection('VUMeter', {
+    ...base.vumeter,
+    background: resolved.vumeter.background,
+    scale: resolved.vumeter.scale,
+    labels: resolved.vumeter.labels,
+  }, VUMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const lufsmeterSection = serializeSection('LUFSMeter', {
-    level: base.lufsmeter.level,
-    track: base.lufsmeter.track,
-    target: base.lufsmeter.target,
-    scale: base.scopes.guides,
-    labels: blendText(base.app.text ?? 'rgb(255, 255, 255)', base.app.textMuted ?? 'rgba(255, 255, 255, 0.42)', 0.2),
-  }, LUFSMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const lufsmeterSection = commentExampleTokens(serializeSection('LUFSMeter', {
+    ...base.lufsmeter,
+    background: resolved.lufsmeter.background,
+    scale: resolved.lufsmeter.scale,
+    labels: resolved.lufsmeter.labels,
+  }, LUFSMETER_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const waveformSection = serializeSection('Waveform', {
-    line: base.waveform.line,
-    bandLow: base.waveform.bandLow,
-    bandMid: base.waveform.bandMid,
-    bandHigh: base.waveform.bandHigh,
-  }, WAVEFORM_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const waveformSection = commentExampleTokens(serializeSection('Waveform', {
+    ...base.waveform,
+    background: resolved.waveform.background,
+    guides: resolved.waveform.guides,
+  }, WAVEFORM_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
-  const astraSection = serializeSection('Astra', { ...base.astra }, ASTRA_SCHEMA as SectionSchema<Record<string, string | undefined>>)
+  const nowPlayingSection = commentExampleTokens(serializeSection(
+    'Now Playing',
+    { ...base.nowPlaying },
+    NOW_PLAYING_SCHEMA as SectionSchema<Record<string, string | undefined>>,
+  ))
 
   return `# Prism theme template
 #
 # Colors use R, G, B or R, G, B, A (0-255)
 # CSS colors like #hex, rgb(), and rgba() also work
 #
-# Theme metadata:
-# [Theme]
+# Start with [App].
+# Everything else below is optional and starts commented out.
+# Uncomment the tokens you want to customize and leave the rest commented to inherit defaults.
 #
-# Core UI:
-# [App]       Main palette for the window shell and text
-# [Controls]  Buttons, inputs, menus, sliders, and control chrome
+# [Controls] and [Scopes] are shared override groups.
+# Module sections show the full set of supported tokens for each module.
+# Spectrum and Spectrogram heat token alpha is honored directly.
+# Leave Spectrum heat_base commented unless you want an explicit underlay beneath the heatmap.
 #
-# Shared scope defaults:
-# [Scopes]    Background, guides, and overlays shared by all scopes
-#
-# Module overrides:
-# Add tokens inside each module section only when you want that module to
-# diverge from the shared defaults. Background/guides can still be added to
-# individual sections later even if they are not shown in this template.
-#
-# Set flat_controls = true to disable glass highlights/gradients.
+# Comment out any optional token to let Prism inherit or derive it.
+# Leave an entire optional section commented if that area should use Prism's defaults.
 #
 ${[
   themeSection.join('\n'),
   appSection.join('\n'),
   controlsSection.join('\n'),
   scopesSection.join('\n'),
-  '# Module overrides',
+  '# Module sections below are optional overrides.',
+  '# Uncomment the tokens you want to customize and leave the rest as examples.',
   spectrumSection.join('\n'),
   oscilloscopeSection.join('\n'),
   vectorscopeSection.join('\n'),
@@ -964,7 +991,7 @@ ${[
   vumeterSection.join('\n'),
   lufsmeterSection.join('\n'),
   waveformSection.join('\n'),
-  astraSection.join('\n'),
+  nowPlayingSection.join('\n'),
 ].join('\n\n')}
 `
 }
@@ -1171,7 +1198,7 @@ function resolveSpectrumTheme(
       section.heatMid ?? DEFAULT_HEAT_MID,
       section.heatHigh ?? DEFAULT_HEAT_HIGH,
     ],
-    heatBase: section.heatBase ?? background,
+    heatBase: section.heatBase ?? 'transparent',
   }
 }
 
@@ -1279,37 +1306,36 @@ function resolveAstraTheme(
   app: ResolvedAppTokens,
   controls: ResolvedControlsTokens,
   scopes: ResolvedScopesTokens,
-): ResolvedAstraTheme {
-  const accent = theme.astra.accent ?? app.accent
-  const text = theme.astra.text ?? app.text
-  const buttonBg = theme.astra.buttonSurface ?? controls.surface
+): ResolvedNowPlayingTheme {
+  const accent = theme.nowPlaying.accent ?? app.accent
+  const text = theme.nowPlaying.text ?? app.text
+  const buttonBg = theme.nowPlaying.buttonSurface ?? controls.surface
   return {
     accent,
     text,
     subtext: withAlpha(text, 0.7),
-    background: theme.astra.background ?? scopes.background,
-    surface: theme.astra.surface ?? 'rgba(10, 16, 24, 0.92)',
-    border: theme.astra.border ?? withAlpha(app.border, 0.9),
-    progressTrack: theme.astra.progressTrack ?? withAlpha(text, 0.18),
-    progressFill: theme.astra.progressFill ?? accent,
+    background: theme.nowPlaying.background ?? scopes.background,
+    surface: theme.nowPlaying.surface ?? 'rgba(10, 16, 24, 0.92)',
+    border: theme.nowPlaying.border ?? withAlpha(app.border, 0.9),
+    progressTrack: theme.nowPlaying.progressTrack ?? withAlpha(text, 0.18),
+    progressFill: theme.nowPlaying.progressFill ?? accent,
     buttonBg,
     buttonBgHover: withAlpha(mixColors(buttonBg, accent, 0.14), 0.94),
     buttonBgActive: withAlpha(accent, 0.16),
-    buttonBorder: theme.astra.buttonBorder ?? controls.border,
+    buttonBorder: theme.nowPlaying.buttonBorder ?? controls.border,
     buttonText: text,
-    statusOk: theme.astra.statusOk ?? app.success,
-    statusError: theme.astra.statusError ?? app.danger,
+    statusOk: theme.nowPlaying.statusOk ?? app.success,
+    statusError: theme.nowPlaying.statusError ?? app.danger,
   }
 }
 
 export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
-  const normalized = normalizeTheme(theme, theme.id, theme.name)
+  const normalized = normalizeTheme(theme, theme.name)
   const app = resolveAppTokens(normalized.app)
   const controls = resolveControlsTokens(normalized.controls, app)
   const scopes = resolveScopesTokens(normalized.scopes, app)
 
   return {
-    id: normalized.id,
     name: normalized.name,
     credit: normalized.credit,
     website: normalized.website,
@@ -1322,7 +1348,7 @@ export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
     vumeter: resolveVUMeterTheme(normalized, app, scopes),
     lufsmeter: resolveLUFSMeterTheme(normalized, app, scopes),
     waveform: resolveWaveformTheme(normalized, app, scopes),
-    astra: resolveAstraTheme(normalized, app, controls, scopes),
+    nowPlaying: resolveAstraTheme(normalized, app, controls, scopes),
   }
 }
 
@@ -1339,17 +1365,46 @@ export function resolveNativeThemeSource(theme: PrismTheme | null | undefined): 
 export function resolveLegacyThemeToPresetId(payload: LegacyThemeMigrationPayload): string | null {
   switch (payload.presetId) {
     case 'default':
-      return DEFAULT_THEME_ID
+      return DEFAULT_THEME_NAME
     case 'graphite':
-      return 'theme_graphite'
+      return 'Graphite'
     case 'midnight':
-      return 'theme_midnight'
+      return 'Midnight'
     case 'green':
-      return 'theme_green'
+      return 'Green'
     case 'purple':
-      return 'theme_purple'
+      return 'Purple'
     case 'rose':
-      return 'theme_rose'
+      return 'Rose'
+    default:
+      return null
+  }
+}
+
+export function resolveLegacyThemeFileId(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  switch (value.trim().toLowerCase()) {
+    case 'default':
+    case 'theme_default':
+      return DEFAULT_THEME_NAME
+    case 'graphite':
+    case 'theme_graphite':
+      return 'Graphite'
+    case 'midnight':
+    case 'theme_midnight':
+      return 'Midnight'
+    case 'green':
+    case 'theme_green':
+      return 'Green'
+    case 'purple':
+    case 'theme_purple':
+      return 'Purple'
+    case 'rose':
+    case 'theme_rose':
+      return 'Rose'
     default:
       return null
   }
@@ -1360,7 +1415,6 @@ export function createMigratedAccentTheme(accent: string): PrismTheme | null {
   if (!parsed) return null
 
   const base = cloneTheme(createDefaultTheme())
-  base.id = 'theme_migrated_accent'
   base.name = 'Migrated Accent'
   base.app.accent = toCssColor(parsed)
   base.controls.surfaceActive = withAlpha(base.app.accent, 0.12)
@@ -1378,9 +1432,9 @@ export function createMigratedAccentTheme(accent: string): PrismTheme | null {
   base.lufsmeter.track = withAlpha(base.app.accent, 0.08)
   base.lufsmeter.target = withAlpha(base.app.accent, 0.25)
   base.waveform.line = base.app.accent
-  base.astra.accent = base.app.accent
-  base.astra.progressFill = base.app.accent
-  return normalizeTheme(base, base.id, base.name)
+  base.nowPlaying.accent = base.app.accent
+  base.nowPlaying.progressFill = base.app.accent
+  return normalizeTheme(base, base.name)
 }
 
 export function themeToCssVariables(theme: Pick<PrismResolvedTheme, 'interface'>): Record<string, string> {
@@ -1451,7 +1505,7 @@ export function applyResolvedThemeToDocument(
 }
 
 export function getDefaultThemeIdForLocalState(): string {
-  return DEFAULT_THEME_ID
+  return DEFAULT_THEME_NAME
 }
 
 export function getLegacyThemeMigrationVersion(): number {

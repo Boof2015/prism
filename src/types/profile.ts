@@ -12,7 +12,6 @@ export const DEFAULT_PROFILE_NAME = 'Default'
 
 export interface Profile {
   name: string
-  themeId: string | null
   scopeOrder: ScopeKind[]
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>
@@ -44,7 +43,7 @@ export interface PrismProfileFileV2 {
   version: typeof PROFILE_FILE_VERSION
   id: string
   name: string
-  themeId: string | null
+  themeId?: string | null
   scopeOrder: ScopeKind[]
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>

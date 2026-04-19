@@ -3,6 +3,7 @@ import type { SpectrogramClarityMode, SpectrogramScaleMode } from './spectrogram
 import type { VUMeterMode, VUMeterOrientation } from './vumeter'
 import type { LUFSMeterMode } from './lufsmeter'
 import { DEFAULT_WAVEFORM_MODE, type WaveformMode } from './waveform'
+import { DEFAULT_SPECTRUM_PEAK_INFO_MODE, type SpectrumPeakInfoMode } from './spectrum'
 
 export interface ScopeSettings {
   spectrum: {
@@ -15,6 +16,7 @@ export interface ScopeSettings {
     smoothing: number
     fillGradient: boolean
     showSideLine: boolean
+    peakInfoMode: SpectrumPeakInfoMode
   }
   oscilloscope: {
     pitchLock: boolean
@@ -49,7 +51,7 @@ export interface ScopeSettings {
     gainDb: number
     multiband: boolean
   }
-  astra: {
+  nowPlaying: {
     showCoverArt: boolean
     showTitle: boolean
     showArtist: boolean
@@ -60,14 +62,14 @@ export interface ScopeSettings {
 }
 
 export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
-  spectrum: { fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, heatmapSmoothing: 0.5, showGrid: true, smoothing: 0.9, fillGradient: true, showSideLine: false },
+  spectrum: { fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, heatmapSmoothing: 0.5, showGrid: true, smoothing: 0.9, fillGradient: true, showSideLine: false, peakInfoMode: DEFAULT_SPECTRUM_PEAK_INFO_MODE },
   oscilloscope: { pitchLock: true, underfillEnabled: false, showGrid: true, lineWidth: 2 },
   vectorscope: { mode: 'lissajous', multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
   spectrogram: { fftSize: 2048, scrollSpeed: 2, clarityMode: 'sharper', scaleMode: 'log', colorScheme: 'heat' },
   vumeter: { mode: 'bar', orientation: 'horizontal' },
   lufsmeter: { mode: 'bar' },
   waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, gainDb: 0, multiband: false },
-  astra: {
+  nowPlaying: {
     showCoverArt: true,
     showTitle: true,
     showArtist: true,

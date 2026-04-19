@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, type CSSProperties, type JSX } from 'react'
+import type { NowPlayingProviderId } from '../../types/nowPlaying'
 import type { ScopeSettings } from '../../types/settings'
-import type { ResolvedAstraTheme } from '../../types/theme'
-import { useAstraStore } from '../stores/astraStore'
-import { useUiStore } from '../stores/uiStore'
+import type { ResolvedNowPlayingTheme } from '../../types/theme'
+import { useNowPlayingStore } from '../stores/nowPlayingStore'
 import { formatAstraTime, getAstraPlaybackProgress } from '../utils/astra'
+import { useUiStore } from '../stores/uiStore'
 
 interface AstraScopeModuleProps {
-  theme: ResolvedAstraTheme
-  settings: ScopeSettings['astra']
+  theme: ResolvedNowPlayingTheme
+  settings: ScopeSettings['nowPlaying']
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -16,7 +17,19 @@ function getErrorMessage(error: unknown, fallback: string): string {
     : fallback
 }
 
-function hasVisibleFields(settings: ScopeSettings['astra']): boolean {
+function isMacOSPlatform(platform: string): boolean {
+  return platform === 'darwin'
+}
+
+function isLinuxPlatform(platform: string): boolean {
+  return platform === 'linux'
+}
+
+function isWindowsPlatform(platform: string): boolean {
+  return platform === 'win32'
+}
+
+function hasVisibleFields(settings: ScopeSettings['nowPlaying']): boolean {
   return settings.showCoverArt
     || settings.showTitle
     || settings.showArtist
@@ -25,7 +38,55 @@ function hasVisibleFields(settings: ScopeSettings['astra']): boolean {
     || settings.showControls
 }
 
-function getFallbackTitle(connectionState: ReturnType<typeof useAstraStore.getState>['integrationState']['connectionState']): string {
+function getConfiguredProviderId(
+  state: ReturnType<typeof useNowPlayingStore.getState>['nowPlayingState'],
+): NowPlayingProviderId | null {
+  return state.providerPriority.find((providerId) => {
+    const provider = state.providers[providerId]
+    return provider.available && provider.isConfigured
+  }) ?? null
+}
+
+function getFallbackTitle(
+  providerId: NowPlayingProviderId | null,
+  connectionState: 'disabled' | 'connecting' | 'connected' | 'error' | 'unavailable' | null,
+  platform: string,
+): string {
+  if (connectionState === null) {
+    return 'Nothing playing'
+  }
+
+  if (providerId === 'spotify') {
+    switch (connectionState) {
+      case 'disabled':
+        return 'Spotify is idle'
+      case 'connecting':
+        return 'Checking Spotify'
+      case 'error':
+        return 'Spotify connection failed'
+      case 'connected':
+        return 'Nothing playing'
+      case 'unavailable':
+        if (isMacOSPlatform(platform)) {
+          return 'Spotify unavailable'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Spotify MPRIS unavailable'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Spotify media session unavailable'
+        }
+
+        return 'Spotify unavailable'
+    }
+  }
+
+  if (providerId !== 'astra') {
+    return 'Nothing playing'
+  }
+
   switch (connectionState) {
     case 'disabled':
       return 'Astra is off'
@@ -35,19 +96,98 @@ function getFallbackTitle(connectionState: ReturnType<typeof useAstraStore.getSt
       return 'Astra connection failed'
     case 'connected':
       return 'Nothing playing'
+    case 'unavailable':
+      return 'Provider unavailable'
   }
 }
 
-function getFallbackDetail(connectionState: ReturnType<typeof useAstraStore.getState>['integrationState']['connectionState']): string {
+function getFallbackDetail(
+  providerId: NowPlayingProviderId | null,
+  connectionState: 'disabled' | 'connecting' | 'connected' | 'error' | 'unavailable' | null,
+  platform: string,
+): string {
+  if (connectionState === null) {
+    return ''
+  }
+
+  if (providerId === 'spotify') {
+    switch (connectionState) {
+      case 'disabled':
+        if (isMacOSPlatform(platform)) {
+          return 'Open Spotify on this Mac to show local playback here.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Open Spotify on this Linux desktop to show local playback here.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Open Spotify on this PC to show local playback here.'
+        }
+
+        return 'Open Spotify to show local playback here.'
+      case 'connecting':
+        if (isMacOSPlatform(platform)) {
+          return 'Waiting for the local Spotify app.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Waiting for the local Spotify MPRIS session.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Waiting for the local Windows media session.'
+        }
+
+        return 'Waiting for the local Spotify integration.'
+      case 'error':
+        if (isMacOSPlatform(platform)) {
+          return 'Check Spotify access in System Settings > Privacy & Security > Automation.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Check that your Linux desktop session exposes Spotify over MPRIS.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Check that Windows media controls can see a Spotify session.'
+        }
+
+        return 'Check that Spotify is available through the local system media controls.'
+      case 'connected':
+        return ''
+      case 'unavailable':
+        if (isMacOSPlatform(platform)) {
+          return 'Install Spotify.app to enable this provider.'
+        }
+
+        if (isLinuxPlatform(platform)) {
+          return 'Linux desktop media controls are unavailable for Spotify on this system.'
+        }
+
+        if (isWindowsPlatform(platform)) {
+          return 'Windows system media controls are unavailable for Spotify on this system.'
+        }
+
+        return 'This local Spotify integration is currently available on macOS, Linux, and Windows.'
+    }
+  }
+
+  if (providerId !== 'astra') {
+    return ''
+  }
+
   switch (connectionState) {
     case 'disabled':
-      return 'Open the Astra scope to connect.'
+      return 'Open the Now Playing configuration to connect Astra.'
     case 'connecting':
       return 'Waiting for the Astra API.'
     case 'error':
       return 'Check the Astra base URL and token.'
     case 'connected':
       return ''
+    case 'unavailable':
+      return 'This provider is not available yet.'
   }
 }
 
@@ -55,26 +195,34 @@ export default function AstraScopeModule({
   theme,
   settings,
 }: AstraScopeModuleProps): JSX.Element {
-  const initialize = useAstraStore((s) => s.initialize)
-  const setScopeActive = useAstraStore((s) => s.setScopeActive)
-  const integrationState = useAstraStore((s) => s.integrationState)
-  const isSendingControl = useAstraStore((s) => s.isSendingControl)
-  const sendControl = useAstraStore((s) => s.sendControl)
-  const saveConfig = useAstraStore((s) => s.saveConfig)
-  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
+  const initialize = useNowPlayingStore((s) => s.initialize)
+  const nowPlayingState = useNowPlayingStore((s) => s.nowPlayingState)
+  const isSendingControl = useNowPlayingStore((s) => s.isSendingControl)
+  const sendControl = useNowPlayingStore((s) => s.sendControl)
+  const retryProvider = useNowPlayingStore((s) => s.retryProvider)
+  const openConfigWindow = useNowPlayingStore((s) => s.openConfigWindow)
   const showBanner = useUiStore((s) => s.showBanner)
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
     void initialize()
-    void setScopeActive(true)
-    return () => {
-      void setScopeActive(false)
-    }
-  }, [initialize, setScopeActive])
+  }, [initialize])
+
+  const configuredProviderId = useMemo(
+    () => getConfiguredProviderId(nowPlayingState),
+    [nowPlayingState],
+  )
+  const displayProviderId = nowPlayingState.activeProviderId ?? configuredProviderId
+  const providerState = displayProviderId
+    ? nowPlayingState.providers[displayProviderId]
+    : null
+  const providerDefinition = displayProviderId
+    ? nowPlayingState.definitions[displayProviderId]
+    : null
+  const platform = window.electronAPI.platform
 
   useEffect(() => {
-    if (integrationState.snapshot?.playbackState !== 'playing') {
+    if (providerState?.snapshot?.playbackState !== 'playing') {
       return
     }
 
@@ -85,17 +233,19 @@ export default function AstraScopeModule({
     return () => {
       window.clearInterval(timer)
     }
-  }, [integrationState.snapshot?.playbackState])
+  }, [providerState?.snapshot?.playbackState])
 
-  const snapshot = integrationState.snapshot
+  const snapshot = providerState?.snapshot ?? null
   const currentTrack = snapshot?.currentTrack ?? null
   const liveProgress = useMemo(
     () => getAstraPlaybackProgress(snapshot, nowMs),
     [nowMs, snapshot],
   )
-  const errorMessage = integrationState.lastError ?? integrationState.lastControlError
+  const errorMessage = providerState?.lastError ?? providerState?.lastControlError ?? null
   const detailMessage = currentTrack?.artist
-    ?? (integrationState.connectionState === 'connected' ? null : getFallbackDetail(integrationState.connectionState))
+    ?? (providerState?.connectionState === 'connected'
+      ? null
+      : getFallbackDetail(displayProviderId, providerState?.connectionState ?? null, platform))
   const style = {
     '--astra-accent': theme.accent,
     '--astra-bg': theme.background,
@@ -118,7 +268,29 @@ export default function AstraScopeModule({
     return (
       <div className="astra-scope astra-scope--empty" style={style}>
         <div className="astra-scope__placeholder">
-          All Astra elements are hidden.
+          All Now Playing elements are hidden.
+        </div>
+      </div>
+    )
+  }
+
+  if (nowPlayingState.onboardingRequired) {
+    return (
+      <div className="astra-scope astra-scope--empty" style={style}>
+        <div className="astra-scope__placeholder">
+          <div className="astra-scope__empty-title">Not configured</div>
+          <div className="astra-scope__empty-detail">
+            Set up a provider to show track metadata and playback controls here.
+          </div>
+          <button
+            type="button"
+            className="astra-scope__control astra-scope__control--primary"
+            onClick={() => {
+              void openConfigWindow()
+            }}
+          >
+            Set Up Now Playing
+          </button>
         </div>
       </div>
     )
@@ -153,8 +325,8 @@ export default function AstraScopeModule({
           {(settings.showTitle || settings.showArtist) && (
             <div className="astra-scope__meta">
               {settings.showTitle && (
-                <div className="astra-scope__title" title={currentTrack?.title ?? getFallbackTitle(integrationState.connectionState)}>
-                  {currentTrack?.title ?? getFallbackTitle(integrationState.connectionState)}
+                <div className="astra-scope__title" title={currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}>
+                  {currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}
                 </div>
               )}
               {settings.showArtist && detailMessage && (
@@ -190,7 +362,7 @@ export default function AstraScopeModule({
               <button
                 type="button"
                 className="astra-scope__control"
-                disabled={!currentTrack || isSendingControl}
+                disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
                 onClick={() => {
                   void sendControl('previous')
                 }}
@@ -202,7 +374,7 @@ export default function AstraScopeModule({
               <button
                 type="button"
                 className="astra-scope__control astra-scope__control--primary"
-                disabled={!currentTrack || isSendingControl}
+                disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
                 onClick={() => {
                   void sendControl(toggleCommand)
                 }}
@@ -214,7 +386,7 @@ export default function AstraScopeModule({
               <button
                 type="button"
                 className="astra-scope__control"
-                disabled={!currentTrack || isSendingControl}
+                disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
                 onClick={() => {
                   void sendControl('next')
                 }}
@@ -238,10 +410,14 @@ export default function AstraScopeModule({
                   type="button"
                   className="astra-scope__control"
                   onClick={() => {
-                    void saveConfig(integrationState.config).catch((error) => {
+                    if (!displayProviderId) {
+                      return
+                    }
+
+                    void retryProvider(displayProviderId).catch((error) => {
                       showBanner({
                         tone: 'error',
-                        message: getErrorMessage(error, 'Could not reconnect to Astra.'),
+                        message: getErrorMessage(error, 'Could not reconnect to the provider.'),
                         actions: [],
                       })
                     })
@@ -252,9 +428,11 @@ export default function AstraScopeModule({
                 <button
                   type="button"
                   className="astra-scope__control"
-                  onClick={() => setSettingsOpen(true)}
+                  onClick={() => {
+                    void openConfigWindow()
+                  }}
                 >
-                  Open Settings
+                  Configure
                 </button>
               </div>
             </>
