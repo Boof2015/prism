@@ -12,6 +12,7 @@ import { useAudioStore } from './stores/audioStore'
 import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
+import { getRendererWindowCapabilities } from './windowCapabilities'
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -36,6 +37,7 @@ export default function App(): JSX.Element {
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const showBanner = useUiStore((s) => s.showBanner)
+  const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
 
   const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
     && (scopeOrder.includes('nowPlaying') || scopePopouts.nowPlaying?.poppedOut === true)
@@ -180,15 +182,23 @@ export default function App(): JSX.Element {
   }, [setSettingsOpen])
 
   const handleAltDragStart = useCallback((event: React.MouseEvent) => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     if (event.altKey && event.button === 0) {
       event.preventDefault()
       window.electronAPI.startWindowMove()
     }
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleAltDragEnd = useCallback(() => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     window.electronAPI.stopWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   useEffect(() => {
     return () => {
@@ -204,8 +214,8 @@ export default function App(): JSX.Element {
       className="prism-app"
       onMouseEnter={showToolbar}
       onMouseLeave={scheduleHide}
-      onMouseDown={handleAltDragStart}
-      onMouseUp={handleAltDragEnd}
+      onMouseDown={useNativeDragRegions ? undefined : handleAltDragStart}
+      onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
     >
       <div
         className={`prism-toolbar-layer ${toolbarVisible ? 'is-visible' : ''}`.trim()}

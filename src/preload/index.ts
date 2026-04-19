@@ -28,15 +28,23 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
+import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import { getCaptureBackendSupport } from './captureSupport'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
+const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
+  platform: process.platform,
+  argv: process.argv,
+  env: process.env,
+})
 
 // Expose Electron API to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  windowCapabilities,
   minimize: () => ipcRenderer.send('window:minimize'),
   close: () => ipcRenderer.send('window:close'),
   startWindowMove: () => ipcRenderer.send('window:start-move'),

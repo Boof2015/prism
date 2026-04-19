@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUiStore } from '../stores/uiStore'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 
 function SettingsIcon(): JSX.Element {
   return (
@@ -78,6 +79,7 @@ interface ToolbarProps {
 }
 
 const DEFAULT_PROFILE_ID = 'profile_default'
+const WAYLAND_REPOSITION_UNAVAILABLE_MESSAGE = 'Top/bottom repositioning is unavailable on native Wayland.'
 
 function isToolbarInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof Element
@@ -107,6 +109,7 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const [showReposition, setShowReposition] = useState(false)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const profileButtonRef = useRef<HTMLButtonElement>(null)
+  const { useNativeDragRegions, supportsProgrammaticReposition } = getRendererWindowCapabilities()
 
   const showProfileErrorBanner = useCallback((error: unknown, fallback: string, includeOpenFolder = false) => {
     const actions = includeOpenFolder
@@ -138,6 +141,12 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     const unsubscribe = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    if (!supportsProgrammaticReposition && showReposition) {
+      setShowReposition(false)
+    }
+  }, [showReposition, supportsProgrammaticReposition])
 
   const handleSaveNew = useCallback(async () => {
     setIsProfileMenuOpen(false)
@@ -306,9 +315,13 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   }, [])
 
   const handleReposition = useCallback((position: 'top' | 'bottom') => {
+    if (!supportsProgrammaticReposition) {
+      return
+    }
+
     window.electronAPI.repositionWindow(position)
     setShowReposition(false)
-  }, [])
+  }, [supportsProgrammaticReposition])
 
   const handleOpenProfileMenu = useCallback(() => {
     const buttonRect = profileButtonRef.current?.getBoundingClientRect()
@@ -329,50 +342,58 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   }, [activeProfileId, profiles])
 
   const handleDragStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
-    if (event.button !== 0) return
+    if (useNativeDragRegions || event.button !== 0) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     window.electronAPI.startWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleDragEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     window.electronAPI.stopWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleToolbarDragStart = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (isToolbarInteractiveTarget(event.target) || event.button !== 0) return
+    if (useNativeDragRegions || isToolbarInteractiveTarget(event.target) || event.button !== 0) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     window.electronAPI.startWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   const handleToolbarDragEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (useNativeDragRegions) {
+      return
+    }
+
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     window.electronAPI.stopWindowMove()
-  }, [])
+  }, [useNativeDragRegions])
 
   const activeProfile = activeProfileId ? profiles[activeProfileId] : null
 
   return (
     <div
-      className="toolbar"
-      onPointerDown={handleToolbarDragStart}
-      onPointerUp={handleToolbarDragEnd}
-      onPointerCancel={handleToolbarDragEnd}
-      onLostPointerCapture={handleToolbarDragEnd}
+      className={`toolbar ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}
+      onPointerDown={useNativeDragRegions ? undefined : handleToolbarDragStart}
+      onPointerUp={useNativeDragRegions ? undefined : handleToolbarDragEnd}
+      onPointerCancel={useNativeDragRegions ? undefined : handleToolbarDragEnd}
+      onLostPointerCapture={useNativeDragRegions ? undefined : handleToolbarDragEnd}
     >
       <button
         type="button"
-        className="toolbar__grab"
-        onPointerDown={handleDragStart}
-        onPointerUp={handleDragEnd}
-        onPointerCancel={handleDragEnd}
-        onLostPointerCapture={handleDragEnd}
+        className={`toolbar__grab ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}
+        onPointerDown={useNativeDragRegions ? undefined : handleDragStart}
+        onPointerUp={useNativeDragRegions ? undefined : handleDragEnd}
+        onPointerCancel={useNativeDragRegions ? undefined : handleDragEnd}
+        onLostPointerCapture={useNativeDragRegions ? undefined : handleDragEnd}
         title="Drag window"
         aria-label="Drag window"
       >
@@ -405,17 +426,21 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
       <div className="toolbar__spacer" />
 
       <div className="toolbar__actions">
-        <div className="toolbar__reposition-wrap">
+        <div
+          className="toolbar__reposition-wrap"
+          title={!supportsProgrammaticReposition ? WAYLAND_REPOSITION_UNAVAILABLE_MESSAGE : undefined}
+        >
           <button
             type="button"
             className={`toolbar__icon-button ${showReposition ? 'is-active' : ''}`.trim()}
             onClick={() => setShowReposition((prev) => !prev)}
-            title="Reposition window"
-            aria-label="Reposition window"
+            title={supportsProgrammaticReposition ? 'Reposition window' : WAYLAND_REPOSITION_UNAVAILABLE_MESSAGE}
+            aria-label={supportsProgrammaticReposition ? 'Reposition window' : WAYLAND_REPOSITION_UNAVAILABLE_MESSAGE}
+            disabled={!supportsProgrammaticReposition}
           >
             <RepositionIcon />
           </button>
-          {showReposition && (
+          {showReposition && supportsProgrammaticReposition && (
             <div className="toolbar__reposition-menu">
               <button
                 type="button"

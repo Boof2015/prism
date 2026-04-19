@@ -298,6 +298,11 @@ select {
   -webkit-backdrop-filter: blur(16px) saturate(1.05);
 }
 
+.toolbar.is-native-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
 .toolbar__grab {
   display: inline-flex;
   align-items: center;
@@ -311,6 +316,10 @@ select {
   cursor: grab;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
+}
+
+.toolbar__grab.is-native-drag {
+  -webkit-app-region: drag;
 }
 
 .toolbar__grab:active {
@@ -387,6 +396,7 @@ select {
   cursor: pointer;
   outline: none;
   transition: color 120ms ease, border-color 120ms ease;
+  -webkit-app-region: no-drag;
 }
 
 .toolbar__profile-button:hover,
@@ -420,6 +430,7 @@ select {
 
 .toolbar__reposition-wrap {
   position: relative;
+  -webkit-app-region: no-drag;
 }
 
 .toolbar__reposition-menu {
@@ -435,6 +446,7 @@ select {
   overflow: hidden;
   z-index: 20;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+  -webkit-app-region: no-drag;
 }
 
 .toolbar__reposition-option {
@@ -449,11 +461,17 @@ select {
   cursor: pointer;
   white-space: nowrap;
   transition: color 120ms ease, background-color 120ms ease;
+  -webkit-app-region: no-drag;
 }
 
 .toolbar__reposition-option:hover {
   color: var(--text-primary);
   background: var(--control-bg-hover);
+}
+
+.toolbar__reposition-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .toolbar__chip {
@@ -490,6 +508,7 @@ select {
   display: flex;
   align-items: center;
   gap: 6px;
+  -webkit-app-region: no-drag;
 }
 
 .toolbar__icon-button {
@@ -509,6 +528,7 @@ select {
     border-color 120ms ease,
     background-color 120ms ease,
     transform 120ms ease;
+  -webkit-app-region: no-drag;
 }
 
 .toolbar__icon-button svg {
@@ -516,7 +536,7 @@ select {
   height: 14px;
 }
 
-.toolbar__icon-button:hover {
+.toolbar__icon-button:hover:not(:disabled) {
   color: var(--control-text);
   border-color: var(--control-border-active);
   background: var(--control-bg-hover);
@@ -529,10 +549,16 @@ select {
   background: var(--control-bg-active);
 }
 
-.toolbar__icon-button--danger:hover {
+.toolbar__icon-button--danger:hover:not(:disabled) {
   color: var(--danger);
   border-color: var(--danger);
   background: var(--control-bg-hover);
+}
+
+.toolbar__icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+  transform: none;
 }
 
 .scope-strip {
@@ -1805,6 +1831,11 @@ select {
   background: var(--toolbar-bg);
 }
 
+.scope-popout__header.is-native-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
 .scope-popout__drag {
   flex: 1;
   min-width: 0;
@@ -1827,6 +1858,10 @@ select {
   color: inherit;
   cursor: grab;
   -webkit-app-region: no-drag;
+}
+
+.scope-popout__drag-handle.is-native-drag {
+  -webkit-app-region: drag;
 }
 
 .scope-popout__drag-handle:active {
@@ -1894,12 +1929,18 @@ select {
   height: 14px;
 }
 
-.scope-popout__button:hover,
+.scope-popout__button:hover:not(:disabled),
 .scope-popout__button.is-active {
   color: var(--accent);
   border-color: var(--control-border-active);
   background: var(--control-bg-active);
   transform: translateY(-1px);
+}
+
+.scope-popout__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+  transform: none;
 }
 
 .toolbar__profile-button:focus-visible,

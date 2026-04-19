@@ -3,6 +3,7 @@ import { audioRouter } from '../audio/AudioRouter'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { FrameScheduler } from '../visualizers/frameScheduler'
 import type {
   ScopePopoutAudioBatch,
@@ -81,6 +82,7 @@ export default function ScopePopoutBridge(): null {
   const flushScheduler = useMemo(() => new FrameScheduler({ frameTarget }), [])
   const activePopoutKindsRef = useRef<ScopeKind[]>(activePopoutKinds)
   const sessionStateRef = useRef(audioRouter.getSessionState())
+  const supportsGeometryPersistence = getRendererWindowCapabilities().supportsGeometryPersistence
 
   useEffect(() => {
     flushScheduler.setFrameTarget(frameTarget)
@@ -94,13 +96,15 @@ export default function ScopePopoutBridge(): null {
     const syncState = SCOPE_KINDS.reduce((acc, kind) => {
       acc[kind] = {
         shouldBeOpen: scopePopouts[kind]?.poppedOut === true && !hiddenScopes.has(kind),
-        bounds: scopePopouts[kind]?.windowBounds,
+        bounds: supportsGeometryPersistence
+          ? scopePopouts[kind]?.windowBounds
+          : undefined,
       }
       return acc
     }, {} as ScopePopoutSyncStateMap)
 
     window.electronAPI.syncScopePopouts(syncState)
-  }, [hiddenScopes, scopePopouts])
+  }, [hiddenScopes, scopePopouts, supportsGeometryPersistence])
 
   useEffect(() => {
     for (const kind of activePopoutKinds) {
@@ -128,6 +132,7 @@ export default function ScopePopoutBridge(): null {
       popInScope(kind)
     })
     const unsubscribeBoundsChanged = window.electronAPI.onScopePopoutBoundsChanged((kind, bounds) => {
+      if (!supportsGeometryPersistence) return
       updatePopoutBounds(kind, bounds)
     })
     const unsubscribeSettingsUpdate = window.electronAPI.onScopePopoutSettingsUpdate((kind, partial) => {
@@ -157,7 +162,7 @@ export default function ScopePopoutBridge(): null {
       unsubscribeSettingsUpdate()
       unsubscribeReady()
     }
-  }, [popInScope, updatePopoutBounds, updateScopeSettings])
+  }, [popInScope, supportsGeometryPersistence, updatePopoutBounds, updateScopeSettings])
 
   useEffect(() => {
     for (const kind of AUDIO_SCOPE_KINDS) {

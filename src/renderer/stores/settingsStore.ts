@@ -7,7 +7,7 @@ import {
   type Profile,
   type ProfileLibrarySnapshot,
 } from '../../types/profile'
-import type { ScopeKind } from '../../types/scope'
+import { SCOPE_KINDS, type ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import {
   createDefaultProfile,
@@ -18,6 +18,7 @@ import {
   normalizeScopePopouts,
   normalizeWidthWeights,
 } from '../../shared/profileState'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { buildProfileDraft, profilesMatch } from './profileDraft'
 import { useUiStore } from './uiStore'
 
@@ -84,10 +85,63 @@ function canUseBrowserStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
 }
 
+function supportsWindowGeometryPersistence(): boolean {
+  return getRendererWindowCapabilities().supportsGeometryPersistence
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message
     ? error.message
     : fallback
+}
+
+function stripScopePopoutBounds(scopePopouts: ScopePopoutStateMap): ScopePopoutStateMap {
+  return SCOPE_KINDS.reduce((acc, kind) => {
+    acc[kind] = {
+      ...scopePopouts[kind],
+      windowBounds: undefined,
+    }
+    return acc
+  }, {} as ScopePopoutStateMap)
+}
+
+function buildPersistedScopePopouts(scopePopouts: ScopePopoutStateMap): ScopePopoutStateMap {
+  const normalizedScopePopouts = normalizeScopePopouts(scopePopouts)
+  return supportsWindowGeometryPersistence()
+    ? normalizedScopePopouts
+    : stripScopePopoutBounds(normalizedScopePopouts)
+}
+
+function restoreBaselineScopePopoutBounds(
+  scopePopouts: ScopePopoutStateMap,
+  baseline: Profile | null,
+): ScopePopoutStateMap {
+  if (supportsWindowGeometryPersistence() || !baseline) {
+    return scopePopouts
+  }
+
+  return SCOPE_KINDS.reduce((acc, kind) => {
+    acc[kind] = {
+      ...scopePopouts[kind],
+      windowBounds: baseline.scopePopouts[kind]?.windowBounds,
+    }
+    return acc
+  }, {} as ScopePopoutStateMap)
+}
+
+function restoreBaselineGeometry(
+  state: Pick<SettingsState, 'savedProfileBaseline'>,
+  workingState: WorkingSettingsState,
+): WorkingSettingsState {
+  if (supportsWindowGeometryPersistence()) {
+    return workingState
+  }
+
+  return {
+    ...workingState,
+    scopePopouts: restoreBaselineScopePopoutBounds(workingState.scopePopouts, state.savedProfileBaseline),
+    windowBounds: state.savedProfileBaseline?.windowBounds,
+  }
 }
 
 function loadFromStorage(): Partial<PersistedSettingsState> {
@@ -117,13 +171,18 @@ function saveToStorage(state: WorkingSettingsState): void {
   }
 
   try {
+    const scopePopouts = buildPersistedScopePopouts(state.scopePopouts)
+    const windowBounds = supportsWindowGeometryPersistence()
+      ? state.windowBounds
+      : undefined
+
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       scopeOrder: state.scopeOrder,
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: state.widthWeights,
       scopeSettings: state.scopeSettings,
-      scopePopouts: state.scopePopouts,
-      windowBounds: state.windowBounds,
+      scopePopouts,
+      windowBounds,
     }))
   } catch {
     // Ignore localStorage write failures.
@@ -192,8 +251,10 @@ function createWorkingStateFromPersistedState(state: Partial<PersistedSettingsSt
     hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(state.hiddenScopes)),
     widthWeights: normalizeWidthWeights(state.widthWeights),
     scopeSettings: mergeScopeSettings(state.scopeSettings),
-    scopePopouts: normalizeScopePopouts(state.scopePopouts),
-    windowBounds: state.windowBounds,
+    scopePopouts: buildPersistedScopePopouts(normalizeScopePopouts(state.scopePopouts)),
+    windowBounds: supportsWindowGeometryPersistence()
+      ? state.windowBounds
+      : undefined,
   }
 }
 
@@ -309,7 +370,7 @@ function syncMissingBaselinePopoutBounds(
 }
 
 function applyLoadedProfileEffects(profile: Profile | null): void {
-  if (!profile) {
+  if (!profile || !supportsWindowGeometryPersistence()) {
     return
   }
 
@@ -321,7 +382,7 @@ function applyLoadedProfileEffects(profile: Profile | null): void {
 function syncCurrentMainWindowBounds(
   set: (updater: (state: SettingsState) => SettingsState) => void,
 ): void {
-  if (!canUseElectronAPI()) {
+  if (!canUseElectronAPI() || !supportsWindowGeometryPersistence()) {
     return
   }
 
@@ -444,7 +505,7 @@ async function restoreSavedProfileBaseline(
     return
   }
 
-  if (baseline.windowBounds && canUseElectronAPI()) {
+  if (baseline.windowBounds && canUseElectronAPI() && supportsWindowGeometryPersistence()) {
     window.electronAPI.setWindowBounds(baseline.windowBounds)
   }
 
@@ -460,7 +521,9 @@ async function restoreSavedProfileBaseline(
     return nextState
   })
 
-  syncCurrentMainWindowBounds(set)
+  if (supportsWindowGeometryPersistence()) {
+    syncCurrentMainWindowBounds(set)
+  }
 }
 
 const stored = loadFromStorage()
@@ -503,20 +566,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const hasStoredWorkingState = hasPersistedWorkingState(storedWorkingState)
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: !hasStoredWorkingState })
     if (hasStoredWorkingState) {
-      set((state) => commitWorkingState(
-        state,
-        createWorkingStateFromPersistedState(storedWorkingState),
-        state.savedProfileBaseline,
-      ))
+      set((state) => {
+        const nextWorkingState = restoreBaselineGeometry(
+          state,
+          createWorkingStateFromPersistedState(storedWorkingState),
+        )
+        return commitWorkingState(state, nextWorkingState, state.savedProfileBaseline)
+      })
 
-      // Restore window position: use the working-state bounds (last known position,
-      // possibly dirty) or fall back to the saved profile's bounds if none exist.
-      const state = get()
-      const boundsToApply = state.windowBounds ?? state.savedProfileBaseline?.windowBounds ?? null
-      if (boundsToApply) {
-        window.electronAPI.setWindowBounds(boundsToApply)
+      if (supportsWindowGeometryPersistence()) {
+        // Restore window position: use the working-state bounds (last known position,
+        // possibly dirty) or fall back to the saved profile's bounds if none exist.
+        const state = get()
+        const boundsToApply = state.windowBounds ?? state.savedProfileBaseline?.windowBounds ?? null
+        if (boundsToApply) {
+          window.electronAPI.setWindowBounds(boundsToApply)
+        }
+        syncCurrentMainWindowBounds(set)
       }
-      syncCurrentMainWindowBounds(set)
     }
   },
 
@@ -615,6 +682,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => {
     set((state) => {
+      if (!supportsWindowGeometryPersistence()) {
+        return state
+      }
+
       const isSyncingGeometry = isWithinGeometrySyncWindow(state)
       const nextBaseline = syncMissingBaselinePopoutBounds(state, kind, bounds)
       const nextState = commitWorkingState(state, {
@@ -637,6 +708,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   updateMainWindowBounds: (bounds: WindowBounds) => {
     set((state) => {
+      if (!supportsWindowGeometryPersistence()) {
+        return state
+      }
+
       const isSyncingGeometry = isWithinGeometrySyncWindow(state)
       const nextBaseline = syncMissingBaselineWindowBounds(state, bounds)
       const nextState = commitWorkingState(state, { windowBounds: bounds }, nextBaseline)

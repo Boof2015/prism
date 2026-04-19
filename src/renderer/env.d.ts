@@ -31,6 +31,7 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
 
 declare global {
@@ -39,6 +40,7 @@ declare global {
     nativeCaptureAPI: NativeCaptureAPI | null
     electronAPI: {
       platform: string
+      windowCapabilities: WindowCapabilities
       minimize: () => void
       close: () => void
       startWindowMove: () => void

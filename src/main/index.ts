@@ -20,6 +20,7 @@ import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
 import type { DialogOptions, DialogResult } from '../types/dialog'
 import { normalizeProfile } from '../shared/profileState'
 import { resolveNativeThemeSource } from '../shared/themeState'
+import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
   raiseWindowAboveNormalPopouts,
@@ -89,6 +90,11 @@ const NOW_PLAYING_CONFIG_DEFAULTS = {
 
 const MAIN_WINDOW_SYNC_SUPPRESSION_MS = 180
 const MAIN_WINDOW_VISIBLE_GRAB_MARGIN = 64
+const runtimeWindowCapabilities = resolveWindowCapabilities({
+  platform: process.platform,
+  argv: process.argv,
+  env: process.env,
+})
 
 function getProfileLibrary(): FileBackedProfileLibrary {
   if (!profileLibrary) {
@@ -234,7 +240,7 @@ async function syncNativeThemeAppearance(): Promise<void> {
 }
 
 function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
-  if (!isMainRendererWindow(window) || !mainRendererReady) return
+  if (!isMainRendererWindow(window) || !mainRendererReady || !supportsGeometryPersistence()) return
 
   if (mainWindowBoundsTimer) {
     clearTimeout(mainWindowBoundsTimer)
@@ -309,6 +315,14 @@ function getDisplayWorkAreas(): WindowBounds[] {
   }))
 }
 
+function supportsProgrammaticReposition(): boolean {
+  return runtimeWindowCapabilities.supportsProgrammaticReposition
+}
+
+function supportsGeometryPersistence(): boolean {
+  return runtimeWindowCapabilities.supportsGeometryPersistence
+}
+
 function suppressMainWindowSync(durationMs = MAIN_WINDOW_SYNC_SUPPRESSION_MS): void {
   suppressMainWindowSyncUntil = Math.max(suppressMainWindowSyncUntil, Date.now() + durationMs)
 }
@@ -349,9 +363,16 @@ function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getB
     return
   }
 
+  const x = supportsGeometryPersistence()
+    ? bounds.x
+    : mainWindowLogicalBounds?.x ?? 0
+  const y = supportsGeometryPersistence()
+    ? bounds.y
+    : mainWindowLogicalBounds?.y ?? 0
+
   mainWindowLogicalBounds = normalizeMainWindowBounds({
-    x: bounds.x,
-    y: bounds.y,
+    x,
+    y,
     width: bounds.width,
     height: Math.max(WINDOW_DEFAULTS.minHeight, bounds.height - getSettingsHeight(window)),
   })
@@ -361,7 +382,12 @@ function applyMainWindowLogicalBounds(window: BrowserWindow, bounds: WindowBound
   const logicalBounds = normalizeMainWindowBounds(bounds)
   mainWindowLogicalBounds = logicalBounds
   suppressMainWindowSync()
-  window.setBounds(resolveExpandedMainWindowBounds(logicalBounds, getSettingsHeight(window), getDisplayWorkAreas()))
+  const expandedBounds = resolveExpandedMainWindowBounds(logicalBounds, getSettingsHeight(window), getDisplayWorkAreas())
+  if (!supportsGeometryPersistence()) {
+    window.setSize(expandedBounds.width, expandedBounds.height)
+    return
+  }
+  window.setBounds(expandedBounds)
 }
 
 function applyLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
@@ -370,13 +396,24 @@ function applyLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
     return
   }
 
+  const nextHeight = bounds.height + getSettingsHeight(window)
+  if (!supportsGeometryPersistence()) {
+    window.setSize(bounds.width, nextHeight)
+    return
+  }
+
   window.setBounds({
     ...bounds,
-    height: bounds.height + getSettingsHeight(window),
+    height: nextHeight,
   })
 }
 
 function setWindowHeight(window: BrowserWindow, bounds: WindowBounds, height: number, y = bounds.y): void {
+  if (!supportsGeometryPersistence()) {
+    window.setSize(bounds.width, height)
+    return
+  }
+
   window.setBounds({
     x: bounds.x,
     y,
@@ -452,6 +489,10 @@ function applySettingsHeight(window: BrowserWindow, rawNextHeight: number): void
 }
 
 function raiseMainWindowAboveNormalPopouts(): void {
+  if (!supportsProgrammaticReposition()) {
+    return
+  }
+
   raiseWindowAboveNormalPopouts(mainWindow, scopePopoutWindows.values())
 }
 
@@ -792,7 +833,13 @@ function createMainWindow(): void {
 }
 
 function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
-  if (!mainWindow || mainWindow.isDestroyed() || window.isDestroyed() || !mainRendererReady) return
+  if (
+    !mainWindow
+    || mainWindow.isDestroyed()
+    || window.isDestroyed()
+    || !mainRendererReady
+    || !supportsGeometryPersistence()
+  ) return
 
   const existingTimer = popoutBoundsTimers.get(kind)
   if (existingTimer) {
@@ -844,19 +891,27 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     return existing
   }
 
-  const mainBounds = mainWindow.getBounds()
-  const fallbackBounds: WindowBounds = {
-    x: mainBounds.x + 40,
-    y: mainBounds.y + 40,
-    width: POPOUT_DEFAULTS.width,
-    height: POPOUT_DEFAULTS.height,
-  }
-  const bounds = normalizeBounds(rawBounds, fallbackBounds)
+  const shouldRestoreGeometry = supportsGeometryPersistence()
+  const mainBounds = shouldRestoreGeometry ? mainWindow.getBounds() : null
+  const fallbackBounds: WindowBounds = mainBounds
+    ? {
+        x: mainBounds.x + 40,
+        y: mainBounds.y + 40,
+        width: POPOUT_DEFAULTS.width,
+        height: POPOUT_DEFAULTS.height,
+      }
+    : {
+        x: Math.round(screen.getPrimaryDisplay().workArea.x + 48),
+        y: Math.round(screen.getPrimaryDisplay().workArea.y + 48),
+        width: POPOUT_DEFAULTS.width,
+        height: POPOUT_DEFAULTS.height,
+      }
+  const bounds = shouldRestoreGeometry
+    ? normalizeBounds(rawBounds, fallbackBounds)
+    : fallbackBounds
   suppressNextPopoutBoundsEvents.add(kind)
 
   const options: BrowserWindowConstructorOptions = {
-    x: bounds.x,
-    y: bounds.y,
     width: bounds.width,
     height: bounds.height,
     minWidth: POPOUT_DEFAULTS.minWidth,
@@ -878,6 +933,11 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
       nodeIntegration: false,
       backgroundThrottling: false,
     },
+  }
+
+  if (shouldRestoreGeometry) {
+    options.x = bounds.x
+    options.y = bounds.y
   }
 
   const popoutWindow = new BrowserWindow(options)
@@ -934,17 +994,19 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
     const popoutWindow = createScopePopoutWindow(kind, desired.bounds)
     if (!popoutWindow || popoutWindow.isDestroyed()) continue
 
-    const currentBounds = popoutWindow.getBounds()
-    const nextBounds = normalizeBounds(desired.bounds, currentBounds)
-    const hasBoundsDelta =
-      currentBounds.x !== nextBounds.x
-      || currentBounds.y !== nextBounds.y
-      || currentBounds.width !== nextBounds.width
-      || currentBounds.height !== nextBounds.height
+    if (supportsGeometryPersistence() && desired.bounds) {
+      const currentBounds = popoutWindow.getBounds()
+      const nextBounds = normalizeBounds(desired.bounds, currentBounds)
+      const hasBoundsDelta =
+        currentBounds.x !== nextBounds.x
+        || currentBounds.y !== nextBounds.y
+        || currentBounds.width !== nextBounds.width
+        || currentBounds.height !== nextBounds.height
 
-    if (hasBoundsDelta) {
-      suppressNextPopoutBoundsEvents.add(kind)
-      applyLogicalBounds(popoutWindow, nextBounds)
+      if (hasBoundsDelta) {
+        suppressNextPopoutBoundsEvents.add(kind)
+        applyLogicalBounds(popoutWindow, nextBounds)
+      }
     }
   }
 }
@@ -973,6 +1035,10 @@ function normalizeNowPlayingConfigBounds(raw: unknown, fallback: WindowBounds): 
 }
 
 function scheduleNowPlayingConfigBoundsSave(window: BrowserWindow): void {
+  if (!supportsGeometryPersistence()) {
+    return
+  }
+
   if (nowPlayingConfigBoundsTimer) {
     clearTimeout(nowPlayingConfigBoundsTimer)
   }
@@ -991,7 +1057,8 @@ function createNowPlayingConfigWindow(): BrowserWindow {
     return nowPlayingConfigWindow
   }
 
-  const anchorBounds = mainWindow?.getBounds()
+  const shouldRestoreGeometry = supportsGeometryPersistence()
+  const anchorBounds = shouldRestoreGeometry ? mainWindow?.getBounds() ?? null : null
   const fallbackBounds: WindowBounds = anchorBounds
     ? {
         x: anchorBounds.x + 40,
@@ -1005,14 +1072,14 @@ function createNowPlayingConfigWindow(): BrowserWindow {
         width: NOW_PLAYING_CONFIG_DEFAULTS.width,
         height: NOW_PLAYING_CONFIG_DEFAULTS.height,
       }
-  const bounds = normalizeNowPlayingConfigBounds(
-    getWindowStateStore().getNowPlayingConfigWindowBounds(),
-    fallbackBounds,
-  )
+  const bounds = shouldRestoreGeometry
+    ? normalizeNowPlayingConfigBounds(
+        getWindowStateStore().getNowPlayingConfigWindowBounds(),
+        fallbackBounds,
+      )
+    : fallbackBounds
 
-  nowPlayingConfigWindow = new BrowserWindow({
-    x: bounds.x,
-    y: bounds.y,
+  const options: BrowserWindowConstructorOptions = {
     width: bounds.width,
     height: bounds.height,
     minWidth: NOW_PLAYING_CONFIG_DEFAULTS.minWidth,
@@ -1032,7 +1099,14 @@ function createNowPlayingConfigWindow(): BrowserWindow {
       nodeIntegration: false,
       backgroundThrottling: false,
     },
-  })
+  }
+
+  if (shouldRestoreGeometry) {
+    options.x = bounds.x
+    options.y = bounds.y
+  }
+
+  nowPlayingConfigWindow = new BrowserWindow(options)
 
   const configWindow = nowPlayingConfigWindow
 
@@ -1091,6 +1165,10 @@ function setupIPC(): void {
   })
 
   ipcMain.on('window:start-move', (event) => {
+    if (!supportsProgrammaticReposition()) {
+      return
+    }
+
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
 
@@ -1415,6 +1493,10 @@ function setupIPC(): void {
   })
 
   ipcMain.handle('window:get-bounds', (event) => {
+    if (!supportsGeometryPersistence()) {
+      return null
+    }
+
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return null
 
@@ -1422,6 +1504,10 @@ function setupIPC(): void {
   })
 
   ipcMain.on('window:reposition', (event, position: 'top' | 'bottom') => {
+    if (!supportsProgrammaticReposition()) {
+      return
+    }
+
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
 

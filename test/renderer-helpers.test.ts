@@ -21,6 +21,7 @@ import {
 import {
   createDefaultProfile,
 } from '../src/shared/profileState'
+import { resolveWindowCapabilities } from '../src/shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
   raiseWindowAboveNormalPopouts,
@@ -85,12 +86,16 @@ import {
   DEFAULT_PROFILE_NAME,
   type Profile,
 } from '../src/types/profile'
+import type { WindowCapabilities } from '../src/types/windowCapabilities'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
+type FakeElectronAPI = {
+  platform: string
+  windowCapabilities: WindowCapabilities
+  [key: string]: unknown
+}
 type WindowWithTimers = typeof globalThis & Pick<Window, 'setTimeout' | 'clearTimeout'> & {
-  electronAPI: {
-    platform: string
-  }
+  electronAPI: FakeElectronAPI
 }
 type GlobalWithStorage = typeof globalThis & {
   localStorage?: Storage
@@ -154,7 +159,10 @@ function installFakeTimeouts(hidden = false): {
 
   globalWithWindow.window = {
     ...globalThis,
-    electronAPI: { platform: 'darwin' },
+    electronAPI: {
+      platform: 'darwin',
+      windowCapabilities: resolveWindowCapabilities({ platform: 'darwin' }),
+    },
     setTimeout(callback: TimerHandler, delay?: number): number {
       const timerId = nextTimerId
       nextTimerId += 1
@@ -349,8 +357,9 @@ function installFakeElectronWindow(overrides: Record<string, unknown> = {}): {
     ...globalThis,
     electronAPI: {
       platform: 'darwin',
+      windowCapabilities: resolveWindowCapabilities({ platform: 'darwin' }),
       ...overrides,
-    },
+    } as FakeElectronAPI,
   } as WindowWithTimers
 
   return {
@@ -2200,6 +2209,101 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
 })
 
+test('resolveWindowCapabilities detects native Wayland sessions on Linux', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'linux',
+      argv: [],
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+    {
+      displayServer: 'wayland',
+      useNativeDragRegions: true,
+      supportsProgrammaticReposition: false,
+      supportsGeometryPersistence: false,
+    },
+  )
+})
+
+test('resolveWindowCapabilities respects --ozone-platform=x11 in a Wayland session', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'linux',
+      argv: ['--ozone-platform=x11'],
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+        DISPLAY: ':0',
+      },
+    }),
+    {
+      displayServer: 'x11',
+      useNativeDragRegions: false,
+      supportsProgrammaticReposition: true,
+      supportsGeometryPersistence: true,
+    },
+  )
+})
+
+test('resolveWindowCapabilities detects X11 sessions on Linux', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'linux',
+      argv: [],
+      env: {
+        XDG_SESSION_TYPE: 'x11',
+        DISPLAY: ':0',
+      },
+    }),
+    {
+      displayServer: 'x11',
+      useNativeDragRegions: false,
+      supportsProgrammaticReposition: true,
+      supportsGeometryPersistence: true,
+    },
+  )
+})
+
+test('resolveWindowCapabilities leaves non-Linux platforms on the full-featured path', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'darwin',
+      argv: [],
+      env: {},
+    }),
+    {
+      displayServer: 'other',
+      useNativeDragRegions: false,
+      supportsProgrammaticReposition: true,
+      supportsGeometryPersistence: true,
+    },
+  )
+})
+
+test('Wayland window controls use native drag regions and omit unsupported reposition/geometry paths', async () => {
+  const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
+  const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
+  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
+  const nowPlayingSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'NowPlayingConfigWindow.tsx'), 'utf8')
+  const bridgeSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ScopePopoutBridge.tsx'), 'utf8')
+  const stripSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Strip.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  assert.match(toolbarSource, /WAYLAND_REPOSITION_UNAVAILABLE_MESSAGE/)
+  assert.match(toolbarSource, /disabled=\{!supportsProgrammaticReposition\}/)
+  assert.match(toolbarSource, /useNativeDragRegions \? 'is-native-drag' : ''/)
+  assert.match(appSource, /onMouseDown=\{useNativeDragRegions \? undefined : handleAltDragStart\}/)
+  assert.match(popoutSource, /scope-popout__header \$\{useNativeDragRegions \? 'is-native-drag' : ''\}/)
+  assert.match(nowPlayingSource, /now-playing-config__toolbar \$\{useNativeDragRegions \? 'is-native-drag' : ''\}/)
+  assert.match(bridgeSource, /bounds: supportsGeometryPersistence\s*\?\s*scopePopouts\[kind\]\?\.windowBounds\s*:\s*undefined/)
+  assert.match(stripSource, /if \(!supportsGeometryPersistence\) \{\s*popOutScope\(kind\)/)
+  assert.match(stylesSource, /\.toolbar\.is-native-drag \{/)
+  assert.match(stylesSource, /\.scope-popout__header\.is-native-drag \{/)
+})
+
 test('toggleScope appends now playing to the scope order when it is enabled from an opt-in profile', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeWindow = installFakeElectronWindow()
@@ -2320,6 +2424,36 @@ test('main-window bounds updates persist working state in Electron mode', () => 
   }
 })
 
+test('native Wayland main-window bounds updates do not dirty or persist geometry', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const fakeWindow = installFakeElectronWindow({
+    platform: 'linux',
+    windowCapabilities: resolveWindowCapabilities({
+      platform: 'linux',
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updateMainWindowBounds({ x: 24, y: 20, width: 900, height: 180 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.deepEqual(useSettingsStore.getState().windowBounds, profile.windowBounds)
+    assert.equal(fakeStorage.getSetCount(), 0)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
 test('initializeProfiles restores persisted dirty window bounds while keeping the saved profile as baseline', async () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeStorage = installFakeLocalStorage()
@@ -2364,6 +2498,85 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
     assert.deepEqual(state.savedProfileBaseline?.windowBounds, profile.windowBounds)
     assert.equal(state.hasUnsavedProfileChanges, true)
     assert.deepEqual(restoredBounds, [dirtyBounds])
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles ignores persisted geometry on native Wayland and keeps the saved profile clean', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const savedBounds = { x: 10, y: 20, width: 900, height: 180 }
+  const savedPopoutBounds = { x: 140, y: 60, width: 420, height: 240 }
+  const restoredBounds: WindowBounds[] = []
+  let getWindowBoundsCalls = 0
+  const fakeWindow = installFakeElectronWindow({
+    platform: 'linux',
+    windowCapabilities: resolveWindowCapabilities({
+      platform: 'linux',
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+    getProfileSnapshot: async () => {
+      const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+      profile.windowBounds = savedBounds
+      profile.scopePopouts.spectrum = {
+        poppedOut: true,
+        windowBounds: savedPopoutBounds,
+      }
+
+      return {
+        activeProfileId: DEFAULT_PROFILE_ID,
+        profiles: {
+          [DEFAULT_PROFILE_ID]: profile,
+        },
+      }
+    },
+    getWindowBounds: async () => {
+      getWindowBoundsCalls += 1
+      return { x: 44, y: 55, width: 900, height: 180 }
+    },
+    setWindowBounds: (bounds: WindowBounds) => {
+      restoredBounds.push(bounds)
+    },
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.windowBounds = savedBounds
+    profile.scopePopouts.spectrum = {
+      poppedOut: true,
+      windowBounds: savedPopoutBounds,
+    }
+
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      scopeOrder: profile.scopeOrder,
+      hiddenScopes: profile.hiddenScopes,
+      widthWeights: profile.widthWeights,
+      scopeSettings: profile.scopeSettings,
+      scopePopouts: {
+        ...profile.scopePopouts,
+        spectrum: {
+          poppedOut: true,
+          windowBounds: { x: 188, y: 92, width: 440, height: 260 },
+        },
+      },
+      windowBounds: { x: 44, y: 55, width: 900, height: 180 },
+    }))
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.activeProfileId, DEFAULT_PROFILE_ID)
+    assert.deepEqual(state.windowBounds, savedBounds)
+    assert.deepEqual(state.scopePopouts.spectrum.windowBounds, savedPopoutBounds)
+    assert.equal(state.hasUnsavedProfileChanges, false)
+    assert.deepEqual(restoredBounds, [])
+    assert.equal(getWindowBoundsCalls, 0)
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()
@@ -2625,6 +2838,39 @@ test('popout bounds updates persist working state in Electron mode', () => {
     useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 140, y: 60, width: 420, height: 240 })
     assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
     assert.equal(fakeStorage.getSetCount(), 3)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('native Wayland popout bounds updates do not dirty or persist geometry', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const fakeWindow = installFakeElectronWindow({
+    platform: 'linux',
+    windowCapabilities: resolveWindowCapabilities({
+      platform: 'linux',
+      env: {
+        XDG_SESSION_TYPE: 'wayland',
+        WAYLAND_DISPLAY: 'wayland-0',
+      },
+    }),
+  })
+
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    profile.scopePopouts.spectrum = {
+      poppedOut: true,
+      windowBounds: { x: 140, y: 60, width: 420, height: 240 },
+    }
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updatePopoutBounds('spectrum', { x: 156, y: 58, width: 420, height: 240 })
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+    assert.deepEqual(useSettingsStore.getState().scopePopouts.spectrum.windowBounds, profile.scopePopouts.spectrum.windowBounds)
+    assert.equal(fakeStorage.getSetCount(), 0)
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()
