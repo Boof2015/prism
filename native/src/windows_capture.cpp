@@ -10,11 +10,18 @@
 #include <mmreg.h>
 #include <propidl.h>
 #include <avrt.h>
+#include <roapi.h>
 #include <wrl/client.h>
 #include <windows.h>
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Media.Control.h>
+#include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -22,7 +29,9 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,6 +39,9 @@
 namespace {
 
 using Microsoft::WRL::ComPtr;
+using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession;
+using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
+using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus;
 
 constexpr size_t kMaxQueuedChunks = 256;
 constexpr size_t kDefaultDrainChunkLimit = 64;
@@ -119,6 +131,41 @@ std::string hresultMessage(const char* operation, HRESULT hr) {
     return stream.str();
 }
 
+std::string winrtErrorMessage(const char* operation, const winrt::hresult_error& error) {
+    std::string message = hresultMessage(operation, error.code().value);
+    const std::wstring detailWide = error.message().c_str();
+    const std::string detail = wideToUtf8(detailWide);
+    if (!detail.empty()) {
+        message += ": " + detail;
+    }
+    return message;
+}
+
+std::string toLowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return value;
+}
+
+std::string playbackStatusToString(GlobalSystemMediaTransportControlsSessionPlaybackStatus status) {
+    switch (status) {
+        case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing:
+            return "Playing";
+        case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Paused:
+            return "Paused";
+        case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Stopped:
+            return "Stopped";
+        case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Opened:
+            return "Opened";
+        case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Changing:
+            return "Changing";
+        case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Closed:
+        default:
+            return "Closed";
+    }
+}
+
 class ScopedCoInit {
 public:
     ScopedCoInit()
@@ -143,6 +190,160 @@ private:
     HRESULT hr_;
     bool usable_;
 };
+
+class ScopedRoInit {
+public:
+    ScopedRoInit()
+        : hr_(RoInitialize(RO_INIT_MULTITHREADED)),
+          usable_(SUCCEEDED(hr_) || hr_ == RPC_E_CHANGED_MODE) {}
+
+    ~ScopedRoInit() {
+        if (SUCCEEDED(hr_)) {
+            RoUninitialize();
+        }
+    }
+
+    bool usable() const {
+        return usable_;
+    }
+
+    HRESULT result() const {
+        return hr_;
+    }
+
+private:
+    HRESULT hr_;
+    bool usable_;
+};
+
+bool isSpotifySession(const GlobalSystemMediaTransportControlsSession& session) {
+    if (!session) {
+        return false;
+    }
+
+    const std::string sourceId = toLowerAscii(winrt::to_string(session.SourceAppUserModelId()));
+    return sourceId.find("spotify") != std::string::npos;
+}
+
+std::optional<GlobalSystemMediaTransportControlsSession> findSpotifySession(
+    const GlobalSystemMediaTransportControlsSessionManager& manager) {
+    const auto currentSession = manager.GetCurrentSession();
+    if (isSpotifySession(currentSession)) {
+        return currentSession;
+    }
+
+    for (const auto& session : manager.GetSessions()) {
+        if (isSpotifySession(session)) {
+            return session;
+        }
+    }
+
+    return std::nullopt;
+}
+
+Napi::Object createWindowsMediaSupport(
+    Napi::Env env, bool available, const std::string& reason = std::string()) {
+    Napi::Object support = Napi::Object::New(env);
+    support.Set("available", Napi::Boolean::New(env, available));
+    if (available || reason.empty()) {
+        support.Set("reason", env.Null());
+    } else {
+        support.Set("reason", Napi::String::New(env, reason));
+    }
+    return support;
+}
+
+static const char kBase64Chars[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string base64Encode(const std::vector<uint8_t>& data) {
+    std::string result;
+    result.reserve(((data.size() + 2) / 3) * 4);
+    for (size_t i = 0; i < data.size(); i += 3) {
+        const uint32_t b0 = data[i];
+        const uint32_t b1 = (i + 1 < data.size()) ? data[i + 1] : 0u;
+        const uint32_t b2 = (i + 2 < data.size()) ? data[i + 2] : 0u;
+        result += kBase64Chars[(b0 >> 2) & 0x3F];
+        result += kBase64Chars[((b0 << 4) | (b1 >> 4)) & 0x3F];
+        result += (i + 1 < data.size()) ? kBase64Chars[((b1 << 2) | (b2 >> 6)) & 0x3F] : '=';
+        result += (i + 2 < data.size()) ? kBase64Chars[b2 & 0x3F] : '=';
+    }
+    return result;
+}
+
+// Thumbnail is fetched on a background thread to avoid blocking the NAPI call
+// thread with cross-process WinRT async I/O.
+std::mutex s_thumbMutex;
+std::string s_thumbTrackKey;
+std::string s_thumbDataUrl;
+bool s_thumbFetching = false;
+
+void launchThumbnailFetch(
+    const std::string& trackKey,
+    winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
+    const auto thumbnailRef = props.Thumbnail();
+    if (!thumbnailRef) {
+        std::lock_guard<std::mutex> lock(s_thumbMutex);
+        s_thumbFetching = false;
+        return;
+    }
+    std::thread([trackKey, thumbnailRef]() {
+        std::string result;
+        try {
+            using winrt::Windows::Storage::Streams::DataReader;
+            const HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
+            if (SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE) {
+                const auto stream = thumbnailRef.OpenReadAsync().get();
+                const uint64_t size = stream.Size();
+                if (size > 0 && size <= 4u * 1024u * 1024u) {
+                    const auto reader = DataReader(stream);
+                    const uint32_t loaded = reader.LoadAsync(static_cast<uint32_t>(size)).get();
+                    if (loaded > 0) {
+                        std::vector<uint8_t> bytes(loaded);
+                        reader.ReadBytes(bytes);
+                        std::string mimeType = winrt::to_string(stream.ContentType());
+                        if (mimeType.empty()) {
+                            mimeType = "image/jpeg";
+                        }
+                        result = "data:" + mimeType + ";base64," + base64Encode(bytes);
+                    }
+                }
+                if (SUCCEEDED(hr)) {
+                    RoUninitialize();
+                }
+            }
+        } catch (...) {}
+        std::lock_guard<std::mutex> lock(s_thumbMutex);
+        if (s_thumbTrackKey == trackKey) {
+            s_thumbDataUrl = std::move(result);
+        }
+        s_thumbFetching = false;
+    }).detach();
+}
+
+std::string getOrFetchThumbnail(
+    const std::string& trackKey,
+    winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
+    bool shouldFetch = false;
+    std::string result;
+    {
+        std::lock_guard<std::mutex> lock(s_thumbMutex);
+        if (s_thumbTrackKey == trackKey) {
+            result = s_thumbDataUrl;
+        } else {
+            s_thumbTrackKey = trackKey;
+            s_thumbDataUrl.clear();
+            if (!s_thumbFetching) {
+                s_thumbFetching = true;
+                shouldFetch = true;
+            }
+        }
+    }
+    if (shouldFetch) {
+        launchThumbnailFetch(trackKey, std::move(props));
+    }
+    return result;
+}
 
 std::string getDeviceId(IMMDevice* device) {
     if (device == nullptr) {
@@ -856,6 +1057,167 @@ Napi::Value WindowsNowMilliseconds(const Napi::CallbackInfo& info) {
     return Napi::Number::New(info.Env(), engine().NowMilliseconds());
 }
 
+Napi::Value WindowsMediaGetSupport(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    try {
+        ScopedRoInit init;
+        if (!init.usable()) {
+            throw std::runtime_error(
+                hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
+        }
+
+        auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        (void)manager;
+        return createWindowsMediaSupport(env, true);
+    } catch (const winrt::hresult_error& error) {
+        return createWindowsMediaSupport(
+            env,
+            false,
+            winrtErrorMessage(
+                "Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager::RequestAsync",
+                error));
+    } catch (const std::exception& error) {
+        return createWindowsMediaSupport(env, false, error.what());
+    }
+}
+
+Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    try {
+        ScopedRoInit init;
+        if (!init.usable()) {
+            throw std::runtime_error(
+                hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
+        }
+
+        const auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        const auto session = findSpotifySession(manager);
+        if (!session.has_value()) {
+            return env.Null();
+        }
+
+        const auto playbackInfo = session->GetPlaybackInfo();
+        const auto timeline = session->GetTimelineProperties();
+        const auto mediaProperties = session->TryGetMediaPropertiesAsync().get();
+
+        const auto durationMs = std::max<int64_t>(
+            0,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                timeline.EndTime() - timeline.StartTime())
+                .count());
+
+        // Position() is stamped at LastUpdatedTime(); extrapolate forward when playing.
+        int64_t positionMs;
+        if (playbackInfo.PlaybackStatus() ==
+            GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
+            const auto elapsed = winrt::clock::now() - timeline.LastUpdatedTime();
+            const auto extrapolated = timeline.Position() + elapsed;
+            positionMs = std::min(
+                durationMs,
+                std::max<int64_t>(
+                    0,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(extrapolated).count()));
+        } else {
+            positionMs = std::max<int64_t>(
+                0,
+                std::chrono::duration_cast<std::chrono::milliseconds>(timeline.Position())
+                    .count());
+        }
+
+        Napi::Object payload = Napi::Object::New(env);
+        payload.Set(
+            "playbackStatus",
+            Napi::String::New(
+                env, playbackStatusToString(playbackInfo.PlaybackStatus())));
+        payload.Set("positionMs", Napi::Number::New(env, static_cast<double>(positionMs)));
+        payload.Set("durationMs", Napi::Number::New(env, static_cast<double>(durationMs)));
+        payload.Set("title", Napi::String::New(env, winrt::to_string(mediaProperties.Title())));
+        payload.Set("artist", Napi::String::New(env, winrt::to_string(mediaProperties.Artist())));
+        payload.Set(
+            "album", Napi::String::New(env, winrt::to_string(mediaProperties.AlbumTitle())));
+        payload.Set(
+            "sourceAppUserModelId",
+            Napi::String::New(env, winrt::to_string(session->SourceAppUserModelId())));
+
+        const std::string trackKey =
+            winrt::to_string(mediaProperties.Title()) + "\n" +
+            winrt::to_string(mediaProperties.Artist());
+        const std::string artworkDataUrl = getOrFetchThumbnail(trackKey, mediaProperties);
+        payload.Set(
+            "artworkDataUrl",
+            artworkDataUrl.empty() ? env.Null() : Napi::String::New(env, artworkDataUrl));
+
+        return payload;
+    } catch (const winrt::hresult_error& error) {
+        Napi::Error::New(
+            env,
+            winrtErrorMessage(
+                "Windows.Media.Control.GlobalSystemMediaTransportControlsSession",
+                error))
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    } catch (const std::exception& error) {
+        Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+        return env.Null();
+    }
+}
+
+Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsString()) {
+        Napi::TypeError::New(env, "Expected a Spotify control command.").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    const std::string command = info[0].As<Napi::String>().Utf8Value();
+
+    try {
+        ScopedRoInit init;
+        if (!init.usable()) {
+            throw std::runtime_error(
+                hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
+        }
+
+        const auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        const auto session = findSpotifySession(manager);
+        if (!session.has_value()) {
+            throw std::runtime_error("Spotify is not running.");
+        }
+
+        bool accepted = false;
+        if (command == "play") {
+            accepted = session->TryPlayAsync().get();
+        } else if (command == "pause") {
+            accepted = session->TryPauseAsync().get();
+        } else if (command == "next") {
+            accepted = session->TrySkipNextAsync().get();
+        } else if (command == "previous") {
+            accepted = session->TrySkipPreviousAsync().get();
+        } else {
+            throw std::runtime_error("Unsupported Spotify control command.");
+        }
+
+        if (!accepted) {
+            throw std::runtime_error("Spotify did not allow Prism to complete that request.");
+        }
+
+        return Napi::Boolean::New(env, true);
+    } catch (const winrt::hresult_error& error) {
+        Napi::Error::New(
+            env,
+            winrtErrorMessage(
+                "Windows.Media.Control.GlobalSystemMediaTransportControlsSession",
+                error))
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    } catch (const std::exception& error) {
+        Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+        return env.Null();
+    }
+}
+
 }  // namespace
 
 void RegisterWindowsCapture(Napi::Env env, Napi::Object exports) {
@@ -868,6 +1230,16 @@ void RegisterWindowsCapture(Napi::Env env, Napi::Object exports) {
     captureExports.Set("drain", Napi::Function::New(env, WindowsDrain));
     captureExports.Set("nowMilliseconds", Napi::Function::New(env, WindowsNowMilliseconds));
     exports.Set("windowsCapture", captureExports);
+
+    Napi::Object mediaExports = Napi::Object::New(env);
+    mediaExports.Set("getSupport", Napi::Function::New(env, WindowsMediaGetSupport));
+    mediaExports.Set(
+        "getSpotifyPlaybackState",
+        Napi::Function::New(env, WindowsMediaGetSpotifyPlaybackState));
+    mediaExports.Set(
+        "sendSpotifyControl",
+        Napi::Function::New(env, WindowsMediaSendSpotifyControl));
+    exports.Set("windowsMedia", mediaExports);
 }
 
 #endif  // defined(_WIN32)

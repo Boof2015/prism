@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { MacSpotifyProvider } from '../src/main/services/macSpotifyProvider'
+import type {
+  NativeWindowsMediaAPI,
+  NativeWindowsSpotifyPlaybackState,
+} from '../src/types/nativeWindowsMedia'
 
 const DELIMITER = '\u001f'
 
@@ -46,26 +50,6 @@ function createLinuxStatusPayload(options: {
 }): string {
   const artists = options.artist ? `['${options.artist}']` : '[]'
   return `({'PlaybackStatus': <'${options.playbackState}'>, 'Metadata': <{'mpris:trackid': <objectpath '${options.trackId ?? '/com/spotify/track/123'}'>, 'mpris:length': <int64 ${options.durationUs ?? 0}>, 'mpris:artUrl': <'${options.artworkUrl ?? ''}'>, 'xesam:album': <'${options.album ?? ''}'>, 'xesam:artist': <${artists}>, 'xesam:title': <'${options.title ?? ''}'>, 'xesam:url': <'${options.trackUrl ?? ''}'>}>, 'Position': <int64 ${options.positionUs ?? 0}>},)`
-}
-
-function createWindowsStatusPayload(options: {
-  album?: string
-  artist?: string
-  durationMs?: number
-  playbackStatus: 'Playing' | 'Paused' | 'Stopped'
-  positionMs?: number
-  sourceAppUserModelId?: string
-  title?: string
-}): string {
-  return JSON.stringify({
-    album: options.album ?? '',
-    artist: options.artist ?? '',
-    durationMs: options.durationMs ?? 0,
-    playbackStatus: options.playbackStatus,
-    positionMs: options.positionMs ?? 0,
-    sourceAppUserModelId: options.sourceAppUserModelId ?? 'SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify',
-    title: options.title ?? '',
-  })
 }
 
 async function waitFor(predicate: () => boolean, message: string): Promise<void> {
@@ -134,6 +118,42 @@ class StubCommandRunner {
       throw this.error
     }
     return this.handler(command, args)
+  }
+}
+
+class StubWindowsMediaApi implements NativeWindowsMediaAPI {
+  calls: Array<{ kind: 'status' | 'control'; command?: string }> = []
+  controlError: Error | null = null
+  statusError: Error | null = null
+  support = {
+    available: true,
+    reason: null,
+  } as const
+
+  constructor(
+    private readonly playbackState: NativeWindowsSpotifyPlaybackState | null,
+  ) {}
+
+  getSupport() {
+    return this.support
+  }
+
+  getSpotifyPlaybackState(): NativeWindowsSpotifyPlaybackState | null {
+    this.calls.push({ kind: 'status' })
+    if (this.statusError) {
+      throw this.statusError
+    }
+
+    return this.playbackState
+  }
+
+  sendSpotifyControl(command: 'play' | 'pause' | 'next' | 'previous'): boolean {
+    this.calls.push({ kind: 'control', command })
+    if (this.controlError) {
+      throw this.controlError
+    }
+
+    return true
   }
 }
 
@@ -349,35 +369,35 @@ test('provider treats a missing Linux Spotify MPRIS session as idle', async () =
   }
 })
 
+test('provider stays unavailable on Windows when the native media API is not present', async () => {
+  const provider = new MacSpotifyProvider({
+    platform: 'win32',
+  })
+
+  try {
+    await provider.initialize()
+    assert.equal(provider.getProviderState().available, false)
+    assert.match(provider.getProviderState().lastError ?? '', /native Windows media integration is not available/)
+  } finally {
+    await provider.dispose()
+  }
+})
+
 test('provider reads Windows Spotify playback through system media controls and routes commands', async () => {
-  const runner = new StubCommandRunner((command, args) => {
-    assert.equal(command, 'powershell.exe')
-    const script = args.at(-1) ?? ''
-
-    if (script.includes('Write-Output "ready"')) {
-      return 'ready'
-    }
-    if (script.includes('ConvertTo-Json')) {
-      return createWindowsStatusPayload({
-        playbackStatus: 'Playing',
-        positionMs: 32000,
-        durationMs: 210000,
-        title: 'Song Windows',
-        artist: 'Artist Windows',
-        album: 'Album Windows',
-      })
-    }
-    if (script.includes('TrySkipNextAsync')) {
-      return 'ok'
-    }
-
-    throw new Error('unexpected powershell script')
+  const windowsMediaApi = new StubWindowsMediaApi({
+    playbackStatus: 'Playing',
+    positionMs: 32000,
+    durationMs: 210000,
+    title: 'Song Windows',
+    artist: 'Artist Windows',
+    album: 'Album Windows',
+    sourceAppUserModelId: 'SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify',
   })
 
   const provider = new MacSpotifyProvider({
-    commandRunner: (command, args) => runner.run(command, args),
     now: () => 3000,
     platform: 'win32',
+    windowsMediaApi,
   })
 
   try {
@@ -394,7 +414,7 @@ test('provider reads Windows Spotify playback through system media controls and 
     assert.equal(state.snapshot?.duration, 210)
 
     await provider.sendControl('next')
-    assert.ok(runner.calls.some((call) => (call.args.at(-1) ?? '').includes('TrySkipNextAsync')))
+    assert.ok(windowsMediaApi.calls.some((call) => call.kind === 'control' && call.command === 'next'))
   } finally {
     await provider.dispose()
   }

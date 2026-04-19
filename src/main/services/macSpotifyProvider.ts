@@ -9,6 +9,10 @@ import type {
   NowPlayingProviderState,
   NowPlayingSnapshot,
 } from '../../types/nowPlaying'
+import type {
+  NativeWindowsMediaAPI,
+  NativeWindowsSpotifyPlaybackState,
+} from '../../types/nativeWindowsMedia'
 import type { NowPlayingProviderService } from './nowPlayingProvider'
 
 type FetchLike = typeof fetch
@@ -24,6 +28,7 @@ interface MacSpotifyProviderOptions {
   now?: () => number
   platform?: NodeJS.Platform
   runner?: AppleScriptRunner
+  windowsMediaApi?: NativeWindowsMediaAPI | null
 }
 
 interface LocalSpotifyTrackSnapshot {
@@ -41,16 +46,6 @@ interface LocalSpotifySnapshot {
   duration: number
   currentTrack: LocalSpotifyTrackSnapshot | null
   updatedAt: number
-}
-
-interface WindowsSpotifyStatusPayload {
-  album?: unknown
-  artist?: unknown
-  durationMs?: unknown
-  playbackStatus?: unknown
-  sourceAppUserModelId?: unknown
-  title?: unknown
-  positionMs?: unknown
 }
 
 const FAST_POLL_MS = 1500
@@ -147,7 +142,7 @@ function normalizeSpotifyError(
     }
 
     if (/GlobalSystemMediaTransportControls|Windows\.Media\.Control|WinRT/i.test(message)) {
-      return new Error('Prism could not access Windows media controls for Spotify.')
+      return new Error(`Prism could not access Windows media controls for Spotify. ${message}`)
     }
   }
 
@@ -348,13 +343,10 @@ function parseLinuxSpotifyStatusOutput(output: string, now: () => number): Local
   }
 }
 
-function parseWindowsSpotifyStatusOutput(output: string, now: () => number): LocalSpotifySnapshot | null {
-  const trimmed = output.trim()
-  if (!trimmed || trimmed === 'null') {
-    return null
-  }
-
-  const payload = JSON.parse(trimmed) as WindowsSpotifyStatusPayload
+function parseWindowsSpotifyStatusPayload(
+  payload: Partial<NativeWindowsSpotifyPlaybackState>,
+  now: () => number,
+): LocalSpotifySnapshot | null {
   const title = normalizeString(typeof payload.title === 'string' ? payload.title : '')
   const artist = normalizeString(typeof payload.artist === 'string' ? payload.artist : '')
   const album = normalizeString(typeof payload.album === 'string' ? payload.album : '')
@@ -371,6 +363,10 @@ function parseWindowsSpotifyStatusOutput(output: string, now: () => number): Loc
       : 0,
   )
 
+  const artworkUrl = typeof payload.artworkDataUrl === 'string' && payload.artworkDataUrl
+    ? payload.artworkDataUrl
+    : null
+
   const currentTrack = title && artist
     ? {
         id: sourceAppUserModelId
@@ -380,7 +376,7 @@ function parseWindowsSpotifyStatusOutput(output: string, now: () => number): Loc
         artist,
         album,
         isFavorite: false,
-        artworkUrl: null,
+        artworkUrl,
       } satisfies LocalSpotifyTrackSnapshot
     : null
 
@@ -588,95 +584,6 @@ function buildLinuxCommandArgs(busName: string, command: NowPlayingControlComman
   ]
 }
 
-function buildWindowsPowerShellArgs(script: string): string[] {
-  return [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-Command',
-    script,
-  ]
-}
-
-function buildWindowsPowerShellPrelude(): string[] {
-  return [
-    '$ErrorActionPreference = "Stop"',
-    'Add-Type -AssemblyName System.Runtime.WindowsRuntime',
-    '[void][Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime]',
-    '[void][System.WindowsRuntimeSystemExtensions]',
-    'function Await-WinRT($operation) { return [System.WindowsRuntimeSystemExtensions]::AsTask($operation).GetAwaiter().GetResult() }',
-    'function Get-SpotifySession {',
-    '  $manager = Await-WinRT ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync())',
-    '  $currentSession = $manager.GetCurrentSession()',
-    '  if ($currentSession -and $currentSession.SourceAppUserModelId -match "spotify") {',
-    '    return $currentSession',
-    '  }',
-    '  return $manager.GetSessions() | Where-Object { $_.SourceAppUserModelId -match "spotify" } | Select-Object -First 1',
-    '}',
-  ]
-}
-
-function buildWindowsProbeScript(): string {
-  return [
-    ...buildWindowsPowerShellPrelude(),
-    '$null = Get-SpotifySession',
-    'Write-Output "ready"',
-  ].join('\n')
-}
-
-function buildWindowsStatusScript(): string {
-  return [
-    ...buildWindowsPowerShellPrelude(),
-    '$session = Get-SpotifySession',
-    'if (-not $session) {',
-    '  Write-Output "null"',
-    '  exit 0',
-    '}',
-    '$timeline = $session.GetTimelineProperties()',
-    '$playbackInfo = $session.GetPlaybackInfo()',
-    '$mediaProperties = Await-WinRT ($session.TryGetMediaPropertiesAsync())',
-    '$payload = [PSCustomObject]@{',
-    '  playbackStatus = [string]$playbackInfo.PlaybackStatus',
-    '  positionMs = [double]$timeline.Position.TotalMilliseconds',
-    '  durationMs = [double](($timeline.EndTime - $timeline.StartTime).TotalMilliseconds)',
-    '  title = [string]$mediaProperties.Title',
-    '  artist = [string]$mediaProperties.Artist',
-    '  album = [string]$mediaProperties.AlbumTitle',
-    '  sourceAppUserModelId = [string]$session.SourceAppUserModelId',
-    '}',
-    '$payload | ConvertTo-Json -Compress',
-  ].join('\n')
-}
-
-function buildWindowsControlScript(command: NowPlayingControlCommand): string {
-  const methodName = (() => {
-    switch (command) {
-      case 'play':
-        return 'TryPlayAsync'
-      case 'pause':
-        return 'TryPauseAsync'
-      case 'next':
-        return 'TrySkipNextAsync'
-      case 'previous':
-        return 'TrySkipPreviousAsync'
-    }
-  })()
-
-  return [
-    ...buildWindowsPowerShellPrelude(),
-    '$session = Get-SpotifySession',
-    'if (-not $session) {',
-    '  throw "Spotify is not running."',
-    '}',
-    `$result = Await-WinRT ($session.${methodName}())`,
-    'if (-not $result) {',
-    '  throw "Spotify did not allow Prism to complete that request."',
-    '}',
-    'Write-Output "ok"',
-  ].join('\n')
-}
-
 export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
   readonly providerId = 'spotify'
 
@@ -687,6 +594,7 @@ export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
   private readonly now: () => number
   private readonly platform: NodeJS.Platform
   private readonly runner: AppleScriptRunner
+  private readonly windowsMediaApi: NativeWindowsMediaAPI | null
   private readonly listeners = new Set<() => void>()
   private readonly activeConsumers = new Set<number>()
 
@@ -708,6 +616,7 @@ export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
     this.now = options.now ?? (() => Date.now())
     this.platform = options.platform ?? process.platform
     this.runner = options.runner ?? defaultAppleScriptRunner
+    this.windowsMediaApi = options.windowsMediaApi ?? null
   }
 
   async initialize(): Promise<void> {
@@ -861,18 +770,30 @@ export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
     }
 
     if (this.platform === 'win32') {
-      try {
-        await this.commandRunner('powershell.exe', buildWindowsPowerShellArgs(buildWindowsProbeScript()))
+      if (!this.windowsMediaApi) {
+        this.state = {
+          ...createDefaultState(false),
+          lastError: 'Prism native Windows media integration is not available in this build.',
+        }
+        return
+      }
+
+      const support = this.windowsMediaApi.getSupport()
+      if (support.available) {
         this.state = {
           ...createDefaultState(true),
           lastError: this.state.lastError,
           lastControlError: this.state.lastControlError,
           snapshot: cloneSnapshot(this.state.snapshot),
         }
-      } catch (error) {
+      } else {
         this.state = {
           ...createDefaultState(false),
-          lastError: normalizeSpotifyError(error, 'Prism could not access Windows media controls for Spotify.', this.platform).message,
+          lastError: normalizeSpotifyError(
+            support.reason,
+            'Prism could not access Windows media controls for Spotify.',
+            this.platform,
+          ).message,
         }
       }
       return
@@ -1047,8 +968,16 @@ export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
     }
 
     if (this.platform === 'win32') {
-      const output = await this.commandRunner('powershell.exe', buildWindowsPowerShellArgs(buildWindowsStatusScript()))
-      return parseWindowsSpotifyStatusOutput(output, this.now)
+      if (!this.windowsMediaApi) {
+        throw new Error('Prism native Windows media integration is not available in this build.')
+      }
+
+      const payload = this.windowsMediaApi.getSpotifyPlaybackState()
+      if (!payload) {
+        return null
+      }
+
+      return parseWindowsSpotifyStatusPayload(payload, this.now)
     }
 
     const output = await this.runner(buildSpotifyStatusScript())
@@ -1072,7 +1001,11 @@ export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
     }
 
     if (this.platform === 'win32') {
-      await this.commandRunner('powershell.exe', buildWindowsPowerShellArgs(buildWindowsControlScript(command)))
+      if (!this.windowsMediaApi) {
+        throw new Error('Prism native Windows media integration is not available in this build.')
+      }
+
+      this.windowsMediaApi.sendSpotifyControl(command)
       return
     }
 
@@ -1098,6 +1031,25 @@ export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
     }
 
     if (artworkKey === this.failedArtworkKey || !artworkUrl) {
+      return
+    }
+
+    if (artworkUrl.startsWith('data:')) {
+      const currentSnapshot = this.currentSnapshot
+      if (!currentSnapshot || getArtworkKey(
+        currentSnapshot.currentTrack?.id ?? null,
+        currentSnapshot.currentTrack?.artworkUrl ?? null,
+      ) !== artworkKey) {
+        return
+      }
+      this.currentArtworkKey = artworkKey
+      this.currentArtworkDataUrl = artworkUrl
+      this.failedArtworkKey = null
+      this.state = {
+        ...this.state,
+        snapshot: toPublicSnapshot(currentSnapshot, artworkUrl),
+      }
+      this.emitState()
       return
     }
 

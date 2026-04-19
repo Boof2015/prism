@@ -49,6 +49,7 @@
           "libraries": [
             "ole32.lib",
             "avrt.lib",
+            "runtimeobject.lib",
             "uuid.lib"
           ],
           "msvs_settings": {
