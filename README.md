@@ -40,7 +40,7 @@ Save your entire layout — scope arrangement, visibility, sizes, per-scope sett
 
 ## Themes
 
-The whole interface is themeable through editable `.iro` files. Themes control everything — spectrum heatmap gradients, oscilloscope trace color, vectorscope bands, all of it. Build your own in an editor, drop it into the `Prism Themes` folder, or import it from Prism.
+The whole interface is themeable through editable `.iro` files. Themes control everything — spectrum heatmap gradients, oscilloscope trace color, vectorscope bands, all of it. Build your own in an editor and drop it into the `Prism Themes` folder, or download one from [the community](https://discord.gg/hsKK8Kr9Nj). Prism also includes Chroma key friendly themes by default, so you can key out your scopes in OBS and drop them directly into your stream as transparent overlays.
 
 <!-- ![Prism themes](assets/themes.png) -->
 
