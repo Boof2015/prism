@@ -5,6 +5,7 @@ export type NativeWindowsMediaSupport = NativeCaptureSupport
 
 export interface NativeWindowsSpotifyPlaybackState {
   album: string
+  artworkDataUrl: string | null
   artist: string
   durationMs: number
   playbackStatus: string

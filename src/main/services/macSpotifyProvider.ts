@@ -363,6 +363,10 @@ function parseWindowsSpotifyStatusPayload(
       : 0,
   )
 
+  const artworkUrl = typeof payload.artworkDataUrl === 'string' && payload.artworkDataUrl
+    ? payload.artworkDataUrl
+    : null
+
   const currentTrack = title && artist
     ? {
         id: sourceAppUserModelId
@@ -372,7 +376,7 @@ function parseWindowsSpotifyStatusPayload(
         artist,
         album,
         isFavorite: false,
-        artworkUrl: null,
+        artworkUrl,
       } satisfies LocalSpotifyTrackSnapshot
     : null
 
@@ -1027,6 +1031,25 @@ export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {
     }
 
     if (artworkKey === this.failedArtworkKey || !artworkUrl) {
+      return
+    }
+
+    if (artworkUrl.startsWith('data:')) {
+      const currentSnapshot = this.currentSnapshot
+      if (!currentSnapshot || getArtworkKey(
+        currentSnapshot.currentTrack?.id ?? null,
+        currentSnapshot.currentTrack?.artworkUrl ?? null,
+      ) !== artworkKey) {
+        return
+      }
+      this.currentArtworkKey = artworkKey
+      this.currentArtworkDataUrl = artworkUrl
+      this.failedArtworkKey = null
+      this.state = {
+        ...this.state,
+        snapshot: toPublicSnapshot(currentSnapshot, artworkUrl),
+      }
+      this.emitState()
       return
     }
 

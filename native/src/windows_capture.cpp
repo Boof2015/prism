@@ -17,6 +17,7 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.Control.h>
+#include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
 #include <atomic>
@@ -250,6 +251,98 @@ Napi::Object createWindowsMediaSupport(
         support.Set("reason", Napi::String::New(env, reason));
     }
     return support;
+}
+
+static const char kBase64Chars[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string base64Encode(const std::vector<uint8_t>& data) {
+    std::string result;
+    result.reserve(((data.size() + 2) / 3) * 4);
+    for (size_t i = 0; i < data.size(); i += 3) {
+        const uint32_t b0 = data[i];
+        const uint32_t b1 = (i + 1 < data.size()) ? data[i + 1] : 0u;
+        const uint32_t b2 = (i + 2 < data.size()) ? data[i + 2] : 0u;
+        result += kBase64Chars[(b0 >> 2) & 0x3F];
+        result += kBase64Chars[((b0 << 4) | (b1 >> 4)) & 0x3F];
+        result += (i + 1 < data.size()) ? kBase64Chars[((b1 << 2) | (b2 >> 6)) & 0x3F] : '=';
+        result += (i + 2 < data.size()) ? kBase64Chars[b2 & 0x3F] : '=';
+    }
+    return result;
+}
+
+// Thumbnail is fetched on a background thread to avoid blocking the NAPI call
+// thread with cross-process WinRT async I/O.
+std::mutex s_thumbMutex;
+std::string s_thumbTrackKey;
+std::string s_thumbDataUrl;
+bool s_thumbFetching = false;
+
+void launchThumbnailFetch(
+    const std::string& trackKey,
+    winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
+    const auto thumbnailRef = props.Thumbnail();
+    if (!thumbnailRef) {
+        std::lock_guard<std::mutex> lock(s_thumbMutex);
+        s_thumbFetching = false;
+        return;
+    }
+    std::thread([trackKey, thumbnailRef]() {
+        std::string result;
+        try {
+            using winrt::Windows::Storage::Streams::DataReader;
+            const HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
+            if (SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE) {
+                const auto stream = thumbnailRef.OpenReadAsync().get();
+                const uint64_t size = stream.Size();
+                if (size > 0 && size <= 4u * 1024u * 1024u) {
+                    const auto reader = DataReader(stream);
+                    const uint32_t loaded = reader.LoadAsync(static_cast<uint32_t>(size)).get();
+                    if (loaded > 0) {
+                        std::vector<uint8_t> bytes(loaded);
+                        reader.ReadBytes(bytes);
+                        std::string mimeType = winrt::to_string(stream.ContentType());
+                        if (mimeType.empty()) {
+                            mimeType = "image/jpeg";
+                        }
+                        result = "data:" + mimeType + ";base64," + base64Encode(bytes);
+                    }
+                }
+                if (SUCCEEDED(hr)) {
+                    RoUninitialize();
+                }
+            }
+        } catch (...) {}
+        std::lock_guard<std::mutex> lock(s_thumbMutex);
+        if (s_thumbTrackKey == trackKey) {
+            s_thumbDataUrl = std::move(result);
+        }
+        s_thumbFetching = false;
+    }).detach();
+}
+
+std::string getOrFetchThumbnail(
+    const std::string& trackKey,
+    winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
+    bool shouldFetch = false;
+    std::string result;
+    {
+        std::lock_guard<std::mutex> lock(s_thumbMutex);
+        if (s_thumbTrackKey == trackKey) {
+            result = s_thumbDataUrl;
+        } else {
+            s_thumbTrackKey = trackKey;
+            s_thumbDataUrl.clear();
+            if (!s_thumbFetching) {
+                s_thumbFetching = true;
+                shouldFetch = true;
+            }
+        }
+    }
+    if (shouldFetch) {
+        launchThumbnailFetch(trackKey, std::move(props));
+    }
+    return result;
 }
 
 std::string getDeviceId(IMMDevice* device) {
@@ -1032,6 +1125,15 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
         payload.Set(
             "sourceAppUserModelId",
             Napi::String::New(env, winrt::to_string(session->SourceAppUserModelId())));
+
+        const std::string trackKey =
+            winrt::to_string(mediaProperties.Title()) + "\n" +
+            winrt::to_string(mediaProperties.Artist());
+        const std::string artworkDataUrl = getOrFetchThumbnail(trackKey, mediaProperties);
+        payload.Set(
+            "artworkDataUrl",
+            artworkDataUrl.empty() ? env.Null() : Napi::String::New(env, artworkDataUrl));
+
         return payload;
     } catch (const winrt::hresult_error& error) {
         Napi::Error::New(
