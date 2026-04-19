@@ -55,7 +55,7 @@
           "msvs_settings": {
             "VCCLCompilerTool": {
               "ExceptionHandling": 1,
-              "AdditionalOptions": ["/O2", "/std:c++17"]
+              "AdditionalOptions": ["/O2"]
             }
           }
         }],
