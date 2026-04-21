@@ -37,7 +37,7 @@ import {
   useSettingsStore,
 } from '../src/renderer/stores/settingsStore'
 import { useThemeStore } from '../src/renderer/stores/themeStore'
-import { resolveThemeCreditDetails } from '../src/renderer/components/BottomBar'
+import { resolveThemeCreditDetails, resolveThemeOptionLabel } from '../src/renderer/components/BottomBar'
 import { scopeSettingsToOptions } from '../src/renderer/components/ScopeModule'
 import { scopeSummary } from '../src/renderer/components/ScopeSettingsSection'
 import {
@@ -2186,6 +2186,21 @@ test('resolveThemeCreditDetails normalizes descriptions and enables links only f
       url: null,
       description: null,
     },
+  )
+})
+
+test('resolveThemeOptionLabel appends creator credit when present', () => {
+  assert.equal(
+    resolveThemeOptionLabel({ name: 'Night Shift', credit: 'Astra' }),
+    'Night Shift - Astra',
+  )
+  assert.equal(
+    resolveThemeOptionLabel({ name: 'Night Shift' }),
+    'Night Shift',
+  )
+  assert.equal(
+    resolveThemeOptionLabel({ name: 'Night Shift', credit: '   ' }),
+    'Night Shift',
   )
 })
 

@@ -50,6 +50,19 @@ type ThemeCreditSource = {
   description?: string
 } | null | undefined
 
+type ThemeOptionLabelSource = {
+  name: string
+  credit?: string
+}
+
+export function resolveThemeOptionLabel(theme: ThemeOptionLabelSource): string {
+  const credit = typeof theme.credit === 'string' && theme.credit.trim()
+    ? theme.credit.trim()
+    : null
+
+  return credit ? `${theme.name} - ${credit}` : theme.name
+}
+
 export function resolveThemeCreditDetails(theme: ThemeCreditSource): {
   credit: string | null
   url: string | null
@@ -408,7 +421,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 >
                   {themeEntries.map(([id, theme]) => (
                     <option key={id} value={id}>
-                      {theme.name}
+                      {resolveThemeOptionLabel(theme)}
                     </option>
                   ))}
                 </ThemedSelect>
