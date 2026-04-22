@@ -332,27 +332,119 @@ select {
 }
 
 .toolbar__brand {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-width: 86px;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid var(--control-border-active);
-  background: linear-gradient(180deg, var(--control-bg-active), var(--panel-surface));
-  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  justify-content: center;
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+  margin: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  line-height: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+  -webkit-app-region: no-drag;
 }
 
-.toolbar__brand-mark {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(var(--accent-rgb), 0.92);
-  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.32);
+.toolbar__brand:hover {
+  background: var(--glass-bg);
+  color: var(--text-primary);
 }
 
-.toolbar__brand-text,
+.toolbar__brand-logo {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 21px;
+  flex-shrink: 0;
+  transition: opacity 0.15s ease, transform 0.2s ease;
+}
+
+.toolbar__brand-logo > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.prism-logo__path {
+  transition: fill 0.15s ease, filter 0.15s ease;
+}
+
+.prism-logo__path--lower {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 5px var(--accent-glow));
+}
+
+.prism-logo__path--upper {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+.toolbar__brand-heart {
+  width: 2px;
+  height: 2px;
+  margin-top: -4px;
+  margin-left: -5px;
+  background: #fb7185;
+  box-shadow:
+    2px 0 0 #fb7185,
+    6px 0 0 #fb7185,
+    8px 0 0 #fb7185,
+    0 2px 0 #fb7185,
+    2px 2px 0 #fb7185,
+    4px 2px 0 #fb7185,
+    6px 2px 0 #fb7185,
+    8px 2px 0 #fb7185,
+    2px 4px 0 #fb7185,
+    4px 4px 0 #fb7185,
+    6px 4px 0 #fb7185,
+    4px 6px 0 #fb7185;
+  opacity: 0;
+  transform: translate3d(0, 2px, 0);
+  transform-origin: center;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.45));
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+}
+
+.toolbar__brand:hover .toolbar__brand-heart {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+  animation: titlebarLogoHeartPop 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.toolbar__brand:hover .toolbar__brand-logo {
+  opacity: 0;
+  transform: scale(0.82);
+}
+
+@keyframes titlebarLogoHeartPop {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 3px, 0);
+  }
+  62% {
+    opacity: 1;
+    transform: translate3d(0, -1px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
 .toolbar__chip,
 .toolbar__icon-button,
 .settings-section-title,
@@ -365,11 +457,6 @@ select {
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-}
-
-.toolbar__brand-text {
-  color: var(--text-secondary);
-  font-size: 10px;
 }
 
 .toolbar__version {
@@ -2018,6 +2105,7 @@ button.toolbar__version:hover {
   transform: none;
 }
 
+.toolbar__brand:focus-visible,
 .toolbar__profile-button:focus-visible,
 .toolbar__chip:focus-visible,
 .toolbar__icon-button:focus-visible,
@@ -2033,6 +2121,18 @@ button.toolbar__version:hover {
     inset 0 1px 0 var(--glass-highlight),
     0 0 0 1px rgba(var(--accent-rgb), 0.32),
     0 0 0 4px rgba(var(--accent-rgb), 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolbar__brand,
+  .toolbar__brand-logo,
+  .toolbar__brand-heart {
+    transition-duration: 0.08s !important;
+  }
+
+  .toolbar__brand:hover .toolbar__brand-heart {
+    animation: none !important;
+  }
 }
 
 .scope-popout__settings-panel {

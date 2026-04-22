@@ -2222,6 +2222,48 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
 })
 
+test('toolbar uses the Prism logo support link and static package icons are configured', async () => {
+  const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const packageSource = await readFile(join(process.cwd(), 'package.json'), 'utf8')
+  const packageJson = JSON.parse(packageSource) as {
+    build: {
+      mac: { icon: string }
+      win: { icon: string }
+      linux: { icon: string }
+      extraResources: Array<{ from: string; to: string }>
+    }
+  }
+
+  assert.match(toolbarSource, /import PrismLogo from '\.\/PrismLogo'/)
+  assert.match(toolbarSource, /const PRISM_SUPPORT_URL = 'https:\/\/ko-fi\.com\/boof2015'/)
+  assert.match(toolbarSource, /window\.electronAPI\.openExternalUrl\(PRISM_SUPPORT_URL\)/)
+  assert.match(toolbarSource, /<PrismLogo \/>/)
+  assert.match(toolbarSource, /toolbar__brand-heart/)
+  assert.doesNotMatch(toolbarSource, /toolbar__brand-mark/)
+  assert.doesNotMatch(toolbarSource, /toolbar__brand-text/)
+
+  assert.match(stylesSource, /\.toolbar__brand-heart \{/)
+  assert.match(stylesSource, /\.prism-logo__path--upper \{[\s\S]*fill: var\(--accent\);/)
+  assert.match(stylesSource, /animation: titlebarLogoHeartPop 0\.22s cubic-bezier\(0\.22, 1, 0\.36, 1\);/)
+  assert.match(stylesSource, /@keyframes titlebarLogoHeartPop/)
+  assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)/)
+
+  assert.match(mainSource, /nativeImage/)
+  assert.match(mainSource, /function applyStaticDockIcon\(\)/)
+  assert.match(mainSource, /app\.dock\?\.setIcon\(icon\)/)
+  assert.match(mainSource, /applyStaticDockIcon\(\)/)
+  assert.match(mainSource, /function getStaticWindowIconOptions\(\)/)
+  assert.match(mainSource, /\.\.\.getStaticWindowIconOptions\(\)/)
+  assert.equal(packageJson.build.mac.icon, 'resources/icon.icns')
+  assert.equal(packageJson.build.win.icon, 'resources/icon.ico')
+  assert.equal(packageJson.build.linux.icon, 'resources/icon.png')
+  assert.ok(packageJson.build.extraResources.some((entry) => {
+    return entry.from === 'resources/icon.png' && entry.to === 'icon.png'
+  }))
+})
+
 test('resolveWindowCapabilities detects native Wayland sessions on Linux', () => {
   assert.deepEqual(
     resolveWindowCapabilities({

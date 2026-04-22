@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, safeStorage, screen, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
@@ -95,6 +95,7 @@ const NOW_PLAYING_CONFIG_DEFAULTS = {
   minHeight: 520,
 }
 
+const STATIC_APP_ICON_FILENAME = 'icon.png'
 const MAIN_WINDOW_SYNC_SUPPRESSION_MS = 180
 const MAIN_WINDOW_VISIBLE_GRAB_MARGIN = 64
 const runtimeWindowCapabilities = resolveWindowCapabilities({
@@ -284,6 +285,39 @@ function getWindowStateStore(): FileBackedWindowStateStore {
   }
 
   return windowStateStore
+}
+
+function getStaticAppIconPath(): string | undefined {
+  const candidates = app.isPackaged
+    ? [join(process.resourcesPath, STATIC_APP_ICON_FILENAME)]
+    : [
+        join(process.cwd(), 'resources', STATIC_APP_ICON_FILENAME),
+        join(__dirname, '../../resources', STATIC_APP_ICON_FILENAME),
+      ]
+
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
+function getStaticWindowIconOptions(): Pick<BrowserWindowConstructorOptions, 'icon'> {
+  if (process.platform === 'darwin') {
+    return {}
+  }
+
+  const icon = getStaticAppIconPath()
+  return icon ? { icon } : {}
+}
+
+function applyStaticDockIcon(): void {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  const iconPath = getStaticAppIconPath()
+  if (!iconPath) return
+
+  const icon = nativeImage.createFromPath(iconPath)
+  if (icon.isEmpty()) return
+  app.dock?.setIcon(icon)
 }
 
 function broadcastNowPlayingState(state: NowPlayingState): void {
@@ -895,6 +929,7 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
       hasShadow: false,
       skipTaskbar: true,
       show: false,
+      ...getStaticWindowIconOptions(),
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),
         sandbox: false,
@@ -936,6 +971,7 @@ function createMainWindow(): void {
     maximizable: true,
     fullscreenable: true,
     title: 'Prism',
+    ...getStaticWindowIconOptions(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -1105,6 +1141,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     title: `Prism ${SCOPE_LABELS[kind]}`,
     alwaysOnTop: getWindowStateStore().getPopoutAlwaysOnTop(kind),
     show: false,
+    ...getStaticWindowIconOptions(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -1271,6 +1308,7 @@ function createNowPlayingConfigWindow(): BrowserWindow {
     autoHideMenuBar: true,
     title: 'Prism Now Playing',
     show: false,
+    ...getStaticWindowIconOptions(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -1827,6 +1865,7 @@ if (!hasSingleInstanceLock) {
     setupIPC()
     await getWindowStateStore().initialize()
     await syncNativeThemeAppearance()
+    applyStaticDockIcon()
     createMainWindow()
     queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
     void processPendingProfileOpenPaths()

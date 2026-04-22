@@ -4,6 +4,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useUpdateStore } from '../stores/updateStore'
 import { useUiStore } from '../stores/uiStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
+import PrismLogo from './PrismLogo'
 
 function SettingsIcon(): JSX.Element {
   return (
@@ -81,6 +82,7 @@ interface ToolbarProps {
 }
 
 const DEFAULT_PROFILE_ID = 'profile_default'
+const PRISM_SUPPORT_URL = 'https://ko-fi.com/boof2015'
 const WAYLAND_REPOSITION_UNAVAILABLE_MESSAGE = 'Top/bottom repositioning is unavailable on native Wayland.'
 
 function isToolbarInteractiveTarget(target: EventTarget | null): boolean {
@@ -409,6 +411,16 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     void openReleasesPage()
   }, [openReleasesPage])
 
+  const handleOpenSupport = useCallback(() => {
+    void window.electronAPI.openExternalUrl(PRISM_SUPPORT_URL).catch((error) => {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not open Ko-fi.'),
+        actions: [],
+      })
+    })
+  }, [showBanner])
+
   const handleReposition = useCallback((position: 'top' | 'bottom') => {
     if (!supportsProgrammaticReposition) {
       return
@@ -495,12 +507,18 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         <GripIcon />
       </button>
 
-      <div
+      <button
+        type="button"
         className="toolbar__brand"
+        onClick={handleOpenSupport}
+        title="Support Prism on Ko-fi"
+        aria-label="Support Prism on Ko-fi"
       >
-        <span className="toolbar__brand-mark" />
-        <span className="toolbar__brand-text">Prism</span>
-      </div>
+        <span className="toolbar__brand-logo">
+          <PrismLogo />
+        </span>
+        <span className="toolbar__brand-heart" aria-hidden="true" />
+      </button>
 
       <AppVersionBlock
         buildInfo={appBuildInfo}

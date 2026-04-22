@@ -9,6 +9,7 @@
     "build": "electron-vite build && node ./scripts/build/writeAppBuildMetadata.cjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
+    "build:icons": "node scripts/build/generate-prism-icons.mjs",
     "test:audio-router": "node scripts/run-audio-router-tests.mjs",
     "test:audio-store": "node scripts/run-audio-store-tests.mjs",
     "test:astra": "node scripts/run-astra-integration-tests.mjs",
@@ -85,10 +86,15 @@
         "from": "native/build/Release/",
         "to": "native/",
         "filter": ["*.node"]
+      },
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
       }
     ],
     "mac": {
       "target": ["dmg", "zip"],
+      "icon": "resources/icon.icns",
       "category": "public.app-category.music",
       "hardenedRuntime": true,
       "entitlements": "resources/entitlements.mac.plist",
@@ -98,10 +104,12 @@
       "target": [
         { "target": "nsis", "arch": ["x64"] },
         { "target": "portable", "arch": ["x64"] }
-      ]
+      ],
+      "icon": "resources/icon.ico"
     },
     "linux": {
       "target": ["AppImage", "deb"],
+      "icon": "resources/icon.png",
       "category": "Audio"
     }
   }
