@@ -2449,6 +2449,7 @@ test('toolbar uses the Prism logo support link and static package icons are conf
 
   assert.match(mainSource, /nativeImage/)
   assert.match(mainSource, /function applyStaticDockIcon\(\)/)
+  assert.match(mainSource, /process\.platform !== 'darwin' \|\| app\.isPackaged/)
   assert.match(mainSource, /app\.dock\?\.setIcon\(icon\)/)
   assert.match(mainSource, /applyStaticDockIcon\(\)/)
   assert.match(mainSource, /function getStaticWindowIconOptions\(\)/)

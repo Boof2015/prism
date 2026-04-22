@@ -308,7 +308,7 @@ function getStaticWindowIconOptions(): Pick<BrowserWindowConstructorOptions, 'ic
 }
 
 function applyStaticDockIcon(): void {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' || app.isPackaged) {
     return
   }
 
