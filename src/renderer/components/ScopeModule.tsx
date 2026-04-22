@@ -296,7 +296,6 @@ export function scopeSettingsToOptions(
         },
         mode: s.mode,
         scrollSpeed: s.scrollSpeed,
-        gainDb: s.gainDb,
         multiband: s.multiband,
       }
     }

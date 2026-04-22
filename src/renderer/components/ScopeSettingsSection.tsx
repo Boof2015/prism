@@ -69,10 +69,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       return 'Bar Meter'
     case 'waveform': {
       const scopeSettings = settings as ScopeSettings['waveform']
-      const summary = [`${scopeSettings.gainDb > 0 ? '+' : ''}${scopeSettings.gainDb} dB`]
-      if (scopeSettings.mode === 'stereo') {
-        summary.push('Stereo')
-      }
+      const summary = [scopeSettings.mode === 'stereo' ? 'Stereo' : 'Mono']
       if (scopeSettings.multiband) {
         summary.push('RGB')
       }
@@ -522,17 +519,6 @@ export default function ScopeSettingsSection({
                   onClick={() => onUpdate('waveform', { multiband: !current.multiband })}
                 />
               </ToggleGroup>
-
-              <RangeControl
-                label="Gain"
-                value={current.gainDb}
-                valueLabel={`${current.gainDb > 0 ? '+' : ''}${current.gainDb.toFixed(0)} dB`}
-                min={-12}
-                max={12}
-                step={1}
-                fullWidth={false}
-                onChange={(value) => onUpdate('waveform', { gainDb: value })}
-              />
 
               <RangeControl
                 label="Speed"

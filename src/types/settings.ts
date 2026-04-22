@@ -48,7 +48,6 @@ export interface ScopeSettings {
   waveform: {
     mode: WaveformMode
     scrollSpeed: number
-    gainDb: number
     multiband: boolean
   }
   nowPlaying: {
@@ -68,7 +67,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   spectrogram: { fftSize: 2048, scrollSpeed: 2, clarityMode: 'sharper', scaleMode: 'log', colorScheme: 'heat' },
   vumeter: { mode: 'bar', orientation: 'horizontal' },
   lufsmeter: { mode: 'bar' },
-  waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, gainDb: 0, multiband: false },
+  waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, multiband: false },
   nowPlaying: {
     showCoverArt: true,
     showTitle: true,

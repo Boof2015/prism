@@ -1721,6 +1721,7 @@ test('scopeSettingsToOptions wires waveform stereo mode into analyzer options', 
   assert.equal(options.backgroundColor, theme.waveform.background)
   assert.equal(options.gridMajorColor, theme.waveform.guides)
   assert.equal(options.gridMinorColor, theme.waveform.guidesSecondary)
+  assert.equal(Object.hasOwn(options, 'gainDb'), false)
 })
 
 test('scopeSettingsToOptions forwards shared scope background and guides to oscilloscope and vectorscope', () => {
@@ -1934,17 +1935,16 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
   assert.equal(lufsmeter.labelColor, theme.lufsmeter.labels)
 })
 
-test('scopeSummary includes Stereo for waveform only when stereo mode is enabled', () => {
+test('scopeSummary includes only waveform display modes', () => {
   const profile = createDefaultProfile('Default')
-  profile.scopeSettings.waveform.gainDb = 6
 
-  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB')
+  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), 'Mono')
 
   profile.scopeSettings.waveform.mode = 'stereo'
-  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB · Stereo')
+  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), 'Stereo')
 
   profile.scopeSettings.waveform.multiband = true
-  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), '+6 dB · Stereo · RGB')
+  assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), 'Stereo · RGB')
 })
 
 test('scopeSummary includes spectrum peak mode when enabled', () => {
@@ -2000,7 +2000,6 @@ test('applying a profile snapshot does not change the machine-local frame target
     const defaultProfile = createDefaultProfile('Default')
     const alternateProfile = createDefaultProfile('Live Mix')
     alternateProfile.hiddenScopes = []
-    alternateProfile.scopeSettings.waveform.gainDb = 6
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
       activeProfileId: 'profile_live_mix',
@@ -2030,7 +2029,6 @@ test('applying a profile snapshot does not change the machine-local trim', () =>
     const defaultProfile = createDefaultProfile('Default')
     const alternateProfile = createDefaultProfile('Live Mix')
     alternateProfile.hiddenScopes = []
-    alternateProfile.scopeSettings.waveform.gainDb = 6
 
     useSettingsStore.getState().applyExternalProfileSnapshot({
       activeProfileId: 'profile_live_mix',
@@ -2072,7 +2070,7 @@ test('profile draft comparisons return to clean after reverting a change', () =>
       ...baselineProfile.scopeSettings,
       waveform: {
         ...baselineProfile.scopeSettings.waveform,
-        gainDb: baselineProfile.scopeSettings.waveform.gainDb + 3,
+        scrollSpeed: baselineProfile.scopeSettings.waveform.scrollSpeed + 1,
       },
     },
     scopePopouts: baselineProfile.scopePopouts,

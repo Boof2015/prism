@@ -4,10 +4,8 @@ import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
-  DEFAULT_WAVEFORM_GAIN_DB,
   DEFAULT_WAVEFORM_MODE,
   DEFAULT_WAVEFORM_SCROLL_SPEED,
-  clampWaveformGainDb,
   clampWaveformScrollSpeed,
   type WaveformMode,
 } from '../../types/waveform'
@@ -35,7 +33,6 @@ export interface WaveformOptions {
   }
   mode?: WaveformMode
   scrollSpeed?: number
-  gainDb?: number
   multiband?: boolean
   dataSource?: WaveformDataSource
   frameScheduler?: FrameScheduler
@@ -55,7 +52,6 @@ const defaultOptions: ResolvedWaveformOptions = {
   },
   mode: DEFAULT_WAVEFORM_MODE,
   scrollSpeed: DEFAULT_WAVEFORM_SCROLL_SPEED,
-  gainDb: DEFAULT_WAVEFORM_GAIN_DB,
   multiband: false,
 }
 
@@ -115,7 +111,6 @@ export class Waveform {
       ...optionOverrides,
       mode: optionOverrides.mode ?? defaultOptions.mode,
       scrollSpeed: clampWaveformScrollSpeed(optionOverrides.scrollSpeed ?? defaultOptions.scrollSpeed),
-      gainDb: clampWaveformGainDb(optionOverrides.gainDb ?? defaultOptions.gainDb),
       multiband: optionOverrides.multiband ?? defaultOptions.multiband,
     }
     this.dataSource = dataSource ?? defaultWaveformDataSource
@@ -186,7 +181,6 @@ export class Waveform {
       mode: optionUpdates.mode ?? this.options.mode,
       lineColor: optionUpdates.lineColor ?? this.options.lineColor,
       scrollSpeed: clampWaveformScrollSpeed(optionUpdates.scrollSpeed ?? this.options.scrollSpeed),
-      gainDb: clampWaveformGainDb(optionUpdates.gainDb ?? this.options.gainDb),
       multiband: optionUpdates.multiband ?? this.options.multiband,
     }
     const speedChanged = nextOptions.scrollSpeed !== this.options.scrollSpeed
@@ -349,9 +343,8 @@ export class Waveform {
     laneHeight: number,
     color: [number, number, number],
   ): void {
-    const amplitudeGain = Math.pow(10, this.options.gainDb / 20)
-    const scaledMin = Math.max(-1, Math.min(1, min * amplitudeGain))
-    const scaledMax = Math.max(-1, Math.min(1, max * amplitudeGain))
+    const scaledMin = Math.max(-1, Math.min(1, min))
+    const scaledMax = Math.max(-1, Math.min(1, max))
     const centerY = laneTop + (laneHeight / 2)
     const displayHalfHeight = (laneHeight / 2) * DISPLAY_MARGIN
     const yTop = Math.round(centerY - scaledMax * displayHalfHeight)

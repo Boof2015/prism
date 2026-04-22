@@ -191,6 +191,14 @@ test('partial files normalize, unsupported versions fail, and import does not ch
       id: 'profile_partial',
       name: 'Partial',
       scopeOrder: ['spectrogram'],
+      scopeSettings: {
+        waveform: {
+          mode: 'stereo',
+          scrollSpeed: 2,
+          gainDb: 6,
+          multiband: true,
+        },
+      },
       scopePopouts: { spectrogram: { poppedOut: true } },
     }, null, 2)}\n`, 'utf8')
 
@@ -199,6 +207,10 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.showSideLine, false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.heatmapSmoothing, 0.5)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrogram.colorScheme, 'heat')
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.mode, 'stereo')
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.scrollSpeed, 2)
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.multiband, true)
+    assert.equal(Object.hasOwn(partialSnapshot.profiles.profile_partial.scopeSettings.waveform, 'gainDb'), false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopePopouts.spectrogram.poppedOut, true)
     assert.equal(partialSnapshot.profiles.profile_partial.widthWeights.spectrum, 1)
 
