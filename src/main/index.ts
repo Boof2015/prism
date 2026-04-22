@@ -1,6 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, safeStorage, screen, session, shell } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
+import { execFileSync } from 'child_process'
+import { existsSync, readFileSync } from 'fs'
 import { extname, join, resolve } from 'path'
+import type { AppBuildInfo } from '../types/appBuildInfo'
 import type { NowPlayingControlCommand, NowPlayingState } from '../types/nowPlaying'
 import type {
   ScopePopoutAudioBatch,
@@ -33,6 +36,7 @@ import { NowPlayingManager } from './services/nowPlayingManager'
 import { AstraIntegrationService } from './services/astraIntegration'
 import { MacSpotifyProvider } from './services/macSpotifyProvider'
 import { SecretVault } from './services/secretVault'
+import { checkForUpdates, resolveSafeReleaseUrl } from './services/updates'
 import { FileBackedThemeLibrary } from './themeLibrary'
 import { FileBackedWindowStateStore } from './windowStateStore'
 import type { NativeWindowsMediaAPI } from '../types/nativeWindowsMedia'
@@ -98,6 +102,157 @@ const runtimeWindowCapabilities = resolveWindowCapabilities({
   argv: process.argv,
   env: process.env,
 })
+
+interface ResolvedBuildMetadata {
+  commitHash: string | null
+  isDirty: boolean
+}
+
+const DIRTY_ENV_TRUE_VALUES = new Set(['1', 'true', 'yes', 'dirty'])
+const DIRTY_ENV_FALSE_VALUES = new Set(['0', 'false', 'no', 'clean'])
+let cachedBuildMetadata: ResolvedBuildMetadata | null = null
+
+function normalizeBuildCommitHash(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function parseDirtyEnvValue(value: unknown): boolean | null {
+  if (typeof value !== 'string') return null
+
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return null
+  if (DIRTY_ENV_TRUE_VALUES.has(normalized)) return true
+  if (DIRTY_ENV_FALSE_VALUES.has(normalized)) return false
+  return null
+}
+
+function tryReadBuildMetadataFile(filePath: string): ResolvedBuildMetadata | null {
+  try {
+    const payload = JSON.parse(readFileSync(filePath, 'utf8')) as { commitHash?: unknown; isDirty?: unknown }
+    const commitHash = normalizeBuildCommitHash(payload.commitHash)
+    const isDirty = payload.isDirty === true
+
+    if (!commitHash) {
+      return {
+        commitHash: null,
+        isDirty: false,
+      }
+    }
+
+    return {
+      commitHash,
+      isDirty,
+    }
+  } catch {
+    return null
+  }
+}
+
+function tryResolveGitBuildMetadataFromDirectory(directory: string): ResolvedBuildMetadata | null {
+  if (!existsSync(join(directory, '.git'))) {
+    return null
+  }
+
+  try {
+    const commitHash = normalizeBuildCommitHash(execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: directory,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }))
+
+    if (!commitHash) {
+      return null
+    }
+
+    const isDirty = execFileSync('git', ['status', '--porcelain'], {
+      cwd: directory,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim().length > 0
+
+    return {
+      commitHash,
+      isDirty,
+    }
+  } catch {
+    return null
+  }
+}
+
+function resolveBuildMetadata(): ResolvedBuildMetadata {
+  if (cachedBuildMetadata) {
+    return cachedBuildMetadata
+  }
+
+  const envCommitHash = normalizeBuildCommitHash(
+    process.env.PRISM_GIT_COMMIT ?? process.env.PRISM_BUILD_COMMIT_HASH,
+  )
+  const envDirty = parseDirtyEnvValue(
+    process.env.PRISM_GIT_DIRTY ?? process.env.PRISM_BUILD_DIRTY,
+  )
+
+  if (envCommitHash) {
+    cachedBuildMetadata = {
+      commitHash: envCommitHash,
+      isDirty: envDirty ?? false,
+    }
+    return cachedBuildMetadata
+  }
+
+  const metadataFileCandidates = Array.from(new Set([
+    join(__dirname, '..', 'build-metadata.json'),
+    join(process.cwd(), 'out', 'build-metadata.json'),
+    join(app.getAppPath(), 'out', 'build-metadata.json'),
+  ]))
+
+  for (const candidate of metadataFileCandidates) {
+    const metadata = tryReadBuildMetadataFile(candidate)
+    if (metadata) {
+      cachedBuildMetadata = {
+        commitHash: metadata.commitHash,
+        isDirty: envDirty ?? metadata.isDirty,
+      }
+      return cachedBuildMetadata
+    }
+  }
+
+  const gitDirectoryCandidates = Array.from(new Set([
+    process.cwd(),
+    app.getAppPath(),
+    join(__dirname, '../..'),
+  ]))
+
+  for (const candidate of gitDirectoryCandidates) {
+    const metadata = tryResolveGitBuildMetadataFromDirectory(candidate)
+    if (metadata) {
+      cachedBuildMetadata = {
+        commitHash: metadata.commitHash,
+        isDirty: envDirty ?? metadata.isDirty,
+      }
+      return cachedBuildMetadata
+    }
+  }
+
+  cachedBuildMetadata = {
+    commitHash: null,
+    isDirty: false,
+  }
+  return cachedBuildMetadata
+}
+
+function getAppBuildInfo(): AppBuildInfo {
+  const buildMetadata = resolveBuildMetadata()
+  const commitHash = buildMetadata.commitHash
+
+  return {
+    version: app.getVersion(),
+    commitHash,
+    shortCommitHash: commitHash ? commitHash.slice(0, 7) : null,
+    isDirty: commitHash ? buildMetadata.isDirty : false,
+  }
+}
 
 function getProfileLibrary(): FileBackedProfileLibrary {
   if (!profileLibrary) {
@@ -1288,6 +1443,18 @@ function setupIPC(): void {
 
   ipcMain.handle('window:is-always-on-top', (event) => {
     return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? false
+  })
+
+  ipcMain.handle('app:get-build-info', () => {
+    return getAppBuildInfo()
+  })
+
+  ipcMain.handle('updates:check', async () => {
+    return checkForUpdates(app.getVersion())
+  })
+
+  ipcMain.handle('updates:open-releases-page', async (_event, releaseUrl: unknown) => {
+    await shell.openExternal(resolveSafeReleaseUrl(releaseUrl))
   })
 
   ipcMain.handle('now-playing:get-state', async () => {

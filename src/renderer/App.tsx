@@ -12,6 +12,7 @@ import { startAudioDeviceWatcher, useAudioStore } from './stores/audioStore'
 import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
+import { useUpdateStore } from './stores/updateStore'
 import { getRendererWindowCapabilities } from './windowCapabilities'
 
 export default function App(): JSX.Element {
@@ -52,6 +53,10 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     return startAudioDeviceWatcher()
+  }, [])
+
+  useEffect(() => {
+    void useUpdateStore.getState().checkForUpdates()
   }, [])
 
   useEffect(() => {

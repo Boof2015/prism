@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { AppBuildInfo } from '../types/appBuildInfo'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
@@ -28,6 +29,7 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
@@ -45,6 +47,7 @@ const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   windowCapabilities,
+  getAppBuildInfo: () => ipcRenderer.invoke('app:get-build-info') as Promise<AppBuildInfo>,
   minimize: () => ipcRenderer.send('window:minimize'),
   close: () => ipcRenderer.send('window:close'),
   startWindowMove: () => ipcRenderer.send('window:start-move'),
@@ -94,6 +97,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   revealThemesFolder: () => ipcRenderer.invoke('themes:reveal-folder') as Promise<void>,
   migrateLegacyTheme: (payload: LegacyThemeMigrationPayload) => ipcRenderer.invoke('themes:migrate-legacy', payload) as Promise<LegacyThemeMigrationResult>,
   openExternalUrl: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<void>,
+  updates: {
+    checkForUpdates: () => ipcRenderer.invoke('updates:check') as Promise<UpdateCheckResult>,
+    openReleasesPage: (releaseUrl?: string) => ipcRenderer.invoke('updates:open-releases-page', releaseUrl) as Promise<void>,
+  },
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),

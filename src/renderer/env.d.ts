@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
+import type { AppBuildInfo } from '../types/appBuildInfo'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
@@ -31,6 +32,7 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
 
@@ -41,6 +43,7 @@ declare global {
     electronAPI: {
       platform: string
       windowCapabilities: WindowCapabilities
+      getAppBuildInfo: () => Promise<AppBuildInfo>
       minimize: () => void
       close: () => void
       startWindowMove: () => void
@@ -80,6 +83,10 @@ declare global {
       revealThemesFolder: () => Promise<void>
       migrateLegacyTheme: (payload: LegacyThemeMigrationPayload) => Promise<LegacyThemeMigrationResult>
       openExternalUrl: (url: string) => Promise<void>
+      updates: {
+        checkForUpdates: () => Promise<UpdateCheckResult>
+        openReleasesPage: (releaseUrl?: string) => Promise<void>
+      }
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
       setSettingsHeight: (panelHeight: number) => void

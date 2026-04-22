@@ -372,6 +372,68 @@ select {
   font-size: 10px;
 }
 
+.toolbar__version {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  max-width: 210px;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+button.toolbar__version {
+  padding: 0 2px;
+  cursor: pointer;
+  outline: none;
+  transition: color 120ms ease, transform 120ms ease;
+  -webkit-app-region: no-drag;
+}
+
+button.toolbar__version:hover,
+button.toolbar__version:focus-visible {
+  color: var(--text-primary);
+}
+
+button.toolbar__version:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button.toolbar__version:hover {
+  transform: translateY(-1px);
+}
+
+.toolbar__version.is-update-available {
+  color: var(--text-secondary);
+}
+
+.toolbar__version-update-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 9px var(--accent-glow);
+  flex-shrink: 0;
+}
+
+.toolbar__version-number,
+.toolbar__version-commit {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar__version-separator {
+  color: var(--text-muted);
+}
+
 .toolbar__profile {
   position: relative;
   display: flex;
@@ -559,6 +621,19 @@ select {
   cursor: not-allowed;
   opacity: 0.46;
   transform: none;
+}
+
+@media (max-width: 640px) {
+  .toolbar__version-commit,
+  .toolbar__version-separator {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .toolbar__version {
+    display: none;
+  }
 }
 
 .scope-strip {

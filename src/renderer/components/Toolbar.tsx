@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
+import type { AppBuildInfo } from '../../types/appBuildInfo'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useUpdateStore } from '../stores/updateStore'
 import { useUiStore } from '../stores/uiStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 
@@ -92,6 +94,72 @@ function getErrorMessage(error: unknown, fallback: string): string {
     : fallback
 }
 
+interface AppVersionBlockProps {
+  buildInfo: AppBuildInfo | null
+  updateAvailable: boolean
+  latestTag: string | null
+  releaseName: string | null
+  onOpenUpdate: () => void
+}
+
+function AppVersionBlock({
+  buildInfo,
+  updateAvailable,
+  latestTag,
+  releaseName,
+  onOpenUpdate,
+}: AppVersionBlockProps): JSX.Element | null {
+  if (!buildInfo?.version) {
+    return null
+  }
+
+  const versionLabel = `v${buildInfo.version}`
+  const commitLabel = buildInfo.shortCommitHash
+    ? `${buildInfo.shortCommitHash}${buildInfo.isDirty ? '*' : ''}`
+    : ''
+  const releaseLabel = latestTag
+    ? `${latestTag}${releaseName ? ` (${releaseName})` : ''}`
+    : 'the latest release'
+  const buildTooltip = buildInfo.commitHash
+    ? `Prism ${versionLabel}\nCommit: ${buildInfo.commitHash}${buildInfo.isDirty ? '\nWorking tree was dirty when this build started.' : ''}`
+    : `Prism ${versionLabel}`
+  const title = updateAvailable
+    ? `Update available: ${releaseLabel}. Open release.`
+    : buildTooltip
+  const content = (
+    <>
+      {updateAvailable ? <span className="toolbar__version-update-dot" aria-hidden="true" /> : null}
+      <span className="toolbar__version-number">{versionLabel}</span>
+      {commitLabel ? (
+        <>
+          <span className="toolbar__version-separator" aria-hidden="true">·</span>
+          <span className="toolbar__version-commit">{commitLabel}</span>
+        </>
+      ) : null}
+    </>
+  )
+
+  if (updateAvailable) {
+    return (
+      <button
+        type="button"
+        className="toolbar__version is-update-available"
+        onClick={onOpenUpdate}
+        title={title}
+        aria-label={`Update available: ${releaseLabel}. Open release.`}
+      >
+        {content}
+      </button>
+    )
+  }
+
+  return (
+    <div className="toolbar__version" title={title} aria-label={buildTooltip}>
+      {content}
+    </div>
+  )
+}
+
 export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps): JSX.Element {
   const profiles = useSettingsStore((s) => s.profiles)
   const activeProfileId = useSettingsStore((s) => s.activeProfileId)
@@ -105,6 +173,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const importProfileFromDialog = useSettingsStore((s) => s.importProfileFromDialog)
   const showProfilesFolder = useSettingsStore((s) => s.showProfilesFolder)
   const showBanner = useUiStore((s) => s.showBanner)
+  const updateAvailable = useUpdateStore((s) => s.updateAvailable)
+  const latestTag = useUpdateStore((s) => s.latestTag)
+  const releaseName = useUpdateStore((s) => s.releaseName)
+  const openReleasesPage = useUpdateStore((s) => s.openReleasesPage)
+  const [appBuildInfo, setAppBuildInfo] = useState<AppBuildInfo | null>(null)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
   const [showReposition, setShowReposition] = useState(false)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
@@ -140,6 +213,24 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     void window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
     const unsubscribe = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
     return unsubscribe
+  }, [])
+
+  useEffect(() => {
+    let isMounted = true
+
+    void window.electronAPI.getAppBuildInfo()
+      .then((buildInfo) => {
+        if (isMounted) {
+          setAppBuildInfo(buildInfo)
+        }
+      })
+      .catch(() => {
+        // Keep the toolbar usable if build metadata is unavailable.
+      })
+
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   useEffect(() => {
@@ -314,6 +405,10 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     window.electronAPI.toggleAlwaysOnTop()
   }, [])
 
+  const handleOpenUpdate = useCallback(() => {
+    void openReleasesPage()
+  }, [openReleasesPage])
+
   const handleReposition = useCallback((position: 'top' | 'bottom') => {
     if (!supportsProgrammaticReposition) {
       return
@@ -406,6 +501,14 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
         <span className="toolbar__brand-mark" />
         <span className="toolbar__brand-text">Prism</span>
       </div>
+
+      <AppVersionBlock
+        buildInfo={appBuildInfo}
+        updateAvailable={updateAvailable}
+        latestTag={latestTag}
+        releaseName={releaseName}
+        onOpenUpdate={handleOpenUpdate}
+      />
 
       <div className="toolbar__profile">
         <button
