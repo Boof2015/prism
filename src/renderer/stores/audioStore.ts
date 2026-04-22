@@ -12,9 +12,20 @@ const STORAGE_KEY = 'prism:audio'
 const INPUT_GAIN_MIN_DB = -12
 const INPUT_GAIN_MAX_DB = 12
 const INPUT_GAIN_STEP_DB = 0.5
+const DEFAULT_SYSTEM_SOURCE_ID = '__default_system_output__'
+const AUDIO_DEVICE_WATCHER_POLL_MS = 5000
 
 export interface PersistedAudioState {
   inputGainDb: number
+}
+
+interface RefreshSourceOptions {
+  rebindActiveCapture?: boolean
+}
+
+interface StartCaptureOptions {
+  forceDeviceRestart?: boolean
+  skipSourceRefresh?: boolean
 }
 
 interface AudioState {
@@ -31,16 +42,18 @@ interface AudioState {
   captureNotice: string | null
   sampleRate: number
   channelCount: number
+  activeSourceId: string | null
+  activeSourceLabel: string | null
   inputGainDb: number
   setInputGain: (db: number) => void
   clearCaptureNotice: () => void
-  refreshSystemSources: () => Promise<void>
-  refreshDevices: () => Promise<void>
-  refreshBackendSupport: () => Promise<void>
+  refreshSystemSources: (options?: RefreshSourceOptions) => Promise<void>
+  refreshDevices: (options?: RefreshSourceOptions) => Promise<void>
+  refreshBackendSupport: (options?: RefreshSourceOptions) => Promise<void>
   selectSystemSource: (sourceId: string | null) => Promise<void>
   selectDevice: (deviceId: string | null) => Promise<void>
   setCaptureMode: (mode: CaptureMode) => void
-  startCapture: () => Promise<void>
+  startCapture: (options?: StartCaptureOptions) => Promise<void>
   stopCapture: () => void
 }
 
@@ -57,6 +70,8 @@ function applyCaptureStatus(status: CaptureManagerStatus): Partial<AudioState> {
     sampleRate: status.sampleRate,
     channelCount: status.channelCount,
     isCapturing: status.isCapturing,
+    activeSourceId: status.activeSourceId,
+    activeSourceLabel: status.activeSourceLabel,
   }
 }
 
@@ -87,6 +102,61 @@ function describeInputDevice(deviceId: string, devices: MediaDeviceInfo[]): stri
 
 function describeSystemSource(sourceId: string, sources: CaptureSourceDescriptor[]): string {
   return sources.find((source) => source.id === sourceId)?.label ?? 'The selected output device'
+}
+
+function areCaptureSourcesEqual(
+  left: CaptureSourceDescriptor[],
+  right: CaptureSourceDescriptor[],
+): boolean {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((source, index) => {
+    const candidate = right[index]
+    return source.id === candidate.id
+      && source.label === candidate.label
+      && source.kind === candidate.kind
+      && source.isDefault === candidate.isDefault
+      && source.sampleRate === candidate.sampleRate
+      && source.channelCount === candidate.channelCount
+  })
+}
+
+function areMediaDevicesEqual(left: MediaDeviceInfo[], right: MediaDeviceInfo[]): boolean {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((device, index) => {
+    const candidate = right[index]
+    return device.deviceId === candidate.deviceId
+      && device.kind === candidate.kind
+      && device.label === candidate.label
+      && device.groupId === candidate.groupId
+  })
+}
+
+function getResolvedDefaultSystemSourceId(sources: CaptureSourceDescriptor[]): string | null {
+  return sources.find((source) => (
+    source.kind === 'system'
+    && source.id !== DEFAULT_SYSTEM_SOURCE_ID
+    && source.isDefault === true
+  ))?.id ?? null
+}
+
+function getDefaultInputSignature(devices: MediaDeviceInfo[]): string | null {
+  const defaultDevice = devices.find((device) => device.deviceId === 'default') ?? devices[0] ?? null
+  if (!defaultDevice) {
+    return null
+  }
+
+  return [
+    defaultDevice.deviceId,
+    defaultDevice.label,
+    defaultDevice.groupId,
+    defaultDevice.kind,
+  ].join('\0')
 }
 
 function getStorage(): StorageLike | null {
@@ -158,6 +228,8 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   captureNotice: null,
   sampleRate: 48000,
   channelCount: 2,
+  activeSourceId: null,
+  activeSourceLabel: null,
   inputGainDb: storedPreferences.inputGainDb,
 
   setInputGain: (db: number) => {
@@ -175,10 +247,11 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     set({ captureNotice: null })
   },
 
-  refreshSystemSources: async () => {
-    const previousSelectedSystemSourceId = get().selectedSystemSourceId
-    const previousSources = get().systemSources
+  refreshSystemSources: async (options: RefreshSourceOptions = {}) => {
     const systemSources = await audioCapture.listSources('system')
+    const currentState = get()
+    const previousSelectedSystemSourceId = currentState.selectedSystemSourceId
+    const previousSources = currentState.systemSources
     const fallbackSourceId = systemSources[0]?.id ?? null
     const nextSelectedSystemSourceId = previousSelectedSystemSourceId
       && systemSources.some((source) => source.id === previousSelectedSystemSourceId)
@@ -187,24 +260,61 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     const shouldShowFallbackNotice = Boolean(
       previousSelectedSystemSourceId
       && previousSelectedSystemSourceId !== nextSelectedSystemSourceId
-      && get().captureMode === 'system',
+      && currentState.captureMode === 'system',
+    )
+    const sourceListChanged = !areCaptureSourcesEqual(previousSources, systemSources)
+    const selectedSourceChanged = previousSelectedSystemSourceId !== nextSelectedSystemSourceId
+    const nextCaptureNotice = shouldShowFallbackNotice
+      ? `${describeSystemSource(previousSelectedSystemSourceId!, previousSources)} is unavailable. Prism switched to Default Output.`
+      : currentState.captureNotice
+
+    if (selectedSourceChanged) {
+      audioCapture.setSelectedSystemSourceId(nextSelectedSystemSourceId)
+    }
+
+    if (
+      sourceListChanged
+      || selectedSourceChanged
+      || nextCaptureNotice !== currentState.captureNotice
+    ) {
+      set((state) => ({
+        ...state,
+        systemSources,
+        selectedSystemSourceId: nextSelectedSystemSourceId,
+        captureNotice: nextCaptureNotice,
+      }))
+    }
+
+    const defaultSystemSourceId = getResolvedDefaultSystemSourceId(systemSources)
+    const selectedDefaultOutput = nextSelectedSystemSourceId === DEFAULT_SYSTEM_SOURCE_ID
+    const explicitSourceBecameUnavailable = Boolean(
+      previousSelectedSystemSourceId
+      && previousSelectedSystemSourceId !== DEFAULT_SYSTEM_SOURCE_ID
+      && previousSelectedSystemSourceId !== nextSelectedSystemSourceId,
+    )
+    const defaultOutputChanged = Boolean(
+      selectedDefaultOutput
+      && currentState.activeSourceId
+      && defaultSystemSourceId
+      && currentState.activeSourceId !== defaultSystemSourceId,
     )
 
-    audioCapture.setSelectedSystemSourceId(nextSelectedSystemSourceId)
-    set((state) => ({
-      ...state,
-      systemSources,
-      selectedSystemSourceId: nextSelectedSystemSourceId,
-      captureNotice: shouldShowFallbackNotice
-        ? `${describeSystemSource(previousSelectedSystemSourceId!, previousSources)} is unavailable. Prism switched to Default Output.`
-        : state.captureNotice,
-    }))
+    if (
+      options.rebindActiveCapture === true
+      && currentState.captureMode === 'system'
+      && currentState.captureStatus === 'capturing'
+      && currentState.isCapturing
+      && (explicitSourceBecameUnavailable || defaultOutputChanged)
+    ) {
+      await get().startCapture({ skipSourceRefresh: true })
+    }
   },
 
-  refreshDevices: async () => {
-    const previousSelectedDeviceId = get().selectedDeviceId
-    const previousDevices = get().devices
+  refreshDevices: async (options: RefreshSourceOptions = {}) => {
     const devices = await audioCapture.listDevices()
+    const currentState = get()
+    const previousSelectedDeviceId = currentState.selectedDeviceId
+    const previousDevices = currentState.devices
     const nextSelectedDeviceId = previousSelectedDeviceId
       && devices.some((device) => device.deviceId === previousSelectedDeviceId)
       ? previousSelectedDeviceId
@@ -212,24 +322,60 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     const shouldShowFallbackNotice = Boolean(
       previousSelectedDeviceId
       && previousSelectedDeviceId !== nextSelectedDeviceId
-      && get().captureMode === 'device',
+      && currentState.captureMode === 'device',
+    )
+    const deviceListChanged = !areMediaDevicesEqual(previousDevices, devices)
+    const selectedDeviceChanged = previousSelectedDeviceId !== nextSelectedDeviceId
+    const nextCaptureNotice = shouldShowFallbackNotice
+      ? `${describeInputDevice(previousSelectedDeviceId!, previousDevices)} is unavailable. Prism switched to Default Input.`
+      : currentState.captureNotice
+
+    if (selectedDeviceChanged) {
+      audioCapture.setSelectedDeviceId(nextSelectedDeviceId)
+    }
+
+    if (
+      deviceListChanged
+      || selectedDeviceChanged
+      || nextCaptureNotice !== currentState.captureNotice
+    ) {
+      set((state) => ({
+        ...state,
+        devices,
+        selectedDeviceId: nextSelectedDeviceId,
+        captureNotice: nextCaptureNotice,
+      }))
+    }
+
+    const defaultInputChanged = getDefaultInputSignature(previousDevices)
+      !== getDefaultInputSignature(devices)
+    const selectedDefaultInput = nextSelectedDeviceId === null
+    const explicitDeviceBecameUnavailable = Boolean(
+      previousSelectedDeviceId
+      && previousSelectedDeviceId !== nextSelectedDeviceId,
     )
 
-    audioCapture.setSelectedDeviceId(nextSelectedDeviceId)
-    set((state) => ({
-      ...state,
-      devices,
-      selectedDeviceId: nextSelectedDeviceId,
-      captureNotice: shouldShowFallbackNotice
-        ? `${describeInputDevice(previousSelectedDeviceId!, previousDevices)} is unavailable. Prism switched to Default Input.`
-        : state.captureNotice,
-    }))
+    if (
+      options.rebindActiveCapture === true
+      && currentState.captureMode === 'device'
+      && currentState.captureStatus === 'capturing'
+      && currentState.isCapturing
+      && (
+        explicitDeviceBecameUnavailable
+        || (selectedDefaultInput && defaultInputChanged)
+      )
+    ) {
+      await get().startCapture({
+        forceDeviceRestart: selectedDefaultInput,
+        skipSourceRefresh: true,
+      })
+    }
   },
 
-  refreshBackendSupport: async () => {
+  refreshBackendSupport: async (options: RefreshSourceOptions = {}) => {
     const backendSupport = await audioCapture.refreshBackendSupport()
     set({ backendSupport })
-    await get().refreshSystemSources()
+    await get().refreshSystemSources(options)
   },
 
   selectSystemSource: async (sourceId: string | null) => {
@@ -259,13 +405,15 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     set({ captureMode: mode })
   },
 
-  startCapture: async () => {
+  startCapture: async (options: StartCaptureOptions = {}) => {
     set({ captureStatus: 'connecting', captureError: null })
     try {
       const { captureMode } = get()
       audioCapture.setCaptureMode(captureMode)
-      await get().refreshBackendSupport()
-      await get().refreshDevices()
+      if (options.skipSourceRefresh !== true) {
+        await get().refreshBackendSupport({ rebindActiveCapture: false })
+        await get().refreshDevices({ rebindActiveCapture: false })
+      }
 
       const { selectedDeviceId, selectedSystemSourceId, backendSupport } = get()
 
@@ -279,7 +427,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
           captureNotice: message,
         })
         showSystemCaptureFallbackBanner(message)
-        await audioCapture.startDevice(undefined)
+        await audioCapture.startDevice(undefined, { forceDeviceRestart: true })
       }
 
       if (captureMode === 'system') {
@@ -294,7 +442,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
           }
         }
       } else {
-        await audioCapture.startDevice(selectedDeviceId ?? undefined)
+        await audioCapture.startDevice(selectedDeviceId ?? undefined, {
+          forceDeviceRestart: options.forceDeviceRestart === true,
+        })
       }
 
       const status = audioCapture.getStatus()
@@ -311,15 +461,128 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         isCapturing: false,
         captureStatus: 'error',
         captureError: message,
+        activeSourceId: null,
+        activeSourceLabel: null,
       })
     }
   },
 
   stopCapture: () => {
     audioCapture.stop()
-    set({ isCapturing: false, captureStatus: 'idle', captureError: null })
+    set({
+      isCapturing: false,
+      captureStatus: 'idle',
+      captureError: null,
+      activeSourceId: null,
+      activeSourceLabel: null,
+    })
   },
 }))
+
+interface AudioDeviceWatcher {
+  refCount: number
+  dispose: () => void
+}
+
+let audioDeviceWatcher: AudioDeviceWatcher | null = null
+
+function createAudioDeviceWatcher(): AudioDeviceWatcher {
+  let disposed = false
+  let outputRefreshPromise: Promise<void> | null = null
+  let inputRefreshPromise: Promise<void> | null = null
+  let outputPollTimer: number | null = null
+  let inputPollTimer: number | null = null
+
+  const refreshOutputDevices = (): void => {
+    if (disposed || outputRefreshPromise) {
+      return
+    }
+
+    outputRefreshPromise = useAudioStore.getState()
+      .refreshSystemSources({ rebindActiveCapture: true })
+      .catch((error) => {
+        console.error('Failed to refresh output devices:', error)
+      })
+      .finally(() => {
+        outputRefreshPromise = null
+      })
+  }
+
+  const refreshInputDevices = (): void => {
+    if (disposed || inputRefreshPromise) {
+      return
+    }
+
+    inputRefreshPromise = useAudioStore.getState()
+      .refreshDevices({ rebindActiveCapture: true })
+      .catch((error) => {
+        console.error('Failed to refresh input devices:', error)
+      })
+      .finally(() => {
+        inputRefreshPromise = null
+      })
+  }
+
+  const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined
+  const handleDeviceChange = (): void => {
+    refreshInputDevices()
+  }
+
+  if (typeof mediaDevices?.addEventListener === 'function') {
+    mediaDevices.addEventListener('devicechange', handleDeviceChange)
+  }
+
+  if (typeof window !== 'undefined') {
+    outputPollTimer = window.setInterval(refreshOutputDevices, AUDIO_DEVICE_WATCHER_POLL_MS)
+    inputPollTimer = window.setInterval(refreshInputDevices, AUDIO_DEVICE_WATCHER_POLL_MS)
+  }
+
+  refreshOutputDevices()
+  refreshInputDevices()
+
+  return {
+    refCount: 1,
+    dispose: () => {
+      disposed = true
+
+      if (outputPollTimer !== null && typeof window !== 'undefined') {
+        window.clearInterval(outputPollTimer)
+        outputPollTimer = null
+      }
+
+      if (inputPollTimer !== null && typeof window !== 'undefined') {
+        window.clearInterval(inputPollTimer)
+        inputPollTimer = null
+      }
+
+      if (typeof mediaDevices?.removeEventListener === 'function') {
+        mediaDevices.removeEventListener('devicechange', handleDeviceChange)
+      }
+    },
+  }
+}
+
+export function startAudioDeviceWatcher(): () => void {
+  if (!audioDeviceWatcher) {
+    audioDeviceWatcher = createAudioDeviceWatcher()
+  } else {
+    audioDeviceWatcher.refCount += 1
+  }
+
+  let didRelease = false
+  return () => {
+    if (didRelease || !audioDeviceWatcher) {
+      return
+    }
+
+    didRelease = true
+    audioDeviceWatcher.refCount -= 1
+    if (audioDeviceWatcher.refCount <= 0) {
+      audioDeviceWatcher.dispose()
+      audioDeviceWatcher = null
+    }
+  }
+}
 
 audioCapture.subscribeStatus((status) => {
   useAudioStore.setState((state) => ({

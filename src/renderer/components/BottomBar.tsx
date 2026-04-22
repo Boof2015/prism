@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type WheelEvent } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type WheelEvent } from 'react'
 import { useNowPlayingStore } from '../stores/nowPlayingStore'
 import { useAudioStore } from '../stores/audioStore'
 import { usePerformanceStore } from '../stores/performanceStore'
@@ -133,21 +133,12 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     captureNotice,
     inputGainDb,
     clearCaptureNotice,
-    refreshSystemSources,
-    refreshDevices,
-    refreshBackendSupport,
     selectSystemSource,
     selectDevice,
     startCapture,
     setInputGain,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
-
-  useEffect(() => {
-    void refreshBackendSupport()
-    void refreshSystemSources()
-    void refreshDevices()
-  }, [refreshBackendSupport, refreshSystemSources, refreshDevices])
 
   useLayoutEffect(() => {
     if (!onHeightChange || !rootRef.current) return

@@ -8,7 +8,7 @@ import WindowResizeOverlay from './components/WindowResizeOverlay'
 import AppBanner from './components/AppBanner'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
-import { useAudioStore } from './stores/audioStore'
+import { startAudioDeviceWatcher, useAudioStore } from './stores/audioStore'
 import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
@@ -48,6 +48,10 @@ export default function App(): JSX.Element {
     if (!isCapturing && captureStatus !== 'connecting') {
       void startCapture()
     }
+  }, [])
+
+  useEffect(() => {
+    return startAudioDeviceWatcher()
   }, [])
 
   useEffect(() => {

@@ -38,10 +38,13 @@ interface CaptureBackendStatus {
   reason: string | null
   sampleRate: number
   channelCount: number
+  activeSourceId: string | null
+  activeSourceLabel: string | null
 }
 
 interface CaptureBackendStartRequest {
   deviceId?: string
+  forceRestart?: boolean
 }
 
 interface CaptureBackend {
@@ -141,6 +144,8 @@ export interface CaptureManagerStatus {
   sampleRate: number
   channelCount: number
   isCapturing: boolean
+  activeSourceId: string | null
+  activeSourceLabel: string | null
 }
 
 type StatusListener = (status: CaptureManagerStatus) => void
@@ -178,6 +183,8 @@ class DeviceInputCaptureRuntime {
   private sampleRate = 48000
   private channelCount = 2
   private inputGainLinear = 1
+  private activeSourceId: string | null = null
+  private activeSourceLabel: string | null = null
 
   setInputGain(db: number): void {
     this.inputGainLinear = inputGainDbToLinear(db)
@@ -191,11 +198,12 @@ class DeviceInputCaptureRuntime {
     }
   }
 
-  async startDevice(deviceId?: string): Promise<void> {
+  async startDevice(deviceId?: string, forceRestart = false): Promise<void> {
     await this.ensureContext()
 
     const requestedDeviceId = deviceId ?? null
-    if (this.currentDeviceId !== requestedDeviceId || !this.stream || !this.sourceNode) {
+    if (forceRestart || this.currentDeviceId !== requestedDeviceId || !this.stream || !this.sourceNode) {
+      this.releaseStream()
       const nextStream = await this.requestDeviceStream(deviceId)
       this.attachStream(nextStream, requestedDeviceId)
     }
@@ -229,6 +237,8 @@ class DeviceInputCaptureRuntime {
       reason: null,
       sampleRate: this.sampleRate,
       channelCount: this.channelCount,
+      activeSourceId: this.active ? this.activeSourceId : null,
+      activeSourceLabel: this.active ? this.activeSourceLabel : null,
     }
   }
 
@@ -301,12 +311,33 @@ class DeviceInputCaptureRuntime {
 
     const audioTrack = stream.getAudioTracks()[0] ?? null
     const trackSettings = audioTrack?.getSettings()
+    const resolvedDeviceId = typeof trackSettings?.deviceId === 'string' && trackSettings.deviceId
+      ? trackSettings.deviceId
+      : deviceId
 
     this.channelCount = Math.max(
       1,
       Math.floor(trackSettings?.channelCount ?? this.sourceNode.channelCount ?? 2),
     )
     this.sampleRate = Math.max(1, Math.floor(this.audioContext.sampleRate))
+    this.activeSourceId = resolvedDeviceId ?? null
+    this.activeSourceLabel = audioTrack?.label || null
+  }
+
+  private releaseStream(): void {
+    if (this.sourceNode) {
+      this.sourceNode.disconnect()
+      this.sourceNode = null
+    }
+
+    if (this.stream) {
+      this.stream.getTracks().forEach((track) => track.stop())
+      this.stream = null
+    }
+
+    this.currentDeviceId = null
+    this.activeSourceId = null
+    this.activeSourceLabel = null
   }
 
   private syncGainNode(): void {
@@ -336,7 +367,7 @@ class DeviceInputCaptureBackend implements CaptureBackend {
   constructor(private readonly runtime: DeviceInputCaptureRuntime) {}
 
   async start(request?: CaptureBackendStartRequest): Promise<void> {
-    await this.runtime.startDevice(request?.deviceId)
+    await this.runtime.startDevice(request?.deviceId, request?.forceRestart === true)
   }
 
   async stop(): Promise<void> {
@@ -366,6 +397,8 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
   private channelCount = 2
   private supportReason: string | null
   private performanceOffsetMilliseconds = 0
+  private activeSourceId: string | null = null
+  private activeSourceLabel: string | null = null
 
   constructor(private readonly supportEntry: CaptureBackendSupportEntry) {
     this.supportReason = supportEntry.reason
@@ -393,6 +426,8 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
 
     this.sampleRate = Math.max(1, Math.floor(startResult.sampleRate) || 48000)
     this.channelCount = Math.max(1, Math.floor(startResult.channelCount) || 2)
+    this.activeSourceId = startResult.deviceId || null
+    this.activeSourceLabel = startResult.deviceLabel || null
     this.supportReason = null
     this.active = true
     this.startPolling()
@@ -402,6 +437,8 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
     this.stopPolling()
     this.getNativeCaptureModule()?.stop()
     this.active = false
+    this.activeSourceId = null
+    this.activeSourceLabel = null
   }
 
   async listSources(): Promise<CaptureSourceDescriptor[]> {
@@ -440,6 +477,8 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
       reason: this.supportReason,
       sampleRate: this.sampleRate,
       channelCount: this.channelCount,
+      activeSourceId: this.active ? this.activeSourceId : null,
+      activeSourceLabel: this.active ? this.activeSourceLabel : null,
     }
   }
 
@@ -575,8 +614,14 @@ class NativeUnavailableCaptureBackend implements CaptureBackend {
       reason: this.reason,
       sampleRate: 48000,
       channelCount: 2,
+      activeSourceId: null,
+      activeSourceLabel: null,
     }
   }
+}
+
+interface CaptureStartOptions {
+  forceDeviceRestart?: boolean
 }
 
 class AudioCapture {
@@ -632,15 +677,13 @@ class AudioCapture {
     await this.start()
   }
 
-  async startDevice(deviceId?: string): Promise<void> {
+  async startDevice(deviceId?: string, options: CaptureStartOptions = {}): Promise<void> {
     this.captureMode = 'device'
-    if (deviceId) {
-      this.selectedDeviceId = deviceId
-    }
-    await this.start()
+    this.selectedDeviceId = deviceId ?? null
+    await this.start(undefined, options)
   }
 
-  async start(deviceId?: string): Promise<void> {
+  async start(deviceId?: string, options: CaptureStartOptions = {}): Promise<void> {
     if (deviceId) {
       this.selectedDeviceId = deviceId
       this.captureMode = 'device'
@@ -656,7 +699,10 @@ class AudioCapture {
       ? this.selectedDeviceId ?? undefined
       : this.selectedSystemSourceId ?? DEFAULT_SYSTEM_SOURCE_ID
 
-    await requestedBackend.start({ deviceId: requestedDeviceId })
+    await requestedBackend.start({
+      deviceId: requestedDeviceId,
+      forceRestart: this.captureMode === 'device' && options.forceDeviceRestart === true,
+    })
     this.activeBackend = requestedBackend
 
     const backendStatus = requestedBackend.getStatus()
@@ -727,13 +773,16 @@ class AudioCapture {
 
   getStatus(): CaptureManagerStatus {
     const backendStatus = this.activeBackend?.getStatus()
+    const isCapturing = Boolean(backendStatus?.active && this.sessionId !== null)
     return {
       captureMode: this.captureMode,
       activeBackendKind: this.activeBackend?.kind ?? null,
       backendSupport: this.backendSupport,
       sampleRate: backendStatus?.sampleRate ?? 48000,
       channelCount: backendStatus?.channelCount ?? 2,
-      isCapturing: Boolean(this.activeBackend?.getStatus().active && this.sessionId !== null),
+      isCapturing,
+      activeSourceId: isCapturing ? backendStatus?.activeSourceId ?? null : null,
+      activeSourceLabel: isCapturing ? backendStatus?.activeSourceLabel ?? null : null,
     }
   }
 
