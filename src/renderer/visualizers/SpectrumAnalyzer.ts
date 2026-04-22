@@ -13,6 +13,11 @@ import {
   resolveSpectrumPitchInfo,
   type SpectrumPeakInfo,
 } from '../../types/spectrum'
+import {
+  HEAT_LOW_DB,
+  HEAT_MID_DB,
+  normalizeHeatDb,
+} from './heatScale'
 
 type SpectrumStereoChunk = {
   left: Float32Array
@@ -193,15 +198,13 @@ function lerpChannel(start: number, end: number, amount: number): number {
 
 function buildHeatStops(colors: [string, string, string]): HeatStop[] {
   if (isLegacyDefaultHeatColors(colors)) {
-    // Preserve Prism's original default spectrum heatmap instead of flattening it
-    // into the generic themed stop builder.
     return [
       { at: 0, color: [0, 0, 0, 0] },
-      { at: 0.14, color: [15, 7, 33, 255] },
-      { at: 0.32, color: [61, 11, 94, 255] },
-      { at: 0.54, color: [163, 26, 121, 255] },
-      { at: 0.74, color: [255, 82, 87, 255] },
-      { at: 0.9, color: [255, 166, 63, 255] },
+      { at: normalizeHeatDb(-80), color: [15, 7, 33, 255] },
+      { at: normalizeHeatDb(-70), color: [61, 11, 94, 255] },
+      { at: normalizeHeatDb(-60), color: [163, 26, 121, 255] },
+      { at: normalizeHeatDb(-45), color: [255, 82, 87, 255] },
+      { at: normalizeHeatDb(-35), color: [255, 166, 63, 255] },
       { at: 1, color: [255, 241, 209, 255] },
     ]
   }
@@ -212,9 +215,9 @@ function buildHeatStops(colors: [string, string, string]): HeatStop[] {
 
   return [
     { at: 0, color: [0, 0, 0, 0] },
-    { at: 0.2, color: scaleHeatColor(low, 0.5) },
-    { at: 0.48, color: low },
-    { at: 0.76, color: mid },
+    { at: normalizeHeatDb(-90), color: scaleHeatColor(low, 0.5) },
+    { at: normalizeHeatDb(HEAT_LOW_DB), color: low },
+    { at: normalizeHeatDb(HEAT_MID_DB), color: mid },
     { at: 1, color: high },
   ]
 }
@@ -822,7 +825,7 @@ export class SpectrumAnalyzer {
       xOut[index] = x
       yOut[index] = height - clampedNormalized * height
       if (heatmapIntensityOut) {
-        heatmapIntensityOut[index] = Math.pow(clampedNormalized, HEATMAP_GAMMA)
+        heatmapIntensityOut[index] = Math.pow(normalizeHeatDb(db), HEATMAP_GAMMA)
       }
 
       if (capturePeakInfo) {

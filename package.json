@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "version": "0.1.0",
+  "version": "0.1.0-beta",
   "description": "Open-source audio metering and visualization tool",
   "main": "./out/main/index.js",
   "scripts": {

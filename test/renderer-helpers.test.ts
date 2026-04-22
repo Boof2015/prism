@@ -67,6 +67,13 @@ import {
   NativeVisualizerTransport,
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
+import {
+  HEAT_LOW_DB,
+  HEAT_MAX_DB,
+  HEAT_MID_DB,
+  HEAT_MIN_DB,
+  normalizeHeatDb,
+} from '../src/renderer/visualizers/heatScale'
 import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
@@ -838,6 +845,69 @@ function renderSpectrumHeatmap(
   }
 }
 
+function projectSpectrumDb(options: Partial<SpectrumAnalyzerOptions>, db: number): {
+  heatmapIntensity: number[]
+  yPoints: number[]
+} {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    dataSource,
+    ...options,
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      fillSpectrumPoints: (
+        frequencyData: Float32Array,
+        dataLength: number,
+        width: number,
+        height: number,
+        minFrequency: number,
+        maxFrequency: number,
+        nyquist: number,
+        tiltDbPerOctave: number,
+        xOut: Float32Array,
+        yOut: Float32Array,
+        heatmapIntensityOut: Float32Array | null,
+      ) => { pointCount: number }
+    }
+    const pointCount = 2
+    const xOut = new Float32Array(pointCount)
+    const yOut = new Float32Array(pointCount)
+    const heatmapIntensity = new Float32Array(pointCount)
+    const result = state.fillSpectrumPoints(
+      Float32Array.from([db, db, db, db]),
+      4,
+      pointCount,
+      100,
+      20,
+      40,
+      2000,
+      0,
+      xOut,
+      yOut,
+      heatmapIntensity,
+    )
+
+    return {
+      heatmapIntensity: Array.from(heatmapIntensity.subarray(0, result.pointCount)),
+      yPoints: Array.from(yOut.subarray(0, result.pointCount)),
+    }
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+}
+
 function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, values: number[]): number[] {
   const recorder = createFakeCanvasRecorder()
   const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
@@ -1213,6 +1283,42 @@ test('spectrum pitch helpers format nearest note with octave and cents', () => {
   assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(Number.NaN)), '--')
 })
 
+test('normalizeHeatDb uses the shared hybrid heat window', () => {
+  assert.equal(normalizeHeatDb(HEAT_MIN_DB), 0)
+  assert.equal(normalizeHeatDb(-60), 0.5)
+  assert.equal(normalizeHeatDb(HEAT_MAX_DB), 1)
+  assert.equal(normalizeHeatDb(-140), 0)
+  assert.equal(normalizeHeatDb(12), 1)
+  assert.equal(normalizeHeatDb(Number.NaN), 0)
+})
+
+test('SpectrumAnalyzer heat intensity uses shared heat scale without changing line geometry', () => {
+  const referenceDb = -60
+  const defaultLine = projectSpectrumDb({
+    minDecibels: -90,
+    maxDecibels: -10,
+  }, referenceDb)
+  const expandedLine = projectSpectrumDb({
+    minDecibels: -120,
+    maxDecibels: 0,
+  }, referenceDb)
+  const expectedHeat = Math.pow(normalizeHeatDb(referenceDb), 1.4)
+
+  assertAlmostEqual(defaultLine.heatmapIntensity[0], expectedHeat, 1e-6, 'heat intensity should use shared heat dB normalization')
+  assertArraysAlmostEqual(
+    defaultLine.heatmapIntensity,
+    expandedLine.heatmapIntensity,
+    1e-6,
+    'heat intensity should ignore spectrum line min/max dB options',
+  )
+  assertArraysDiffer(
+    defaultLine.yPoints,
+    expandedLine.yPoints,
+    1e-6,
+    'line geometry should still respond to spectrum line min/max dB options',
+  )
+})
+
 test('SpectrumAnalyzer heatmap output does not change when only line smoothing changes', () => {
   const looseLine = renderSpectrumSnapshot({
     smoothing: 0,
@@ -1357,6 +1463,97 @@ test('Spectrogram heatmap preserves authored alpha in generated image data', () 
 
   assert.equal(imageData[3], 0)
   assert.equal(imageData[7] > 0 && imageData[7] < 255, true)
+  assert.equal(imageData[11], 255)
+})
+
+test('Spectrogram keeps the historical display dB range for line thickness', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const spectrogram = new Spectrogram(createFakeCanvas(), { dataSource })
+
+  try {
+    const state = spectrogram as unknown as {
+      options: {
+        minDecibels: number
+        maxDecibels: number
+      }
+    }
+    assert.equal(state.options.minDecibels, -90)
+    assert.equal(state.options.maxDecibels, -12)
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
+test('Spectrogram heat compensation does not change display intensity range', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const canvas = createFakeCanvas()
+  canvas.width = 1
+  canvas.height = 1
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    clarityMode: 'classic',
+    minDecibels: -90,
+    maxDecibels: -12,
+  })
+
+  try {
+    const state = spectrogram as unknown as {
+      drawColumn: (magnitudes: Float32Array) => Float32Array
+      heatColumnValues: Float32Array
+      rowCenterBins: Float32Array
+      rowBandStartBins: Float32Array
+      rowBandEndBins: Float32Array
+    }
+    state.rowCenterBins = Float32Array.from([1])
+    state.rowBandStartBins = Float32Array.from([0.5])
+    state.rowBandEndBins = Float32Array.from([1.5])
+
+    const magnitudes = new Float32Array(24)
+    magnitudes.fill(-120)
+    magnitudes[1] = -66
+    const values = state.drawColumn(magnitudes)
+    const expectedDisplay = Math.pow((-66 - (-90)) / (-12 - (-90)), 1.4)
+    const expectedHeat = normalizeHeatDb(-60)
+
+    assertAlmostEqual(values[0], expectedDisplay, 1e-6, 'display intensity should keep the historical spectrogram range')
+    assertAlmostEqual(state.heatColumnValues[0], expectedHeat, 1e-6, 'heat color should use compensated dB against the shared heat range')
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
+test('Spectrogram custom heat colors land on shared low mid and high thresholds', () => {
+  const imageData = renderSpectrogramColumnImage({
+    heatColors: [
+      'rgb(10, 20, 30)',
+      'rgb(40, 50, 60)',
+      'rgb(70, 80, 90)',
+    ],
+  }, [
+    normalizeHeatDb(HEAT_LOW_DB),
+    normalizeHeatDb(HEAT_MID_DB),
+    normalizeHeatDb(HEAT_MAX_DB),
+  ])
+
+  assert.deepEqual(imageData.slice(0, 3), [10, 20, 30])
+  assert.deepEqual(imageData.slice(4, 7), [40, 50, 60])
+  assert.deepEqual(imageData.slice(8, 11), [70, 80, 90])
+  assert.equal(imageData[3] > 0 && imageData[3] < imageData[7], true)
+  assert.equal(imageData[7] > imageData[3] && imageData[7] < imageData[11], true)
   assert.equal(imageData[11], 255)
 })
 

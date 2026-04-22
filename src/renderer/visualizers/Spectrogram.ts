@@ -13,6 +13,11 @@ import {
   type SpectrogramClarityMode,
   type SpectrogramScaleMode,
 } from '../../types/spectrogram'
+import {
+  HEAT_LOW_DB,
+  HEAT_MID_DB,
+  normalizeHeatDb,
+} from './heatScale'
 
 export interface SpectrogramDataSource extends VisualizerSessionSource {
   getPendingSpectrogramSamples: () => Float32Array[]
@@ -42,6 +47,8 @@ interface SpectrogramClarityProfile {
   sharpness: number  // local peak suppression exponent (0 = off, higher = thinner lines)
   tiltDb: number     // dB/octave frequency compensation
 }
+
+const SPECTROGRAM_HEAT_GAIN_COMPENSATION_DB = 6
 
 const defaultOptions: ResolvedSpectrogramOptions = {
   fftSize: 4096,
@@ -258,11 +265,11 @@ function buildHeatStops(colors: [string, string, string]): ColorStop[] {
   if (isLegacyDefaultHeatColors(colors)) {
     return [
       { at: 0, color: [0, 0, 0, 0] },
-      { at: 0.14, color: [15, 7, 33, 255] },
-      { at: 0.32, color: [61, 11, 94, 255] },
-      { at: 0.54, color: [163, 26, 121, 255] },
-      { at: 0.74, color: [255, 82, 87, 255] },
-      { at: 0.9, color: [255, 166, 63, 255] },
+      { at: normalizeHeatDb(-80), color: [15, 7, 33, 255] },
+      { at: normalizeHeatDb(-70), color: [61, 11, 94, 255] },
+      { at: normalizeHeatDb(-60), color: [163, 26, 121, 255] },
+      { at: normalizeHeatDb(-45), color: [255, 82, 87, 255] },
+      { at: normalizeHeatDb(-35), color: [255, 166, 63, 255] },
       { at: 1, color: [255, 241, 209, 255] },
     ]
   }
@@ -273,9 +280,9 @@ function buildHeatStops(colors: [string, string, string]): ColorStop[] {
 
   return [
     { at: 0, color: [0, 0, 0, 0] },
-    { at: 0.2, color: scaleHeatColor(low, 0.5) },
-    { at: 0.48, color: low },
-    { at: 0.76, color: mid },
+    { at: normalizeHeatDb(-90), color: scaleHeatColor(low, 0.5) },
+    { at: normalizeHeatDb(HEAT_LOW_DB), color: low },
+    { at: normalizeHeatDb(HEAT_MID_DB), color: mid },
     { at: 1, color: high },
   ]
 }
@@ -337,6 +344,7 @@ export class Spectrogram {
   private rowBandEndBins = new Float32Array(0)
   private columnValues = new Float32Array(0)
   private rawColumnValues = new Float32Array(0)
+  private heatColumnValues = new Float32Array(0)
   private columnImageData: ImageData | null = null
   private heatLut: Uint8ClampedArray
 
@@ -455,15 +463,16 @@ export class Spectrogram {
 
     this.columnValues = new Float32Array(height)
     this.rawColumnValues = new Float32Array(height)
+    this.heatColumnValues = new Float32Array(height)
     this.columnImageData = new ImageData(1, height)
   }
 
-  private shiftAndPaintColumn(values: Float32Array): void {
+  private shiftAndPaintColumn(values: Float32Array, heatValues: Float32Array = values): void {
     const width = this.waterfallCanvas.width
     const height = this.waterfallCanvas.height
     if (width <= 0 || height <= 0 || !this.columnImageData) return
 
-    this.paintColumnImage(values)
+    this.paintColumnImage(values, heatValues)
 
     // Shift existing content left by 1 pixel
     const previousCompositeOperation = this.waterfallCtx.globalCompositeOperation
@@ -578,7 +587,7 @@ export class Spectrogram {
     return magnitudes
   }
 
-  private paintColumnImage(values: Float32Array): void {
+  private paintColumnImage(values: Float32Array, heatValues: Float32Array = values): void {
     if (!this.columnImageData) return
 
     const imageData = this.columnImageData.data
@@ -588,7 +597,8 @@ export class Spectrogram {
 
     for (let row = 0; row < values.length; row += 1) {
       const intensity = Math.max(0, Math.min(1, values[row]))
-      const lutIndex = Math.round(intensity * 255)
+      const heatIntensity = Math.max(0, Math.min(1, heatValues[row] ?? intensity))
+      const lutIndex = Math.round(heatIntensity * 255)
       const dataIndex = row * 4
 
       if (this.options.colorScheme === 'heat') {
@@ -612,6 +622,7 @@ export class Spectrogram {
     this.ensureColumnBuffers(height)
     const values = this.columnValues
     const raw = this.rawColumnValues
+    const heat = this.heatColumnValues
     const numBins = magnitudes.length
 
     const clarity = getClarityProfile(this.options.clarityMode)
@@ -636,7 +647,9 @@ export class Spectrogram {
       // Frequency-based tilt — dB per octave from reference, scale-mode independent
       const centerFreq = Math.max(1, centerBin * binWidth)
       const tiltAmount = clarity.tiltDb * Math.log2(centerFreq / TILT_REFERENCE_HZ)
-      raw[row] = clamp01(((db + tiltAmount) - minDecibels) / dbRange)
+      const tiltedDb = db + tiltAmount
+      raw[row] = clamp01((tiltedDb - minDecibels) / dbRange)
+      heat[row] = normalizeHeatDb(tiltedDb + SPECTROGRAM_HEAT_GAIN_COMPENSATION_DB)
     }
 
     // Pass 2: local peak suppression — thin spectral lines for sharp/sharper modes
@@ -669,7 +682,9 @@ export class Spectrogram {
         // Suppress off-peak values: peak stays bright, slopes get crushed
         if (localMax > 1e-6) {
           const ratio = raw[row] / localMax
-          raw[row] *= Math.pow(ratio, effectiveSharpness)
+          const suppression = Math.pow(ratio, effectiveSharpness)
+          raw[row] *= suppression
+          heat[row] *= suppression
         }
       }
     }
@@ -752,7 +767,7 @@ export class Spectrogram {
           const magnitudes = this.processFFT(this.sampleBuffer)
           const values = this.drawColumn(magnitudes)
           // Each FFT hop = exactly 1 pixel column. No accumulation, no duplication.
-          this.shiftAndPaintColumn(values)
+          this.shiftAndPaintColumn(values, this.heatColumnValues)
 
           this.sampleBuffer.copyWithin(0, hopSize)
           this.sampleBufferPos = overlapSamples
