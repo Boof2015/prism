@@ -55,6 +55,7 @@ declare global {
       repositionWindow: (position: 'top' | 'bottom') => void
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
+      isCursorInsideWindow: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
       getNowPlayingState: () => Promise<NowPlayingState>
       setNowPlayingConsumerActive: (active: boolean) => Promise<NowPlayingState>

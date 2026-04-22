@@ -20,6 +20,7 @@ export default function App(): JSX.Element {
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const settingsOpenRef = useRef(false)
   const externalProfileOpenQueueRef = useRef(Promise.resolve())
 
   const initializeProfiles = useSettingsStore((s) => s.initializeProfiles)
@@ -175,12 +176,67 @@ export default function App(): JSX.Element {
     setToolbarVisible(true)
   }, [])
 
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen
+    if (settingsOpen) {
+      showToolbar()
+    }
+  }, [settingsOpen, showToolbar])
+
   const scheduleHide = useCallback(() => {
-    if (settingsOpen) return
+    if (settingsOpenRef.current || hideTimeoutRef.current) return
+
     hideTimeoutRef.current = setTimeout(() => {
+      hideTimeoutRef.current = null
+      if (settingsOpenRef.current) return
       setToolbarVisible(false)
     }, 400)
-  }, [settingsOpen])
+  }, [])
+
+  const handleToolbarHoverLeave = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const relatedTarget = event.relatedTarget
+    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+      return
+    }
+
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const isPointerInside = event.clientX > bounds.left
+      && event.clientX < bounds.right
+      && event.clientY > bounds.top
+      && event.clientY < bounds.bottom
+
+    if (isPointerInside) {
+      showToolbar()
+      return
+    }
+
+    scheduleHide()
+  }, [scheduleHide, showToolbar])
+
+  useEffect(() => {
+    if (!toolbarVisible || settingsOpen) return
+
+    let isDisposed = false
+    const checkCursorInsideWindow = (): void => {
+      void window.electronAPI.isCursorInsideWindow()
+        .then((isInside) => {
+          if (!isDisposed && !isInside) {
+            scheduleHide()
+          }
+        })
+        .catch(() => {
+          // Renderer leave events still handle auto-hide if the cursor query is unavailable.
+        })
+    }
+
+    checkCursorInsideWindow()
+    const interval = setInterval(checkCursorInsideWindow, 120)
+
+    return () => {
+      isDisposed = true
+      clearInterval(interval)
+    }
+  }, [scheduleHide, settingsOpen, toolbarVisible])
 
   const handleToggleSettings = useCallback(() => {
     toggleSettings()
@@ -222,7 +278,8 @@ export default function App(): JSX.Element {
     <div
       className="prism-app"
       onMouseEnter={showToolbar}
-      onMouseLeave={scheduleHide}
+      onMouseMove={showToolbar}
+      onMouseLeave={handleToolbarHoverLeave}
       onMouseDown={useNativeDragRegions ? undefined : handleAltDragStart}
       onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
     >

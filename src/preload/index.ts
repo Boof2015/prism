@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
+  isCursorInsideWindow: () => ipcRenderer.invoke('window:is-cursor-inside') as Promise<boolean>,
   getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
   getNowPlayingState: () => ipcRenderer.invoke('now-playing:get-state') as Promise<NowPlayingState>,
   setNowPlayingConsumerActive: (active: boolean) => ipcRenderer.invoke('now-playing:set-active', active) as Promise<NowPlayingState>,

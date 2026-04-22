@@ -695,6 +695,16 @@ function stopWindowResizeController(): void {
   resizeEdge = null
 }
 
+function isCursorInsideWindow(window: BrowserWindow): boolean {
+  const cursor = screen.getCursorScreenPoint()
+  const bounds = window.getBounds()
+
+  return cursor.x > bounds.x
+    && cursor.x < bounds.x + bounds.width
+    && cursor.y > bounds.y
+    && cursor.y < bounds.y + bounds.height
+}
+
 function getFramelessWindowChromeOptions(): Pick<
   BrowserWindowConstructorOptions,
   'frame' | 'transparent' | 'backgroundColor' | 'roundedCorners' | 'hasShadow' | 'thickFrame' | 'backgroundMaterial'
@@ -1443,6 +1453,11 @@ function setupIPC(): void {
 
   ipcMain.handle('window:is-always-on-top', (event) => {
     return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? false
+  })
+
+  ipcMain.handle('window:is-cursor-inside', (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    return targetWindow ? isCursorInsideWindow(targetWindow) : false
   })
 
   ipcMain.handle('app:get-build-info', () => {
