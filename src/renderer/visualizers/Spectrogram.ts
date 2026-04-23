@@ -1,5 +1,5 @@
 import { audioRouter } from '../audio/AudioRouter'
-import { parseColorToRgba, resolveColorToRgb } from '../utils/color'
+import { parseColorToRgba, resolveColorToRgb, type RgbaColor } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
@@ -591,9 +591,9 @@ export class Spectrogram {
     if (!this.columnImageData) return
 
     const imageData = this.columnImageData.data
-    const { r: tintR, g: tintG, b: tintB } = this.options.colorScheme === 'mono'
-      ? resolveColorToRgb(this.options.lineColor)
-      : { r: 0, g: 0, b: 0 }
+    const tint: RgbaColor = this.options.colorScheme === 'mono'
+      ? parseColorToRgba(this.options.lineColor) ?? { ...resolveColorToRgb(this.options.lineColor), a: 1 }
+      : { r: 0, g: 0, b: 0, a: 1 }
 
     for (let row = 0; row < values.length; row += 1) {
       const intensity = Math.max(0, Math.min(1, values[row]))
@@ -607,10 +607,10 @@ export class Spectrogram {
         imageData[dataIndex + 2] = this.heatLut[(lutIndex * 4) + 2]
         imageData[dataIndex + 3] = Math.round(this.heatLut[(lutIndex * 4) + 3] * intensity)
       } else {
-        imageData[dataIndex] = Math.round(tintR * intensity)
-        imageData[dataIndex + 1] = Math.round(tintG * intensity)
-        imageData[dataIndex + 2] = Math.round(tintB * intensity)
-        imageData[dataIndex + 3] = 255
+        imageData[dataIndex] = tint.r
+        imageData[dataIndex + 1] = tint.g
+        imageData[dataIndex + 2] = tint.b
+        imageData[dataIndex + 3] = Math.round(255 * tint.a * intensity)
       }
     }
   }

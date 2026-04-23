@@ -1466,6 +1466,32 @@ test('Spectrogram heatmap preserves authored alpha in generated image data', () 
   assert.equal(imageData[11], 255)
 })
 
+test('Spectrogram solid color uses intensity as alpha while preserving tint RGB', () => {
+  const imageData = renderSpectrogramColumnImage({
+    colorScheme: 'mono',
+    lineColor: 'rgb(10, 20, 30)',
+  }, [0, 0.5, 1])
+
+  assert.deepEqual(imageData.slice(0, 3), [10, 20, 30])
+  assert.equal(imageData[3], 0)
+  assert.deepEqual(imageData.slice(4, 7), [10, 20, 30])
+  assert.equal(imageData[7], 128)
+  assert.deepEqual(imageData.slice(8, 11), [10, 20, 30])
+  assert.equal(imageData[11], 255)
+})
+
+test('Spectrogram solid color honors authored tint alpha', () => {
+  const imageData = renderSpectrogramColumnImage({
+    colorScheme: 'mono',
+    lineColor: 'rgba(100, 150, 200, 0.5)',
+  }, [0.5, 1])
+
+  assert.deepEqual(imageData.slice(0, 3), [100, 150, 200])
+  assert.equal(imageData[3], 64)
+  assert.deepEqual(imageData.slice(4, 7), [100, 150, 200])
+  assert.equal(imageData[7], 128)
+})
+
 test('Spectrogram keeps the historical display dB range for line thickness', () => {
   const dom = installFakeCanvasDom()
   const dataSource = {

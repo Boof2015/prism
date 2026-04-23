@@ -440,7 +440,7 @@ export default function ScopeSettingsSection({
                 onChange={(value) => onUpdate('spectrogram', { colorScheme: value as ScopeSettings['spectrogram']['colorScheme'] })}
               >
                 <option value="heat">Heat</option>
-                <option value="mono">Mono</option>
+                <option value="mono">Solid</option>
               </SelectControl>
 
               <RangeControl
