@@ -568,38 +568,489 @@ function cloneTheme(theme: PrismTheme): PrismTheme {
   return JSON.parse(JSON.stringify(theme)) as PrismTheme
 }
 
-function createPresetTheme(name: string, accent: string): PrismTheme {
-  const base = cloneTheme(createDefaultTheme())
-  base.name = name
-  base.app.accent = accent
-  base.controls.surfaceActive = withAlpha(accent, 0.12)
-  base.controls.borderActive = withAlpha(accent, 0.28)
-  base.controls.slider = withAlpha(accent, 0.82)
-  base.spectrum.line = accent
-  base.spectrum.sideLine = withAlpha(accent, 0.5)
-  base.spectrum.fill = withAlpha(accent, 0.34)
-  base.oscilloscope.line = accent
-  base.vectorscope.trace = accent
-  base.spectrogram.mono = accent
-  base.vumeter.level = accent
-  base.vumeter.track = withAlpha(accent, 0.08)
-  base.lufsmeter.level = accent
-  base.lufsmeter.track = withAlpha(accent, 0.08)
-  base.lufsmeter.target = withAlpha(accent, 0.25)
-  base.waveform.line = accent
-  base.nowPlaying.accent = accent
-  base.nowPlaying.progressFill = accent
-  return normalizeTheme(base, name)
-}
+const BUNDLED_TESTER_THEME_FILES = [
+  {
+    name: 'Alpha Centauri',
+    content: `[Theme]
+format = prism-theme
+version = 2
+credit = MxnGxzr
+website = https://www.instagram.com/mxngxzr.jpeg/
+description = It exists
+
+[App]
+accent = 0, 50, 220
+background = 255, 255, 255
+surface = 255, 255, 255, 255
+surface_alt = 255, 255, 255, 250
+border = 255, 255, 255, 23
+text = 0, 0, 0
+text_muted = 0, 0, 0, 200
+toolbar_bg = 255, 255, 255, 199
+settings_bg_top = 255, 255, 255, 235
+settings_bg_bottom = 255, 255, 255, 250
+bottom_bar_bg = 255, 255, 255, 250
+
+[Scopes]
+background = 255, 255, 255
+guides = 0, 0, 0, 170
+
+[Spectrum]
+background = 255, 255, 255
+line = 0, 50, 220
+side_line = 240, 30, 180, 120
+fill = 180, 50, 100, 87
+heat_low = 255, 255, 255
+heat_mid = 15, 30, 240
+heat_high = 240, 30, 180
+heat_base = 255, 255, 255
+guides = 0, 0, 0, 40
+labels = 0, 0, 0, 40
+
+[Oscilloscope]
+line = 0, 50, 220
+fill = 240, 30, 180, 100
+guides = 0, 0, 0, 40
+
+[Vectorscope]
+band_low = 0, 50, 180
+band_mid = 11, 180, 140
+band_high = 200, 50, 180
+guides = 0, 0, 0, 70
+labels = 0, 0, 0, 70
+
+[Spectrogram]
+background = 255, 255, 255, 0
+mono = 255, 105, 180
+heat_low = 15, 30, 240
+heat_mid = 15, 30, 240
+heat_high = 255, 105, 180
+
+[VUMeter]
+peak = 240, 30, 180
+scale = 0, 0, 0, 100
+labels = 0, 0, 0, 120
+
+[LUFSMeter]
+level = 0, 50, 220
+track = 0, 50, 220, 20
+target = 0, 50, 220, 120
+scale = 0, 0, 0, 200
+labels = 0, 0, 0, 225
+
+[Waveform]
+line = 0, 0, 0, 120
+band_low = 0, 50, 180
+band_mid = 70, 160, 240
+band_high = 255, 105, 180
+guides = 0, 0, 0, 120
+`,
+  },
+  {
+    name: 'Chroma Blue',
+    content: `[Theme]
+format = prism-theme
+version = 2
+credit = Prism
+website = https://astramusic.dev/
+description = Chroma key for transparent overlays
+
+[App]
+accent = 56, 140, 255
+background = 8, 8, 14
+surface = 10, 10, 18, 235
+surface_alt = 8, 8, 14, 250
+border = 180, 200, 240, 23
+text = 255, 255, 255
+text_muted = 160, 180, 220
+success = 0, 210, 100
+warning = 255, 210, 0
+danger = 255, 75, 75
+toolbar_bg = 8, 8, 14, 205
+settings_bg_top = 10, 10, 18, 235
+settings_bg_bottom = 8, 8, 14, 250
+bottom_bar_bg = 8, 8, 14, 250
+
+[Controls]
+surface = 20, 30, 80, 15
+surface_hover = 20, 30, 80, 28
+surface_active = 56, 140, 255, 38
+border = 160, 180, 220, 22
+border_active = 56, 140, 255, 85
+text = 255, 255, 255, 235
+input_surface = 6, 6, 12, 245
+input_border = 160, 180, 220, 24
+menu_surface = 10, 10, 18, 248
+menu_border = 160, 180, 220, 28
+slider = 56, 140, 255, 210
+flat_controls = true
+
+[Scopes]
+background = 0, 0, 255
+guides = 0, 0, 255
+overlay_surface = 8, 8, 16, 255
+overlay_text = 255, 255, 255, 255
+overlay_border = 160, 180, 220, 255
+resize_handle = 160, 180, 220, 255
+
+[Spectrum]
+background = 0, 0, 255
+line = 255, 255, 255
+side_line = 255, 255, 255, 255
+fill = 255, 255, 255, 0
+heat_low = 0, 0, 255, 255
+heat_high = 255, 255, 255, 255
+heat_base = 0, 0, 255, 255
+guides = 0, 0, 255
+labels = 0, 0, 255
+
+[Oscilloscope]
+background = 0, 0, 255
+line = 255, 255, 255
+fill = 255, 255, 255, 255
+guides = 0, 0, 255
+
+[Vectorscope]
+background = 0, 0, 255
+trace = 255, 255, 255
+band_low = 255, 255, 255, 120
+band_mid = 255, 255, 255, 120
+band_high = 255, 255, 255, 120
+guides = 0, 0, 255
+labels = 0, 0, 255
+
+[Spectrogram]
+background = 0, 0, 255
+mono = 255, 255, 255
+heat_low = 0, 0, 255, 255
+heat_high = 255, 255, 255, 255
+
+[VUMeter]
+background = 0, 0, 255
+level = 255, 255, 255
+track = 255, 255, 255, 255
+peak = 255, 220, 0
+clip = 255, 75, 75, 255
+scale = 0, 0, 255
+labels = 0, 0, 255
+
+[LUFSMeter]
+background = 0, 0, 255
+level = 255, 255, 255
+track = 255, 255, 255, 255
+target = 255, 255, 255, 255
+scale = 0, 0, 255
+labels = 0, 0, 255
+
+[Waveform]
+background = 0, 0, 255
+line = 255, 255, 255
+band_low = 255, 255, 255, 120
+band_mid = 255, 255, 255, 120
+band_high = 255, 255, 255, 120
+guides = 0, 0, 255
+
+[Now Playing]
+accent = 56, 140, 255
+background = 8, 8, 14, 255
+surface = 10, 10, 18, 255
+border = 160, 180, 220, 255
+text = 255, 255, 255
+progress_track = 30, 60, 160, 45
+progress_fill = 56, 140, 255
+button_surface = 20, 30, 80, 18
+button_border = 160, 180, 220, 255
+status_ok = 0, 210, 100
+status_error = 255, 75, 75
+`,
+  },
+  {
+    name: 'Chroma Green',
+    content: `[Theme]
+format = prism-theme
+version = 2
+credit = Prism
+website = https://astramusic.dev/
+description = Chroma key for transparent overlays
+
+[App]
+accent = 0, 230, 80
+background = 8, 12, 8
+surface = 10, 15, 10, 235
+surface_alt = 8, 12, 8, 250
+border = 200, 240, 200, 23
+text = 255, 255, 255
+text_muted = 160, 210, 160
+success = 0, 230, 80
+warning = 255, 210, 0
+danger = 255, 75, 75
+toolbar_bg = 8, 12, 8, 205
+settings_bg_top = 10, 15, 10, 235
+settings_bg_bottom = 8, 12, 8, 250
+bottom_bar_bg = 8, 12, 8, 250
+
+[Controls]
+surface = 0, 50, 20, 15
+surface_hover = 0, 50, 20, 28
+surface_active = 0, 230, 80, 38
+border = 160, 210, 160, 22
+border_active = 0, 230, 80, 85
+text = 255, 255, 255, 235
+input_surface = 6, 10, 6, 245
+input_border = 160, 210, 160, 24
+menu_surface = 10, 15, 10, 248
+menu_border = 160, 210, 160, 28
+slider = 0, 230, 80, 210
+flat_controls = true
+
+[Scopes]
+background = 0, 255, 0
+guides = 0, 255, 0
+overlay_surface = 8, 14, 8, 255
+overlay_text = 255, 255, 255, 255
+overlay_border = 160, 210, 160, 255
+resize_handle = 160, 210, 160, 38
+
+[Spectrum]
+background = 0, 255, 0
+line = 255, 255, 255
+side_line = 255, 255, 255, 255
+fill = 255, 255, 255, 100
+heat_low = 0, 255, 0, 255
+heat_high = 255, 255, 255, 255
+heat_base = 0, 255, 0, 255
+guides = 0, 255, 0
+labels = 0, 255, 0
+
+[Oscilloscope]
+background = 0, 255, 0
+line = 255, 255, 255
+fill = 255, 255, 255, 55
+guides = 0, 255, 0
+
+[Vectorscope]
+background = 0, 255, 0
+trace = 255, 255, 255
+band_low = 255, 255, 255, 120
+band_mid = 255, 255, 255, 120
+band_high = 255, 255, 255, 120
+guides = 0, 255, 0
+labels = 0, 255, 0
+
+[Spectrogram]
+background = 0, 255, 0
+mono = 255, 255, 255
+heat_low = 0, 255, 0, 255
+heat_high = 255, 255, 255, 255
+
+[VUMeter]
+background = 0, 255, 0
+level = 255, 255, 255
+track = 255, 255, 255, 28
+peak = 255, 220, 0
+clip = 255, 75, 75, 230
+scale = 0, 255, 0
+labels = 0, 255, 0
+
+[LUFSMeter]
+background = 0, 255, 0
+level = 255, 255, 255
+track = 255, 255, 255, 28
+target = 255, 255, 255, 75
+scale = 0, 255, 0
+labels = 0, 255, 0
+
+[Waveform]
+background = 0, 255, 0
+line = 255, 255, 255
+band_low = 255, 255, 255, 120
+band_mid = 255, 255, 255, 120
+band_high = 255, 255, 255, 120
+guides = 0, 255, 0
+
+[Now Playing]
+accent = 0, 230, 80
+background = 8, 12, 8, 235
+surface = 10, 16, 10, 238
+border = 160, 210, 160, 38
+text = 255, 255, 255
+progress_track = 0, 160, 50, 45
+progress_fill = 0, 230, 80
+button_surface = 0, 50, 20, 18
+button_border = 160, 210, 160, 38
+status_ok = 0, 230, 80
+status_error = 255, 75, 75
+`,
+  },
+  {
+    name: 'Redshift',
+    content: `[Theme]
+format = prism-theme
+version = 2
+credit = Boof2015
+website = https://astramusic.dev/
+description = A very red theme
+
+[App]
+accent = 230, 0, 69
+background = 15, 15, 15
+surface = 12, 13, 14, 235
+surface_alt = 15, 15, 15, 250
+text = 255, 255, 255
+text_muted = 172, 192, 222
+success = 127, 255, 127
+warning = 230, 0, 69
+danger = 230, 0, 69
+toolbar_bg = 12, 13, 14, 199
+settings_bg_top = 12, 13, 14, 235
+settings_bg_bottom = 15, 15, 15, 250
+bottom_bar_bg = 15, 15, 15, 250
+
+[Controls]
+surface = 72, 21, 39, 8
+surface_hover = 72, 21, 39, 15
+surface_active = 230, 0, 69, 31
+border = 172, 192, 222, 20
+border_active = 230, 0, 69, 71
+text = 255, 255, 255, 235
+input_surface = 15, 15, 15, 245
+input_border = 172, 192, 222, 23
+menu_surface = 12, 13, 14, 245
+menu_border = 172, 192, 222, 26
+slider = 230, 0, 69, 209
+
+[Scopes]
+background = 15, 15, 15
+guides = 59, 64, 71
+overlay_surface = 12, 13, 14, 224
+overlay_text = 255, 255, 255, 194
+overlay_border = 172, 192, 222, 31
+resize_handle = 172, 192, 222, 31
+
+[Spectrum]
+line = 255, 255, 255
+side_line = 255, 255, 255, 128
+fill = 230, 0, 69, 87
+heat_low = 180, 20, 40, 200
+heat_mid = 220, 0, 55, 250
+heat_high = 255, 90, 90, 255
+heat_base = 15, 15, 15, 255
+guides = 56, 58, 61
+labels = 56, 58, 61
+
+[Oscilloscope]
+background = 15, 15, 15
+line = 230, 0, 69
+fill = 255, 255, 255, 46
+guides = 56, 58, 61
+
+[Vectorscope]
+background = 15, 15, 15
+trace = 230, 0, 69
+band_low = 230, 0, 69
+band_mid = 102, 90, 255
+band_high = 0, 255, 255
+guides = 56, 58, 61
+labels = 56, 58, 61
+
+[Spectrogram]
+mono = 230, 0, 69
+heat_low = 180, 20, 40, 200
+heat_mid = 220, 0, 55, 250
+heat_high = 255, 90, 90, 255
+
+[VUMeter]
+background = 15, 15, 15
+level = 153, 0, 53
+track = 153, 0, 53, 20
+peak = 230, 0, 69
+clip = 255, 0, 0, 230
+scale = 86, 96, 111
+labels = 86, 96, 111
+
+[LUFSMeter]
+background = 15, 15, 15
+level = 230, 0, 69
+track = 230, 0, 69, 20
+target = 230, 0, 69, 64
+scale = 86, 96, 111
+labels = 86, 96, 111
+
+[Waveform]
+background = 15, 15, 15
+line = 230, 0, 69
+band_low = 230, 0, 69
+band_mid = 102, 90, 255
+band_high = 0, 255, 255
+guides = 86, 96, 111
+
+[Now Playing]
+accent = 230, 0, 69
+background = 15, 15, 15, 230
+surface = 12, 13, 14, 235
+border = 172, 192, 222, 31
+text = 255, 255, 255
+progress_track = 86, 96, 111
+progress_fill = 230, 0, 69
+button_surface = 72, 21, 39, 13
+button_border = 172, 192, 222, 31
+status_ok = 127, 255, 127
+status_error = 230, 0, 69
+`,
+  },
+  {
+    name: 'Stanky Leg',
+    content: `[Theme]
+format = prism-theme
+version = 2
+credit = MrAlibi
+website = https://twitch.tv/mralibitv
+description = I tripped, and now my leg turned too stanky
+
+[App]
+accent = 69, 20, 184
+background = 0, 0, 0
+surface = 69, 20, 184
+surface_alt = 4, 8, 12, 250
+border = 255, 255, 255, 23
+text = 255, 255, 255
+
+[Scopes]
+guides = 255, 255, 255, 26
+
+[Spectrum]
+heat_low = 50, 19, 143
+heat_mid = 173, 73, 191
+heat_high = 255, 15, 223
+heat_base = 0, 0, 0
+
+[Oscilloscope]
+fill = 191, 40, 201, 150
+
+[Vectorscope]
+band_low = 177, 105, 219
+band_mid = 108, 31, 196
+band_high = 69, 20, 184
+
+[Spectrogram]
+mono = 86, 25, 230
+heat_low = 86, 25, 230
+heat_mid = 177, 105, 219
+heat_high = 177, 105, 219
+
+[Waveform]
+line = 86, 25, 230
+band_low = 177, 105, 219
+band_mid = 108, 31, 196
+band_high = 69, 20, 184
+`,
+  },
+] as const
 
 export function createBundledThemes(): PrismTheme[] {
   return [
     createDefaultTheme(),
-    createPresetTheme('Graphite', '#4fc3f7'),
-    createPresetTheme('Midnight', '#4f9bff'),
-    createPresetTheme('Green', '#4ade80'),
-    createPresetTheme('Purple', '#a78bfa'),
-    createPresetTheme('Rose', '#fb7185'),
+    ...BUNDLED_TESTER_THEME_FILES.map((theme) => parseThemeFileContent(theme.content, theme.name)),
   ]
 }
 

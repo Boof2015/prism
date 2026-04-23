@@ -18,6 +18,24 @@ import {
   DEFAULT_THEME_NAME,
 } from '../src/types/theme'
 
+const BUNDLED_THEME_FILE_NAMES = [
+  'Alpha Centauri.iro',
+  'Chroma Blue.iro',
+  'Chroma Green.iro',
+  'Default.iro',
+  'Redshift.iro',
+  'Stanky Leg.iro',
+  '_TEMPLATE.iro',
+].sort()
+
+const OLD_GENERATED_THEME_FILE_NAMES = [
+  'Graphite.iro',
+  'Green.iro',
+  'Midnight.iro',
+  'Purple.iro',
+  'Rose.iro',
+]
+
 async function createHarness(): Promise<{
   cleanup: () => Promise<void>
   library: FileBackedThemeLibrary
@@ -314,11 +332,34 @@ test('Astra renderer consumes Astra-specific button theme vars', async () => {
   assert.match(stylesSource, /\.astra-scope__control:active:not\(:disabled\) \{[\s\S]*background: var\(--astra-button-bg-active\);/)
 })
 
-test('bundled and migrated accent themes recolor every accent-driven scope', () => {
-  const purple = createBundledThemes().find((theme) => theme.name === 'Purple')
-  assert.ok(purple)
-  assert.equal(purple.oscilloscope.line, purple.app.accent)
-  assert.equal(purple.vectorscope.trace, purple.app.accent)
+test('bundled tester themes preserve authored tokens and migrated accent themes recolor every accent-driven scope', () => {
+  const bundledThemes = createBundledThemes()
+  assert.deepEqual(bundledThemes.map((theme) => theme.name), [
+    DEFAULT_THEME_NAME,
+    'Alpha Centauri',
+    'Chroma Blue',
+    'Chroma Green',
+    'Redshift',
+    'Stanky Leg',
+  ])
+
+  const alphaCentauri = bundledThemes.find((theme) => theme.name === 'Alpha Centauri')
+  assert.ok(alphaCentauri)
+  assert.equal(alphaCentauri.credit, 'MxnGxzr')
+  assert.equal(alphaCentauri.website, 'https://www.instagram.com/mxngxzr.jpeg/')
+  assert.equal(alphaCentauri.description, 'It exists')
+  assert.equal(alphaCentauri.app.accent, 'rgb(0, 50, 220)')
+  assert.equal(alphaCentauri.spectrogram.background, 'rgba(255, 255, 255, 0)')
+
+  const chromaGreen = bundledThemes.find((theme) => theme.name === 'Chroma Green')
+  assert.ok(chromaGreen)
+  assert.equal(chromaGreen.controls.flatControls, 'true')
+  assert.equal(chromaGreen.scopes.background, 'rgb(0, 255, 0)')
+
+  const redshift = bundledThemes.find((theme) => theme.name === 'Redshift')
+  assert.ok(redshift)
+  assert.equal(redshift.oscilloscope.line, redshift.app.accent)
+  assert.equal(redshift.vectorscope.trace, redshift.app.accent)
 
   const migrated = createMigratedAccentTheme('#4ade80')
   assert.ok(migrated)
@@ -335,8 +376,10 @@ test('library seeds default themes and template file', async () => {
     assert.equal(snapshot.activeThemeId, DEFAULT_THEME_NAME)
 
     const fileNames = (await readdir(harness.themesDir)).sort()
-    assert.ok(fileNames.includes('Default.iro'))
-    assert.ok(fileNames.includes('_TEMPLATE.iro'))
+    assert.deepEqual(fileNames, BUNDLED_THEME_FILE_NAMES)
+    for (const fileName of OLD_GENERATED_THEME_FILE_NAMES) {
+      assert.equal(fileNames.includes(fileName), false)
+    }
 
     const defaultThemeContent = await readFile(join(harness.themesDir, 'Default.iro'), 'utf8')
     const templateContent = await readFile(join(harness.themesDir, '_TEMPLATE.iro'), 'utf8')
@@ -382,17 +425,19 @@ test('library refreshes shipped bundled themes when their definitions change', a
   try {
     await harness.library.getSnapshot()
 
-    const stalePurple = createDefaultTheme()
-    stalePurple.name = 'Purple'
-    stalePurple.app.accent = 'rgb(167, 139, 250)'
-    stalePurple.oscilloscope.line = 'rgb(56, 189, 248)'
-    stalePurple.vectorscope.trace = 'rgb(56, 189, 248)'
+    const staleRedshift = createDefaultTheme()
+    staleRedshift.name = 'Redshift'
+    staleRedshift.credit = 'Stale'
+    staleRedshift.app.accent = 'rgb(1, 2, 3)'
+    staleRedshift.oscilloscope.line = 'rgb(4, 5, 6)'
+    staleRedshift.vectorscope.trace = 'rgb(7, 8, 9)'
 
-    await writeFile(join(harness.themesDir, 'Purple.iro'), serializeThemeFile(stalePurple), 'utf8')
+    await writeFile(join(harness.themesDir, 'Redshift.iro'), serializeThemeFile(staleRedshift), 'utf8')
 
     const snapshot = await harness.library.reloadThemes()
-    assert.equal(snapshot.themes.Purple.oscilloscope.line, snapshot.themes.Purple.app.accent)
-    assert.equal(snapshot.themes.Purple.vectorscope.trace, snapshot.themes.Purple.app.accent)
+    assert.equal(snapshot.themes.Redshift.credit, 'Boof2015')
+    assert.equal(snapshot.themes.Redshift.oscilloscope.line, snapshot.themes.Redshift.app.accent)
+    assert.equal(snapshot.themes.Redshift.vectorscope.trace, snapshot.themes.Redshift.app.accent)
   } finally {
     await harness.cleanup()
   }
@@ -442,7 +487,7 @@ test('legacy migration can create an accent theme and make it active', async () 
   }
 })
 
-test('library remaps legacy active theme ids in local state to filename-derived keys', async () => {
+test('library falls back when legacy active theme ids target retired bundled themes', async () => {
   const harness = await createHarness()
 
   try {
@@ -455,12 +500,12 @@ test('library remaps legacy active theme ids in local state to filename-derived 
     }, null, 2))
 
     const snapshot = await harness.library.getSnapshot()
-    assert.equal(snapshot.activeThemeId, 'Midnight')
+    assert.equal(snapshot.activeThemeId, DEFAULT_THEME_NAME)
 
     const localState = JSON.parse(await readFile(harness.localStatePath, 'utf8')) as {
       activeThemeId: string | null
     }
-    assert.equal(localState.activeThemeId, 'Midnight')
+    assert.equal(localState.activeThemeId, DEFAULT_THEME_NAME)
   } finally {
     await harness.cleanup()
   }
