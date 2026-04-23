@@ -1665,7 +1665,7 @@ button.toolbar__version:hover {
   padding: 0 14px;
   border-radius: 10px;
   border: 1px solid transparent;
-  background: linear-gradient(180deg, var(--input-bg), var(--settings-bg-bottom));
+  background: var(--control-bg);
   color: var(--text-secondary);
   font-size: 9px;
   cursor: pointer;
@@ -1678,7 +1678,7 @@ button.toolbar__version:hover {
 .settings-panel__close:hover {
   color: var(--text-primary);
   border-color: var(--control-border-active);
-  background: linear-gradient(180deg, var(--input-bg-focus), var(--settings-bg-bottom));
+  background: var(--control-bg-hover);
 }
 
 .bottom-bar {

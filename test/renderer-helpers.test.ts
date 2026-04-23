@@ -2490,6 +2490,21 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
 })
 
+test('BottomBar close button uses flat themed control backgrounds', async () => {
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const closeBlock = [...stylesSource.matchAll(/^\.settings-panel__close \{([\s\S]*?)\n\}/gm)]
+    .map((match) => match[1])
+    .find((block) => block.includes('min-height: 34px;'))
+  const closeHoverBlock = stylesSource.match(/\.settings-panel__close:hover \{([\s\S]*?)\n\}/)?.[1]
+
+  assert.ok(closeBlock)
+  assert.ok(closeHoverBlock)
+  assert.match(closeBlock, /background: var\(--control-bg\);/)
+  assert.match(closeHoverBlock, /background: var\(--control-bg-hover\);/)
+  assert.doesNotMatch(closeBlock, /linear-gradient/)
+  assert.doesNotMatch(closeHoverBlock, /linear-gradient/)
+})
+
 test('toolbar uses the Prism logo support link and static package icons are configured', async () => {
   const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
   const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
