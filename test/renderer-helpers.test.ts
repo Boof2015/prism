@@ -1517,7 +1517,7 @@ test('Spectrogram keeps the historical display dB range for line thickness', () 
   }
 })
 
-test('Spectrogram heat compensation does not change display intensity range', () => {
+test('Spectrogram display gain feeds both display and heat intensity', () => {
   const dom = installFakeCanvasDom()
   const dataSource = {
     getPendingSpectrogramSamples: () => [],
@@ -1551,11 +1551,56 @@ test('Spectrogram heat compensation does not change display intensity range', ()
     magnitudes.fill(-120)
     magnitudes[1] = -66
     const values = state.drawColumn(magnitudes)
-    const expectedDisplay = Math.pow((-66 - (-90)) / (-12 - (-90)), 1.4)
-    const expectedHeat = normalizeHeatDb(-60)
+    const expectedDisplay = Math.pow((-64 - (-90)) / (-12 - (-90)), 1.4)
+    const expectedHeat = normalizeHeatDb(-58)
 
-    assertAlmostEqual(values[0], expectedDisplay, 1e-6, 'display intensity should keep the historical spectrogram range')
-    assertAlmostEqual(state.heatColumnValues[0], expectedHeat, 1e-6, 'heat color should use compensated dB against the shared heat range')
+    assertAlmostEqual(values[0], expectedDisplay, 1e-6, 'display intensity should include spectrogram display gain')
+    assertAlmostEqual(state.heatColumnValues[0], expectedHeat, 1e-6, 'heat color should include display gain before heat compensation')
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
+test('Spectrogram tilt adds 4 dB per octave above the reference frequency', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const canvas = createFakeCanvas()
+  canvas.width = 1
+  canvas.height = 1
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    clarityMode: 'classic',
+    minDecibels: -90,
+    maxDecibels: -12,
+  })
+
+  try {
+    const state = spectrogram as unknown as {
+      drawColumn: (magnitudes: Float32Array) => Float32Array
+      heatColumnValues: Float32Array
+      rowCenterBins: Float32Array
+      rowBandStartBins: Float32Array
+      rowBandEndBins: Float32Array
+    }
+    state.rowCenterBins = Float32Array.from([2])
+    state.rowBandStartBins = Float32Array.from([1.5])
+    state.rowBandEndBins = Float32Array.from([2.5])
+
+    const magnitudes = new Float32Array(24)
+    magnitudes.fill(-120)
+    magnitudes[2] = -66
+    const values = state.drawColumn(magnitudes)
+    const expectedDisplay = Math.pow((-60 - (-90)) / (-12 - (-90)), 1.4)
+    const expectedHeat = normalizeHeatDb(-54)
+
+    assertAlmostEqual(values[0], expectedDisplay, 1e-6, 'display intensity should include +4 dB/oct spectrogram tilt')
+    assertAlmostEqual(state.heatColumnValues[0], expectedHeat, 1e-6, 'heat color should include +4 dB/oct spectrogram tilt')
   } finally {
     spectrogram.dispose()
     dom.restore()

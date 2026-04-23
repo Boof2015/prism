@@ -45,10 +45,12 @@ type ResolvedSpectrogramOptions = Required<Omit<SpectrogramOptions, 'dataSource'
 interface SpectrogramClarityProfile {
   gamma: number      // contrast curve exponent
   sharpness: number  // local peak suppression exponent (0 = off, higher = thinner lines)
-  tiltDb: number     // dB/octave frequency compensation
 }
 
+const SPECTROGRAM_DISPLAY_GAIN_DB = 2
 const SPECTROGRAM_HEAT_GAIN_COMPENSATION_DB = 6
+const SPECTROGRAM_TILT_DB_PER_OCTAVE = 4
+const SPECTROGRAM_TILT_REFERENCE_HZ = 1000
 
 const defaultOptions: ResolvedSpectrogramOptions = {
   fftSize: 4096,
@@ -73,11 +75,11 @@ const defaultSpectrogramDataSource: SpectrogramDataSource = {
 function getClarityProfile(mode: SpectrogramClarityMode): SpectrogramClarityProfile {
   switch (mode) {
     case 'classic':
-      return { gamma: 1.4, sharpness: 0, tiltDb: 2.0 }
+      return { gamma: 1.4, sharpness: 0 }
     case 'sharp':
-      return { gamma: 1.5, sharpness: 2.5, tiltDb: 2.0 }
+      return { gamma: 1.5, sharpness: 2.5 }
     case 'sharper':
-      return { gamma: 1.6, sharpness: 5.0, tiltDb: 2.0 }
+      return { gamma: 1.6, sharpness: 5.0 }
   }
 }
 
@@ -632,9 +634,8 @@ export class Spectrogram {
     // Compute bin width for frequency-based tilt
     const sampleRate = Math.max(1, this.dataSource.getSampleRate())
     const binWidth = (sampleRate / 2) / numBins
-    const TILT_REFERENCE_HZ = 1000
 
-    // Pass 1: sub-bin interpolation + tilt → raw normalized values (no gamma yet)
+    // Pass 1: sub-bin interpolation + tilt/gain -> raw normalized values (no gamma yet)
     for (let row = 0; row < height; row += 1) {
       const centerBin = this.rowCenterBins[row]
 
@@ -646,10 +647,10 @@ export class Spectrogram {
 
       // Frequency-based tilt — dB per octave from reference, scale-mode independent
       const centerFreq = Math.max(1, centerBin * binWidth)
-      const tiltAmount = clarity.tiltDb * Math.log2(centerFreq / TILT_REFERENCE_HZ)
-      const tiltedDb = db + tiltAmount
-      raw[row] = clamp01((tiltedDb - minDecibels) / dbRange)
-      heat[row] = normalizeHeatDb(tiltedDb + SPECTROGRAM_HEAT_GAIN_COMPENSATION_DB)
+      const tiltAmount = SPECTROGRAM_TILT_DB_PER_OCTAVE * Math.log2(centerFreq / SPECTROGRAM_TILT_REFERENCE_HZ)
+      const displayDb = db + tiltAmount + SPECTROGRAM_DISPLAY_GAIN_DB
+      raw[row] = clamp01((displayDb - minDecibels) / dbRange)
+      heat[row] = normalizeHeatDb(displayDb + SPECTROGRAM_HEAT_GAIN_COMPENSATION_DB)
     }
 
     // Pass 2: local peak suppression — thin spectral lines for sharp/sharper modes
