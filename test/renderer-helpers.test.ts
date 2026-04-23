@@ -13,7 +13,10 @@ import {
   getHorizontalWheelScrollResult,
   normalizeWheelDelta,
 } from '../src/renderer/utils/horizontalWheelScroll'
-import { resolveMainWindowSettingsHeight } from '../src/renderer/mainWindowSettings'
+import {
+  resolveMainWindowSettingsHeight,
+  resolveMainWindowSettingsPanelHeight,
+} from '../src/renderer/mainWindowSettings'
 import {
   formatAstraTime,
   getAstraPlaybackProgress,
@@ -2668,6 +2671,32 @@ test('resolveMainWindowSettingsHeight waits for real measurements instead of usi
   assert.equal(resolveMainWindowSettingsHeight(true, 0, 96), 0)
   assert.equal(resolveMainWindowSettingsHeight(true, 312, 0), 0)
   assert.equal(resolveMainWindowSettingsHeight(true, 312, 96), 408)
+})
+
+test('resolveMainWindowSettingsPanelHeight uses intrinsic scope-track height when the panel is stretched', () => {
+  const globalWithStyle = globalThis as typeof globalThis & {
+    getComputedStyle?: (element: Element) => CSSStyleDeclaration
+  }
+  const previousGetComputedStyle = globalWithStyle.getComputedStyle
+
+  globalWithStyle.getComputedStyle = () => ({
+    paddingTop: '10px',
+    paddingBottom: '4px',
+  }) as CSSStyleDeclaration
+
+  try {
+    const stretchedPanel = { scrollHeight: 640 } as HTMLElement
+    const collapsedScopeTrack = { scrollHeight: 220.25 } as HTMLElement
+
+    assert.equal(resolveMainWindowSettingsPanelHeight(stretchedPanel, collapsedScopeTrack), 235)
+    assert.equal(resolveMainWindowSettingsPanelHeight(stretchedPanel, null), 640)
+  } finally {
+    if (previousGetComputedStyle) {
+      globalWithStyle.getComputedStyle = previousGetComputedStyle
+    } else {
+      delete globalWithStyle.getComputedStyle
+    }
+  }
 })
 
 test('expanded main-window bounds can push upward into an overlapping display above', () => {

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, type CSSProperties, type JSX } from 'react'
 import { buildAnalyzerGridTemplateColumns } from '../analyzerLayout'
+import { resolveMainWindowSettingsPanelHeight } from '../mainWindowSettings'
 import ScopeSettingsSection from './ScopeSettingsSection'
 import { useSettingsStore } from '../stores/settingsStore'
 
@@ -31,7 +32,7 @@ export default function SettingsPanel({ onHeightChange }: SettingsPanelProps): J
     const reportHeight = (): void => {
       cancelAnimationFrame(frameId)
       frameId = requestAnimationFrame(() => {
-        onHeightChange(Math.ceil(panelElement.scrollHeight))
+        onHeightChange(resolveMainWindowSettingsPanelHeight(panelElement, scopeTrackRef.current))
       })
     }
 
