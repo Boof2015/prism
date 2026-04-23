@@ -8,8 +8,6 @@ A free, open-source audio visualizer and meter rack for your desktop.
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Boof2015/prism/main.yml)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/boof2015/prism/total)
 
-<!-- ![Prism screenshot](assets/screenshot.png) -->
-
 Prism taps into your system audio and runs it through a rack of real-time scopes and meters. It grew out of the visualization engine in [Astra](https://github.com/Boof2015/astra), rebuilt as a standalone tool. Whether you're mixing a track, tuning a room, or just like watching your music, Prism gives you a window into what you're hearing.
 
 ## Scopes
@@ -24,7 +22,7 @@ Seven visualizers driven by a native C++ analysis engine:
 - **LUFS Meter** — Integrated loudness metering following ITU-R BS.1770
 - **Waveform** — Scrolling time-domain view with mono, stereo, and multiband modes
 
-<!-- ![Prism scopes](assets/scopes.png) -->
+![Prism scopes](assets/prism-demo-12fps.gif)
 
 Every scope is independently configurable. Drag and resize them into whatever layout makes sense, pop any scope out into its own window, and pin windows on top so they stay visible while you work.
 
@@ -40,9 +38,18 @@ Save your entire layout — scope arrangement, visibility, sizes, per-scope sett
 
 ## Themes
 
-The whole interface is themeable through editable `.iro` files. Themes control everything — spectrum heatmap gradients, oscilloscope trace color, vectorscope bands, all of it. Build your own in an editor and drop it into the `Prism Themes` folder, or download one from [the community](https://discord.gg/hsKK8Kr9Nj). Prism also includes Chroma key friendly themes by default, so you can key out your scopes in OBS and drop them directly into your stream as transparent overlays.
+The whole interface is themeable through editable `.iro` files. Themes control everything — spectrum heatmap gradients, oscilloscope trace color, vectorscope bands, all of it. Build your own in an editor and drop it into the `Prism Themes` folder, or download one from [the community](https://discord.gg/hsKK8Kr9Nj).
 
-<!-- ![Prism themes](assets/themes.png) -->
+![Prism themes](assets/themes.png)
+
+
+Prism also includes Chroma key friendly themes by default, so you can key out your scopes in OBS and drop them directly into your stream as transparent overlays.
+
+![Prism themes](assets/chroma.png)
+
+## Download
+
+Prebuilt binaries for Windows, macOS, and Linux are available on the [Releases](https://github.com/Boof2015/prism/releases) page.
 
 ## Building from Source
 
