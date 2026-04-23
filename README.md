@@ -28,17 +28,17 @@ Every scope is independently configurable. Drag and resize them into whatever la
 
 ## Audio Capture
 
-Prism captures system audio at the OS level — CoreAudio on macOS, WASAPI on Windows, PulseAudio on Linux. No virtual cables or routing hacks needed. There's also a device input mode for microphones and line-in if you want to analyze a live signal.
+Prism pulls audio at the OS level, straight from CoreAudio on macOS, WASAPI on Windows, or PulseAudio on Linux. No virtual cables or routing hacks. Flip on device input mode when you want to analyze a mic or a line-in instead. 
 
 Capture-to-display latency measures under 8ms. When tested at 120fps, measured latency was 0ms. What you see is what you hear.
 
 ## Profiles
 
-Save your entire layout — scope arrangement, visibility, sizes, per-scope settings, and popout window positions — as a `.prsm` file. Keep separate profiles for different workflows and share them with others.
+Save the whole rack as a profile. What's visible, how it's laid out, per-scope settings, popout window positions as a `.prsm` file. Keep separate profiles for different workflows and share them with others.
 
 ## Themes
 
-The whole interface is themeable through editable `.iro` files. Themes control everything — spectrum heatmap gradients, oscilloscope trace color, vectorscope bands, all of it. Build your own in an editor and drop it into the `Prism Themes` folder, or download one from [the community](https://discord.gg/hsKK8Kr9Nj).
+The whole interface is themeable through editable `.iro` files. Themes control everything, build your own in an editor and drop it into the `Prism Themes` folder, or download one from [the community](https://discord.gg/hsKK8Kr9Nj).
 
 ![Prism themes](assets/themes.png)
 
@@ -80,7 +80,7 @@ npm run dist:linux       # Linux (AppImage + DEB)
 
 ## Astra Integration
 
-If you use [Astra](https://github.com/Boof2015/astra), Prism can connect to its local API to show what's playing — cover art, track info, and playback controls — alongside your scopes.
+If you use [Astra](https://github.com/Boof2015/astra), Prism can connect to its local API to show what's playing, cover art, track info, and playback controls,  alongside your scopes.
 
 ## Support
 
