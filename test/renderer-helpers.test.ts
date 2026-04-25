@@ -2625,6 +2625,22 @@ test('resolveWindowCapabilities leaves non-Linux platforms on the full-featured 
   )
 })
 
+test('resolveWindowCapabilities uses native drag regions on Windows while preserving geometry controls', () => {
+  assert.deepEqual(
+    resolveWindowCapabilities({
+      platform: 'win32',
+      argv: [],
+      env: {},
+    }),
+    {
+      displayServer: 'other',
+      useNativeDragRegions: true,
+      supportsProgrammaticReposition: true,
+      supportsGeometryPersistence: true,
+    },
+  )
+})
+
 test('Wayland window controls use native drag regions and omit unsupported reposition/geometry paths', async () => {
   const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
   const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
