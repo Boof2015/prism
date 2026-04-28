@@ -6,6 +6,7 @@ import {
   normalizeAudioPreferences,
   startAudioDeviceWatcher,
   useAudioStore,
+  type PersistedAudioState,
 } from '../src/renderer/stores/audioStore'
 import { useUiStore } from '../src/renderer/stores/uiStore'
 import type { CaptureBackendSupport, CaptureSourceDescriptor } from '../src/types/capture'
@@ -21,6 +22,20 @@ type StartDeviceOptions = {
 type HarnessSourceProvider<T> = T[] | (() => T[] | Promise<T[]>)
 
 const DEFAULT_SYSTEM_SOURCE_ID = '__default_system_output__'
+
+function audioPreferences(overrides: Partial<PersistedAudioState> = {}): PersistedAudioState {
+  return {
+    inputGainDb: 0,
+    captureMode: 'system',
+    selectedSystemSourceId: DEFAULT_SYSTEM_SOURCE_ID,
+    selectedDeviceId: null,
+    ...overrides,
+  }
+}
+
+function storedAudioPreferences(overrides: Partial<PersistedAudioState> = {}): string {
+  return JSON.stringify(audioPreferences(overrides))
+}
 
 const initialAudioState = {
   ...useAudioStore.getState(),
@@ -260,6 +275,9 @@ function installFakeDeviceWatcherEnvironment(): {
 }
 
 function resetStores(): void {
+  audioCapture.setSelectedSystemSourceId(DEFAULT_SYSTEM_SOURCE_ID)
+  audioCapture.setSelectedDeviceId(null)
+  audioCapture.setCaptureMode('system')
   audioCapture.setInputGain(0)
   useAudioStore.setState({
     ...initialAudioState,
@@ -423,7 +441,7 @@ function installAudioCaptureHarness(options: {
 }
 
 test('loadAudioPreferences falls back to 0 dB when storage is unavailable', () => {
-  assert.deepEqual(loadAudioPreferences(null), { inputGainDb: 0 })
+  assert.deepEqual(loadAudioPreferences(null), audioPreferences())
 })
 
 test('loadAudioPreferences falls back to 0 dB when stored JSON is invalid', () => {
@@ -432,17 +450,49 @@ test('loadAudioPreferences falls back to 0 dB when stored JSON is invalid', () =
     setItem: () => {},
   }
 
-  assert.deepEqual(loadAudioPreferences(storage), { inputGainDb: 0 })
+  assert.deepEqual(loadAudioPreferences(storage), audioPreferences())
+})
+
+test('loadAudioPreferences keeps legacy trim-only preferences compatible', () => {
+  const storage = {
+    getItem: () => JSON.stringify({ inputGainDb: 6.26 }),
+    setItem: () => {},
+  }
+
+  assert.deepEqual(loadAudioPreferences(storage), audioPreferences({ inputGainDb: 6.5 }))
+})
+
+test('normalizeAudioPreferences defaults invalid persisted selector values', () => {
+  assert.deepEqual(normalizeAudioPreferences({
+    inputGainDb: 3,
+    captureMode: 'surround',
+    selectedSystemSourceId: '',
+    selectedDeviceId: '',
+  }), audioPreferences({ inputGainDb: 3 }))
+})
+
+test('normalizeAudioPreferences preserves valid persisted selector values', () => {
+  assert.deepEqual(normalizeAudioPreferences({
+    inputGainDb: -3,
+    captureMode: 'device',
+    selectedSystemSourceId: 'speaker',
+    selectedDeviceId: 'mic-1',
+  }), audioPreferences({
+    inputGainDb: -3,
+    captureMode: 'device',
+    selectedSystemSourceId: 'speaker',
+    selectedDeviceId: 'mic-1',
+  }))
 })
 
 test('normalizeAudioPreferences clamps out-of-range trim values', () => {
-  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: -18 }), { inputGainDb: -12 })
-  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 18 }), { inputGainDb: 12 })
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: -18 }), audioPreferences({ inputGainDb: -12 }))
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 18 }), audioPreferences({ inputGainDb: 12 }))
 })
 
 test('normalizeAudioPreferences rounds trim values to 0.5 dB steps', () => {
-  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 6.24 }), { inputGainDb: 6 })
-  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 6.26 }), { inputGainDb: 6.5 })
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 6.24 }), audioPreferences({ inputGainDb: 6 }))
+  assert.deepEqual(normalizeAudioPreferences({ inputGainDb: 6.26 }), audioPreferences({ inputGainDb: 6.5 }))
 })
 
 test('audio store persists normalized trim values and forwards them to audioCapture', () => {
@@ -460,7 +510,7 @@ test('audio store persists normalized trim values and forwards them to audioCapt
 
     assert.equal(useAudioStore.getState().inputGainDb, 6.5)
     assert.deepEqual(forwardedValues, [6.5])
-    assert.equal(fakeStorage.getItem('prism:audio'), JSON.stringify({ inputGainDb: 6.5 }))
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({ inputGainDb: 6.5 }))
     assert.equal(fakeStorage.getSetCount(), 1)
 
     useAudioStore.getState().setInputGain(6.49)
@@ -472,7 +522,7 @@ test('audio store persists normalized trim values and forwards them to audioCapt
 
     assert.equal(useAudioStore.getState().inputGainDb, 0)
     assert.deepEqual(forwardedValues, [6.5, 0])
-    assert.equal(fakeStorage.getItem('prism:audio'), JSON.stringify({ inputGainDb: 0 }))
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({ inputGainDb: 0 }))
     assert.equal(fakeStorage.getSetCount(), 2)
   } finally {
     audioCapture.setInputGain = originalSetInputGain
@@ -481,8 +531,49 @@ test('audio store persists normalized trim values and forwards them to audioCapt
   }
 })
 
+test('audio store persists custom output source selections', async () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+
+  try {
+    await useAudioStore.getState().selectSystemSource('headphones')
+
+    const state = useAudioStore.getState()
+    assert.equal(state.captureMode, 'system')
+    assert.equal(state.selectedSystemSourceId, 'headphones')
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'system',
+      selectedSystemSourceId: 'headphones',
+    }))
+  } finally {
+    fakeStorage.restore()
+    resetStores()
+  }
+})
+
+test('audio store persists input source selections', async () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+
+  try {
+    await useAudioStore.getState().selectDevice('mic-1')
+
+    const state = useAudioStore.getState()
+    assert.equal(state.captureMode, 'device')
+    assert.equal(state.selectedDeviceId, 'mic-1')
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'device',
+      selectedDeviceId: 'mic-1',
+    }))
+  } finally {
+    fakeStorage.restore()
+    resetStores()
+  }
+})
+
 test('audio store auto-switches to device input when native system capture is unavailable on startup', async () => {
   resetStores()
+  const fakeStorage = installFakeLocalStorage()
   const harness = installAudioCaptureHarness({
     support: createBackendSupport(false, 'PulseAudio is unavailable.'),
   })
@@ -498,12 +589,17 @@ test('audio store auto-switches to device input when native system capture is un
     assert.equal(state.captureError, null)
     assert.equal(state.activeBackendKind, 'device-input')
     assert.match(state.captureNotice ?? '', /switched to Default Input/i)
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'device',
+      selectedDeviceId: null,
+    }))
 
     const banner = useUiStore.getState().banner
     assert.ok(banner)
     assert.equal(banner?.tone, 'info')
     assert.match(banner?.message ?? '', /PulseAudio is unavailable/i)
   } finally {
+    fakeStorage.restore()
     harness.restore()
     resetStores()
   }
@@ -511,6 +607,7 @@ test('audio store auto-switches to device input when native system capture is un
 
 test('audio store falls back to device input when native system capture fails at start time', async () => {
   resetStores()
+  const fakeStorage = installFakeLocalStorage()
   const harness = installAudioCaptureHarness({
     support: createBackendSupport(true, null),
     startSystemAudio: async () => {
@@ -528,11 +625,16 @@ test('audio store falls back to device input when native system capture fails at
     assert.equal(state.captureStatus, 'capturing')
     assert.equal(state.captureError, null)
     assert.match(state.captureNotice ?? '', /PulseAudio monitor stream failed/i)
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'device',
+      selectedDeviceId: null,
+    }))
 
     const banner = useUiStore.getState().banner
     assert.ok(banner)
     assert.match(banner?.message ?? '', /PulseAudio monitor stream failed/i)
   } finally {
+    fakeStorage.restore()
     harness.restore()
     resetStores()
   }
@@ -663,6 +765,7 @@ test('audio store keeps explicit output selections pinned when the OS default ch
 
 test('audio store falls back to Default Output when an explicit output disappears', async () => {
   resetStores()
+  const fakeStorage = installFakeLocalStorage()
   const support = createBackendSupport(true, null)
   let sources = [
     defaultSystemSource(),
@@ -699,7 +802,64 @@ test('audio store falls back to Default Output when an explicit output disappear
     assert.equal(state.selectedSystemSourceId, DEFAULT_SYSTEM_SOURCE_ID)
     assert.equal(state.activeSourceId, 'headphones')
     assert.match(state.captureNotice ?? '', /Speakers is unavailable/i)
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'system',
+      selectedSystemSourceId: DEFAULT_SYSTEM_SOURCE_ID,
+    }))
   } finally {
+    fakeStorage.restore()
+    harness.restore()
+    resetStores()
+  }
+})
+
+test('audio store persists Default Input when an explicit input disappears', async () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const support = createBackendSupport(true, null)
+  let devices = [
+    mediaDevice('mic-1', 'Mic 1', 'group-1'),
+    mediaDevice('mic-2', 'Mic 2', 'group-2'),
+  ]
+  const harness = installAudioCaptureHarness({
+    support,
+    devices: () => devices,
+  })
+
+  try {
+    useAudioStore.setState({
+      backendSupport: support,
+      devices,
+      selectedDeviceId: 'mic-1',
+      captureMode: 'device',
+      captureStatus: 'capturing',
+      isCapturing: true,
+      activeBackendKind: 'device-input',
+      activeSourceId: 'mic-1',
+      activeSourceLabel: 'Mic 1',
+    })
+
+    devices = [
+      mediaDevice('mic-2', 'Mic 2', 'group-2'),
+    ]
+
+    await useAudioStore.getState().refreshDevices({ rebindActiveCapture: true })
+
+    const state = useAudioStore.getState()
+    assert.equal(harness.calls.startDevice, 1)
+    assert.deepEqual(harness.calls.startDeviceRequests, [{
+      deviceId: null,
+      forceDeviceRestart: true,
+    }])
+    assert.equal(state.selectedDeviceId, null)
+    assert.equal(state.activeSourceId, 'mic-2')
+    assert.match(state.captureNotice ?? '', /Mic 1 is unavailable/i)
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'device',
+      selectedDeviceId: null,
+    }))
+  } finally {
+    fakeStorage.restore()
     harness.restore()
     resetStores()
   }

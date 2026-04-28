@@ -17,6 +17,9 @@ const AUDIO_DEVICE_WATCHER_POLL_MS = 5000
 
 export interface PersistedAudioState {
   inputGainDb: number
+  captureMode: CaptureMode
+  selectedSystemSourceId: string
+  selectedDeviceId: string | null
 }
 
 interface RefreshSourceOptions {
@@ -174,6 +177,22 @@ export function normalizeInputGainDb(raw: unknown): number {
   return Object.is(rounded, -0) ? 0 : rounded
 }
 
+function normalizeCaptureMode(raw: unknown): CaptureMode {
+  return raw === 'device' ? 'device' : 'system'
+}
+
+function normalizeSystemSourceId(raw: unknown): string {
+  return typeof raw === 'string' && raw.trim().length > 0
+    ? raw
+    : DEFAULT_SYSTEM_SOURCE_ID
+}
+
+function normalizeDeviceId(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.trim().length > 0
+    ? raw
+    : null
+}
+
 export function normalizeAudioPreferences(raw: unknown): PersistedAudioState {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<PersistedAudioState>
@@ -181,7 +200,24 @@ export function normalizeAudioPreferences(raw: unknown): PersistedAudioState {
 
   return {
     inputGainDb: normalizeInputGainDb(parsed.inputGainDb),
+    captureMode: normalizeCaptureMode(parsed.captureMode),
+    selectedSystemSourceId: normalizeSystemSourceId(parsed.selectedSystemSourceId),
+    selectedDeviceId: normalizeDeviceId(parsed.selectedDeviceId),
   }
+}
+
+function buildAudioPreferences(
+  inputGainDb: number,
+  captureMode: CaptureMode,
+  selectedSystemSourceId: string | null,
+  selectedDeviceId: string | null,
+): PersistedAudioState {
+  return normalizeAudioPreferences({
+    inputGainDb,
+    captureMode,
+    selectedSystemSourceId,
+    selectedDeviceId,
+  })
 }
 
 export function loadAudioPreferences(storage = getStorage()): PersistedAudioState {
@@ -201,11 +237,11 @@ export function loadAudioPreferences(storage = getStorage()): PersistedAudioStat
   }
 }
 
-function persistAudioPreferences(inputGainDb: number, storage = getStorage()): void {
+function persistAudioPreferences(preferences: PersistedAudioState, storage = getStorage()): void {
   if (!storage) return
 
   try {
-    storage.setItem(STORAGE_KEY, JSON.stringify({ inputGainDb }))
+    storage.setItem(STORAGE_KEY, JSON.stringify(normalizeAudioPreferences(preferences)))
   } catch {
     // Ignore localStorage write failures.
   }
@@ -213,13 +249,16 @@ function persistAudioPreferences(inputGainDb: number, storage = getStorage()): v
 
 const storedPreferences = loadAudioPreferences()
 audioCapture.setInputGain(storedPreferences.inputGainDb)
+audioCapture.setSelectedSystemSourceId(storedPreferences.selectedSystemSourceId)
+audioCapture.setSelectedDeviceId(storedPreferences.selectedDeviceId)
+audioCapture.setCaptureMode(storedPreferences.captureMode)
 
 export const useAudioStore = create<AudioState>((set, get) => ({
   systemSources: [],
   devices: [],
   selectedSystemSourceId: audioCapture.getSelectedSystemSourceId(),
-  selectedDeviceId: null,
-  captureMode: 'system',
+  selectedDeviceId: audioCapture.getSelectedDeviceId(),
+  captureMode: audioCapture.getCaptureMode(),
   activeBackendKind: null,
   backendSupport: null,
   isCapturing: false,
@@ -234,11 +273,17 @@ export const useAudioStore = create<AudioState>((set, get) => ({
 
   setInputGain: (db: number) => {
     const nextInputGainDb = normalizeInputGainDb(db)
-    if (get().inputGainDb === nextInputGainDb) {
+    const currentState = get()
+    if (currentState.inputGainDb === nextInputGainDb) {
       return
     }
 
-    persistAudioPreferences(nextInputGainDb)
+    persistAudioPreferences(buildAudioPreferences(
+      nextInputGainDb,
+      currentState.captureMode,
+      currentState.selectedSystemSourceId,
+      currentState.selectedDeviceId,
+    ))
     audioCapture.setInputGain(nextInputGainDb)
     set({ inputGainDb: nextInputGainDb })
   },
@@ -270,6 +315,12 @@ export const useAudioStore = create<AudioState>((set, get) => ({
 
     if (selectedSourceChanged) {
       audioCapture.setSelectedSystemSourceId(nextSelectedSystemSourceId)
+      persistAudioPreferences(buildAudioPreferences(
+        currentState.inputGainDb,
+        currentState.captureMode,
+        nextSelectedSystemSourceId,
+        currentState.selectedDeviceId,
+      ))
     }
 
     if (
@@ -332,6 +383,12 @@ export const useAudioStore = create<AudioState>((set, get) => ({
 
     if (selectedDeviceChanged) {
       audioCapture.setSelectedDeviceId(nextSelectedDeviceId)
+      persistAudioPreferences(buildAudioPreferences(
+        currentState.inputGainDb,
+        currentState.captureMode,
+        currentState.selectedSystemSourceId,
+        nextSelectedDeviceId,
+      ))
     }
 
     if (
@@ -381,8 +438,16 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   selectSystemSource: async (sourceId: string | null) => {
     audioCapture.setSelectedSystemSourceId(sourceId)
     audioCapture.setCaptureMode('system')
+    const currentState = get()
+    const nextSelectedSystemSourceId = audioCapture.getSelectedSystemSourceId()
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      'system',
+      nextSelectedSystemSourceId,
+      currentState.selectedDeviceId,
+    ))
     set({
-      selectedSystemSourceId: audioCapture.getSelectedSystemSourceId(),
+      selectedSystemSourceId: nextSelectedSystemSourceId,
       captureMode: 'system',
       captureError: null,
       captureNotice: null,
@@ -392,6 +457,13 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   selectDevice: async (deviceId: string | null) => {
     audioCapture.setSelectedDeviceId(deviceId)
     audioCapture.setCaptureMode('device')
+    const currentState = get()
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      'device',
+      currentState.selectedSystemSourceId,
+      deviceId,
+    ))
     set({
       selectedDeviceId: deviceId,
       captureMode: 'device',
@@ -402,6 +474,13 @@ export const useAudioStore = create<AudioState>((set, get) => ({
 
   setCaptureMode: (mode: CaptureMode) => {
     audioCapture.setCaptureMode(mode)
+    const currentState = get()
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      mode,
+      currentState.selectedSystemSourceId,
+      currentState.selectedDeviceId,
+    ))
     set({ captureMode: mode })
   },
 
@@ -421,6 +500,13 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         const message = buildSystemCaptureFallbackMessage(reason)
         audioCapture.setSelectedDeviceId(null)
         audioCapture.setCaptureMode('device')
+        const currentState = get()
+        persistAudioPreferences(buildAudioPreferences(
+          currentState.inputGainDb,
+          'device',
+          currentState.selectedSystemSourceId,
+          null,
+        ))
         set({
           selectedDeviceId: null,
           captureMode: 'device',
