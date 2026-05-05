@@ -10,7 +10,9 @@ import {
   type VUMeterSnapshot,
 } from './vuMeterBallistics'
 import {
+  DEFAULT_VU_METER_NEEDLE_CHANNELS,
   DEFAULT_VU_METER_ORIENTATION,
+  type VUMeterNeedleChannels,
   type VUMeterMode,
   type VUMeterOrientation,
 } from '../../types/vumeter'
@@ -29,6 +31,10 @@ export interface VUMeterOptions {
   clipColor?: string
   scaleColor?: string
   labelColor?: string
+  needleLeftColor?: string
+  needleRightColor?: string
+  needleCombinedColor?: string
+  needleChannels?: VUMeterNeedleChannels
   dataSource?: VUMeterDataSource
   frameScheduler?: FrameScheduler
 }
@@ -45,11 +51,30 @@ const defaultOptions: ResolvedVUMeterOptions = {
   clipColor: 'rgba(255, 120, 80, 0.9)',
   scaleColor: 'rgba(255, 255, 255, 0.12)',
   labelColor: 'rgba(255, 255, 255, 0.5)',
+  needleLeftColor: '#c7dfff',
+  needleRightColor: '#ff477e',
+  needleCombinedColor: '#f4f8ff',
+  needleChannels: DEFAULT_VU_METER_NEEDLE_CHANNELS,
 }
 
 const defaultVUMeterDataSource: VUMeterDataSource = {
   getPendingVUMeterSamples: () => audioRouter.flushPendingVUMeterSamples(),
   ...defaultVisualizerSessionSource,
+}
+
+const NEEDLE_VISUAL_SMOOTHING_SECONDS = 0.065
+const NEEDLE_PEAK_DECAY_DB_PER_SECOND = 12
+const NEEDLE_PIVOT_FRACTION = 0.91
+const NEEDLE_STEREO_GAP_FRACTION = 0.14
+export const VU_NEEDLE_FACE_WIDTH_CSS_PX = 560
+export const VU_NEEDLE_FACE_HEIGHT_CSS_PX = 360
+
+export interface VUNeedleFaceLayout {
+  x: number
+  y: number
+  width: number
+  height: number
+  scale: number
 }
 
 function colorWithAlpha(r: number, g: number, b: number, a: number): string {
@@ -59,6 +84,163 @@ function colorWithAlpha(r: number, g: number, b: number, a: number): string {
 function alphaColor(color: string, alpha: number): string {
   const { r, g, b } = resolveColorToRgb(color)
   return colorWithAlpha(r, g, b, alpha)
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function normalizeDevicePixelRatio(devicePixelRatio: number): number {
+  return Number.isFinite(devicePixelRatio) && devicePixelRatio > 0
+    ? devicePixelRatio
+    : 1
+}
+
+function getCanvasDevicePixelRatio(): number {
+  return normalizeDevicePixelRatio(
+    typeof window === 'undefined' ? 1 : window.devicePixelRatio,
+  )
+}
+
+export function resolveVUNeedleFaceLayout(
+  canvasWidth: number,
+  canvasHeight: number,
+  devicePixelRatio = 1,
+): VUNeedleFaceLayout {
+  const dpr = normalizeDevicePixelRatio(devicePixelRatio)
+  const targetWidth = VU_NEEDLE_FACE_WIDTH_CSS_PX * dpr
+  const targetHeight = VU_NEEDLE_FACE_HEIGHT_CSS_PX * dpr
+  const safeWidth = Math.max(0, Number.isFinite(canvasWidth) ? canvasWidth : 0)
+  const safeHeight = Math.max(0, Number.isFinite(canvasHeight) ? canvasHeight : 0)
+  const scale = Math.min(1, safeWidth / targetWidth, safeHeight / targetHeight)
+  const width = targetWidth * scale
+  const height = targetHeight * scale
+
+  return {
+    x: Math.max(0, (safeWidth - width) / 2),
+    y: Math.max(0, safeHeight - height),
+    width,
+    height,
+    scale,
+  }
+}
+
+export const CLASSIC_VU_MIN = -20
+export const CLASSIC_VU_MAX = 3
+export const CLASSIC_VU_LABELS: ReadonlyArray<{ vu: number; label: string }> = [
+  { vu: -20, label: '20' },
+  { vu: -10, label: '10' },
+  { vu: -7, label: '7' },
+  { vu: -5, label: '5' },
+  { vu: -4, label: '4' },
+  { vu: -3, label: '3' },
+  { vu: -2, label: '2' },
+  { vu: -1, label: '1' },
+  { vu: 0, label: '0' },
+  { vu: 1, label: '+1' },
+  { vu: 2, label: '+2' },
+  { vu: 3, label: '+3' },
+]
+
+const CLASSIC_VU_ANCHORS: ReadonlyArray<{ vu: number; position: number }> = [
+  { vu: -20, position: 0 },
+  { vu: -10, position: 0.24 },
+  { vu: -7, position: 0.36 },
+  { vu: -5, position: 0.46 },
+  { vu: -4, position: 0.53 },
+  { vu: -3, position: 0.60 },
+  { vu: -2, position: 0.67 },
+  { vu: -1, position: 0.74 },
+  { vu: 0, position: 0.81 },
+  { vu: 1, position: 0.88 },
+  { vu: 2, position: 0.94 },
+  { vu: 3, position: 1 },
+]
+
+export interface VUNeedleReading {
+  id: 'left' | 'right' | 'combined'
+  db: number
+  peakDb: number
+  vu: number
+  peakVu: number
+}
+
+export function dbfsToClassicVu(db: number): number {
+  if (!Number.isFinite(db)) {
+    return CLASSIC_VU_MIN
+  }
+  return clamp(db + 6, CLASSIC_VU_MIN, CLASSIC_VU_MAX)
+}
+
+export function classicVuToNormalized(vu: number): number {
+  const clampedVu = clamp(
+    Number.isFinite(vu) ? vu : CLASSIC_VU_MIN,
+    CLASSIC_VU_MIN,
+    CLASSIC_VU_MAX,
+  )
+
+  for (let index = 1; index < CLASSIC_VU_ANCHORS.length; index += 1) {
+    const previous = CLASSIC_VU_ANCHORS[index - 1]
+    const next = CLASSIC_VU_ANCHORS[index]
+    if (!previous || !next || clampedVu > next.vu) continue
+
+    const span = next.vu - previous.vu
+    const progress = span > 0 ? (clampedVu - previous.vu) / span : 0
+    return previous.position + progress * (next.position - previous.position)
+  }
+
+  return 1
+}
+
+export function stereoRmsDbAverage(leftDb: number, rightDb: number): number {
+  const leftPower = 10 ** (clamp(leftDb, VU_METER_MIN_DB, VU_METER_MAX_DB) / 10)
+  const rightPower = 10 ** (clamp(rightDb, VU_METER_MIN_DB, VU_METER_MAX_DB) / 10)
+  const averagePower = (leftPower + rightPower) / 2
+  const db = 10 * Math.log10(Math.max(averagePower, 1e-12))
+  return clamp(db, VU_METER_MIN_DB, VU_METER_MAX_DB)
+}
+
+export function resolveVUNeedleReadings({
+  leftDb,
+  rightDb,
+  leftPeakDb,
+  rightPeakDb,
+  needleChannels,
+}: {
+  leftDb: number
+  rightDb: number
+  leftPeakDb: number
+  rightPeakDb: number
+  needleChannels: VUMeterNeedleChannels
+}): VUNeedleReading[] {
+  if (needleChannels === 'combined') {
+    const db = stereoRmsDbAverage(leftDb, rightDb)
+    const peakDb = Math.max(leftPeakDb, rightPeakDb)
+    return [{
+      id: 'combined',
+      db,
+      peakDb,
+      vu: dbfsToClassicVu(db),
+      peakVu: dbfsToClassicVu(peakDb),
+    }]
+  }
+
+  return [
+    {
+      id: 'left',
+      db: leftDb,
+      peakDb: leftPeakDb,
+      vu: dbfsToClassicVu(leftDb),
+      peakVu: dbfsToClassicVu(leftPeakDb),
+    },
+    {
+      id: 'right',
+      db: rightDb,
+      peakDb: rightPeakDb,
+      vu: dbfsToClassicVu(rightDb),
+      peakVu: dbfsToClassicVu(rightPeakDb),
+    },
+  ]
 }
 
 // ---- VU Meter class ----
@@ -80,6 +262,11 @@ export class VUMeter {
   private peakL = VU_METER_MIN_DB
   private peakR = VU_METER_MIN_DB
   private correlation = 0
+  private needleDisplayL = VU_METER_MIN_DB
+  private needleDisplayR = VU_METER_MIN_DB
+  private needlePeakL = VU_METER_MIN_DB
+  private needlePeakR = VU_METER_MIN_DB
+  private lastNeedleVisualUpdateMs: number | null = null
 
   constructor(canvas: HTMLCanvasElement, options: VUMeterOptions = {}) {
     this.canvas = canvas
@@ -111,6 +298,7 @@ export class VUMeter {
   private resetMeters(): void {
     this.meterBallistics.reinitialize(this.dataSource.getSampleRate())
     this.applySnapshot(this.meterBallistics.getSnapshot())
+    this.resetNeedleVisuals()
     this.invalidate()
   }
 
@@ -152,7 +340,54 @@ export class VUMeter {
     this.correlation = snapshot.correlation
   }
 
-  private processAudio(): void {
+  private resetNeedleVisuals(): void {
+    this.needleDisplayL = this.vuL
+    this.needleDisplayR = this.vuR
+    this.needlePeakL = this.vuL
+    this.needlePeakR = this.vuR
+    this.lastNeedleVisualUpdateMs = null
+  }
+
+  private updateNeedleVisuals(nowMs: number): void {
+    if (!Number.isFinite(nowMs)) {
+      this.needleDisplayL = this.vuL
+      this.needleDisplayR = this.vuR
+      this.needlePeakL = this.vuL
+      this.needlePeakR = this.vuR
+      this.lastNeedleVisualUpdateMs = null
+      return
+    }
+
+    if (this.lastNeedleVisualUpdateMs === null) {
+      this.needleDisplayL = this.vuL
+      this.needleDisplayR = this.vuR
+      this.needlePeakL = this.vuL
+      this.needlePeakR = this.vuR
+      this.lastNeedleVisualUpdateMs = nowMs
+      return
+    }
+
+    const elapsedSeconds = clamp((nowMs - this.lastNeedleVisualUpdateMs) / 1000, 0, 0.1)
+    this.lastNeedleVisualUpdateMs = nowMs
+    const amount = 1 - Math.exp(-elapsedSeconds / NEEDLE_VISUAL_SMOOTHING_SECONDS)
+    this.needleDisplayL += (this.vuL - this.needleDisplayL) * amount
+    this.needleDisplayR += (this.vuR - this.needleDisplayR) * amount
+    this.needlePeakL = this.updateNeedlePeakVisual(this.needlePeakL, this.needleDisplayL, elapsedSeconds)
+    this.needlePeakR = this.updateNeedlePeakVisual(this.needlePeakR, this.needleDisplayR, elapsedSeconds)
+  }
+
+  private updateNeedlePeakVisual(currentPeakDb: number, currentNeedleDb: number, elapsedSeconds: number): number {
+    if (currentNeedleDb >= currentPeakDb) {
+      return currentNeedleDb
+    }
+
+    return Math.max(
+      currentNeedleDb,
+      currentPeakDb - elapsedSeconds * NEEDLE_PEAK_DECAY_DB_PER_SECOND,
+    )
+  }
+
+  private processAudio(nowMs = performance.now()): void {
     const sampleRate = this.dataSource.getSampleRate()
     if (Math.abs(sampleRate - this.meterBallistics.getSampleRate()) > 100) {
       this.meterBallistics.reinitialize(sampleRate)
@@ -164,7 +399,7 @@ export class VUMeter {
     }
 
     const chunks = this.dataSource.getPendingVUMeterSamples()
-    this.applySnapshot(this.meterBallistics.process(chunks, performance.now()))
+    this.applySnapshot(this.meterBallistics.process(chunks, nowMs))
   }
 
   private dbToNormalized(db: number): number {
@@ -394,7 +629,11 @@ export class VUMeter {
   private drawCorrelationBar(
     ctx: CanvasRenderingContext2D,
     x: number, y: number, w: number, h: number,
-    cr: number, cg: number, cb: number
+    cr: number, cg: number, cb: number,
+    labelScale = 0.55,
+    labelAlpha = 0.6,
+    minLabelSize = 8,
+    maxLabelSize = 20,
   ): void {
     const centerX = x + w / 2
     const corr = Math.max(-1, Math.min(1, this.correlation))
@@ -422,10 +661,10 @@ export class VUMeter {
     }
 
     // Labels
-    const fontSize = Math.min(18, Math.max(8, h * 0.55))
+    const fontSize = Math.min(maxLabelSize, Math.max(minLabelSize, h * labelScale))
     ctx.font = `${fontSize}px "JetBrains Mono", monospace`
     ctx.textBaseline = 'middle'
-    ctx.fillStyle = alphaColor(this.options.labelColor, 0.6)
+    ctx.fillStyle = alphaColor(this.options.labelColor, labelAlpha)
     ctx.textAlign = 'left'
     ctx.fillText('-1', x + 2, y + h / 2)
     ctx.textAlign = 'center'
@@ -437,120 +676,433 @@ export class VUMeter {
   private drawNeedleMode(width: number, height: number): void {
     const ctx = this.ctx
     const { r: cr, g: cg, b: cb } = resolveColorToRgb(this.options.lineColor)
+    const devicePixelRatio = getCanvasDevicePixelRatio()
+    const faceLayout = resolveVUNeedleFaceLayout(width, height, devicePixelRatio)
+    const faceScale = faceLayout.scale * devicePixelRatio
+    const faceWidth = faceLayout.width
+    const faceHeight = faceLayout.height
 
-    // Layout: two meters side by side, correlation bar below
-    const corrHeight = Math.max(1, Math.floor(height * 0.12))
-    const gap = Math.max(2, Math.floor(height * 0.03))
-    const meterAreaHeight = height - corrHeight - gap
-    const meterWidth = Math.floor(width / 2) - 2
-    const barLeft = Math.max(16, Math.floor(width * 0.06)) + 4
-    const barRight = width - Math.max(36, Math.floor(width * 0.08)) - 4
-    const barWidth = Math.max(1, barRight - barLeft)
+    ctx.save()
+    ctx.translate(faceLayout.x, faceLayout.y)
 
-    // L needle
-    this.drawNeedleMeter(ctx, 0, 0, meterWidth, meterAreaHeight, this.vuL, this.peakL, 'L', cr, cg, cb)
-    // R needle
-    this.drawNeedleMeter(ctx, meterWidth + 4, 0, meterWidth, meterAreaHeight, this.vuR, this.peakR, 'R', cr, cg, cb)
+    const startAngle = Math.PI * 1.08
+    const endAngle = Math.PI * 1.92
+    const spanCos = Math.abs(Math.cos(startAngle))
+    const corrHeight = 19 * faceScale
+    const gap = 4 * faceScale
+    const meterAreaHeight = Math.max(1, faceHeight - corrHeight - gap)
+    const sidePadding = 11 * faceScale
+    const labelFontSize = 23.5 * faceScale
+    const outerArcWidth = 22 * faceScale
+    const innerArcWidth = 17 * faceScale
+    const needleWidth = 3.25 * faceScale
+    const pivotY = meterAreaHeight * NEEDLE_PIVOT_FRACTION
+    const tickOutward = 5 * faceScale
+    const topPadding = 10 * faceScale
+    const horizontalLabelAllowance = labelFontSize * 0.32
+    const verticalLabelAllowance = labelFontSize * 0.62
+    const radiusXByWidth = (faceWidth / 2 - sidePadding) / spanCos
+      - outerArcWidth / 2
+      - tickOutward
+      - horizontalLabelAllowance
+    const radiusYByHeight = pivotY
+      - outerArcWidth / 2
+      - tickOutward
+      - verticalLabelAllowance
+      - topPadding
+    const outerRadiusX = Math.max(34 * faceScale, radiusXByWidth)
+    const outerRadiusY = Math.max(34 * faceScale, Math.min(radiusYByHeight, outerRadiusX * 0.92))
+    const innerRadiusX = this.options.needleChannels === 'stereo'
+      ? outerRadiusX * (1 - NEEDLE_STEREO_GAP_FRACTION)
+      : outerRadiusX
+    const innerRadiusY = this.options.needleChannels === 'stereo'
+      ? outerRadiusY * (1 - NEEDLE_STEREO_GAP_FRACTION)
+      : outerRadiusY
+    const centerX = faceWidth / 2
+    const centerY = Math.max(topPadding + outerRadiusY, pivotY)
+    const visualReadings = resolveVUNeedleReadings({
+      leftDb: this.needleDisplayL,
+      rightDb: this.needleDisplayR,
+      leftPeakDb: this.needlePeakL,
+      rightPeakDb: this.needlePeakR,
+      needleChannels: this.options.needleChannels,
+    })
+    const readoutReadings = resolveVUNeedleReadings({
+      leftDb: this.vuL,
+      rightDb: this.vuR,
+      leftPeakDb: this.needlePeakL,
+      rightPeakDb: this.needlePeakR,
+      needleChannels: this.options.needleChannels,
+    })
 
-    // Correlation bar at bottom
-    this.drawCorrelationBar(ctx, barLeft, meterAreaHeight + gap, barWidth, corrHeight, cr, cg, cb)
+    this.drawNeedleArcs(
+      ctx,
+      centerX,
+      centerY,
+      outerRadiusX,
+      outerRadiusY,
+      innerRadiusX,
+      innerRadiusY,
+      startAngle,
+      endAngle,
+      visualReadings,
+      outerArcWidth,
+      innerArcWidth,
+    )
+    this.drawSharedNeedleScale(ctx, centerX, centerY, outerRadiusX, outerRadiusY, outerArcWidth, startAngle, endAngle, labelFontSize, faceWidth, sidePadding, tickOutward)
+    this.drawNeedlePeakMarkers(ctx, centerX, centerY, outerRadiusX, outerRadiusY, innerRadiusX, innerRadiusY, startAngle, endAngle, readoutReadings, outerArcWidth, innerArcWidth)
+    this.drawSharedNeedles(ctx, centerX, centerY, outerRadiusX, outerRadiusY, startAngle, endAngle, visualReadings, needleWidth)
+    this.drawNeedleReadouts(ctx, readoutReadings, meterAreaHeight, faceWidth, sidePadding, labelFontSize)
+
+    const barLeft = Math.max(10 * faceScale, sidePadding)
+    const barWidth = Math.max(1, faceWidth - barLeft * 2)
+    this.drawCorrelationBar(ctx, barLeft, meterAreaHeight + gap, barWidth, corrHeight, cr, cg, cb, 0.72, 0.76, 8 * faceScale, 18 * faceScale)
+    ctx.restore()
   }
 
-  private drawNeedleMeter(
+  private vuToNeedleAngle(vu: number, startAngle: number, endAngle: number): number {
+    return startAngle + classicVuToNormalized(vu) * (endAngle - startAngle)
+  }
+
+  private needleEllipsePoint(
+    centerX: number,
+    centerY: number,
+    radiusX: number,
+    radiusY: number,
+    angle: number,
+    offset = 0,
+  ): { x: number; y: number } {
+    return {
+      x: centerX + Math.cos(angle) * (radiusX + offset),
+      y: centerY + Math.sin(angle) * (radiusY + offset),
+    }
+  }
+
+  private drawNeedleArcs(
     ctx: CanvasRenderingContext2D,
-    x: number, y: number, w: number, h: number,
-    rmsDb: number, peakDb: number,
-    label: string,
-    cr: number, cg: number, cb: number
+    centerX: number,
+    centerY: number,
+    outerRadiusX: number,
+    outerRadiusY: number,
+    innerRadiusX: number,
+    innerRadiusY: number,
+    startAngle: number,
+    endAngle: number,
+    readings: VUNeedleReading[],
+    outerWidth: number,
+    innerWidth: number,
   ): void {
-    const centerX = x + w / 2
-    const arcRadius = Math.min(w * 0.42, h * 0.65)
-    const arcCenterY = y + h * 0.78
+    const hotAngle = this.vuToNeedleAngle(0, startAngle, endAngle)
+    const mainReading = readings[readings.length - 1]
+    const leftReading = readings.length > 1 ? readings[0] : null
+    if (!mainReading) return
 
-    // Arc background (sweep from -135° to -45°, top half)
-    const startAngle = Math.PI * 1.25 // 225° (bottom-left)
-    const endAngle = Math.PI * 1.75 // 315° (bottom-right)
-
-    // Scale arc
-    ctx.strokeStyle = alphaColor(this.options.scaleColor, 0.66)
-    ctx.lineWidth = 2
+    ctx.lineCap = 'butt'
+    ctx.strokeStyle = alphaColor(this.getNeedleColor(mainReading), 0.052)
+    ctx.lineWidth = outerWidth
     ctx.beginPath()
-    ctx.arc(centerX, arcCenterY, arcRadius, startAngle, endAngle)
+    ctx.ellipse(centerX, centerY, outerRadiusX, outerRadiusY, 0, startAngle, hotAngle)
+    ctx.stroke()
+    ctx.strokeStyle = alphaColor(this.options.clipColor, 0.085)
+    ctx.beginPath()
+    ctx.ellipse(centerX, centerY, outerRadiusX, outerRadiusY, 0, hotAngle, endAngle)
     ctx.stroke()
 
-    // Scale ticks
-    const tickDbs = [-48, -36, -24, -18, -12, -6, -3, 0]
-    for (const db of tickDbs) {
-      const norm = this.dbToNormalized(db)
-      const angle = startAngle + norm * (endAngle - startAngle)
-      const innerR = arcRadius - 6
-      const outerR = arcRadius + 2
-
-      ctx.strokeStyle = db >= -6
-        ? alphaColor(this.options.clipColor, 0.3)
-        : alphaColor(this.options.scaleColor, 0.9)
-      ctx.lineWidth = 1
+    if (leftReading) {
+      ctx.strokeStyle = alphaColor(this.getNeedleColor(leftReading), 0.04)
+      ctx.lineWidth = innerWidth
       ctx.beginPath()
-      ctx.moveTo(centerX + Math.cos(angle) * innerR, arcCenterY + Math.sin(angle) * innerR)
-      ctx.lineTo(centerX + Math.cos(angle) * outerR, arcCenterY + Math.sin(angle) * outerR)
+      ctx.ellipse(centerX, centerY, innerRadiusX, innerRadiusY, 0, startAngle, hotAngle)
+      ctx.stroke()
+      ctx.strokeStyle = alphaColor(this.options.clipColor, 0.065)
+      ctx.beginPath()
+      ctx.ellipse(centerX, centerY, innerRadiusX, innerRadiusY, 0, hotAngle, endAngle)
+      ctx.stroke()
+      this.drawNeedleLevelArc(ctx, leftReading, centerX, centerY, innerRadiusX, innerRadiusY, innerWidth, startAngle, hotAngle, endAngle, 0.72)
+    }
+
+    this.drawNeedleLevelArc(ctx, mainReading, centerX, centerY, outerRadiusX, outerRadiusY, outerWidth, startAngle, hotAngle, endAngle, 0.95)
+  }
+
+  private drawNeedleLevelArc(
+    ctx: CanvasRenderingContext2D,
+    reading: VUNeedleReading,
+    centerX: number,
+    centerY: number,
+    radiusX: number,
+    radiusY: number,
+    lineWidth: number,
+    startAngle: number,
+    hotAngle: number,
+    endAngle: number,
+    alpha: number,
+  ): void {
+    const levelAngle = Math.min(endAngle, Math.max(startAngle, this.vuToNeedleAngle(reading.vu, startAngle, endAngle)))
+    if (levelAngle <= startAngle) return
+
+    const safeEnd = Math.min(levelAngle, hotAngle)
+    if (safeEnd > startAngle) {
+      ctx.strokeStyle = alphaColor(this.getNeedleColor(reading), alpha)
+      ctx.lineWidth = lineWidth
+      ctx.lineCap = 'butt'
+      ctx.beginPath()
+      ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, startAngle, safeEnd)
       ctx.stroke()
     }
 
-    // Needle
-    const rmsNorm = this.dbToNormalized(rmsDb)
-    const needleAngle = startAngle + rmsNorm * (endAngle - startAngle)
-    const needleLength = arcRadius * 0.88
-
-    ctx.strokeStyle = colorWithAlpha(cr, cg, cb, 0.9)
-    ctx.lineWidth = 1.5
-    ctx.lineCap = 'round'
-    ctx.beginPath()
-    ctx.moveTo(centerX, arcCenterY)
-    ctx.lineTo(
-      centerX + Math.cos(needleAngle) * needleLength,
-      arcCenterY + Math.sin(needleAngle) * needleLength
-    )
-    ctx.stroke()
-
-    // Needle pivot dot
-    ctx.fillStyle = colorWithAlpha(cr, cg, cb, 0.7)
-    ctx.beginPath()
-    ctx.arc(centerX, arcCenterY, 2.5, 0, Math.PI * 2)
-    ctx.fill()
-
-    // Peak indicator (small dot on the arc)
-    const peakNorm = this.dbToNormalized(peakDb)
-    if (peakNorm > 0.001) {
-      const peakAngle = startAngle + peakNorm * (endAngle - startAngle)
-      const peakInHot = peakDb > -6
-      ctx.fillStyle = peakInHot
-        ? alphaColor(this.options.clipColor, 0.8)
-        : alphaColor(this.options.peakColor, 0.8)
+    if (levelAngle > hotAngle) {
+      ctx.strokeStyle = alphaColor(this.options.clipColor, Math.min(1, alpha + 0.04))
+      ctx.lineWidth = lineWidth
+      ctx.lineCap = 'butt'
       ctx.beginPath()
-      ctx.arc(
-        centerX + Math.cos(peakAngle) * arcRadius,
-        arcCenterY + Math.sin(peakAngle) * arcRadius,
-        2.5, 0, Math.PI * 2
-      )
-      ctx.fill()
+      ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, hotAngle, levelAngle)
+      ctx.stroke()
+    }
+  }
+
+  private drawSharedNeedleScale(
+    ctx: CanvasRenderingContext2D,
+    centerX: number,
+    centerY: number,
+    radiusX: number,
+    radiusY: number,
+    outerWidth: number,
+    startAngle: number,
+    endAngle: number,
+    labelFontSize: number,
+    width: number,
+    sidePadding: number,
+    tickOutward: number,
+  ): void {
+    const averageRadius = (radiusX + radiusY) / 2
+    const majorInward = outerWidth + Math.max(5, averageRadius * 0.028)
+    const minorInward = outerWidth * 0.65
+
+    ctx.lineCap = 'square'
+    for (const { vu, label } of CLASSIC_VU_LABELS) {
+      const angle = this.vuToNeedleAngle(vu, startAngle, endAngle)
+      const isHot = vu >= 0
+      const isMajor = vu <= -10 || vu === 0 || vu > 0
+      const shouldShowLabel = isMajor || vu === -5 || vu === -3 || vu === -2 || vu === -1
+      const inward = isMajor ? majorInward : minorInward
+
+      ctx.strokeStyle = isHot
+        ? alphaColor(this.options.clipColor, 0.92)
+        : alphaColor(this.options.scaleColor, 0.72)
+      ctx.lineWidth = isMajor ? Math.max(2.25, averageRadius * 0.014) : Math.max(1.15, averageRadius * 0.008)
+      const tickStart = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, outerWidth / 2 + tickOutward)
+      const tickEnd = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, outerWidth / 2 - inward)
+      ctx.beginPath()
+      ctx.moveTo(tickStart.x, tickStart.y)
+      ctx.lineTo(tickEnd.x, tickEnd.y)
+      ctx.stroke()
+
+      if (shouldShowLabel) {
+        const labelPoint = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, outerWidth / 2 + tickOutward + labelFontSize * 0.64)
+        const x = clamp(labelPoint.x, sidePadding, width - sidePadding)
+        const y = labelPoint.y
+        ctx.fillStyle = isHot
+          ? alphaColor(this.options.clipColor, 0.98)
+          : alphaColor(this.options.labelColor, 0.9)
+        ctx.font = `${isMajor ? '700 ' : ''}${isMajor ? labelFontSize : labelFontSize * 0.9}px "JetBrains Mono", monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(label, x, y)
+      }
     }
 
-    // Channel label
-    const fontSize = Math.min(22, Math.max(10, h * 0.1))
-    ctx.fillStyle = alphaColor(this.options.labelColor, 0.9)
-    ctx.font = `${fontSize}px "JetBrains Mono", monospace`
+    const percentFontSize = labelFontSize * 0.62
+    ctx.font = `${percentFontSize}px "JetBrains Mono", monospace`
+    ctx.fillStyle = alphaColor(this.options.labelColor, 0.48)
     ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-    ctx.fillText(label, centerX, y + 4)
+    ctx.textBaseline = 'middle'
+    const percentMarks = [
+      { vu: -20, label: '0' },
+      { vu: -10, label: '20' },
+      { vu: -5, label: '40' },
+      { vu: -3, label: '60' },
+      { vu: -1, label: '80' },
+      { vu: 0, label: '100' },
+    ]
+    for (const { vu, label } of percentMarks) {
+      const angle = this.vuToNeedleAngle(vu, startAngle, endAngle)
+      const x = centerX + Math.cos(angle) * (radiusX * 0.55)
+      const y = centerY + Math.sin(angle) * (radiusY * 0.55)
+      if (y < centerY - 4) {
+        ctx.fillText(label, x, y)
+      }
+    }
 
-    // dB readout
-    const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, rmsDb))
-    const dbText = displayDb <= VU_METER_MIN_DB + 1 ? '-∞ dB' : `${displayDb.toFixed(1)} dB`
-    ctx.fillStyle = alphaColor(this.options.labelColor, 0.7)
-    ctx.font = `${Math.max(9, fontSize - 1)}px "JetBrains Mono", monospace`
-    ctx.textAlign = 'center'
+    const titleFontSize = Math.min(labelFontSize * 0.88, averageRadius * 0.095)
+    const titleY = centerY - radiusY * 0.14
+    if (titleY > 4) {
+      ctx.fillStyle = alphaColor(this.options.labelColor, 0.48)
+      ctx.font = `${titleFontSize}px "JetBrains Mono", monospace`
+      ctx.fillText('VU', centerX, titleY)
+    }
+  }
+
+  private drawNeedlePeakMarkers(
+    ctx: CanvasRenderingContext2D,
+    centerX: number,
+    centerY: number,
+    outerRadiusX: number,
+    outerRadiusY: number,
+    innerRadiusX: number,
+    innerRadiusY: number,
+    startAngle: number,
+    endAngle: number,
+    readings: VUNeedleReading[],
+    outerWidth: number,
+    innerWidth: number,
+  ): void {
+    const mainReading = readings[readings.length - 1]
+    const leftReading = readings.length > 1 ? readings[0] : null
+    if (leftReading) {
+      this.drawNeedlePeakMarker(ctx, leftReading, centerX, centerY, innerRadiusX, innerRadiusY, innerWidth, startAngle, endAngle, 0.68)
+    }
+    if (mainReading) {
+      this.drawNeedlePeakMarker(ctx, mainReading, centerX, centerY, outerRadiusX, outerRadiusY, outerWidth, startAngle, endAngle, 0.96)
+    }
+  }
+
+  private drawNeedlePeakMarker(
+    ctx: CanvasRenderingContext2D,
+    reading: VUNeedleReading,
+    centerX: number,
+    centerY: number,
+    radiusX: number,
+    radiusY: number,
+    arcWidth: number,
+    startAngle: number,
+    endAngle: number,
+    alpha: number,
+  ): void {
+    if (reading.peakDb <= VU_METER_MIN_DB + 1) return
+
+    const angle = this.vuToNeedleAngle(reading.peakVu, startAngle, endAngle)
+    const isHot = reading.peakVu >= 0
+    const color = isHot ? this.options.clipColor : this.getNeedleColor(reading)
+    const averageRadius = (radiusX + radiusY) / 2
+    const markerInset = Math.max(3, averageRadius * 0.016)
+    const inner = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, -arcWidth / 2 - markerInset)
+    const outer = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, arcWidth / 2 + markerInset)
+
+    ctx.strokeStyle = alphaColor(color, alpha)
+    ctx.lineWidth = Math.max(2.2, averageRadius * 0.011)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(inner.x, inner.y)
+    ctx.lineTo(outer.x, outer.y)
+    ctx.stroke()
+  }
+
+  private drawSharedNeedles(
+    ctx: CanvasRenderingContext2D,
+    centerX: number,
+    centerY: number,
+    radiusX: number,
+    radiusY: number,
+    startAngle: number,
+    endAngle: number,
+    readings: VUNeedleReading[],
+    needleWidth: number,
+  ): void {
+    const mainReading = readings[readings.length - 1]
+    const leftReading = readings.length > 1 ? readings[0] : null
+    const averageRadius = (radiusX + radiusY) / 2
+    if (leftReading) {
+      this.drawSharedNeedle(ctx, leftReading, centerX, centerY, radiusX, radiusY, startAngle, endAngle, 0.5, needleWidth * 0.72)
+    }
+    if (mainReading) {
+      this.drawSharedNeedle(ctx, mainReading, centerX, centerY, radiusX, radiusY, startAngle, endAngle, 0.96, needleWidth)
+      const pivotSize = Math.max(2.3, averageRadius * 0.015)
+      ctx.fillStyle = alphaColor(this.getNeedleColor(mainReading), 0.65)
+      ctx.fillRect(centerX - pivotSize, centerY - pivotSize, pivotSize * 2, pivotSize * 2)
+    }
+  }
+
+  private drawSharedNeedle(
+    ctx: CanvasRenderingContext2D,
+    reading: VUNeedleReading,
+    centerX: number,
+    centerY: number,
+    radiusX: number,
+    radiusY: number,
+    startAngle: number,
+    endAngle: number,
+    alpha: number,
+    lineWidth: number,
+  ): void {
+    const angle = this.vuToNeedleAngle(reading.vu, startAngle, endAngle)
+    const color = this.getNeedleColor(reading)
+    const averageRadius = (radiusX + radiusY) / 2
+    const tip = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, -Math.max(3, averageRadius * 0.012))
+    const counterWeight = Math.max(5, averageRadius * 0.034)
+    const baseX = centerX - Math.cos(angle) * counterWeight
+    const baseY = centerY - Math.sin(angle) * counterWeight
+
+    ctx.strokeStyle = alphaColor(color, alpha)
+    ctx.lineWidth = lineWidth
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(baseX, baseY)
+    ctx.lineTo(tip.x, tip.y)
+    ctx.stroke()
+
+    ctx.fillStyle = alphaColor(color, Math.min(1, alpha + 0.07))
+    ctx.beginPath()
+    ctx.arc(tip.x, tip.y, Math.max(1.5, lineWidth * 0.75), 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  private drawNeedleReadouts(
+    ctx: CanvasRenderingContext2D,
+    readings: VUNeedleReading[],
+    meterAreaHeight: number,
+    width: number,
+    sidePadding: number,
+    labelFontSize: number,
+  ): void {
+    const mainReading = readings[readings.length - 1]
+    if (!mainReading) return
+
+    const leftReading = readings.length > 1 ? readings[0] : null
+    const fontSize = labelFontSize * 0.88
+    const y = meterAreaHeight - 3
+    ctx.font = `${fontSize}px "JetBrains Mono", monospace`
     ctx.textBaseline = 'bottom'
-    ctx.fillText(dbText, centerX, y + h - 2)
+
+    if (!leftReading) {
+      ctx.fillStyle = alphaColor(this.getNeedleColor(mainReading), 0.94)
+      ctx.textAlign = 'center'
+      ctx.fillText(`${this.formatNeedleDb(mainReading.db)} dB`, width / 2, y)
+      return
+    }
+
+    ctx.fillStyle = alphaColor(this.getNeedleColor(leftReading), 0.88)
+    ctx.textAlign = 'left'
+    ctx.fillText(`L  ${this.formatNeedleDb(leftReading.db)} dB`, sidePadding, y)
+
+    ctx.fillStyle = alphaColor(this.getNeedleColor(mainReading), 0.96)
+    ctx.textAlign = 'right'
+    ctx.fillText(`${this.formatNeedleDb(mainReading.db)} dB  R`, width - sidePadding, y)
+  }
+
+  private formatNeedleDb(db: number): string {
+    const displayDb = clamp(db, VU_METER_MIN_DB, VU_METER_MAX_DB)
+    return displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : displayDb.toFixed(1)
+  }
+
+  private getNeedleColor(reading: VUNeedleReading): string {
+    switch (reading.id) {
+      case 'left':
+        return this.options.needleLeftColor
+      case 'right':
+        return this.options.needleRightColor
+      case 'combined':
+        return this.options.needleCombinedColor
+    }
   }
 
   private drawFrame = (): void => {
@@ -562,7 +1114,9 @@ export class VUMeter {
       return
     }
 
-    this.processAudio()
+    const nowMs = performance.now()
+    this.processAudio(nowMs)
+    this.updateNeedleVisuals(nowMs)
 
     ctx.clearRect(0, 0, width, height)
     if (options.backgroundColor !== 'transparent') {

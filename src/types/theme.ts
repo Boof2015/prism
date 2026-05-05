@@ -100,6 +100,9 @@ export interface ThemeVUMeterTokens {
   clip?: string
   scale?: string
   labels?: string
+  needleLeft?: string
+  needleRight?: string
+  needleCombined?: string
 }
 
 export interface ThemeLUFSMeterTokens {
@@ -285,6 +288,9 @@ export interface ResolvedVUMeterTheme {
   clip: string
   scale: string
   labels: string
+  needleLeft: string
+  needleRight: string
+  needleCombined: string
   background: string
 }
 

@@ -64,6 +64,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   theme.scopes.background = '#030712'
   theme.spectrum.heatMid = 'rgb(200, 50, 120)'
   theme.vumeter.track = '#111827'
+  theme.vumeter.needleLeft = 'rgb(70, 80, 90)'
 
   const serialized = serializeThemeFile(theme)
   const parsed = parseThemeFileContent(serialized, DEFAULT_THEME_NAME)
@@ -74,6 +75,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.match(serialized, /\[Controls\]/)
   assert.match(serialized, /\[Scopes\]/)
   assert.match(serialized, /flat_controls = true/)
+  assert.match(serialized, /needle_left = 70, 80, 90/)
   assert.doesNotMatch(serialized, /^id = /m)
   assert.doesNotMatch(serialized, /^name = /m)
 
@@ -84,6 +86,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.equal(parsed.scopes.background, 'rgb(3, 7, 18)')
   assert.equal(parsed.spectrum.heatMid, 'rgb(200, 50, 120)')
   assert.equal(parsed.vumeter.track, 'rgb(17, 24, 39)')
+  assert.equal(parsed.vumeter.needleLeft, 'rgb(70, 80, 90)')
   assert.equal(parsed.nowPlaying.background, theme.nowPlaying.background)
 })
 
@@ -170,6 +173,44 @@ heat_high = 71, 81, 91, 255
     'rgb(71, 81, 91)',
   ])
   assert.equal(defaultResolved.spectrum.heatBase, 'transparent')
+})
+
+test('VUMeter needle color tokens parse and fall back to existing VU colors', () => {
+  const parsed = parseThemeFileContent(`
+[Theme]
+format = prism-theme
+version = 2
+
+[VUMeter]
+level = 10, 20, 30
+peak = 40, 50, 60
+needle_left = 70, 80, 90
+needle_right = 100, 110, 120
+needle_combined = 130, 140, 150
+`, 'Needles')
+  const fallback = parseThemeFileContent(`
+[Theme]
+format = prism-theme
+version = 2
+
+[VUMeter]
+level = 10, 20, 30
+peak = 40, 50, 60
+`, 'Needle Fallback')
+
+  assert.equal(parsed.vumeter.needleLeft, 'rgb(70, 80, 90)')
+  assert.equal(parsed.vumeter.needleRight, 'rgb(100, 110, 120)')
+  assert.equal(parsed.vumeter.needleCombined, 'rgb(130, 140, 150)')
+
+  const resolved = resolveTheme(parsed)
+  assert.equal(resolved.vumeter.needleLeft, 'rgb(70, 80, 90)')
+  assert.equal(resolved.vumeter.needleRight, 'rgb(100, 110, 120)')
+  assert.equal(resolved.vumeter.needleCombined, 'rgb(130, 140, 150)')
+
+  const resolvedFallback = resolveTheme(fallback)
+  assert.equal(resolvedFallback.vumeter.needleLeft, 'rgb(10, 20, 30)')
+  assert.equal(resolvedFallback.vumeter.needleRight, 'rgb(40, 50, 60)')
+  assert.equal(resolvedFallback.vumeter.needleCombined, 'rgb(10, 20, 30)')
 })
 
 test('parseThemeFileContent derives the theme name from the filename stem and ignores legacy header names', () => {
@@ -343,6 +384,12 @@ test('bundled tester themes preserve authored tokens and migrated accent themes 
     'Stanky Leg',
   ])
 
+  const defaultTheme = bundledThemes.find((theme) => theme.name === DEFAULT_THEME_NAME)
+  assert.ok(defaultTheme)
+  assert.equal(defaultTheme.vumeter.needleLeft, 'rgb(199, 223, 255)')
+  assert.equal(defaultTheme.vumeter.needleRight, 'rgb(255, 71, 126)')
+  assert.equal(defaultTheme.vumeter.needleCombined, 'rgb(244, 248, 255)')
+
   const alphaCentauri = bundledThemes.find((theme) => theme.name === 'Alpha Centauri')
   assert.ok(alphaCentauri)
   assert.equal(alphaCentauri.credit, 'MxnGxzr')
@@ -350,6 +397,7 @@ test('bundled tester themes preserve authored tokens and migrated accent themes 
   assert.equal(alphaCentauri.description, 'It exists')
   assert.equal(alphaCentauri.app.accent, 'rgb(0, 50, 220)')
   assert.equal(alphaCentauri.spectrogram.background, 'rgba(255, 255, 255, 0)')
+  assert.equal(alphaCentauri.vumeter.needleLeft, undefined)
 
   const chromaGreen = bundledThemes.find((theme) => theme.name === 'Chroma Green')
   assert.ok(chromaGreen)
@@ -365,6 +413,8 @@ test('bundled tester themes preserve authored tokens and migrated accent themes 
   assert.ok(migrated)
   assert.equal(migrated.oscilloscope.line, migrated.app.accent)
   assert.equal(migrated.vectorscope.trace, migrated.app.accent)
+  assert.equal(migrated.vumeter.needleLeft, migrated.app.accent)
+  assert.equal(migrated.vumeter.needleCombined, migrated.app.accent)
 })
 
 test('library seeds default themes and template file', async () => {

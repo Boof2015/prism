@@ -7,6 +7,7 @@ import { FileBackedProfileLibrary } from '../src/main/profileLibrary'
 import {
   createDefaultProfile,
   extractLocalProfileMetadata,
+  mergeScopeSettings,
   normalizeScopeOrder,
   profileFileToProfile,
   profileToFileData,
@@ -75,6 +76,28 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
   assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
+})
+
+test('mergeScopeSettings defaults missing or invalid VU needle channel settings to stereo', () => {
+  const combined = mergeScopeSettings({
+    vumeter: {
+      mode: 'needle',
+      orientation: 'horizontal',
+      needleChannels: 'combined',
+    },
+  })
+  const invalid = mergeScopeSettings({
+    vumeter: {
+      mode: 'needle',
+      orientation: 'horizontal',
+      needleChannels: 'mid',
+    },
+  })
+  const missing = mergeScopeSettings({})
+
+  assert.equal(combined.vumeter.needleChannels, 'combined')
+  assert.equal(invalid.vumeter.needleChannels, 'stereo')
+  assert.equal(missing.vumeter.needleChannels, 'stereo')
 })
 
 test('library saves, renames, deletes, and resolves filename collisions', async () => {

@@ -264,8 +264,12 @@ export function scopeSettingsToOptions(
         clipColor: t.clip,
         scaleColor: t.scale,
         labelColor: t.labels,
+        needleLeftColor: t.needleLeft,
+        needleRightColor: t.needleRight,
+        needleCombinedColor: t.needleCombined,
         mode: s.mode,
         orientation: s.orientation,
+        needleChannels: s.needleChannels,
       }
     }
     case 'lufsmeter': {

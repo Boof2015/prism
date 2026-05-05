@@ -16,6 +16,7 @@ import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } fr
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 import { isLUFSMeterReadout } from '../types/lufsmeter'
 import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
+import { isVUMeterNeedleChannels } from '../types/vumeter'
 import { clampWaveformScrollSpeed } from '../types/waveform'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
@@ -142,6 +143,9 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
   const rawLUFSMeter: Partial<ScopeSettings['lufsmeter']> = typeof parsed.lufsmeter === 'object' && parsed.lufsmeter !== null
     ? parsed.lufsmeter
     : {}
+  const rawVUMeter: Partial<ScopeSettings['vumeter']> = typeof parsed.vumeter === 'object' && parsed.vumeter !== null
+    ? parsed.vumeter
+    : {}
   const rawNowPlaying: Partial<ScopeSettings['nowPlaying']> = typeof legacyParsed.nowPlaying === 'object' && legacyParsed.nowPlaying !== null
     ? legacyParsed.nowPlaying
     : (typeof legacyParsed.astra === 'object' && legacyParsed.astra !== null ? legacyParsed.astra : {})
@@ -155,7 +159,13 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
     oscilloscope: { ...DEFAULT_SCOPE_SETTINGS.oscilloscope, ...(parsed.oscilloscope ?? {}) },
     vectorscope: { ...DEFAULT_SCOPE_SETTINGS.vectorscope, ...(parsed.vectorscope ?? {}) },
     spectrogram: { ...DEFAULT_SCOPE_SETTINGS.spectrogram, ...(parsed.spectrogram ?? {}) },
-    vumeter: { ...DEFAULT_SCOPE_SETTINGS.vumeter, ...(parsed.vumeter ?? {}) },
+    vumeter: {
+      ...DEFAULT_SCOPE_SETTINGS.vumeter,
+      ...rawVUMeter,
+      needleChannels: isVUMeterNeedleChannels(rawVUMeter.needleChannels)
+        ? rawVUMeter.needleChannels
+        : DEFAULT_SCOPE_SETTINGS.vumeter.needleChannels,
+    },
     lufsmeter: {
       ...DEFAULT_SCOPE_SETTINGS.lufsmeter,
       ...rawLUFSMeter,

@@ -74,7 +74,9 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     }
     case 'vumeter': {
       const scopeSettings = settings as ScopeSettings['vumeter']
-      return `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.orientation.toUpperCase()}`
+      return scopeSettings.mode === 'needle'
+        ? `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.needleChannels.toUpperCase()}`
+        : `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.orientation.toUpperCase()}`
     }
     case 'lufsmeter':
       return `${lufsReadoutLabel((settings as ScopeSettings['lufsmeter']).readout)} LUFS`
@@ -481,14 +483,25 @@ export default function ScopeSettingsSection({
                 <option value="needle">Needle</option>
               </SelectControl>
 
-              <SelectControl
-                label="Orientation"
-                value={current.orientation}
-                onChange={(value) => onUpdate('vumeter', { orientation: value as ScopeSettings['vumeter']['orientation'] })}
-              >
-                <option value="horizontal">Horizontal</option>
-                <option value="vertical">Vertical</option>
-              </SelectControl>
+              {current.mode === 'bar' ? (
+                <SelectControl
+                  label="Orientation"
+                  value={current.orientation}
+                  onChange={(value) => onUpdate('vumeter', { orientation: value as ScopeSettings['vumeter']['orientation'] })}
+                >
+                  <option value="horizontal">Horizontal</option>
+                  <option value="vertical">Vertical</option>
+                </SelectControl>
+              ) : (
+                <SelectControl
+                  label="Needles"
+                  value={current.needleChannels}
+                  onChange={(value) => onUpdate('vumeter', { needleChannels: value as ScopeSettings['vumeter']['needleChannels'] })}
+                >
+                  <option value="stereo">Stereo</option>
+                  <option value="combined">Combined</option>
+                </SelectControl>
+              )}
             </>
           )
         })()}

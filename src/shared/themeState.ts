@@ -47,6 +47,9 @@ const DEFAULT_BAND_HIGH = '#4488ff'
 const DEFAULT_HEAT_LOW = 'rgb(15, 7, 33)'
 const DEFAULT_HEAT_MID = 'rgb(163, 26, 121)'
 const DEFAULT_HEAT_HIGH = 'rgb(255, 241, 209)'
+const DEFAULT_VU_NEEDLE_LEFT = 'rgb(199, 223, 255)'
+const DEFAULT_VU_NEEDLE_RIGHT = 'rgb(255, 71, 126)'
+const DEFAULT_VU_NEEDLE_COMBINED = 'rgb(244, 248, 255)'
 
 type SectionTokenMap = Partial<Record<string, string>>
 type SectionSchema<T extends object> = Record<string, Extract<keyof T, string>>
@@ -138,6 +141,9 @@ const VUMETER_SCHEMA = {
   clip: 'clip',
   scale: 'scale',
   labels: 'labels',
+  needle_left: 'needleLeft',
+  needle_right: 'needleRight',
+  needle_combined: 'needleCombined',
 } as const satisfies SectionSchema<ThemeVUMeterTokens>
 
 const LUFSMETER_SCHEMA = {
@@ -536,6 +542,9 @@ export function createDefaultTheme(): PrismTheme {
       track: 'rgba(56, 189, 248, 0.08)',
       peak: 'rgb(255, 127, 0)',
       clip: 'rgba(255, 120, 80, 0.9)',
+      needleLeft: DEFAULT_VU_NEEDLE_LEFT,
+      needleRight: DEFAULT_VU_NEEDLE_RIGHT,
+      needleCombined: DEFAULT_VU_NEEDLE_COMBINED,
     },
     lufsmeter: {
       level: DEFAULT_ACCENT,
@@ -1715,6 +1724,9 @@ function resolveVUMeterTheme(
     clip: theme.vumeter.clip ?? 'rgba(255, 120, 80, 0.9)',
     scale: theme.vumeter.scale ?? scopes.guides,
     labels: theme.vumeter.labels ?? blendText(app.text, app.textMuted, 0.35),
+    needleLeft: theme.vumeter.needleLeft ?? level,
+    needleRight: theme.vumeter.needleRight ?? theme.vumeter.peak ?? 'rgb(255, 127, 0)',
+    needleCombined: theme.vumeter.needleCombined ?? level,
     background: theme.vumeter.background ?? scopes.background,
   }
 }
@@ -1879,6 +1891,8 @@ export function createMigratedAccentTheme(accent: string): PrismTheme | null {
   base.spectrogram.mono = base.app.accent
   base.vumeter.level = base.app.accent
   base.vumeter.track = withAlpha(base.app.accent, 0.08)
+  base.vumeter.needleLeft = base.app.accent
+  base.vumeter.needleCombined = base.app.accent
   base.lufsmeter.level = base.app.accent
   base.lufsmeter.track = withAlpha(base.app.accent, 0.08)
   base.lufsmeter.target = withAlpha(base.app.accent, 0.25)

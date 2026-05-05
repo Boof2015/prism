@@ -87,6 +87,15 @@ import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
 import {
+  VU_NEEDLE_FACE_HEIGHT_CSS_PX,
+  VU_NEEDLE_FACE_WIDTH_CSS_PX,
+  classicVuToNormalized,
+  dbfsToClassicVu,
+  resolveVUNeedleFaceLayout,
+  resolveVUNeedleReadings,
+  stereoRmsDbAverage,
+} from '../src/renderer/visualizers/VUMeter'
+import {
   drawVectorscopeGridForMode,
   getVectorscopeLayout,
 } from '../src/renderer/visualizers/vectorscopeGrids'
@@ -2216,9 +2225,13 @@ test('Vectorscope keeps the original linear projection behavior', () => {
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
   profile.scopeSettings.lufsmeter.readout = 'shortTerm'
+  profile.scopeSettings.vumeter.needleChannels = 'combined'
   const authoredTheme = createDefaultTheme()
   authoredTheme.scopes.background = 'rgb(6, 7, 8)'
   authoredTheme.vumeter.track = 'rgb(9, 10, 11)'
+  authoredTheme.vumeter.needleLeft = 'rgb(20, 21, 22)'
+  authoredTheme.vumeter.needleRight = 'rgb(23, 24, 25)'
+  authoredTheme.vumeter.needleCombined = 'rgb(26, 27, 28)'
   authoredTheme.lufsmeter.track = 'rgb(12, 13, 14)'
   authoredTheme.lufsmeter.target = 'rgb(15, 16, 17)'
   const theme = resolveTheme(authoredTheme)
@@ -2231,6 +2244,10 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
   assert.equal(vumeter.trackColor, 'rgb(9, 10, 11)')
   assert.equal(vumeter.scaleColor, theme.vumeter.scale)
   assert.equal(vumeter.labelColor, theme.vumeter.labels)
+  assert.equal(vumeter.needleLeftColor, 'rgb(20, 21, 22)')
+  assert.equal(vumeter.needleRightColor, 'rgb(23, 24, 25)')
+  assert.equal(vumeter.needleCombinedColor, 'rgb(26, 27, 28)')
+  assert.equal(vumeter.needleChannels, 'combined')
 
   const lufsmeter = scopeSettingsToOptions('lufsmeter', profile.scopeSettings.lufsmeter, theme.lufsmeter)
   assert.equal(lufsmeter.backgroundColor, 'rgb(6, 7, 8)')
@@ -2239,6 +2256,73 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
   assert.equal(lufsmeter.scaleColor, theme.lufsmeter.scale)
   assert.equal(lufsmeter.labelColor, theme.lufsmeter.labels)
   assert.equal(lufsmeter.readout, 'shortTerm')
+})
+
+test('VUMeter shared needle helpers map dBFS to a classic VU face', () => {
+  assert.equal(dbfsToClassicVu(-6), 0)
+  assert.equal(dbfsToClassicVu(0), 3)
+  assert.equal(dbfsToClassicVu(-40), -20)
+  assertAlmostEqual(classicVuToNormalized(-20), 0, 1e-12, '-20 VU should start the scale')
+  assertAlmostEqual(classicVuToNormalized(0), 0.81, 1e-12, '0 VU should sit near the hot zone')
+  assertAlmostEqual(classicVuToNormalized(3), 1, 1e-12, '+3 VU should end the scale')
+})
+
+test('VUMeter needle face layout stays fixed instead of scaling up', () => {
+  const wide = resolveVUNeedleFaceLayout(1200, 500)
+  assert.equal(wide.width, VU_NEEDLE_FACE_WIDTH_CSS_PX)
+  assert.equal(wide.height, VU_NEEDLE_FACE_HEIGHT_CSS_PX)
+  assertAlmostEqual(wide.x, (1200 - VU_NEEDLE_FACE_WIDTH_CSS_PX) / 2, 1e-12, 'fixed face should center in extra width')
+  assertAlmostEqual(wide.y, 500 - VU_NEEDLE_FACE_HEIGHT_CSS_PX, 1e-12, 'fixed face should bottom-align in extra height')
+  assert.equal(wide.scale, 1)
+
+  const retinaWide = resolveVUNeedleFaceLayout(2400, 1000, 2)
+  assert.equal(retinaWide.width, VU_NEEDLE_FACE_WIDTH_CSS_PX * 2)
+  assert.equal(retinaWide.height, VU_NEEDLE_FACE_HEIGHT_CSS_PX * 2)
+  assert.equal(retinaWide.scale, 1)
+
+  const small = resolveVUNeedleFaceLayout(280, 180)
+  assert.equal(small.width, 280)
+  assert.equal(small.height, 180)
+  assertAlmostEqual(small.scale, 0.5, 1e-12, 'fixed face should only shrink when the canvas is smaller')
+})
+
+test('VUMeter shared needle helpers switch between stereo needles and combined RMS', () => {
+  const stereo = resolveVUNeedleReadings({
+    leftDb: -6,
+    rightDb: -12,
+    leftPeakDb: -3,
+    rightPeakDb: -9,
+    needleChannels: 'stereo',
+  })
+  const combined = resolveVUNeedleReadings({
+    leftDb: -6,
+    rightDb: -12,
+    leftPeakDb: -3,
+    rightPeakDb: -9,
+    needleChannels: 'combined',
+  })
+  const expectedCombinedDb = stereoRmsDbAverage(-6, -12)
+
+  assert.equal(stereo.length, 2)
+  assert.equal(stereo[0]?.id, 'left')
+  assert.equal(stereo[1]?.id, 'right')
+  assert.equal(combined.length, 1)
+  assert.equal(combined[0]?.id, 'combined')
+  assertAlmostEqual(combined[0]?.db ?? 0, expectedCombinedDb, 1e-12, 'combined needle should average stereo RMS power')
+  assert.equal(combined[0]?.peakDb, -3)
+  assertAlmostEqual(combined[0]?.vu ?? 0, dbfsToClassicVu(expectedCombinedDb), 1e-12, 'combined needle should use classic VU mapping')
+})
+
+test('scopeSummary reports VU needle channel mode', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'BAR · HORIZONTAL')
+
+  profile.scopeSettings.vumeter.mode = 'needle'
+  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'NEEDLE · STEREO')
+
+  profile.scopeSettings.vumeter.needleChannels = 'combined'
+  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'NEEDLE · COMBINED')
 })
 
 test('scopeSummary includes only waveform display modes', () => {
