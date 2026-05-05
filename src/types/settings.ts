@@ -1,7 +1,7 @@
 import type { VectorscopeMode } from '../renderer/visualizers/Vectorscope'
 import type { SpectrogramClarityMode, SpectrogramScaleMode } from './spectrogram'
 import type { VUMeterMode, VUMeterOrientation } from './vumeter'
-import type { LUFSMeterMode } from './lufsmeter'
+import { DEFAULT_LUFS_METER_READOUT, type LUFSMeterMode, type LUFSMeterReadout } from './lufsmeter'
 import { DEFAULT_WAVEFORM_MODE, type WaveformMode } from './waveform'
 import { DEFAULT_SPECTRUM_PEAK_INFO_MODE, type SpectrumPeakInfoMode } from './spectrum'
 
@@ -44,6 +44,7 @@ export interface ScopeSettings {
   }
   lufsmeter: {
     mode: LUFSMeterMode
+    readout: LUFSMeterReadout
   }
   waveform: {
     mode: WaveformMode
@@ -66,7 +67,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   vectorscope: { mode: 'lissajous', multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
   spectrogram: { fftSize: 2048, scrollSpeed: 2, clarityMode: 'sharper', scaleMode: 'log', colorScheme: 'heat' },
   vumeter: { mode: 'bar', orientation: 'horizontal' },
-  lufsmeter: { mode: 'bar' },
+  lufsmeter: { mode: 'bar', readout: DEFAULT_LUFS_METER_READOUT },
   waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, multiband: false },
   nowPlaying: {
     showCoverArt: true,

@@ -51,7 +51,7 @@ export const SCOPE_LABELS: Record<ScopeKind, string> = {
   vectorscope: 'Vectorscope',
   spectrogram: 'Spectrogram',
   vumeter: 'VU Meter',
-  lufsmeter: 'LUFS Meter',
+  lufsmeter: 'Loudness Meter',
   waveform: 'Waveform',
   nowPlaying: 'Now Playing',
 }

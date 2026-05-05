@@ -279,6 +279,7 @@ export function scopeSettingsToOptions(
         scaleColor: t.scale,
         labelColor: t.labels,
         mode: s.mode,
+        readout: s.readout,
       }
     }
     case 'waveform': {

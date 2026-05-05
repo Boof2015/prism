@@ -18,6 +18,10 @@ import {
   resolveMainWindowSettingsPanelHeight,
 } from '../src/renderer/mainWindowSettings'
 import {
+  LOCKED_LOUDNESS_METER_WIDTH_PX,
+  buildAnalyzerGridTemplateColumns,
+} from '../src/renderer/analyzerLayout'
+import {
   formatAstraTime,
   getAstraPlaybackProgress,
 } from '../src/renderer/utils/astra'
@@ -532,6 +536,7 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
 
 interface FakeCanvasRecorder {
   fillRects: Array<{ x: number; y: number; width: number; height: number; fillStyle: string }>
+  fillTexts: Array<{ text: string; x: number; y: number; fillStyle: string; font: string }>
   strokeRects: Array<{ x: number; y: number; width: number; height: number; lineDash: number[] }>
   arcs: Array<{
     x: number
@@ -550,6 +555,7 @@ interface FakeCanvasRecorder {
 function createFakeCanvasRecorder(): FakeCanvasRecorder {
   return {
     fillRects: [],
+    fillTexts: [],
     strokeRects: [],
     arcs: [],
     lineDashes: [],
@@ -562,6 +568,7 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
   let currentLineDash: number[] = []
   let currentFillStyle = ''
   let currentStrokeStyle = ''
+  let currentFont = ''
   let currentCompositeOperation: GlobalCompositeOperation = 'source-over'
 
   const context = {
@@ -569,7 +576,9 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     fillRect(x: number, y: number, width: number, height: number) {
       recorder?.fillRects.push({ x, y, width, height, fillStyle: currentFillStyle })
     },
-    fillText() {},
+    fillText(text: string, x: number, y: number) {
+      recorder?.fillTexts.push({ text: String(text), x, y, fillStyle: currentFillStyle, font: currentFont })
+    },
     beginPath() {},
     closePath() {},
     fill() {},
@@ -604,11 +613,18 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
         addColorStop() {},
       } as CanvasGradient
     },
-    measureText() {
-      return { width: 0 } as TextMetrics
+    measureText(text: string) {
+      const fontSizeMatch = currentFont.match(/(\d+(?:\.\d+)?)px/)
+      const fontSize = fontSizeMatch ? Number(fontSizeMatch[1]) : 12
+      return { width: String(text).length * fontSize * 0.62 } as TextMetrics
     },
     lineWidth: 1,
-    font: '',
+    get font() {
+      return currentFont
+    },
+    set font(value: string) {
+      currentFont = value
+    },
     textAlign: 'left',
     textBaseline: 'top',
     lineCap: 'butt',
@@ -638,11 +654,15 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
   return context as unknown as CanvasRenderingContext2D
 }
 
-function createFakeCanvas(recorder: FakeCanvasRecorder | null = null): HTMLCanvasElement {
+function createFakeCanvas(
+  recorder: FakeCanvasRecorder | null = null,
+  width = 320,
+  height = 180,
+): HTMLCanvasElement {
   const context = createFakeCanvasContext(recorder)
   return {
-    width: 320,
-    height: 180,
+    width,
+    height,
     getContext: (kind: string) => kind === '2d' ? context : null,
   } as unknown as HTMLCanvasElement
 }
@@ -1255,6 +1275,19 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'waveform',
     'nowPlaying',
   ])
+})
+
+test('analyzer layout locks the loudness meter width', () => {
+  const columns = buildAnalyzerGridTemplateColumns(
+    ['spectrum', 'lufsmeter', 'waveform'],
+    { spectrum: 1, lufsmeter: 0.15, waveform: 1 },
+  )
+
+  assert.equal(LOCKED_LOUDNESS_METER_WIDTH_PX, 150)
+  assert.equal(
+    columns,
+    `minmax(0, 1fr) minmax(${LOCKED_LOUDNESS_METER_WIDTH_PX}px, ${LOCKED_LOUDNESS_METER_WIDTH_PX}px) minmax(0, 1fr)`,
+  )
 })
 
 test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer options', () => {
@@ -2182,6 +2215,7 @@ test('Vectorscope keeps the original linear projection behavior', () => {
 
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
+  profile.scopeSettings.lufsmeter.readout = 'shortTerm'
   const authoredTheme = createDefaultTheme()
   authoredTheme.scopes.background = 'rgb(6, 7, 8)'
   authoredTheme.vumeter.track = 'rgb(9, 10, 11)'
@@ -2204,6 +2238,7 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
   assert.equal(lufsmeter.targetColor, 'rgb(15, 16, 17)')
   assert.equal(lufsmeter.scaleColor, theme.lufsmeter.scale)
   assert.equal(lufsmeter.labelColor, theme.lufsmeter.labels)
+  assert.equal(lufsmeter.readout, 'shortTerm')
 })
 
 test('scopeSummary includes only waveform display modes', () => {
@@ -2216,6 +2251,18 @@ test('scopeSummary includes only waveform display modes', () => {
 
   profile.scopeSettings.waveform.multiband = true
   assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), 'Stereo · RGB')
+})
+
+test('scopeSummary includes loudness readout source', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(scopeSummary('lufsmeter', profile.scopeSettings.lufsmeter), 'Short-term LUFS')
+
+  profile.scopeSettings.lufsmeter.readout = 'integrated'
+  assert.equal(scopeSummary('lufsmeter', profile.scopeSettings.lufsmeter), 'Integrated LUFS')
+
+  profile.scopeSettings.lufsmeter.readout = 'momentary'
+  assert.equal(scopeSummary('lufsmeter', profile.scopeSettings.lufsmeter), 'Momentary LUFS')
 })
 
 test('scopeSummary includes spectrum peak mode when enabled', () => {
@@ -3502,6 +3549,123 @@ test('MultibandSplitter and MultibandBuffer reuse caller-owned buffers', () => {
   assert.equal(pointCount, 8)
   assert.equal(pointTarget.mid.left, pointRef)
   assert.notEqual(pointTarget.low.left[0], 0)
+})
+
+test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and attached readout', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const leftChunk = new Float32Array(4800)
+  const rightChunk = new Float32Array(4800)
+  for (let index = 0; index < leftChunk.length; index += 1) {
+    const sample = index % 2 === 0 ? 0.55 : -0.55
+    leftChunk[index] = sample
+    rightChunk[index] = sample * 0.75
+  }
+
+  let pendingChunks: Array<{ left: Float32Array; right: Float32Array }> = [
+    { left: leftChunk, right: rightChunk },
+  ]
+  const dataSource = {
+    getPendingLUFSMeterSamples: () => {
+      const drained = pendingChunks
+      pendingChunks = []
+      return drained
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const meter = new LUFSMeter(createFakeCanvas(recorder), {
+    dataSource,
+    readout: 'momentary',
+    lineColor: 'rgb(255, 0, 96)',
+    trackColor: 'rgba(255, 0, 96, 0.08)',
+    targetColor: 'rgb(1, 2, 3)',
+    scaleColor: 'rgb(4, 5, 6)',
+    labelColor: 'rgb(7, 8, 9)',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    const trackRects = recorder.fillRects.filter((rect) => rect.fillStyle === 'rgba(255, 0, 96, 0.08)')
+    assert.equal(trackRects.length >= 3, true)
+    assert.equal(trackRects.some((rect) => rect.width > 12), true)
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === 'rgba(255, 0, 96, 0.88)'), true)
+    assert.equal(
+      recorder.fillRects.some((rect) => rect.fillStyle === 'rgb(255, 0, 96)' && rect.width > 12 && rect.width < 80),
+      true,
+    )
+    assert.equal(
+      recorder.fillRects.some((rect) => rect.fillStyle === 'rgb(255, 0, 96)' && rect.width > 120 && rect.height <= 34),
+      true,
+    )
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === 'rgb(1, 2, 3)'), true)
+
+    for (const scaleLabel of ['0', '6', '12', '24', '36', '50']) {
+      assert.equal(
+        recorder.fillTexts.some((text) => text.text === scaleLabel && text.fillStyle === 'rgb(4, 5, 6)'),
+        true,
+      )
+    }
+    assert.equal(
+      recorder.fillTexts.some((text) => text.text.endsWith('LUFS') && text.fillStyle === 'rgba(0, 0, 0, 0.9)'),
+      true,
+    )
+  } finally {
+    meter.dispose()
+    dom.restore()
+  }
+})
+
+test('LUFSMeter fits readout text inside narrow tags', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const leftChunk = new Float32Array(4800)
+  const rightChunk = new Float32Array(4800)
+  leftChunk.fill(0.55)
+  rightChunk.fill(0.55)
+
+  let pendingChunks: Array<{ left: Float32Array; right: Float32Array }> = [
+    { left: leftChunk, right: rightChunk },
+  ]
+  const dataSource = {
+    getPendingLUFSMeterSamples: () => {
+      const drained = pendingChunks
+      pendingChunks = []
+      return drained
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const meter = new LUFSMeter(createFakeCanvas(recorder, 180, 360), {
+    dataSource,
+    readout: 'momentary',
+    lineColor: 'rgb(255, 0, 96)',
+    trackColor: 'rgba(255, 0, 96, 0.08)',
+    targetColor: 'rgb(1, 2, 3)',
+    scaleColor: 'rgb(4, 5, 6)',
+    labelColor: 'rgb(7, 8, 9)',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    const tagRect = recorder.fillRects.find((rect) => (
+      rect.fillStyle === 'rgb(255, 0, 96)' && rect.width > 50 && rect.height <= 34
+    ))
+    const readout = recorder.fillTexts.find((text) => text.text.endsWith('LUFS'))
+    assert.ok(tagRect)
+    assert.ok(readout)
+
+    const fontSize = Number(readout.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 0)
+    const estimatedTextWidth = readout.text.length * fontSize * 0.62
+    assert.equal(estimatedTextWidth <= tagRect.width - 8, true)
+  } finally {
+    meter.dispose()
+    dom.restore()
+  }
 })
 
 test('LUFSMeter keeps integrated history bounded over long runs', () => {

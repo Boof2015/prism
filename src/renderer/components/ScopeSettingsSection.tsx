@@ -19,6 +19,17 @@ function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): strin
   }
 }
 
+function lufsReadoutLabel(readout: ScopeSettings['lufsmeter']['readout']): string {
+  switch (readout) {
+    case 'integrated':
+      return 'Integrated'
+    case 'shortTerm':
+      return 'Short-term'
+    case 'momentary':
+      return 'Momentary'
+  }
+}
+
 function nowPlayingVisibleLabels(settings: ScopeSettings['nowPlaying']): string[] {
   const labels: string[] = []
   if (settings.showCoverArt) labels.push('Cover')
@@ -66,7 +77,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       return `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.orientation.toUpperCase()}`
     }
     case 'lufsmeter':
-      return 'Bar Meter'
+      return `${lufsReadoutLabel((settings as ScopeSettings['lufsmeter']).readout)} LUFS`
     case 'waveform': {
       const scopeSettings = settings as ScopeSettings['waveform']
       const summary = [scopeSettings.mode === 'stereo' ? 'Stereo' : 'Mono']
@@ -486,11 +497,13 @@ export default function ScopeSettingsSection({
           const current = settings as ScopeSettings['lufsmeter']
           return (
             <SelectControl
-              label="Mode"
-              value={current.mode}
-              onChange={(value) => onUpdate('lufsmeter', { mode: value as ScopeSettings['lufsmeter']['mode'] })}
+              label="Readout"
+              value={current.readout}
+              onChange={(value) => onUpdate('lufsmeter', { readout: value as ScopeSettings['lufsmeter']['readout'] })}
             >
-              <option value="bar">Bar</option>
+              <option value="integrated">Integrated</option>
+              <option value="shortTerm">Short-term</option>
+              <option value="momentary">Momentary</option>
             </SelectControl>
           )
         })()}

@@ -14,6 +14,7 @@ import {
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
+import { isLUFSMeterReadout } from '../types/lufsmeter'
 import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
 import { clampWaveformScrollSpeed } from '../types/waveform'
 
@@ -138,6 +139,9 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
   const rawWaveform: Partial<ScopeSettings['waveform']> = typeof parsed.waveform === 'object' && parsed.waveform !== null
     ? parsed.waveform
     : {}
+  const rawLUFSMeter: Partial<ScopeSettings['lufsmeter']> = typeof parsed.lufsmeter === 'object' && parsed.lufsmeter !== null
+    ? parsed.lufsmeter
+    : {}
   const rawNowPlaying: Partial<ScopeSettings['nowPlaying']> = typeof legacyParsed.nowPlaying === 'object' && legacyParsed.nowPlaying !== null
     ? legacyParsed.nowPlaying
     : (typeof legacyParsed.astra === 'object' && legacyParsed.astra !== null ? legacyParsed.astra : {})
@@ -152,7 +156,13 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
     vectorscope: { ...DEFAULT_SCOPE_SETTINGS.vectorscope, ...(parsed.vectorscope ?? {}) },
     spectrogram: { ...DEFAULT_SCOPE_SETTINGS.spectrogram, ...(parsed.spectrogram ?? {}) },
     vumeter: { ...DEFAULT_SCOPE_SETTINGS.vumeter, ...(parsed.vumeter ?? {}) },
-    lufsmeter: { ...DEFAULT_SCOPE_SETTINGS.lufsmeter, ...(parsed.lufsmeter ?? {}) },
+    lufsmeter: {
+      ...DEFAULT_SCOPE_SETTINGS.lufsmeter,
+      ...rawLUFSMeter,
+      readout: isLUFSMeterReadout(rawLUFSMeter.readout)
+        ? rawLUFSMeter.readout
+        : DEFAULT_SCOPE_SETTINGS.lufsmeter.readout,
+    },
     waveform: {
       ...DEFAULT_SCOPE_SETTINGS.waveform,
       mode: rawWaveform.mode === 'stereo' || rawWaveform.mode === 'mono'

@@ -19,7 +19,7 @@ Seven visualizers driven by a native C++ analysis engine:
 - **Vectorscope** — Stereo phase visualization in five display modes (Lissajous, polar, linear) with optional multiband RGB split
 - **Spectrogram** — Scrolling frequency-over-time display with mel, log, and linear scale modes
 - **VU Meter** — Classic loudness metering in needle or bar style, horizontal or vertical
-- **LUFS Meter** — Integrated loudness metering following ITU-R BS.1770
+- **Loudness Meter** — Compact LUFS metering following ITU-R BS.1770 with fast stereo peak activity
 - **Waveform** — Scrolling time-domain view with mono, stereo, and multiband modes
 
 ![Prism scopes](assets/prism-demo-12fps.gif)

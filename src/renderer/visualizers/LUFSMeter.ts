@@ -1,9 +1,14 @@
 import { audioRouter } from '../audio/AudioRouter'
-import type { LUFSMeterMode } from '../../types/lufsmeter'
+import type { LUFSMeterMode, LUFSMeterReadout } from '../../types/lufsmeter'
 import { resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
+import {
+  VUMeterBallistics,
+  VU_METER_MIN_DB,
+  type VUMeterSnapshot,
+} from './vuMeterBallistics'
 
 export interface LUFSMeterDataSource extends VisualizerSessionSource {
   getPendingLUFSMeterSamples: () => Array<{ left: Float32Array; right: Float32Array }>
@@ -11,6 +16,7 @@ export interface LUFSMeterDataSource extends VisualizerSessionSource {
 
 export interface LUFSMeterOptions {
   mode?: LUFSMeterMode
+  readout?: LUFSMeterReadout
   backgroundColor?: string
   lineColor?: string
   trackColor?: string
@@ -25,6 +31,7 @@ type ResolvedLUFSMeterOptions = Required<Omit<LUFSMeterOptions, 'dataSource' | '
 
 const defaultOptions: ResolvedLUFSMeterOptions = {
   mode: 'bar',
+  readout: 'shortTerm',
   backgroundColor: 'transparent',
   lineColor: '#38bdf8',
   trackColor: 'rgba(56, 189, 248, 0.08)',
@@ -38,10 +45,28 @@ const defaultLUFSMeterDataSource: LUFSMeterDataSource = {
   ...defaultVisualizerSessionSource,
 }
 
+function colorWithAlpha(r: number, g: number, b: number, a: number): string {
+  return `rgba(${r}, ${g}, ${b}, ${a})`
+}
+
+function relativeLuminanceChannel(channel: number): number {
+  const normalized = Math.max(0, Math.min(255, channel)) / 255
+  return normalized <= 0.03928
+    ? normalized / 12.92
+    : ((normalized + 0.055) / 1.055) ** 2.4
+}
+
+function contrastRatio(luminanceA: number, luminanceB: number): number {
+  const lighter = Math.max(luminanceA, luminanceB)
+  const darker = Math.min(luminanceA, luminanceB)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
 // ---- Constants ----
 
 const METER_MIN_LUFS = -60
-const METER_MAX_LUFS = 0
+const COMPACT_METER_MIN_DB = -50
+const COMPACT_METER_MAX_DB = 0
 const MOMENTARY_WINDOW_S = 0.4
 const SHORT_TERM_WINDOW_S = 3.0
 const INTEGRATED_BLOCK_S = 0.4
@@ -56,6 +81,16 @@ const INTEGRATED_HISTOGRAM_BIN_WIDTH = 0.1
 const INTEGRATED_HISTOGRAM_BIN_COUNT = Math.round(
   (INTEGRATED_HISTOGRAM_MAX_LUFS - INTEGRATED_HISTOGRAM_MIN_LUFS) / INTEGRATED_HISTOGRAM_BIN_WIDTH
 ) + 1
+
+const INITIAL_VU_SNAPSHOT: VUMeterSnapshot = {
+  vuLDb: VU_METER_MIN_DB,
+  vuRDb: VU_METER_MIN_DB,
+  barLDb: VU_METER_MIN_DB,
+  barRDb: VU_METER_MIN_DB,
+  peakLDb: VU_METER_MIN_DB,
+  peakRDb: VU_METER_MIN_DB,
+  correlation: 0,
+}
 
 // ---- K-weighting filter coefficients (ITU-R BS.1770) ----
 
@@ -126,7 +161,7 @@ function histogramLufsAtIndex(index: number): number {
   return INTEGRATED_HISTOGRAM_MIN_LUFS + (index * INTEGRATED_HISTOGRAM_BIN_WIDTH)
 }
 
-// ---- LUFS Meter class ----
+// ---- Loudness meter class ----
 
 export class LUFSMeter {
   private canvas: HTMLCanvasElement
@@ -134,6 +169,7 @@ export class LUFSMeter {
   private options: ResolvedLUFSMeterOptions
   private dataSource: LUFSMeterDataSource
   private frameLoop: VisualizerFrameLoop
+  private meterBallistics: VUMeterBallistics
 
   // K-weighting filter state (per channel, two stages)
   private preFilterL = createBiquadState()
@@ -161,6 +197,7 @@ export class LUFSMeter {
   private momentaryLUFS = METER_MIN_LUFS
   private shortTermLUFS = METER_MIN_LUFS
   private integratedLUFS = METER_MIN_LUFS
+  private fastSnapshot: VUMeterSnapshot = { ...INITIAL_VU_SNAPSHOT }
   private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: LUFSMeterOptions = {}) {
@@ -172,6 +209,7 @@ export class LUFSMeter {
     const { dataSource, frameScheduler, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultLUFSMeterDataSource
+    this.meterBallistics = new VUMeterBallistics(this.dataSource.getSampleRate())
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
@@ -194,6 +232,7 @@ export class LUFSMeter {
   private initRingBuffer(sampleRate: number): void {
     this.currentSampleRate = Math.max(1, sampleRate)
     this.kWeightingCoeffs = getKWeightingCoeffs(this.currentSampleRate)
+    this.meterBallistics.reinitialize(this.currentSampleRate)
     const bufferSize = Math.ceil(this.currentSampleRate * SHORT_TERM_WINDOW_S)
     this.ringBufferL = new Float32Array(bufferSize)
     this.ringBufferR = new Float32Array(bufferSize)
@@ -205,6 +244,8 @@ export class LUFSMeter {
     this.momentaryLUFS = METER_MIN_LUFS
     this.shortTermLUFS = METER_MIN_LUFS
     this.integratedLUFS = METER_MIN_LUFS
+    this.meterBallistics.reset()
+    this.fastSnapshot = this.meterBallistics.getSnapshot()
     this.ringBufferL.fill(0)
     this.ringBufferR.fill(0)
     this.ringBufferPos = 0
@@ -264,11 +305,15 @@ export class LUFSMeter {
     const playing = this.dataSource.isPlaying()
 
     if (!playing && chunks.length === 0) {
+      this.meterBallistics.reset()
+      this.fastSnapshot = this.meterBallistics.getSnapshot()
       // Decay toward silence only when truly stopped
       this.momentaryLUFS = this.momentaryLUFS * SMOOTHING + METER_MIN_LUFS * (1 - SMOOTHING)
       this.shortTermLUFS = this.shortTermLUFS * SMOOTHING + METER_MIN_LUFS * (1 - SMOOTHING)
       return
     }
+
+    this.fastSnapshot = this.meterBallistics.process(chunks, performance.now())
 
     // Process any new audio chunks into the ring buffer
     if (chunks.length > 0) {
@@ -419,101 +464,200 @@ export class LUFSMeter {
     this.drawBars(width, height)
   }
 
-  private drawBars(width: number, height: number): void {
+  private selectedLufs(): number {
+    switch (this.options.readout) {
+      case 'momentary':
+        return this.momentaryLUFS
+      case 'shortTerm':
+        return this.shortTermLUFS
+      case 'integrated':
+      default:
+        return this.integratedLUFS
+    }
+  }
+
+  private compactDbToNormalized(db: number): number {
+    const clamped = Math.max(COMPACT_METER_MIN_DB, Math.min(COMPACT_METER_MAX_DB, db))
+    return (clamped - COMPACT_METER_MIN_DB) / (COMPACT_METER_MAX_DB - COMPACT_METER_MIN_DB)
+  }
+
+  private contrastForLevelColor(): string {
+    const { r, g, b } = resolveColorToRgb(this.options.lineColor)
+    const luminance = 0.2126 * relativeLuminanceChannel(r)
+      + 0.7152 * relativeLuminanceChannel(g)
+      + 0.0722 * relativeLuminanceChannel(b)
+    return contrastRatio(luminance, 0) >= contrastRatio(luminance, 1)
+      ? 'rgba(0, 0, 0, 0.9)'
+      : 'rgba(255, 255, 255, 0.94)'
+  }
+
+  private resolveReadoutTextLayout(
+    candidates: string[],
+    maxWidth: number,
+    maxFontSize: number,
+    minFontSize: number,
+  ): { text: string; fontSize: number } {
     const ctx = this.ctx
-    const { r: tintR, g: tintG, b: tintB } = resolveColorToRgb(this.options.lineColor)
-    const dpr = window.devicePixelRatio || 1
-
-    const padding = Math.round(8 * dpr)
-    const labelHeight = Math.round(20 * dpr)
-    const readoutHeight = Math.round(18 * dpr)
-    const scaleWidth = Math.round(32 * dpr)
-    const barAreaTop = padding + labelHeight
-    const barAreaBottom = height - padding - readoutHeight
-    const barAreaHeight = Math.max(1, barAreaBottom - barAreaTop)
-    const barAreaWidth = width - scaleWidth - padding
-
-    const barCount = 3
-    const barGap = Math.round(4 * dpr)
-    const totalGaps = (barCount - 1) * barGap
-    const barWidth = Math.max(4, Math.floor((barAreaWidth - totalGaps) / barCount))
-
-    const values = [this.momentaryLUFS, this.shortTermLUFS, this.integratedLUFS]
-    const labels = ['M', 'S', 'I']
-    const dbRange = METER_MAX_LUFS - METER_MIN_LUFS
-
-    const fontSize = Math.min(Math.round(13 * dpr), Math.max(Math.round(9 * dpr), Math.round(barWidth * 0.4)))
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-
-    for (let i = 0; i < barCount; i++) {
-      const x = scaleWidth + i * (barWidth + barGap)
-      const lufs = values[i]
-      const normalized = Math.max(0, Math.min(1, (lufs - METER_MIN_LUFS) / dbRange))
-      const barH = Math.round(normalized * barAreaHeight)
-
-      // Bar label
-      ctx.font = `600 ${fontSize}px "Inter", system-ui, sans-serif`
-      ctx.fillStyle = this.options.labelColor
-      ctx.fillText(labels[i], x + barWidth / 2, padding)
-
-      // Bar background
-      ctx.fillStyle = this.options.trackColor
-      ctx.fillRect(x, barAreaTop, barWidth, barAreaHeight)
-
-      // Bar fill — gradient from dim at bottom to bright at top
-      if (barH > 0) {
-        const gradient = ctx.createLinearGradient(0, barAreaBottom, 0, barAreaBottom - barH)
-        gradient.addColorStop(0, `rgba(${tintR}, ${tintG}, ${tintB}, 0.3)`)
-        gradient.addColorStop(0.5, `rgba(${tintR}, ${tintG}, ${tintB}, 0.6)`)
-        gradient.addColorStop(1, `rgba(${tintR}, ${tintG}, ${tintB}, 0.9)`)
-        ctx.fillStyle = gradient
-        ctx.fillRect(x, barAreaBottom - barH, barWidth, barH)
+    for (const text of candidates) {
+      ctx.font = `800 ${maxFontSize}px "JetBrains Mono", "SF Mono", monospace`
+      const measuredWidth = ctx.measureText(text).width
+      if (measuredWidth <= maxWidth) {
+        return { text, fontSize: maxFontSize }
       }
 
-      // Bright cap line at top of bar
-      if (barH > 1) {
-        ctx.fillStyle = `rgb(${tintR}, ${tintG}, ${tintB})`
-        ctx.fillRect(x, barAreaBottom - barH, barWidth, Math.max(1, Math.round(2 * dpr)))
+      const scaledFontSize = Math.floor(maxFontSize * (maxWidth / Math.max(1, measuredWidth)))
+      if (scaledFontSize >= minFontSize) {
+        return { text, fontSize: scaledFontSize }
       }
-
-      // LUFS readout below bar
-      const displayLufs = lufs <= METER_MIN_LUFS + 1 ? '-∞' : lufs.toFixed(1)
-      ctx.font = `500 ${Math.max(Math.round(8 * dpr), fontSize - Math.round(2 * dpr))}px "JetBrains Mono", "SF Mono", monospace`
-      ctx.fillStyle = this.options.labelColor
-      ctx.fillText(displayLufs, x + barWidth / 2, barAreaBottom + Math.round(4 * dpr))
     }
 
-    // Target reference line (-14 LUFS)
-    const targetNorm = Math.max(0, Math.min(1, (TARGET_LUFS - METER_MIN_LUFS) / dbRange))
-    const targetY = Math.round(barAreaBottom - targetNorm * barAreaHeight)
-    ctx.strokeStyle = this.options.targetColor
-    ctx.lineWidth = Math.max(1, dpr)
-    ctx.setLineDash([Math.round(4 * dpr), Math.round(3 * dpr)])
-    ctx.beginPath()
-    ctx.moveTo(scaleWidth, targetY)
-    ctx.lineTo(scaleWidth + barCount * barWidth + (barCount - 1) * barGap, targetY)
-    ctx.stroke()
-    ctx.setLineDash([])
+    return {
+      text: candidates[candidates.length - 1] ?? '',
+      fontSize: minFontSize,
+    }
+  }
 
-    // Scale markings on left
-    const scaleFont = Math.max(Math.round(7 * dpr), Math.round(9 * dpr))
-    ctx.font = `400 ${scaleFont}px "JetBrains Mono", "SF Mono", monospace`
+  private drawFastPeakBar(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    levelDb: number,
+    peakDb: number,
+    tint: { r: number; g: number; b: number },
+    dpr: number,
+  ): void {
+    const ctx = this.ctx
+    const barBottom = y + height
+    const levelHeight = Math.round(this.compactDbToNormalized(levelDb) * height)
+
+    ctx.fillStyle = this.options.trackColor
+    ctx.fillRect(x, y, width, height)
+
+    if (levelHeight > 0) {
+      ctx.fillStyle = colorWithAlpha(tint.r, tint.g, tint.b, 0.88)
+      ctx.fillRect(x, barBottom - levelHeight, width, levelHeight)
+    }
+
+    const peakNorm = this.compactDbToNormalized(peakDb)
+    if (peakNorm > 0.001) {
+      const peakY = Math.round(barBottom - peakNorm * height)
+      ctx.fillStyle = `rgb(${tint.r}, ${tint.g}, ${tint.b})`
+      ctx.fillRect(x, peakY, width, Math.max(1, Math.round(2 * dpr)))
+    }
+  }
+
+  private drawBars(width: number, height: number): void {
+    const ctx = this.ctx
+    const tint = resolveColorToRgb(this.options.lineColor)
+    const dpr = window.devicePixelRatio || 1
+
+    const paddingX = Math.max(Math.round(4 * dpr), Math.floor(width * 0.012))
+    const paddingY = Math.max(Math.round(4 * dpr), Math.floor(height * 0.025))
+    const meterTop = paddingY
+    const meterBottom = height - paddingY
+    const meterHeight = Math.max(1, meterBottom - meterTop)
+    const scaleWidth = Math.max(Math.round(26 * dpr), Math.min(Math.round(42 * dpr), Math.floor(width * 0.16)))
+    const barWidth = Math.max(Math.round(6 * dpr), Math.min(Math.round(14 * dpr), Math.floor(width * 0.04)))
+    const barGap = Math.max(Math.round(3 * dpr), Math.floor(width * 0.012))
+    const lufsBarGap = Math.max(Math.round(5 * dpr), Math.floor(width * 0.018))
+    const lufsBarWidth = Math.max(Math.round(12 * dpr), Math.min(Math.round(28 * dpr), Math.floor(width * 0.07)))
+    const tagGap = Math.max(Math.round(8 * dpr), Math.floor(width * 0.025))
+    const leftBarX = paddingX + scaleWidth
+    const rightBarX = leftBarX + barWidth + barGap
+    const lufsBarX = rightBarX + barWidth + lufsBarGap
+    const tagX = lufsBarX + lufsBarWidth + tagGap
+    const tagWidth = Math.max(1, width - paddingX - tagX)
+    const meterRight = tagX + tagWidth
+
+    this.drawFastPeakBar(
+      leftBarX,
+      meterTop,
+      barWidth,
+      meterHeight,
+      this.fastSnapshot.barLDb,
+      this.fastSnapshot.peakLDb,
+      tint,
+      dpr,
+    )
+    this.drawFastPeakBar(
+      rightBarX,
+      meterTop,
+      barWidth,
+      meterHeight,
+      this.fastSnapshot.barRDb,
+      this.fastSnapshot.peakRDb,
+      tint,
+      dpr,
+    )
+
+    const selectedLufs = this.selectedLufs()
+    const loudnessNorm = this.compactDbToNormalized(selectedLufs)
+    const loudnessY = Math.round(meterBottom - loudnessNorm * meterHeight)
+    const lufsBarHeight = Math.round(loudnessNorm * meterHeight)
+
+    ctx.fillStyle = this.options.trackColor
+    ctx.fillRect(lufsBarX, meterTop, lufsBarWidth, meterHeight)
+    if (lufsBarHeight > 0) {
+      ctx.fillStyle = this.options.lineColor
+      ctx.fillRect(lufsBarX, meterBottom - lufsBarHeight, lufsBarWidth, lufsBarHeight)
+      ctx.fillRect(lufsBarX, loudnessY, lufsBarWidth, Math.max(1, Math.round(2 * dpr)))
+    }
+
+    const targetY = Math.round(meterBottom - this.compactDbToNormalized(TARGET_LUFS) * meterHeight)
+    ctx.fillStyle = this.options.targetColor
+    ctx.fillRect(leftBarX, targetY, Math.max(1, meterRight - leftBarX), Math.max(1, Math.round(dpr)))
+
+    const tickValues = [0, -6, -12, -24, -36, -50]
+    const tickMarkWidth = Math.max(4, Math.round(8 * dpr))
+    const tickFontSize = Math.max(Math.round(8 * dpr), Math.min(Math.round(15 * dpr), Math.floor(height * 0.06)))
+    ctx.font = `600 ${tickFontSize}px "JetBrains Mono", "SF Mono", monospace`
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = this.options.scaleColor
-
-    const tickValues = [-60, -48, -36, -24, -18, -14, -9, -6, -3, 0]
     for (const tick of tickValues) {
-      const norm = (tick - METER_MIN_LUFS) / dbRange
-      if (norm < 0 || norm > 1) continue
-      const y = Math.round(barAreaBottom - norm * barAreaHeight)
-      ctx.fillText(`${tick}`, scaleWidth - Math.round(4 * dpr), y)
-
-      // Tick mark
-      ctx.fillRect(scaleWidth - Math.round(3 * dpr), y, Math.round(2 * dpr), Math.max(1, dpr))
+      const y = Math.round(meterBottom - this.compactDbToNormalized(tick) * meterHeight)
+      const labelY = Math.max(
+        meterTop + tickFontSize / 2,
+        Math.min(meterBottom - tickFontSize / 2, y),
+      )
+      ctx.fillText(`${Math.abs(tick)}`, paddingX + scaleWidth - Math.round(8 * dpr), labelY)
+      ctx.fillRect(paddingX + scaleWidth - tickMarkWidth, y, tickMarkWidth, Math.max(1, Math.round(dpr)))
     }
 
+    const displayValue = selectedLufs <= METER_MIN_LUFS + 1
+      ? '-∞'
+      : selectedLufs.toFixed(1)
+    const displayCandidates = [
+      `${displayValue}LUFS`,
+      displayValue,
+    ]
+    const tagHeight = Math.min(
+      meterHeight,
+      Math.max(Math.round(22 * dpr), Math.min(Math.round(34 * dpr), Math.floor(height * 0.16))),
+    )
+    const tagY = Math.round(Math.max(meterTop, Math.min(meterBottom - tagHeight, loudnessY - tagHeight / 2)))
+    const tagPadding = Math.max(Math.round(4 * dpr), Math.min(Math.round(8 * dpr), Math.floor(tagWidth * 0.08)))
+    const maxReadoutFontSize = Math.max(
+      Math.round(10 * dpr),
+      Math.min(Math.round(20 * dpr), Math.floor(tagHeight * 0.52)),
+    )
+    const minReadoutFontSize = Math.min(maxReadoutFontSize, Math.max(Math.round(7 * dpr), Math.floor(tagHeight * 0.38)))
+    const readoutLayout = this.resolveReadoutTextLayout(
+      displayCandidates,
+      Math.max(1, tagWidth - tagPadding * 2),
+      maxReadoutFontSize,
+      minReadoutFontSize,
+    )
+
+    ctx.fillStyle = this.options.lineColor
+    ctx.fillRect(tagX, tagY, tagWidth, tagHeight)
+
+    ctx.font = `800 ${readoutLayout.fontSize}px "JetBrains Mono", "SF Mono", monospace`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = this.contrastForLevelColor()
+    ctx.fillText(readoutLayout.text, tagX + tagPadding, tagY + tagHeight / 2)
   }
 
   dispose(): void {

@@ -207,6 +207,7 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.showSideLine, false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.heatmapSmoothing, 0.5)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrogram.colorScheme, 'heat')
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.lufsmeter.readout, 'shortTerm')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.mode, 'stereo')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.scrollSpeed, 2)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.multiband, true)
