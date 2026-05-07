@@ -248,6 +248,7 @@ export function scopeSettingsToOptions(
         backgroundColor: t.background,
         fftSize: s.fftSize,
         scrollSpeed: s.scrollSpeed,
+        contrast: s.contrast,
         clarityMode: s.clarityMode,
         scaleMode: s.scaleMode,
         colorScheme: s.colorScheme,

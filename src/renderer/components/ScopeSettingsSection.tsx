@@ -3,6 +3,11 @@ import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import {
+  MAX_SPECTROGRAM_CONTRAST,
+  MIN_SPECTROGRAM_CONTRAST,
+  SPECTROGRAM_CONTRAST_STEP,
+} from '../../types/spectrogram'
+import {
   DEFAULT_VU_REFERENCE_DBFS,
   VU_REFERENCE_MAX_DBFS,
   VU_REFERENCE_MIN_DBFS,
@@ -530,6 +535,17 @@ export default function ScopeSettingsSection({
                 step={1}
                 fullWidth={false}
                 onChange={(value) => onUpdate('spectrogram', { scrollSpeed: value })}
+              />
+
+              <RangeControl
+                label="Contrast"
+                value={current.contrast}
+                valueLabel={`${current.contrast.toFixed(1)}x`}
+                min={MIN_SPECTROGRAM_CONTRAST}
+                max={MAX_SPECTROGRAM_CONTRAST}
+                step={SPECTROGRAM_CONTRAST_STEP}
+                fullWidth={false}
+                onChange={(value) => onUpdate('spectrogram', { contrast: value })}
               />
             </>
           )

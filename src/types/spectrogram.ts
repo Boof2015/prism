@@ -19,6 +19,11 @@ export const MAX_SPECTROGRAM_SCROLL_SPEED = 4
 export const SPECTROGRAM_SCROLL_SPEED_STEP = 0.5
 export const DEFAULT_SPECTROGRAM_SCROLL_SPEED = 2
 
+export const MIN_SPECTROGRAM_CONTRAST = 0.5
+export const MAX_SPECTROGRAM_CONTRAST = 2.0
+export const SPECTROGRAM_CONTRAST_STEP = 0.1
+export const DEFAULT_SPECTROGRAM_CONTRAST = 1.0
+
 export function isSpectrogramClarityMode(value: unknown): value is SpectrogramClarityMode {
   return typeof value === 'string' && SPECTROGRAM_CLARITY_MODES.includes(value as SpectrogramClarityMode)
 }
@@ -35,4 +40,14 @@ export function clampSpectrogramScrollSpeed(value: unknown): number {
 
   const snapped = Math.round(numeric / SPECTROGRAM_SCROLL_SPEED_STEP) * SPECTROGRAM_SCROLL_SPEED_STEP
   return Math.min(MAX_SPECTROGRAM_SCROLL_SPEED, Math.max(MIN_SPECTROGRAM_SCROLL_SPEED, snapped))
+}
+
+export function clampSpectrogramContrast(value: unknown): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_SPECTROGRAM_CONTRAST
+  }
+
+  const snapped = Math.round(numeric / SPECTROGRAM_CONTRAST_STEP) * SPECTROGRAM_CONTRAST_STEP
+  return Math.min(MAX_SPECTROGRAM_CONTRAST, Math.max(MIN_SPECTROGRAM_CONTRAST, snapped))
 }

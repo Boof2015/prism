@@ -5,8 +5,10 @@ import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
   DEFAULT_SPECTROGRAM_CLARITY_MODE,
+  DEFAULT_SPECTROGRAM_CONTRAST,
   DEFAULT_SPECTROGRAM_SCALE_MODE,
   DEFAULT_SPECTROGRAM_SCROLL_SPEED,
+  clampSpectrogramContrast,
   clampSpectrogramScrollSpeed,
   isSpectrogramClarityMode,
   isSpectrogramScaleMode,
@@ -30,6 +32,7 @@ export interface SpectrogramOptions {
   minDecibels?: number
   maxDecibels?: number
   scrollSpeed?: number
+  contrast?: number
   clarityMode?: SpectrogramClarityMode
   scaleMode?: SpectrogramScaleMode
   colorScheme?: 'heat' | 'mono'
@@ -45,6 +48,7 @@ type ResolvedSpectrogramOptions = Required<Omit<SpectrogramOptions, 'dataSource'
 interface SpectrogramClarityProfile {
   gamma: number      // contrast curve exponent
   sharpness: number  // local peak suppression exponent (0 = off, higher = thinner lines)
+  lineWidth: number  // target visible line width in pixels (smaller = tighter peaks)
 }
 
 const SPECTROGRAM_DISPLAY_GAIN_DB = 2
@@ -59,6 +63,7 @@ const defaultOptions: ResolvedSpectrogramOptions = {
   minDecibels: -90,
   maxDecibels: -12,
   scrollSpeed: DEFAULT_SPECTROGRAM_SCROLL_SPEED,
+  contrast: DEFAULT_SPECTROGRAM_CONTRAST,
   clarityMode: DEFAULT_SPECTROGRAM_CLARITY_MODE,
   scaleMode: DEFAULT_SPECTROGRAM_SCALE_MODE,
   colorScheme: 'heat',
@@ -75,11 +80,11 @@ const defaultSpectrogramDataSource: SpectrogramDataSource = {
 function getClarityProfile(mode: SpectrogramClarityMode): SpectrogramClarityProfile {
   switch (mode) {
     case 'classic':
-      return { gamma: 1.4, sharpness: 0 }
+      return { gamma: 1.4, sharpness: 0,   lineWidth: 3 }
     case 'sharp':
-      return { gamma: 1.5, sharpness: 2.5 }
+      return { gamma: 1.5, sharpness: 2.5, lineWidth: 3 }
     case 'sharper':
-      return { gamma: 1.6, sharpness: 5.0 }
+      return { gamma: 2.0, sharpness: 5.0, lineWidth: 2 }
   }
 }
 
@@ -101,6 +106,9 @@ function resolveOptions(base: ResolvedSpectrogramOptions, overrides: Partial<Spe
     scrollSpeed: overrides.scrollSpeed === undefined
       ? base.scrollSpeed
       : clampSpectrogramScrollSpeed(overrides.scrollSpeed),
+    contrast: overrides.contrast === undefined
+      ? base.contrast
+      : clampSpectrogramContrast(overrides.contrast),
     clarityMode: resolveClarityMode(overrides.clarityMode, base.clarityMode),
     scaleMode: resolveScaleMode(overrides.scaleMode, base.scaleMode),
     colorScheme: overrides.colorScheme ?? base.colorScheme,
@@ -639,11 +647,26 @@ export class Spectrogram {
     for (let row = 0; row < height; row += 1) {
       const centerBin = this.rowCenterBins[row]
 
-      // Sub-bin interpolation in dB domain
-      const binLo = Math.floor(centerBin)
-      const binHi = Math.min(binLo + 1, numBins - 1)
-      const frac = centerBin - binLo
-      const db = magnitudes[binLo] * (1 - frac) + magnitudes[binHi] * frac
+      // 4-point Catmull–Rom cubic interpolation in dB — captures the Hann
+      // mainlobe curvature so a tone between bins lands on a single row
+      // instead of smearing linearly across two.
+      const i1 = Math.floor(centerBin)
+      const frac = centerBin - i1
+      const i0 = Math.max(0, i1 - 1)
+      const i2 = Math.min(numBins - 1, i1 + 1)
+      const i3 = Math.min(numBins - 1, i1 + 2)
+      const m0 = magnitudes[i0]
+      const m1 = magnitudes[i1]
+      const m2 = magnitudes[i2]
+      const m3 = magnitudes[i3]
+      const f2 = frac * frac
+      const f3 = f2 * frac
+      const db = 0.5 * (
+          (2 * m1)
+        + (-m0 + m2) * frac
+        + (2 * m0 - 5 * m1 + 4 * m2 - m3) * f2
+        + (-m0 + 3 * m1 - 3 * m2 + m3) * f3
+      )
 
       // Frequency-based tilt — dB per octave from reference, scale-mode independent
       const centerFreq = Math.max(1, centerBin * binWidth)
@@ -659,7 +682,7 @@ export class Spectrogram {
       // Hann mainlobe = 4 original bins = 4 * FFT_PAD_FACTOR padded bins
       const mainlobePaddedBins = 4 * FFT_PAD_FACTOR
       // Target visual line width in pixels — suppression scales to achieve this
-      const TARGET_LINE_WIDTH = 3
+      const TARGET_LINE_WIDTH = clarity.lineWidth
 
       for (let row = 0; row < height; row += 1) {
         // Adaptive window: mainlobe width in pixel rows at this frequency
@@ -690,9 +713,10 @@ export class Spectrogram {
       }
     }
 
-    // Pass 3: apply gamma
+    // Pass 3: apply gamma scaled by user contrast (1.0 = profile default)
+    const effectiveGamma = clarity.gamma * this.options.contrast
     for (let row = 0; row < height; row += 1) {
-      values[row] = Math.pow(raw[row], clarity.gamma)
+      values[row] = Math.pow(raw[row], effectiveGamma)
     }
 
     return values
