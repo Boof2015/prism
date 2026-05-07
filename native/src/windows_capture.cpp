@@ -844,6 +844,27 @@ private:
         const DWORD sleepMilliseconds = static_cast<DWORD>(
             std::max<LONG64>(2, std::min<LONG64>(10, defaultPeriod / 10000 / 2)));
 
+        // WASAPI loopback stops delivering packets entirely when no application
+        // is rendering audio. To keep visualizers ticking through silence at
+        // real-time pacing (instead of freezing on the last frame), synthesize
+        // zero-filled chunks once WASAPI has truly stalled past the device
+        // period. The stall threshold has to be comfortably larger than the
+        // device period — packet delivery is bursty (typically one packet per
+        // device period, but our poll loop runs ~2× faster), so a tighter
+        // threshold would mistake the inter-packet gap for silence and
+        // interleave zeros into legitimate playback.
+        const double devicePeriodMs = static_cast<double>(defaultPeriod) / 10000.0;
+        const double silenceStallThresholdMs =
+            std::max<double>(25.0, devicePeriodMs * 2.5);
+        const UINT32 maxSilenceFrames = std::max<UINT32>(
+            64,
+            static_cast<UINT32>(
+                static_cast<double>(format.sampleRate) *
+                static_cast<double>(sleepMilliseconds) * 4.0 / 1000.0));
+        const double startMs = monotonicMilliseconds();
+        double lastChunkPushedAtMs = startMs;
+        double lastRealPacketAtMs = startMs;
+
         hr = audioClient->Initialize(
             AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 0, 0, mixFormat, nullptr);
         if (FAILED(hr)) {
@@ -877,6 +898,7 @@ private:
         HANDLE mmcssHandle = AvSetMmThreadCharacteristicsW(L"Audio", &taskIndex);
 
         while (!stopRequested_.load()) {
+            bool pushedThisIteration = false;
             UINT32 packetFrames = 0;
             hr = captureClient->GetNextPacketSize(&packetFrames);
             if (FAILED(hr)) {
@@ -915,7 +937,10 @@ private:
                         std::fill(chunk.right.begin(), chunk.right.end(), 0.0f);
                     }
 
+                    lastChunkPushedAtMs = chunk.capturedAtMilliseconds;
+                    lastRealPacketAtMs = chunk.capturedAtMilliseconds;
                     pushChunk(std::move(chunk));
+                    pushedThisIteration = true;
                 }
 
                 captureClient->ReleaseBuffer(framesToRead);
@@ -927,6 +952,28 @@ private:
 
             if (FAILED(hr) || stopRequested_.load()) {
                 break;
+            }
+
+            if (!pushedThisIteration) {
+                const double nowMs = monotonicMilliseconds();
+                const double stallMs = nowMs - lastRealPacketAtMs;
+                const double sinceLastChunkMs = nowMs - lastChunkPushedAtMs;
+                if (stallMs >= silenceStallThresholdMs && sinceLastChunkMs >= 1.0) {
+                    const UINT32 silenceFrames = std::min<UINT32>(
+                        maxSilenceFrames,
+                        std::max<UINT32>(
+                            1,
+                            static_cast<UINT32>(
+                                sinceLastChunkMs *
+                                static_cast<double>(format.sampleRate) / 1000.0)));
+                    CapturedChunk silentChunk;
+                    silentChunk.channelCount = std::max<UINT32>(1, format.channels);
+                    silentChunk.capturedAtMilliseconds = nowMs;
+                    silentChunk.left.assign(silenceFrames, 0.0f);
+                    silentChunk.right.assign(silenceFrames, 0.0f);
+                    lastChunkPushedAtMs = nowMs;
+                    pushChunk(std::move(silentChunk));
+                }
             }
 
             if (WaitForSingleObject(stopEvent_, sleepMilliseconds) == WAIT_OBJECT_0) {
