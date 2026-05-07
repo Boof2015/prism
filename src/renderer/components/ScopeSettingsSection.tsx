@@ -1,4 +1,4 @@
-import type { CSSProperties, JSX, ReactNode } from 'react'
+import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
@@ -212,6 +212,58 @@ function RangeControl({
         onChange={(event) => onChange(Number(event.target.value))}
       />
     </label>
+  )
+}
+
+function VUReferenceControl({
+  value,
+  onChange,
+}: {
+  value: number
+  onChange: (value: number) => void
+}): JSX.Element {
+  const matchedPreset = findVUReferencePreset(value)
+  const [customExpanded, setCustomExpanded] = useState(matchedPreset === null)
+  const showCustom = customExpanded || matchedPreset === null
+  const selectValue = showCustom ? 'custom' : matchedPreset!.id
+
+  return (
+    <>
+      <SelectControl
+        label="Reference"
+        value={selectValue}
+        onChange={(next) => {
+          if (next === 'custom') {
+            setCustomExpanded(true)
+            return
+          }
+          const preset = VU_REFERENCE_PRESETS.find((entry) => entry.id === next)
+          if (preset) {
+            setCustomExpanded(false)
+            onChange(preset.dbfs)
+          }
+        }}
+      >
+        {VU_REFERENCE_PRESETS.map((preset) => (
+          <option key={preset.id} value={preset.id}>
+            {`${preset.label} (${preset.dbfs} dBFS) — ${preset.description}`}
+          </option>
+        ))}
+        <option value="custom">Custom…</option>
+      </SelectControl>
+
+      {showCustom && (
+        <RangeControl
+          label="Custom reference"
+          value={value}
+          valueLabel={`${value.toFixed(1)} dBFS`}
+          min={VU_REFERENCE_MIN_DBFS}
+          max={VU_REFERENCE_MAX_DBFS}
+          step={0.5}
+          onChange={(next) => onChange(sanitizeVUReferenceDbfs(next))}
+        />
+      )}
+    </>
   )
 }
 
@@ -516,47 +568,10 @@ export default function ScopeSettingsSection({
                 </SelectControl>
               )}
 
-              {(() => {
-                const matchedPreset = findVUReferencePreset(current.referenceDb)
-                const selectValue = matchedPreset ? matchedPreset.id : 'custom'
-                return (
-                  <>
-                    <SelectControl
-                      label="Reference"
-                      value={selectValue}
-                      onChange={(value) => {
-                        if (value === 'custom') {
-                          // Stay on the current value; the slider below takes over.
-                          return
-                        }
-                        const preset = VU_REFERENCE_PRESETS.find((entry) => entry.id === value)
-                        if (preset) {
-                          onUpdate('vumeter', { referenceDb: preset.dbfs })
-                        }
-                      }}
-                    >
-                      {VU_REFERENCE_PRESETS.map((preset) => (
-                        <option key={preset.id} value={preset.id}>
-                          {`${preset.label} (${preset.dbfs} dBFS) — ${preset.description}`}
-                        </option>
-                      ))}
-                      <option value="custom">Custom…</option>
-                    </SelectControl>
-
-                    {selectValue === 'custom' && (
-                      <RangeControl
-                        label="Custom reference"
-                        value={current.referenceDb}
-                        valueLabel={`${current.referenceDb.toFixed(1)} dBFS`}
-                        min={VU_REFERENCE_MIN_DBFS}
-                        max={VU_REFERENCE_MAX_DBFS}
-                        step={0.5}
-                        onChange={(value) => onUpdate('vumeter', { referenceDb: sanitizeVUReferenceDbfs(value) })}
-                      />
-                    )}
-                  </>
-                )
-              })()}
+              <VUReferenceControl
+                value={current.referenceDb}
+                onChange={(value) => onUpdate('vumeter', { referenceDb: value })}
+              />
 
               {current.referenceDb !== DEFAULT_VU_REFERENCE_DBFS && (
                 <ToggleGroup label="Calibration">
