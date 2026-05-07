@@ -610,7 +610,7 @@ export class LUFSMeter {
     ctx.fillStyle = this.options.targetColor
     ctx.fillRect(leftBarX, targetY, Math.max(1, lufsBarX + lufsBarWidth - leftBarX), Math.max(1, Math.round(dpr)))
 
-    const tickValues = [0, -12, -24, -36, -50]
+    const tickValues = [0, -6, -12, -24, -36, -50]
     const tickMarkWidth = Math.max(4, Math.round(6 * dpr))
     const tickFontSize = Math.max(Math.round(8 * dpr), Math.min(Math.round(13 * dpr), Math.floor(height * 0.055)))
     ctx.font = `600 ${tickFontSize}px "JetBrains Mono", "SF Mono", monospace`
