@@ -36,6 +36,9 @@ function clampSampleRate(sampleRate: number): number {
 }
 
 function amplitudeToDb(amplitude: number): number {
+  if (!Number.isFinite(amplitude) || amplitude <= 0) {
+    return VU_METER_MIN_DB
+  }
   const db = 20 * Math.log10(Math.max(amplitude, 1e-10))
   return Math.max(VU_METER_MIN_DB, Math.min(VU_METER_MAX_DB, db))
 }
@@ -119,8 +122,11 @@ export class VUMeterBallistics {
         const cross = left * right
 
         if (this.sampleCount === this.integrationWindowSamples) {
-          this.sumSqL -= this.sqL[this.writeIndex]
-          this.sumSqR -= this.sqR[this.writeIndex]
+          // Clamp running sums to non-negative: floating-point cancellation in
+          // the slide-out subtraction can drift them by ~1e-15 below zero on
+          // near-silent content, which would propagate as NaN through sqrt.
+          this.sumSqL = Math.max(0, this.sumSqL - this.sqL[this.writeIndex])
+          this.sumSqR = Math.max(0, this.sumSqR - this.sqR[this.writeIndex])
           this.sumCross -= this.cross[this.writeIndex]
         } else {
           this.sampleCount += 1
@@ -163,9 +169,9 @@ export class VUMeterBallistics {
       return
     }
 
-    const meanSqL = this.sumSqL / this.sampleCount
-    const meanSqR = this.sumSqR / this.sampleCount
-    const denominator = Math.sqrt(this.sumSqL * this.sumSqR)
+    const meanSqL = Math.max(0, this.sumSqL) / this.sampleCount
+    const meanSqR = Math.max(0, this.sumSqR) / this.sampleCount
+    const denominator = Math.sqrt(Math.max(0, this.sumSqL) * Math.max(0, this.sumSqR))
 
     this.snapshot.vuLDb = amplitudeToDb(Math.sqrt(meanSqL))
     this.snapshot.vuRDb = amplitudeToDb(Math.sqrt(meanSqR))

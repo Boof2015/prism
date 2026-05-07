@@ -606,7 +606,7 @@ export class VUMeter {
     x: number, y: number, _w: number, h: number,
     db: number
   ): void {
-    const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, db))
+    const displayDb = Number.isFinite(db) ? Math.max(VU_METER_MIN_DB, Math.min(0, db)) : VU_METER_MIN_DB
     const text = displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
     ctx.fillStyle = alphaColor(this.options.labelColor, 0.8)
     ctx.font = `${Math.min(20, Math.max(9, h * 0.55))}px "JetBrains Mono", monospace`
@@ -620,7 +620,7 @@ export class VUMeter {
     x: number, y: number, w: number, h: number,
     db: number
   ): void {
-    const displayDb = Math.max(VU_METER_MIN_DB, Math.min(0, db))
+    const displayDb = Number.isFinite(db) ? Math.max(VU_METER_MIN_DB, Math.min(0, db)) : VU_METER_MIN_DB
     const text = displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : `${displayDb.toFixed(1)}`
     ctx.fillStyle = alphaColor(this.options.labelColor, 0.8)
     ctx.font = `${Math.min(16, Math.max(8, h * 0.5))}px "JetBrains Mono", monospace`
@@ -1088,6 +1088,7 @@ export class VUMeter {
   }
 
   private formatNeedleDb(db: number): string {
+    if (!Number.isFinite(db)) return '-∞'
     const displayDb = clamp(db, VU_METER_MIN_DB, VU_METER_MAX_DB)
     return displayDb <= VU_METER_MIN_DB + 1 ? '-∞' : displayDb.toFixed(1)
   }

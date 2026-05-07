@@ -3512,6 +3512,31 @@ test('VUMeterBallistics produces the same VU, bar, and correlation for contiguou
   assertAlmostEqual(irregularSnapshot.correlation, contiguousSnapshot.correlation, 1e-6, 'correlation should be chunking-invariant')
 })
 
+test('VUMeterBallistics keeps RMS finite across loud-then-silent sequences (NaN-drift regression)', () => {
+  const sampleRate = 48000
+  const meter = new VUMeterBallistics(sampleRate)
+  const windowSamples = Math.round((sampleRate * VU_INTEGRATION_WINDOW_MS) / 1000)
+
+  // Run loud audio long enough to fully populate the sliding-window buffer.
+  meter.process([createFilledStereoChunk(0.7, 0.7, windowSamples * 2)], 100)
+
+  // Then feed many windows of digital silence. Floating-point cancellation in
+  // the running-sum slide-out used to drift sumSqL/sumSqR slightly below zero,
+  // producing NaN through Math.sqrt. After the fix, the RMS must remain finite
+  // and decay all the way to VU_METER_MIN_DB.
+  let nowMs = 100
+  for (let i = 0; i < 20; i += 1) {
+    nowMs += 50
+    meter.process([createFilledStereoChunk(0, 0, windowSamples)], nowMs)
+  }
+
+  const snapshot = meter.getSnapshot()
+  assert.ok(Number.isFinite(snapshot.vuLDb), 'left VU must stay finite (no NaN)')
+  assert.ok(Number.isFinite(snapshot.vuRDb), 'right VU must stay finite (no NaN)')
+  assert.equal(snapshot.vuLDb, VU_METER_MIN_DB)
+  assert.equal(snapshot.vuRDb, VU_METER_MIN_DB)
+})
+
 test('VUMeterBallistics lets the bar outrun the VU needle while peak hold remains highest', () => {
   const sampleRate = 48000
   const meter = new VUMeterBallistics(sampleRate)
@@ -3696,8 +3721,16 @@ test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and a
       recorder.fillRects.some((rect) => rect.fillStyle === 'rgb(255, 0, 96)' && rect.width > 12 && rect.width < 80),
       true,
     )
+    // Readout tag pill: drawn with line color, fits to text width with padding,
+    // and uses the compact tag height. Sized smaller than the LUFS level bar.
     assert.equal(
-      recorder.fillRects.some((rect) => rect.fillStyle === 'rgb(255, 0, 96)' && rect.width > 120 && rect.height <= 34),
+      recorder.fillRects.some((rect) =>
+        rect.fillStyle === 'rgb(255, 0, 96)'
+        && rect.width >= 40
+        && rect.width <= 100
+        && rect.height >= 14
+        && rect.height <= 24,
+      ),
       true,
     )
     assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === 'rgb(1, 2, 3)'), true)
