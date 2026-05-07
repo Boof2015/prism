@@ -503,7 +503,7 @@ export class LUFSMeter {
   ): { text: string; fontSize: number } {
     const ctx = this.ctx
     for (const text of candidates) {
-      ctx.font = `800 ${maxFontSize}px "JetBrains Mono", "SF Mono", monospace`
+      ctx.font = `700 ${maxFontSize}px "JetBrains Mono", "SF Mono", monospace`
       const measuredWidth = ctx.measureText(text).width
       if (measuredWidth <= maxWidth) {
         return { text, fontSize: maxFontSize }
@@ -561,18 +561,17 @@ export class LUFSMeter {
     const meterTop = paddingY
     const meterBottom = height - paddingY
     const meterHeight = Math.max(1, meterBottom - meterTop)
-    const scaleWidth = Math.max(Math.round(26 * dpr), Math.min(Math.round(42 * dpr), Math.floor(width * 0.16)))
+    const scaleWidth = Math.max(Math.round(22 * dpr), Math.min(Math.round(36 * dpr), Math.floor(width * 0.14)))
     const barWidth = Math.max(Math.round(6 * dpr), Math.min(Math.round(14 * dpr), Math.floor(width * 0.04)))
     const barGap = Math.max(Math.round(3 * dpr), Math.floor(width * 0.012))
     const lufsBarGap = Math.max(Math.round(5 * dpr), Math.floor(width * 0.018))
     const lufsBarWidth = Math.max(Math.round(12 * dpr), Math.min(Math.round(28 * dpr), Math.floor(width * 0.07)))
-    const tagGap = Math.max(Math.round(8 * dpr), Math.floor(width * 0.025))
+    const tagGap = Math.max(Math.round(6 * dpr), Math.floor(width * 0.02))
     const leftBarX = paddingX + scaleWidth
     const rightBarX = leftBarX + barWidth + barGap
     const lufsBarX = rightBarX + barWidth + lufsBarGap
-    const tagX = lufsBarX + lufsBarWidth + tagGap
-    const tagWidth = Math.max(1, width - paddingX - tagX)
-    const meterRight = tagX + tagWidth
+    const tagAreaX = lufsBarX + lufsBarWidth + tagGap
+    const tagAreaWidth = Math.max(1, width - paddingX - tagAreaX)
 
     this.drawFastPeakBar(
       leftBarX,
@@ -605,16 +604,15 @@ export class LUFSMeter {
     if (lufsBarHeight > 0) {
       ctx.fillStyle = this.options.lineColor
       ctx.fillRect(lufsBarX, meterBottom - lufsBarHeight, lufsBarWidth, lufsBarHeight)
-      ctx.fillRect(lufsBarX, loudnessY, lufsBarWidth, Math.max(1, Math.round(2 * dpr)))
     }
 
     const targetY = Math.round(meterBottom - this.compactDbToNormalized(TARGET_LUFS) * meterHeight)
     ctx.fillStyle = this.options.targetColor
-    ctx.fillRect(leftBarX, targetY, Math.max(1, meterRight - leftBarX), Math.max(1, Math.round(dpr)))
+    ctx.fillRect(leftBarX, targetY, Math.max(1, lufsBarX + lufsBarWidth - leftBarX), Math.max(1, Math.round(dpr)))
 
-    const tickValues = [0, -6, -12, -24, -36, -50]
-    const tickMarkWidth = Math.max(4, Math.round(8 * dpr))
-    const tickFontSize = Math.max(Math.round(8 * dpr), Math.min(Math.round(15 * dpr), Math.floor(height * 0.06)))
+    const tickValues = [0, -12, -24, -36, -50]
+    const tickMarkWidth = Math.max(4, Math.round(6 * dpr))
+    const tickFontSize = Math.max(Math.round(8 * dpr), Math.min(Math.round(13 * dpr), Math.floor(height * 0.055)))
     ctx.font = `600 ${tickFontSize}px "JetBrains Mono", "SF Mono", monospace`
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
@@ -625,7 +623,7 @@ export class LUFSMeter {
         meterTop + tickFontSize / 2,
         Math.min(meterBottom - tickFontSize / 2, y),
       )
-      ctx.fillText(`${Math.abs(tick)}`, paddingX + scaleWidth - Math.round(8 * dpr), labelY)
+      ctx.fillText(`${Math.abs(tick)}`, paddingX + scaleWidth - Math.round(7 * dpr), labelY)
       ctx.fillRect(paddingX + scaleWidth - tickMarkWidth, y, tickMarkWidth, Math.max(1, Math.round(dpr)))
     }
 
@@ -638,26 +636,28 @@ export class LUFSMeter {
     ]
     const tagHeight = Math.min(
       meterHeight,
-      Math.max(Math.round(22 * dpr), Math.min(Math.round(34 * dpr), Math.floor(height * 0.16))),
+      Math.max(Math.round(16 * dpr), Math.min(Math.round(22 * dpr), Math.floor(height * 0.1))),
     )
-    const tagY = Math.round(Math.max(meterTop, Math.min(meterBottom - tagHeight, loudnessY - tagHeight / 2)))
-    const tagPadding = Math.max(Math.round(4 * dpr), Math.min(Math.round(8 * dpr), Math.floor(tagWidth * 0.08)))
-    const maxReadoutFontSize = Math.max(
-      Math.round(10 * dpr),
-      Math.min(Math.round(20 * dpr), Math.floor(tagHeight * 0.52)),
+    const tagPadding = Math.max(Math.round(4 * dpr), Math.min(Math.round(7 * dpr), Math.floor(tagHeight * 0.4)))
+    const readoutFontSize = Math.max(
+      Math.round(9 * dpr),
+      Math.min(Math.round(13 * dpr), Math.floor(tagHeight * 0.62)),
     )
-    const minReadoutFontSize = Math.min(maxReadoutFontSize, Math.max(Math.round(7 * dpr), Math.floor(tagHeight * 0.38)))
     const readoutLayout = this.resolveReadoutTextLayout(
       displayCandidates,
-      Math.max(1, tagWidth - tagPadding * 2),
-      maxReadoutFontSize,
-      minReadoutFontSize,
+      Math.max(1, tagAreaWidth - tagPadding * 2),
+      readoutFontSize,
+      Math.max(Math.round(7 * dpr), Math.floor(readoutFontSize * 0.7)),
     )
+    ctx.font = `700 ${readoutLayout.fontSize}px "JetBrains Mono", "SF Mono", monospace`
+    const measuredText = ctx.measureText(readoutLayout.text).width
+    const tagWidth = Math.max(1, Math.min(tagAreaWidth, Math.ceil(measuredText) + tagPadding * 2))
+    const tagX = tagAreaX
+    const tagY = Math.round(Math.max(meterTop, Math.min(meterBottom - tagHeight, loudnessY - tagHeight / 2)))
 
     ctx.fillStyle = this.options.lineColor
     ctx.fillRect(tagX, tagY, tagWidth, tagHeight)
 
-    ctx.font = `800 ${readoutLayout.fontSize}px "JetBrains Mono", "SF Mono", monospace`
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = this.contrastForLevelColor()
