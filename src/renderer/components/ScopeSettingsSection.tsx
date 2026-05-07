@@ -2,6 +2,14 @@ import type { CSSProperties, JSX, ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import {
+  DEFAULT_VU_REFERENCE_DBFS,
+  VU_REFERENCE_MAX_DBFS,
+  VU_REFERENCE_MIN_DBFS,
+  VU_REFERENCE_PRESETS,
+  findVUReferencePreset,
+  sanitizeVUReferenceDbfs,
+} from '../../types/vumeter'
 import ThemedSelect from './ThemedSelect'
 
 function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): string {
@@ -74,9 +82,14 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     }
     case 'vumeter': {
       const scopeSettings = settings as ScopeSettings['vumeter']
-      return scopeSettings.mode === 'needle'
+      const matchedPreset = findVUReferencePreset(scopeSettings.referenceDb)
+      const refLabel = matchedPreset
+        ? matchedPreset.label
+        : `${scopeSettings.referenceDb.toFixed(1)} dBFS`
+      const base = scopeSettings.mode === 'needle'
         ? `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.needleChannels.toUpperCase()}`
         : `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.orientation.toUpperCase()}`
+      return `${base} · ${refLabel}`
     }
     case 'lufsmeter':
       return `${lufsReadoutLabel((settings as ScopeSettings['lufsmeter']).readout)} LUFS`
@@ -501,6 +514,58 @@ export default function ScopeSettingsSection({
                   <option value="stereo">Stereo</option>
                   <option value="combined">Combined</option>
                 </SelectControl>
+              )}
+
+              {(() => {
+                const matchedPreset = findVUReferencePreset(current.referenceDb)
+                const selectValue = matchedPreset ? matchedPreset.id : 'custom'
+                return (
+                  <>
+                    <SelectControl
+                      label="Reference"
+                      value={selectValue}
+                      onChange={(value) => {
+                        if (value === 'custom') {
+                          // Stay on the current value; the slider below takes over.
+                          return
+                        }
+                        const preset = VU_REFERENCE_PRESETS.find((entry) => entry.id === value)
+                        if (preset) {
+                          onUpdate('vumeter', { referenceDb: preset.dbfs })
+                        }
+                      }}
+                    >
+                      {VU_REFERENCE_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {`${preset.label} (${preset.dbfs} dBFS) — ${preset.description}`}
+                        </option>
+                      ))}
+                      <option value="custom">Custom…</option>
+                    </SelectControl>
+
+                    {selectValue === 'custom' && (
+                      <RangeControl
+                        label="Custom reference"
+                        value={current.referenceDb}
+                        valueLabel={`${current.referenceDb.toFixed(1)} dBFS`}
+                        min={VU_REFERENCE_MIN_DBFS}
+                        max={VU_REFERENCE_MAX_DBFS}
+                        step={0.5}
+                        onChange={(value) => onUpdate('vumeter', { referenceDb: sanitizeVUReferenceDbfs(value) })}
+                      />
+                    )}
+                  </>
+                )
+              })()}
+
+              {current.referenceDb !== DEFAULT_VU_REFERENCE_DBFS && (
+                <ToggleGroup label="Calibration">
+                  <ToggleChip
+                    label="Reset to default"
+                    active={false}
+                    onClick={() => onUpdate('vumeter', { referenceDb: DEFAULT_VU_REFERENCE_DBFS })}
+                  />
+                </ToggleGroup>
               )}
             </>
           )

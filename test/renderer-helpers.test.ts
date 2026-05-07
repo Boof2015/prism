@@ -2259,8 +2259,10 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
 })
 
 test('VUMeter shared needle helpers map dBFS to a classic VU face', () => {
-  assert.equal(dbfsToClassicVu(-6), 0)
-  assert.equal(dbfsToClassicVu(0), 3)
+  // K-14: 0 VU = -14 dBFS
+  assert.equal(dbfsToClassicVu(-14), 0)
+  assert.equal(dbfsToClassicVu(-11), 3)
+  assert.equal(dbfsToClassicVu(-15), -1)
   assert.equal(dbfsToClassicVu(-40), -20)
   assertAlmostEqual(classicVuToNormalized(-20), 0, 1e-12, '-20 VU should start the scale')
   assertAlmostEqual(classicVuToNormalized(0), 0.81, 1e-12, '0 VU should sit near the hot zone')
@@ -2316,13 +2318,27 @@ test('VUMeter shared needle helpers switch between stereo needles and combined R
 test('scopeSummary reports VU needle channel mode', () => {
   const profile = createDefaultProfile('Default')
 
-  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'BAR · HORIZONTAL')
+  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'BAR · HORIZONTAL · K-14')
 
   profile.scopeSettings.vumeter.mode = 'needle'
-  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'NEEDLE · STEREO')
+  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'NEEDLE · STEREO · K-14')
 
   profile.scopeSettings.vumeter.needleChannels = 'combined'
-  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'NEEDLE · COMBINED')
+  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'NEEDLE · COMBINED · K-14')
+
+  profile.scopeSettings.vumeter.referenceDb = -13.5
+  assert.equal(scopeSummary('vumeter', profile.scopeSettings.vumeter), 'NEEDLE · COMBINED · -13.5 dBFS')
+})
+
+test('VUMeter dBFS-to-VU mapping honors custom references', () => {
+  // Default (K-14)
+  assert.equal(dbfsToClassicVu(-14), 0)
+  // K-18 (broadcast)
+  assert.equal(dbfsToClassicVu(-18, -18), 0)
+  assert.equal(dbfsToClassicVu(-15, -18), 3)
+  // K-10 (loud masters)
+  assert.equal(dbfsToClassicVu(-10, -10), 0)
+  assert.equal(dbfsToClassicVu(-30, -10), -20)
 })
 
 test('scopeSummary includes only waveform display modes', () => {

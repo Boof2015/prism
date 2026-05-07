@@ -16,7 +16,7 @@ import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } fr
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 import { isLUFSMeterReadout } from '../types/lufsmeter'
 import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
-import { isVUMeterNeedleChannels } from '../types/vumeter'
+import { isVUMeterNeedleChannels, sanitizeVUReferenceDbfs } from '../types/vumeter'
 import { clampWaveformScrollSpeed } from '../types/waveform'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
@@ -165,6 +165,7 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
       needleChannels: isVUMeterNeedleChannels(rawVUMeter.needleChannels)
         ? rawVUMeter.needleChannels
         : DEFAULT_SCOPE_SETTINGS.vumeter.needleChannels,
+      referenceDb: sanitizeVUReferenceDbfs(rawVUMeter.referenceDb),
     },
     lufsmeter: {
       ...DEFAULT_SCOPE_SETTINGS.lufsmeter,

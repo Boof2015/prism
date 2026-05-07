@@ -270,6 +270,7 @@ export function scopeSettingsToOptions(
         mode: s.mode,
         orientation: s.orientation,
         needleChannels: s.needleChannels,
+        referenceDb: s.referenceDb,
       }
     }
     case 'lufsmeter': {

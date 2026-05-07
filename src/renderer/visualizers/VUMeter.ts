@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_VU_METER_NEEDLE_CHANNELS,
   DEFAULT_VU_METER_ORIENTATION,
+  DEFAULT_VU_REFERENCE_DBFS,
   type VUMeterNeedleChannels,
   type VUMeterMode,
   type VUMeterOrientation,
@@ -35,6 +36,7 @@ export interface VUMeterOptions {
   needleRightColor?: string
   needleCombinedColor?: string
   needleChannels?: VUMeterNeedleChannels
+  referenceDb?: number
   dataSource?: VUMeterDataSource
   frameScheduler?: FrameScheduler
 }
@@ -55,6 +57,7 @@ const defaultOptions: ResolvedVUMeterOptions = {
   needleRightColor: '#ff477e',
   needleCombinedColor: '#f4f8ff',
   needleChannels: DEFAULT_VU_METER_NEEDLE_CHANNELS,
+  referenceDb: DEFAULT_VU_REFERENCE_DBFS,
 }
 
 const defaultVUMeterDataSource: VUMeterDataSource = {
@@ -165,11 +168,11 @@ export interface VUNeedleReading {
   peakVu: number
 }
 
-export function dbfsToClassicVu(db: number): number {
+export function dbfsToClassicVu(db: number, referenceDb: number = DEFAULT_VU_REFERENCE_DBFS): number {
   if (!Number.isFinite(db)) {
     return CLASSIC_VU_MIN
   }
-  return clamp(db + 6, CLASSIC_VU_MIN, CLASSIC_VU_MAX)
+  return clamp(db - referenceDb, CLASSIC_VU_MIN, CLASSIC_VU_MAX)
 }
 
 export function classicVuToNormalized(vu: number): number {
@@ -206,12 +209,14 @@ export function resolveVUNeedleReadings({
   leftPeakDb,
   rightPeakDb,
   needleChannels,
+  referenceDb = DEFAULT_VU_REFERENCE_DBFS,
 }: {
   leftDb: number
   rightDb: number
   leftPeakDb: number
   rightPeakDb: number
   needleChannels: VUMeterNeedleChannels
+  referenceDb?: number
 }): VUNeedleReading[] {
   if (needleChannels === 'combined') {
     const db = stereoRmsDbAverage(leftDb, rightDb)
@@ -220,8 +225,8 @@ export function resolveVUNeedleReadings({
       id: 'combined',
       db,
       peakDb,
-      vu: dbfsToClassicVu(db),
-      peakVu: dbfsToClassicVu(peakDb),
+      vu: dbfsToClassicVu(db, referenceDb),
+      peakVu: dbfsToClassicVu(peakDb, referenceDb),
     }]
   }
 
@@ -230,15 +235,15 @@ export function resolveVUNeedleReadings({
       id: 'left',
       db: leftDb,
       peakDb: leftPeakDb,
-      vu: dbfsToClassicVu(leftDb),
-      peakVu: dbfsToClassicVu(leftPeakDb),
+      vu: dbfsToClassicVu(leftDb, referenceDb),
+      peakVu: dbfsToClassicVu(leftPeakDb, referenceDb),
     },
     {
       id: 'right',
       db: rightDb,
       peakDb: rightPeakDb,
-      vu: dbfsToClassicVu(rightDb),
-      peakVu: dbfsToClassicVu(rightPeakDb),
+      vu: dbfsToClassicVu(rightDb, referenceDb),
+      peakVu: dbfsToClassicVu(rightPeakDb, referenceDb),
     },
   ]
 }
@@ -257,8 +262,6 @@ export class VUMeter {
   // Meter state
   private vuL = VU_METER_MIN_DB
   private vuR = VU_METER_MIN_DB
-  private barL = VU_METER_MIN_DB
-  private barR = VU_METER_MIN_DB
   private peakL = VU_METER_MIN_DB
   private peakR = VU_METER_MIN_DB
   private correlation = 0
@@ -333,8 +336,6 @@ export class VUMeter {
   private applySnapshot(snapshot: VUMeterSnapshot): void {
     this.vuL = snapshot.vuLDb
     this.vuR = snapshot.vuRDb
-    this.barL = snapshot.barLDb
-    this.barR = snapshot.barRDb
     this.peakL = snapshot.peakLDb
     this.peakR = snapshot.peakRDb
     this.correlation = snapshot.correlation
@@ -403,7 +404,9 @@ export class VUMeter {
   }
 
   private dbToNormalized(db: number): number {
-    return Math.max(0, Math.min(1, (db - VU_METER_MIN_DB) / (VU_METER_MAX_DB - VU_METER_MIN_DB)))
+    // Map dBFS to bar position via the VU calibration so bars and the needle
+    // share the same scale (0 VU sits at the hot threshold, +3 VU at full scale).
+    return classicVuToNormalized(dbfsToClassicVu(db, this.options.referenceDb))
   }
 
   private drawBarMode(width: number, height: number): void {
@@ -434,15 +437,15 @@ export class VUMeter {
 
     // ---- L meter ----
     const lY = topOffset
-    this.drawHorizontalMeterBar(ctx, barLeft, lY, barWidth, meterHeight, this.barL, this.peakL, cr, cg, cb)
+    this.drawHorizontalMeterBar(ctx, barLeft, lY, barWidth, meterHeight, this.vuL, this.peakL, cr, cg, cb)
     this.drawMeterLabel(ctx, 0, lY, labelWidth, meterHeight, 'L')
-    this.drawDbLabel(ctx, barRight + 4, lY, dbLabelWidth, meterHeight, this.barL)
+    this.drawDbLabel(ctx, barRight + 4, lY, dbLabelWidth, meterHeight, this.vuL)
 
     // ---- R meter ----
     const rY = lY + meterHeight + gap
-    this.drawHorizontalMeterBar(ctx, barLeft, rY, barWidth, meterHeight, this.barR, this.peakR, cr, cg, cb)
+    this.drawHorizontalMeterBar(ctx, barLeft, rY, barWidth, meterHeight, this.vuR, this.peakR, cr, cg, cb)
     this.drawMeterLabel(ctx, 0, rY, labelWidth, meterHeight, 'R')
-    this.drawDbLabel(ctx, barRight + 4, rY, dbLabelWidth, meterHeight, this.barR)
+    this.drawDbLabel(ctx, barRight + 4, rY, dbLabelWidth, meterHeight, this.vuR)
 
     // ---- Correlation meter ----
     const corrY = rY + meterHeight + gap
@@ -475,12 +478,12 @@ export class VUMeter {
     const rX = meterLeft + meterWidth + channelGap
 
     this.drawMeterLabel(ctx, lX, 0, meterWidth, labelHeight, 'L')
-    this.drawVerticalMeterBar(ctx, lX, meterTop, meterWidth, meterHeight, this.barL, this.peakL, cr, cg, cb)
-    this.drawCenteredDbLabel(ctx, lX, dbY, meterWidth, dbHeight, this.barL)
+    this.drawVerticalMeterBar(ctx, lX, meterTop, meterWidth, meterHeight, this.vuL, this.peakL, cr, cg, cb)
+    this.drawCenteredDbLabel(ctx, lX, dbY, meterWidth, dbHeight, this.vuL)
 
     this.drawMeterLabel(ctx, rX, 0, meterWidth, labelHeight, 'R')
-    this.drawVerticalMeterBar(ctx, rX, meterTop, meterWidth, meterHeight, this.barR, this.peakR, cr, cg, cb)
-    this.drawCenteredDbLabel(ctx, rX, dbY, meterWidth, dbHeight, this.barR)
+    this.drawVerticalMeterBar(ctx, rX, meterTop, meterWidth, meterHeight, this.vuR, this.peakR, cr, cg, cb)
+    this.drawCenteredDbLabel(ctx, rX, dbY, meterWidth, dbHeight, this.vuR)
 
     this.drawCorrelationBar(ctx, corrX, corrY, corrWidth, corrHeight, cr, cg, cb)
   }
@@ -494,7 +497,7 @@ export class VUMeter {
     const levelNorm = this.dbToNormalized(levelDb)
     const peakNorm = this.dbToNormalized(peakDb)
     const levelWidth = levelNorm * w
-    const hotThreshold = this.dbToNormalized(-6) * w
+    const hotThreshold = classicVuToNormalized(0) * w
 
     // Background track
     ctx.fillStyle = this.options.trackColor
@@ -522,18 +525,18 @@ export class VUMeter {
     // Peak indicator line
     if (peakNorm > 0.001) {
       const peakX = x + peakNorm * w
-      const peakInHot = peakDb > -6
+      const peakInHot = dbfsToClassicVu(peakDb, this.options.referenceDb) > 0
       ctx.fillStyle = peakInHot
         ? this.options.clipColor
         : this.options.peakColor
       ctx.fillRect(peakX - 1, y, 2, h)
     }
 
-    // Scale ticks
+    // Scale ticks (VU units)
     ctx.fillStyle = this.options.scaleColor
-    const tickDbs = [-48, -36, -24, -18, -12, -6, -3, 0]
-    for (const db of tickDbs) {
-      const tickX = x + this.dbToNormalized(db) * w
+    const tickVus = [-20, -10, -5, -3, -1, 0, 1, 2, 3]
+    for (const vu of tickVus) {
+      const tickX = x + classicVuToNormalized(vu) * w
       ctx.fillRect(tickX, y + h - 3, 1, 3)
     }
   }
@@ -547,7 +550,7 @@ export class VUMeter {
     const levelNorm = this.dbToNormalized(levelDb)
     const peakNorm = this.dbToNormalized(peakDb)
     const levelHeight = levelNorm * h
-    const hotThreshold = this.dbToNormalized(-6) * h
+    const hotThreshold = classicVuToNormalized(0) * h
 
     ctx.fillStyle = this.options.trackColor
     ctx.fillRect(x, y, w, h)
@@ -571,7 +574,7 @@ export class VUMeter {
 
     if (peakNorm > 0.001) {
       const peakY = y + h - peakNorm * h
-      const peakInHot = peakDb > -6
+      const peakInHot = dbfsToClassicVu(peakDb, this.options.referenceDb) > 0
       ctx.fillStyle = peakInHot
         ? this.options.clipColor
         : this.options.peakColor
@@ -579,9 +582,9 @@ export class VUMeter {
     }
 
     ctx.fillStyle = alphaColor(this.options.scaleColor, 0.84)
-    const tickDbs = [-48, -36, -24, -18, -12, -6, -3, 0]
-    for (const db of tickDbs) {
-      const tickY = y + h - this.dbToNormalized(db) * h
+    const tickVus = [-20, -10, -5, -3, -1, 0, 1, 2, 3]
+    for (const vu of tickVus) {
+      const tickY = y + h - classicVuToNormalized(vu) * h
       ctx.fillRect(x, tickY, w, 1)
     }
   }
@@ -726,14 +729,9 @@ export class VUMeter {
       leftPeakDb: this.needlePeakL,
       rightPeakDb: this.needlePeakR,
       needleChannels: this.options.needleChannels,
+      referenceDb: this.options.referenceDb,
     })
-    const readoutReadings = resolveVUNeedleReadings({
-      leftDb: this.vuL,
-      rightDb: this.vuR,
-      leftPeakDb: this.needlePeakL,
-      rightPeakDb: this.needlePeakR,
-      needleChannels: this.options.needleChannels,
-    })
+    const readoutReadings = visualReadings
 
     this.drawNeedleArcs(
       ctx,

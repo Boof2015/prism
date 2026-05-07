@@ -92,43 +92,57 @@ const INITIAL_VU_SNAPSHOT: VUMeterSnapshot = {
   correlation: 0,
 }
 
-// ---- K-weighting filter coefficients (ITU-R BS.1770) ----
+// ---- K-weighting filter coefficients (ITU-R BS.1770-4) ----
 
 interface BiquadCoeffs {
   b0: number; b1: number; b2: number
   a1: number; a2: number
 }
 
-// Pre-filter (high shelf) — 48kHz
-const PRE_FILTER_48K: BiquadCoeffs = {
-  b0: 1.53512485958697, b1: -2.69169618940638, b2: 1.19839281085285,
-  a1: -1.69065929318241, a2: 0.73248077421585,
+// BS.1770-4 reference design parameters. The values below reproduce the
+// standard's reference coefficients at 48 kHz to within 1e-5 and remain
+// accurate at any sample rate (44.1k, 48k, 88.2k, 96k, 192k) via the
+// bilinear transform with frequency pre-warping. Derivation follows the
+// canonical analog prototype used by the ITU reference and pyloudnorm.
+const PRE_FILTER_F0_HZ = 1681.9744509555319
+const PRE_FILTER_GAIN_DB = 3.999843853973347
+const PRE_FILTER_Q = 0.7071752369554193
+const RLB_FILTER_F0_HZ = 38.13547087613982
+const RLB_FILTER_Q = 0.5003270373223665
+
+function preFilterCoeffs(sampleRate: number): BiquadCoeffs {
+  const K = Math.tan(Math.PI * PRE_FILTER_F0_HZ / sampleRate)
+  const Vh = Math.pow(10, PRE_FILTER_GAIN_DB / 20)
+  const Vb = Math.pow(Vh, 0.499666774155997)
+  const KK = K * K
+  const a0 = 1 + K / PRE_FILTER_Q + KK
+  return {
+    b0: (Vh + (Vb * K) / PRE_FILTER_Q + KK) / a0,
+    b1: (2 * (KK - Vh)) / a0,
+    b2: (Vh - (Vb * K) / PRE_FILTER_Q + KK) / a0,
+    a1: (2 * (KK - 1)) / a0,
+    a2: (1 - K / PRE_FILTER_Q + KK) / a0,
+  }
 }
 
-// RLB weighting (high pass) — 48kHz
-const RLB_FILTER_48K: BiquadCoeffs = {
-  b0: 1.0, b1: -2.0, b2: 1.0,
-  a1: -1.99004745483398, a2: 0.99007225036621,
-}
-
-// Pre-filter — 44.1kHz
-const PRE_FILTER_44K: BiquadCoeffs = {
-  b0: 1.5308412300498355, b1: -2.6509799951536985, b2: 1.1690790799210956,
-  a1: -1.6636551132560204, a2: 0.7125954280732254,
-}
-
-// RLB — 44.1kHz
-const RLB_FILTER_44K: BiquadCoeffs = {
-  b0: 1.0, b1: -2.0, b2: 1.0,
-  a1: -1.9891696736297957, a2: 0.9891990357870394,
+function rlbFilterCoeffs(sampleRate: number): BiquadCoeffs {
+  const K = Math.tan(Math.PI * RLB_FILTER_F0_HZ / sampleRate)
+  const KK = K * K
+  const a0 = 1 + K / RLB_FILTER_Q + KK
+  return {
+    b0: 1,
+    b1: -2,
+    b2: 1,
+    a1: (2 * (KK - 1)) / a0,
+    a2: (1 - K / RLB_FILTER_Q + KK) / a0,
+  }
 }
 
 function getKWeightingCoeffs(sampleRate: number): { pre: BiquadCoeffs; rlb: BiquadCoeffs } {
-  if (Math.abs(sampleRate - 44100) < 100) {
-    return { pre: PRE_FILTER_44K, rlb: RLB_FILTER_44K }
+  return {
+    pre: preFilterCoeffs(sampleRate),
+    rlb: rlbFilterCoeffs(sampleRate),
   }
-  // Default to 48kHz (also reasonable approximation for 96kHz, etc.)
-  return { pre: PRE_FILTER_48K, rlb: RLB_FILTER_48K }
 }
 
 // ---- Biquad filter state ----
@@ -185,10 +199,8 @@ export class LUFSMeter {
   private ringBufferPos = 0
   private ringBufferFilled = 0  // how many samples have been written total (capped at buffer size)
 
-  // Integrated loudness: accumulate 400ms block mean-squares with 100ms hop
-  private integratedBlockSumL = 0
-  private integratedBlockSumR = 0
-  private integratedBlockSamples = 0
+  // Integrated loudness: emit one 400ms block per 100ms hop, summed directly
+  // from the K-weighted ring buffer (BS.1770-4 overlapping-block method).
   private integratedHopCounter = 0
   private integratedHistogramCounts = new Uint32Array(INTEGRATED_HISTOGRAM_BIN_COUNT)
   private integratedHistogramPowerSums = new Float64Array(INTEGRATED_HISTOGRAM_BIN_COUNT)
@@ -250,9 +262,6 @@ export class LUFSMeter {
     this.ringBufferR.fill(0)
     this.ringBufferPos = 0
     this.ringBufferFilled = 0
-    this.integratedBlockSumL = 0
-    this.integratedBlockSumR = 0
-    this.integratedBlockSamples = 0
     this.integratedHopCounter = 0
     this.integratedHistogramCounts.fill(0)
     this.integratedHistogramPowerSums.fill(0)
@@ -337,30 +346,25 @@ export class LUFSMeter {
           this.ringBufferPos = (this.ringBufferPos + 1) % bufLen
           if (this.ringBufferFilled < bufLen) this.ringBufferFilled++
 
-          // Accumulate for integrated measurement
-          this.integratedBlockSumL += sqL
-          this.integratedBlockSumR += sqR
-          this.integratedBlockSamples++
           this.integratedHopCounter++
 
-          // Every hop interval, store a block loudness value
-          if (this.integratedHopCounter >= hopSamples && this.integratedBlockSamples >= blockSamples) {
-            const meanSqL = this.integratedBlockSumL / this.integratedBlockSamples
-            const meanSqR = this.integratedBlockSumR / this.integratedBlockSamples
-            const blockPower = Math.max(meanSqL + meanSqR, 1e-10)
+          // Every hop interval (100ms), emit one 400ms block computed from
+          // the ring buffer per BS.1770-4 overlapping-block method.
+          if (this.integratedHopCounter >= hopSamples && this.ringBufferFilled >= blockSamples) {
+            let sumL = 0
+            let sumR = 0
+            for (let j = 0; j < blockSamples; j++) {
+              const idx = (this.ringBufferPos - 1 - j + bufLen) % bufLen
+              sumL += this.ringBufferL[idx]
+              sumR += this.ringBufferR[idx]
+            }
+            const blockPower = Math.max(sumL / blockSamples + sumR / blockSamples, 1e-10)
             const blockLUFS = -0.691 + 10 * Math.log10(blockPower)
             if (blockLUFS > ABSOLUTE_GATE_LUFS) {
               const histogramIndex = histogramIndexFromLufs(blockLUFS)
               this.integratedHistogramCounts[histogramIndex] += 1
               this.integratedHistogramPowerSums[histogramIndex] += blockPower
             }
-
-            // Slide the block window: remove oldest hop worth of samples
-            // Approximate by keeping a running sum and subtracting the hop fraction
-            const hopFraction = hopSamples / this.integratedBlockSamples
-            this.integratedBlockSumL *= (1 - hopFraction)
-            this.integratedBlockSumR *= (1 - hopFraction)
-            this.integratedBlockSamples = Math.round(this.integratedBlockSamples * (1 - hopFraction))
             this.integratedHopCounter = 0
           }
         }
@@ -383,7 +387,7 @@ export class LUFSMeter {
         sumR += this.ringBufferR[idx]
       }
       const rawM = -0.691 + 10 * Math.log10(Math.max(sumL / momentarySamples + sumR / momentarySamples, 1e-10))
-      this.momentaryLUFS = this.momentaryLUFS * SMOOTHING + Math.max(METER_MIN_LUFS, rawM) * (1 - SMOOTHING)
+      this.momentaryLUFS = Math.max(METER_MIN_LUFS, rawM)
     }
 
     // Compute short-term loudness (last 3s)
@@ -399,7 +403,7 @@ export class LUFSMeter {
         sumR += this.ringBufferR[idx]
       }
       const rawS = -0.691 + 10 * Math.log10(Math.max(sumL / shortTermSamples + sumR / shortTermSamples, 1e-10))
-      this.shortTermLUFS = this.shortTermLUFS * SMOOTHING + Math.max(METER_MIN_LUFS, rawS) * (1 - SMOOTHING)
+      this.shortTermLUFS = Math.max(METER_MIN_LUFS, rawS)
     }
 
     // Compute integrated loudness with gating
