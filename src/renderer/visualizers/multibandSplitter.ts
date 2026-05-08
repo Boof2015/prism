@@ -6,14 +6,14 @@
  *
  * Crossover frequencies:
  *   Low ↔ Mid : 250 Hz
- *   Mid ↔ High: 4000 Hz
+ *   Mid ↔ High: 2500 Hz
  *
  * Each band carries independent left/right channels so the vectorscope
  * can render each band's stereo image in a distinct color.
  */
 
 const LOW_MID_CROSSOVER = 250
-const MID_HIGH_CROSSOVER = 4000
+const MID_HIGH_CROSSOVER = 2500
 
 export const BAND_COLORS = {
   low: '#ff4444',   // Red — bass
