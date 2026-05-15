@@ -298,9 +298,19 @@ export default function AstraScopeModule({
 
   const toggleCommand = snapshot?.playbackState === 'playing' ? 'pause' : 'play'
   const toggleLabel = snapshot?.playbackState === 'playing' ? 'Pause' : 'Play'
-  const cardClassName = settings.showCoverArt
-    ? 'astra-scope__card'
-    : 'astra-scope__card astra-scope__card--no-cover'
+  const toggleIcon = snapshot?.playbackState === 'playing' ? '\u23F8' : '\u25B6'
+  const shouldShowMeta = settings.showTitle || (settings.showArtist && Boolean(detailMessage))
+  const shouldShowTransport = settings.showProgress || settings.showTime
+  const shouldShowBody = shouldShowMeta
+    || shouldShowTransport
+    || settings.showControls
+    || Boolean(errorMessage)
+  const isCoverArtOnly = settings.showCoverArt && !shouldShowBody
+  const cardClassName = [
+    'astra-scope__card',
+    !settings.showCoverArt ? 'astra-scope__card--no-cover' : '',
+    isCoverArtOnly ? 'astra-scope__card--cover-only' : '',
+  ].filter(Boolean).join(' ')
 
   return (
     <div className="astra-scope" style={style}>
@@ -321,123 +331,131 @@ export default function AstraScopeModule({
           </div>
         )}
 
-        <div className="astra-scope__body">
-          {(settings.showTitle || settings.showArtist) && (
-            <div className="astra-scope__meta">
-              {settings.showTitle && (
-                <div className="astra-scope__title" title={currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}>
-                  {currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}
-                </div>
-              )}
-              {settings.showArtist && detailMessage && (
-                <div className="astra-scope__artist" title={detailMessage}>
-                  {detailMessage}
-                </div>
-              )}
-            </div>
-          )}
-
-          {(settings.showProgress || settings.showTime) && (
-            <div className="astra-scope__transport">
-              {settings.showProgress && (
-                <div className="astra-scope__progress" aria-hidden="true">
-                  <div
-                    className="astra-scope__progress-fill"
-                    style={{ width: `${Math.max(0, Math.min(100, liveProgress.progress * 100))}%` }}
-                  />
-                </div>
-              )}
-              {settings.showTime && (
-                <div className="astra-scope__time">
-                  <span>{formatAstraTime(liveProgress.currentTime)}</span>
-                  <span>/</span>
-                  <span>{liveProgress.duration > 0 ? formatAstraTime(liveProgress.duration) : '--:--'}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {settings.showControls && (
-            <div className="astra-scope__controls">
-              <button
-                type="button"
-                className="astra-scope__control"
-                disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
-                onClick={() => {
-                  void sendControl('previous')
-                }}
-                aria-label="Previous track"
-                title="Previous track"
-              >
-                &#9198;
-              </button>
-              <button
-                type="button"
-                className="astra-scope__control astra-scope__control--primary"
-                disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
-                onClick={() => {
-                  void sendControl(toggleCommand)
-                }}
-                aria-label={toggleLabel}
-                title={toggleLabel}
-              >
-                {toggleLabel}
-              </button>
-              <button
-                type="button"
-                className="astra-scope__control"
-                disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
-                onClick={() => {
-                  void sendControl('next')
-                }}
-                aria-label="Next track"
-                title="Next track"
-              >
-                &#9197;
-              </button>
-            </div>
-          )}
-
-          {errorMessage && (
-            <>
-              <div
-                className="astra-scope__status is-error"
-              >
-                {errorMessage}
+        {shouldShowBody && (
+          <div className="astra-scope__body">
+            {shouldShowMeta && (
+              <div className="astra-scope__meta">
+                {settings.showTitle && (
+                  <div className="astra-scope__title" title={currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}>
+                    {currentTrack?.title ?? getFallbackTitle(displayProviderId, providerState?.connectionState ?? null, platform)}
+                  </div>
+                )}
+                {settings.showArtist && detailMessage && (
+                  <div className="astra-scope__artist" title={detailMessage}>
+                    {detailMessage}
+                  </div>
+                )}
               </div>
-              <div className="astra-scope__status-actions">
+            )}
+
+            {shouldShowTransport && (
+              <div className="astra-scope__transport">
+                {settings.showProgress && (
+                  <div className="astra-scope__progress" aria-hidden="true">
+                    <div
+                      className="astra-scope__progress-fill"
+                      style={{ width: `${Math.max(0, Math.min(100, liveProgress.progress * 100))}%` }}
+                    />
+                  </div>
+                )}
+                {settings.showTime && (
+                  <div className="astra-scope__time">
+                    <span>{formatAstraTime(liveProgress.currentTime)}</span>
+                    <span>/</span>
+                    <span>{liveProgress.duration > 0 ? formatAstraTime(liveProgress.duration) : '--:--'}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {settings.showControls && (
+              <div className="astra-scope__controls">
                 <button
                   type="button"
-                  className="astra-scope__control"
+                  className="astra-scope__control astra-scope__control--transport"
+                  disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
                   onClick={() => {
-                    if (!displayProviderId) {
-                      return
-                    }
+                    void sendControl('previous')
+                  }}
+                  aria-label="Previous track"
+                  title="Previous track"
+                >
+                  <span className="astra-scope__control-icon" aria-hidden="true">
+                    &#9198;
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="astra-scope__control astra-scope__control--transport astra-scope__control--transport-primary"
+                  disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
+                  onClick={() => {
+                    void sendControl(toggleCommand)
+                  }}
+                  aria-label={toggleLabel}
+                  title={toggleLabel}
+                >
+                  <span className="astra-scope__control-icon" aria-hidden="true">
+                    {toggleIcon}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="astra-scope__control astra-scope__control--transport"
+                  disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
+                  onClick={() => {
+                    void sendControl('next')
+                  }}
+                  aria-label="Next track"
+                  title="Next track"
+                >
+                  <span className="astra-scope__control-icon" aria-hidden="true">
+                    &#9197;
+                  </span>
+                </button>
+              </div>
+            )}
 
-                    void retryProvider(displayProviderId).catch((error) => {
-                      showBanner({
-                        tone: 'error',
-                        message: getErrorMessage(error, 'Could not reconnect to the provider.'),
-                        actions: [],
+            {errorMessage && (
+              <>
+                <div
+                  className="astra-scope__status is-error"
+                >
+                  {errorMessage}
+                </div>
+                <div className="astra-scope__status-actions">
+                  <button
+                    type="button"
+                    className="astra-scope__control"
+                    onClick={() => {
+                      if (!displayProviderId) {
+                        return
+                      }
+
+                      void retryProvider(displayProviderId).catch((error) => {
+                        showBanner({
+                          tone: 'error',
+                          message: getErrorMessage(error, 'Could not reconnect to the provider.'),
+                          actions: [],
+                        })
                       })
-                    })
-                  }}
-                >
-                  Retry
-                </button>
-                <button
-                  type="button"
-                  className="astra-scope__control"
-                  onClick={() => {
-                    void openConfigWindow()
-                  }}
-                >
-                  Configure
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+                    }}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    className="astra-scope__control"
+                    onClick={() => {
+                      void openConfigWindow()
+                    }}
+                  >
+                    Configure
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

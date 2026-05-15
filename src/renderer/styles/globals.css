@@ -896,13 +896,14 @@ button.toolbar__version:hover {
 }
 
 .astra-scope {
-  --astra-cover-size: clamp(56px, min(34cqi, 72cqb), 220px);
-  --astra-card-gap: clamp(8px, min(3cqi, 3cqb), 14px);
+  --astra-cover-size: clamp(52px, min(30cqi, 68cqb), 180px);
+  --astra-card-gap: clamp(7px, min(2.4cqi, 2.4cqb), 12px);
+  --astra-card-padding: clamp(8px, min(2.6cqi, 2.8cqb), 12px);
   display: flex;
   width: 100%;
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   background: var(--astra-bg);
   color: var(--astra-text);
   container-type: size;
@@ -916,7 +917,7 @@ button.toolbar__version:hover {
 .astra-scope--empty {
   align-items: center;
   justify-content: center;
-  padding: 12px;
+  padding: var(--astra-card-padding);
 }
 
 .astra-scope__card {
@@ -927,11 +928,16 @@ button.toolbar__version:hover {
   gap: var(--astra-card-gap);
   width: 100%;
   height: 100%;
-  padding: clamp(10px, 3cqi, 12px);
+  padding: var(--astra-card-padding);
 }
 
 .astra-scope__card--no-cover {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.astra-scope__card--cover-only {
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
 }
 
 .astra-scope__cover-shell {
@@ -944,10 +950,19 @@ button.toolbar__version:hover {
   min-width: 0;
 }
 
+.astra-scope__card--cover-only .astra-scope__cover-shell {
+  justify-self: center;
+  width: min(
+    calc(100cqi - (var(--astra-card-padding) + var(--astra-card-padding))),
+    calc(100cqb - (var(--astra-card-padding) + var(--astra-card-padding)))
+  );
+  max-width: 420px;
+}
+
 .astra-scope__cover {
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--astra-border);
   object-fit: cover;
   background: var(--astra-surface);
@@ -959,8 +974,8 @@ button.toolbar__version:hover {
   justify-content: center;
   color: var(--astra-accent);
   font-family: 'JetBrains Mono', monospace;
-  font-size: clamp(20px, 4vw, 38px);
-  letter-spacing: 0.14em;
+  font-size: 24px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   background: var(--astra-surface);
 }
@@ -972,20 +987,20 @@ button.toolbar__version:hover {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: clamp(8px, min(2.4cqi, 2.4cqb), 10px);
+  gap: clamp(6px, min(2cqi, 2cqb), 9px);
 }
 
 .astra-scope__meta {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .astra-scope__title {
   min-width: 0;
   color: var(--astra-text);
-  font-size: clamp(14px, 2vw, 20px);
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
@@ -996,7 +1011,7 @@ button.toolbar__version:hover {
 .astra-scope__artist {
   min-width: 0;
   color: var(--astra-subtext);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -1007,12 +1022,12 @@ button.toolbar__version:hover {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .astra-scope__progress {
   width: 100%;
-  height: 7px;
+  height: 5px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--astra-progress-track);
@@ -1030,14 +1045,15 @@ button.toolbar__version:hover {
   gap: 6px;
   color: var(--astra-subtext);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  line-height: 1;
 }
 
 .astra-scope__controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   flex-wrap: nowrap;
 }
@@ -1045,9 +1061,9 @@ button.toolbar__version:hover {
 .astra-scope__control {
   flex: 0 0 auto;
   min-width: 36px;
-  height: 32px;
+  height: 30px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: 8px;
   border: 1px solid var(--astra-button-border);
   background: var(--astra-button-bg);
   color: var(--astra-button-text);
@@ -1061,6 +1077,33 @@ button.toolbar__version:hover {
 .astra-scope__control--primary {
   flex: 1 1 72px;
   min-width: 72px;
+}
+
+.astra-scope__control--transport {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.astra-scope__control--transport-primary {
+  flex-basis: 38px;
+  width: 38px;
+  min-width: 38px;
+  color: var(--astra-accent);
+}
+
+.astra-scope__control-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .astra-scope__control:hover:not(:disabled),
@@ -1153,8 +1196,22 @@ button.toolbar__version:hover {
     font-size: 11px;
   }
 
-  .astra-scope__control {
+  .astra-scope__control:not(.astra-scope__control--transport) {
     padding: 0 10px;
+  }
+
+  .astra-scope__control--transport {
+    flex-basis: 30px;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    padding: 0;
+  }
+
+  .astra-scope__control--transport-primary {
+    flex-basis: 36px;
+    width: 36px;
+    min-width: 36px;
   }
 }
 
@@ -1173,14 +1230,15 @@ button.toolbar__version:hover {
   .astra-scope {
     --astra-cover-size: clamp(40px, min(22cqi, 46cqb), 88px);
     --astra-card-gap: 8px;
-  }
-
-  .astra-scope__card {
-    padding: 8px;
+    --astra-card-padding: 8px;
   }
 
   .astra-scope__control {
     height: 30px;
+  }
+
+  .astra-scope__control--transport {
+    height: 28px;
   }
 }
 
