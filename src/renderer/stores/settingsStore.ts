@@ -30,6 +30,8 @@ const ACTIVE_PROFILE_KEY = 'prism:activeProfile'
 const PROFILE_GEOMETRY_SYNC_WINDOW_MS = 800
 
 interface PersistedSettingsState {
+  activeProfileId?: string | null
+  profileBaselineSignature?: string
   scopeOrder: ScopeKind[]
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>
@@ -112,6 +114,29 @@ function buildPersistedScopePopouts(scopePopouts: ScopePopoutStateMap): ScopePop
     : stripScopePopoutBounds(normalizedScopePopouts)
 }
 
+function buildProfileBaselineSignature(profile: Profile | null): string | undefined {
+  if (!profile) {
+    return undefined
+  }
+
+  const normalizedProfile = normalizeProfile(profile, profile.name)
+  const scopePopouts = SCOPE_KINDS.reduce((acc, kind) => {
+    acc[kind] = {
+      poppedOut: normalizedProfile.scopePopouts[kind]?.poppedOut === true,
+    }
+    return acc
+  }, {} as Record<ScopeKind, { poppedOut: boolean }>)
+
+  return JSON.stringify({
+    name: normalizedProfile.name,
+    scopeOrder: normalizeScopeOrder(normalizedProfile.scopeOrder),
+    hiddenScopes: normalizeHiddenScopes(normalizedProfile.hiddenScopes),
+    widthWeights: normalizeWidthWeights(normalizedProfile.widthWeights),
+    scopeSettings: mergeScopeSettings(normalizedProfile.scopeSettings),
+    scopePopouts,
+  })
+}
+
 function restoreBaselineScopePopoutBounds(
   scopePopouts: ScopePopoutStateMap,
   baseline: Profile | null,
@@ -144,6 +169,30 @@ function restoreBaselineGeometry(
   }
 }
 
+function restoreBaselinePopoutOpenState(
+  state: Pick<SettingsState, 'savedProfileBaseline'>,
+  workingState: WorkingSettingsState,
+): WorkingSettingsState {
+  const baseline = state.savedProfileBaseline
+  if (!baseline) {
+    return workingState
+  }
+
+  const baselinePopouts = normalizeScopePopouts(baseline.scopePopouts)
+  return {
+    ...workingState,
+    scopePopouts: SCOPE_KINDS.reduce((acc, kind) => {
+      acc[kind] = {
+        ...workingState.scopePopouts[kind],
+        poppedOut: baselinePopouts[kind]?.poppedOut === true,
+        windowBounds: workingState.scopePopouts[kind]?.windowBounds
+          ?? baselinePopouts[kind]?.windowBounds,
+      }
+      return acc
+    }, {} as ScopePopoutStateMap),
+  }
+}
+
 function loadFromStorage(): Partial<PersistedSettingsState> {
   if (!canUseBrowserStorage()) {
     return {}
@@ -165,7 +214,9 @@ function loadFromStorage(): Partial<PersistedSettingsState> {
   return {}
 }
 
-function saveToStorage(state: WorkingSettingsState): void {
+function saveToStorage(
+  state: WorkingSettingsState & Pick<SettingsState, 'activeProfileId' | 'savedProfileBaseline'>,
+): void {
   if (!canUseBrowserStorage()) {
     return
   }
@@ -177,6 +228,8 @@ function saveToStorage(state: WorkingSettingsState): void {
       : undefined
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      activeProfileId: state.activeProfileId,
+      profileBaselineSignature: buildProfileBaselineSignature(state.savedProfileBaseline),
       scopeOrder: state.scopeOrder,
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: state.widthWeights,
@@ -189,7 +242,9 @@ function saveToStorage(state: WorkingSettingsState): void {
   }
 }
 
-function persistWorkingState(state: WorkingSettingsState): void {
+function persistWorkingState(
+  state: WorkingSettingsState & Pick<SettingsState, 'activeProfileId' | 'savedProfileBaseline'>,
+): void {
   saveToStorage(state)
 }
 
@@ -200,6 +255,26 @@ function hasPersistedWorkingState(state: Partial<PersistedSettingsState>): boole
     || 'scopeSettings' in state
     || 'scopePopouts' in state
     || 'windowBounds' in state
+}
+
+function canRestorePersistedWorkingState(
+  state: Partial<PersistedSettingsState>,
+  snapshot: ProfileLibrarySnapshot,
+): boolean {
+  if (!hasPersistedWorkingState(state)) {
+    return false
+  }
+
+  if (!snapshot.activeProfileId || state.activeProfileId !== snapshot.activeProfileId) {
+    return false
+  }
+
+  const activeProfile = snapshot.profiles[snapshot.activeProfileId]
+  if (!activeProfile || typeof state.profileBaselineSignature !== 'string') {
+    return false
+  }
+
+  return state.profileBaselineSignature === buildProfileBaselineSignature(activeProfile)
 }
 
 function loadLegacyProfileMigrationPayload(): LegacyProfileMigrationPayload | null {
@@ -558,19 +633,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       }
     }
 
-    // If localStorage has a working state from a previous session, preserve it so the
-    // user picks up exactly where they left off (dirty or not). The saved profile becomes
-    // the baseline for dirty-state comparison but the working values are left as-is.
-    // On first launch (no stored state) we load the profile normally.
+    // Preserve a previous working draft only when it belongs to the current active
+    // profile baseline. Legacy or stale state should not override saved popout state.
     const storedWorkingState = loadFromStorage()
-    const hasStoredWorkingState = hasPersistedWorkingState(storedWorkingState)
-    applyProfileSnapshot(set, snapshot, { loadActiveProfile: !hasStoredWorkingState })
-    if (hasStoredWorkingState) {
+    const shouldRestoreWorkingState = canRestorePersistedWorkingState(storedWorkingState, snapshot)
+    applyProfileSnapshot(set, snapshot, { loadActiveProfile: !shouldRestoreWorkingState })
+    if (shouldRestoreWorkingState) {
       set((state) => {
-        const nextWorkingState = restoreBaselineGeometry(
+        const persistedWorkingState = restoreBaselineGeometry(
           state,
           createWorkingStateFromPersistedState(storedWorkingState),
         )
+        const nextWorkingState = restoreBaselinePopoutOpenState(state, persistedWorkingState)
         return commitWorkingState(state, nextWorkingState, state.savedProfileBaseline)
       })
 

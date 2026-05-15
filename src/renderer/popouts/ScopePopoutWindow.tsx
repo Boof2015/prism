@@ -60,6 +60,7 @@ const defaultTheme = resolveTheme(createDefaultTheme())
 export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps): JSX.Element {
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
+  const [cursorInsideWindow, setCursorInsideWindow] = useState(false)
   const prevMiniSettingsOpenRef = useRef(false)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const miniSettingsOpen = useUiStore((s) => s.settingsOpen)
@@ -77,6 +78,30 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   useEffect(() => {
     frameScheduler.setFrameTarget(frameTarget)
   }, [frameScheduler, frameTarget])
+
+  useEffect(() => {
+    let isDisposed = false
+
+    const syncCursorInsideWindow = (): void => {
+      void window.electronAPI.isCursorInsideWindow()
+        .then((isInside) => {
+          if (!isDisposed) {
+            setCursorInsideWindow(isInside)
+          }
+        })
+        .catch(() => {
+          // Renderer pointer events still update the chrome when cursor polling is unavailable.
+        })
+    }
+
+    syncCursorInsideWindow()
+    const interval = setInterval(syncCursorInsideWindow, 120)
+
+    return () => {
+      isDisposed = true
+      clearInterval(interval)
+    }
+  }, [])
 
   useEffect(() => {
     const unsubscribeSnapshot = window.electronAPI.onScopePopoutSnapshot((nextSnapshot) => {
@@ -182,6 +207,9 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   return (
     <div
       className="scope-popout"
+      onMouseEnter={() => setCursorInsideWindow(true)}
+      onMouseMove={() => setCursorInsideWindow(true)}
+      onMouseLeave={() => setCursorInsideWindow(false)}
       onMouseDown={useNativeDragRegions ? undefined : handleAltDragStart}
       onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
     >
@@ -193,6 +221,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
           className={[
             'scope-popout__chrome',
             miniSettingsOpen ? 'is-expanded' : '',
+            cursorInsideWindow ? 'is-cursor-inside' : '',
           ].join(' ').trim()}
         >
           <header className={`scope-popout__header ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}>

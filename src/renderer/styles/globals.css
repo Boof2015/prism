@@ -1977,6 +1977,8 @@ button.toolbar__version:hover {
 
 .scope-popout__viewport:hover .scope-popout__chrome,
 .scope-popout__chrome:hover,
+.scope-popout__chrome:focus-within,
+.scope-popout__chrome.is-cursor-inside,
 .scope-popout__chrome.is-expanded {
   max-height: 58px;
   opacity: 1;

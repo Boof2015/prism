@@ -145,6 +145,15 @@ export function clampDraggedMainWindowBounds(
   return clampBoundsWithVisibleMargin(actualBounds, envelope, visibleMargin)
 }
 
+export function clampRestoredWindowBounds(
+  bounds: WindowBounds,
+  workAreas: readonly WorkAreaBounds[],
+  visibleMargin: number,
+): WindowBounds {
+  const envelope = buildDisplayEnvelope(bounds, bounds, workAreas)
+  return clampBoundsWithVisibleMargin(bounds, envelope, visibleMargin)
+}
+
 export function raiseWindowAboveNormalPopouts(
   mainWindow: StackableWindowLike | null,
   popouts: Iterable<StackableWindowLike>,

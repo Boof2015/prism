@@ -26,6 +26,7 @@ import { resolveNativeThemeSource } from '../shared/themeState'
 import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
+  clampRestoredWindowBounds,
   raiseWindowAboveNormalPopouts,
   resolveExpandedMainWindowBounds,
 } from '../shared/windowGeometry'
@@ -98,6 +99,7 @@ const NOW_PLAYING_CONFIG_DEFAULTS = {
 const STATIC_APP_ICON_FILENAME = 'icon.png'
 const MAIN_WINDOW_SYNC_SUPPRESSION_MS = 180
 const MAIN_WINDOW_VISIBLE_GRAB_MARGIN = 64
+const RESTORED_WINDOW_VISIBLE_MARGIN = 64
 const runtimeWindowCapabilities = resolveWindowCapabilities({
   platform: process.platform,
   argv: process.argv,
@@ -582,7 +584,11 @@ function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getB
 }
 
 function applyMainWindowLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
-  const logicalBounds = normalizeMainWindowBounds(bounds)
+  const logicalBounds = clampRestoredWindowBounds(
+    normalizeMainWindowBounds(bounds),
+    getDisplayWorkAreas(),
+    RESTORED_WINDOW_VISIBLE_MARGIN,
+  )
   mainWindowLogicalBounds = logicalBounds
   suppressMainWindowSync()
   const expandedBounds = resolveExpandedMainWindowBounds(logicalBounds, getSettingsHeight(window), getDisplayWorkAreas())
@@ -605,10 +611,12 @@ function applyLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
     return
   }
 
-  window.setBounds({
+  const nextBounds = clampRestoredWindowBounds({
     ...bounds,
     height: nextHeight,
-  })
+  }, getDisplayWorkAreas(), RESTORED_WINDOW_VISIBLE_MARGIN)
+
+  window.setBounds(nextBounds)
 }
 
 function setWindowHeight(window: BrowserWindow, bounds: WindowBounds, height: number, y = bounds.y): void {
@@ -1121,9 +1129,12 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
         width: POPOUT_DEFAULTS.width,
         height: POPOUT_DEFAULTS.height,
       }
-  const bounds = shouldRestoreGeometry
+  const normalizedBounds = shouldRestoreGeometry
     ? normalizeBounds(rawBounds, fallbackBounds)
     : fallbackBounds
+  const bounds = shouldRestoreGeometry
+    ? clampRestoredWindowBounds(normalizedBounds, getDisplayWorkAreas(), RESTORED_WINDOW_VISIBLE_MARGIN)
+    : normalizedBounds
   suppressNextPopoutBoundsEvents.add(kind)
 
   const options: BrowserWindowConstructorOptions = {
@@ -1212,7 +1223,11 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
 
     if (supportsGeometryPersistence() && desired.bounds) {
       const currentBounds = popoutWindow.getBounds()
-      const nextBounds = normalizeBounds(desired.bounds, currentBounds)
+      const nextBounds = clampRestoredWindowBounds(
+        normalizeBounds(desired.bounds, currentBounds),
+        getDisplayWorkAreas(),
+        RESTORED_WINDOW_VISIBLE_MARGIN,
+      )
       const hasBoundsDelta =
         currentBounds.x !== nextBounds.x
         || currentBounds.y !== nextBounds.y

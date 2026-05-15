@@ -31,6 +31,7 @@ import {
 import { resolveWindowCapabilities } from '../src/shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
+  clampRestoredWindowBounds,
   raiseWindowAboveNormalPopouts,
   resolveExpandedMainWindowBounds,
 } from '../src/shared/windowGeometry'
@@ -2906,6 +2907,19 @@ test('dragged main-window bounds keep a visible grab margin without sticking at 
   assert.equal(clamped.y, 120)
 })
 
+test('restored window bounds clamp back to a visible display margin', () => {
+  const clamped = clampRestoredWindowBounds(
+    { x: 1800, y: 1400, width: 420, height: 240 },
+    [{ x: 0, y: 0, width: 800, height: 600 }],
+    64,
+  )
+
+  assert.equal(clamped.x, 736)
+  assert.equal(clamped.y, 536)
+  assert.equal(clamped.width, 420)
+  assert.equal(clamped.height, 240)
+})
+
 test('raiseWindowAboveNormalPopouts raises the main window when an unpinned popout exists', () => {
   const main = createFakeStackableWindow()
   const normalPopout = createFakeStackableWindow(false)
@@ -2989,19 +3003,16 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
   const previousSettingsState = useSettingsStore.getState()
   const fakeStorage = installFakeLocalStorage()
   const restoredBounds: WindowBounds[] = []
+  const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+  profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
   const dirtyBounds = { x: 44, y: 55, width: 900, height: 180 }
   const fakeWindow = installFakeElectronWindow({
-    getProfileSnapshot: async () => {
-      const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-      profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
-
-      return {
-        activeProfileId: DEFAULT_PROFILE_ID,
-        profiles: {
-          [DEFAULT_PROFILE_ID]: profile,
-        },
-      }
-    },
+    getProfileSnapshot: async () => ({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    }),
     getWindowBounds: async () => dirtyBounds,
     setWindowBounds: (bounds: WindowBounds) => {
       restoredBounds.push(bounds)
@@ -3009,17 +3020,24 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
   })
 
   try {
-    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
-    profile.windowBounds = { x: 10, y: 20, width: 900, height: 180 }
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
 
+    const rawStored = fakeStorage.getItem('prism:settings')
+    assert.ok(rawStored)
+    const stored = JSON.parse(rawStored) as Record<string, unknown>
     fakeStorage.setItem('prism:settings', JSON.stringify({
-      scopeOrder: profile.scopeOrder,
-      hiddenScopes: profile.hiddenScopes,
-      widthWeights: profile.widthWeights,
-      scopeSettings: profile.scopeSettings,
-      scopePopouts: profile.scopePopouts,
+      ...stored,
       windowBounds: dirtyBounds,
     }))
+    restoredBounds.length = 0
+    useSettingsStore.setState(previousSettingsState)
 
     await useSettingsStore.getState().initializeProfiles()
 
@@ -3146,6 +3164,193 @@ test('initializeProfiles ignores stale persisted theme-only state and loads the 
     assert.equal(state.activeProfileId, DEFAULT_PROFILE_ID)
     assert.deepEqual(state.windowBounds, savedBounds)
     assert.deepEqual(state.savedProfileBaseline?.windowBounds, savedBounds)
+    assert.equal(state.hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles ignores legacy persisted inline popouts and restores active profile popouts', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const savedPopoutBounds = { x: 140, y: 60, width: 420, height: 240 }
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => {
+      const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+      profile.scopePopouts.spectrum = {
+        poppedOut: true,
+        windowBounds: savedPopoutBounds,
+      }
+
+      return {
+        activeProfileId: DEFAULT_PROFILE_ID,
+        profiles: {
+          [DEFAULT_PROFILE_ID]: profile,
+        },
+      }
+    },
+    getWindowBounds: async () => ({ x: 10, y: 20, width: 900, height: 180 }),
+    setWindowBounds: () => {},
+  })
+
+  try {
+    const staleProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    staleProfile.scopePopouts.spectrum = {
+      poppedOut: false,
+      windowBounds: savedPopoutBounds,
+    }
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      scopeOrder: staleProfile.scopeOrder,
+      hiddenScopes: staleProfile.hiddenScopes,
+      widthWeights: staleProfile.widthWeights,
+      scopeSettings: staleProfile.scopeSettings,
+      scopePopouts: staleProfile.scopePopouts,
+    }))
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.scopePopouts.spectrum.poppedOut, true)
+    assert.deepEqual(state.scopePopouts.spectrum.windowBounds, savedPopoutBounds)
+    assert.equal(state.hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles restores saved popout open state while preserving matching dirty draft values', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const savedPopoutBounds = { x: 140, y: 60, width: 420, height: 240 }
+  const dirtyPopoutBounds = { x: 180, y: 72, width: 440, height: 260 }
+  const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+  profile.scopePopouts.spectrum = {
+    poppedOut: true,
+    windowBounds: savedPopoutBounds,
+  }
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => ({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    }),
+    getWindowBounds: async () => ({ x: 10, y: 20, width: 900, height: 180 }),
+    setWindowBounds: () => {},
+  })
+
+  try {
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: profile,
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const rawStored = fakeStorage.getItem('prism:settings')
+    assert.ok(rawStored)
+    const stored = JSON.parse(rawStored) as {
+      activeProfileId?: string | null
+      profileBaselineSignature?: string
+      scopePopouts: ScopePopoutStateMap
+    }
+    assert.equal(stored.activeProfileId, DEFAULT_PROFILE_ID)
+    assert.equal(typeof stored.profileBaselineSignature, 'string')
+
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      ...stored,
+      scopeSettings: {
+        ...profile.scopeSettings,
+        spectrum: {
+          ...profile.scopeSettings.spectrum,
+          smoothing: 0.42,
+        },
+      },
+      scopePopouts: {
+        ...stored.scopePopouts,
+        spectrum: {
+          poppedOut: false,
+          windowBounds: dirtyPopoutBounds,
+        },
+      },
+    }))
+    useSettingsStore.setState(previousSettingsState)
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.scopePopouts.spectrum.poppedOut, true)
+    assert.deepEqual(state.scopePopouts.spectrum.windowBounds, dirtyPopoutBounds)
+    assert.equal(state.scopeSettings.spectrum.smoothing, 0.42)
+    assert.equal(state.hasUnsavedProfileChanges, true)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles discards persisted popout state when the saved profile baseline changed', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const savedPopoutBounds = { x: 140, y: 60, width: 420, height: 240 }
+  const originalProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+  const changedProfile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+  changedProfile.scopePopouts.spectrum = {
+    poppedOut: true,
+    windowBounds: savedPopoutBounds,
+  }
+  let snapshotProfile = originalProfile
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => ({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: snapshotProfile,
+      },
+    }),
+    getWindowBounds: async () => ({ x: 10, y: 20, width: 900, height: 180 }),
+    setWindowBounds: () => {},
+  })
+
+  try {
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: {
+        [DEFAULT_PROFILE_ID]: originalProfile,
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const rawStored = fakeStorage.getItem('prism:settings')
+    assert.ok(rawStored)
+    const stored = JSON.parse(rawStored) as {
+      scopePopouts: ScopePopoutStateMap
+    }
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      ...stored,
+      scopePopouts: {
+        ...stored.scopePopouts,
+        spectrum: {
+          poppedOut: false,
+          windowBounds: { x: 180, y: 72, width: 440, height: 260 },
+        },
+      },
+    }))
+    snapshotProfile = changedProfile
+    useSettingsStore.setState(previousSettingsState)
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.scopePopouts.spectrum.poppedOut, true)
+    assert.deepEqual(state.scopePopouts.spectrum.windowBounds, savedPopoutBounds)
     assert.equal(state.hasUnsavedProfileChanges, false)
   } finally {
     useSettingsStore.setState(previousSettingsState)
