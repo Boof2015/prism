@@ -2810,6 +2810,17 @@ test('Wayland window controls use native drag regions and omit unsupported repos
   assert.match(stylesSource, /\.scope-popout__header\.is-native-drag \{/)
 })
 
+test('programmatic top/bottom reposition flushes fresh bounds through persistence channels', async () => {
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+
+  assert.match(mainSource, /function sendMainWindowBoundsChanged\(window: BrowserWindow\): void \{[\s\S]*?window\.webContents\.send\('window:bounds-changed', toLogicalBounds\(window\)\)[\s\S]*?\}/)
+  assert.match(mainSource, /function flushMainWindowBoundsChanged\(window: BrowserWindow\): void \{[\s\S]*?clearPendingMainWindowBoundsSave\(\)[\s\S]*?sendMainWindowBoundsChanged\(window\)[\s\S]*?\}/)
+  assert.match(mainSource, /function sendScopePopoutBoundsChanged\(kind: ScopeKind, window: BrowserWindow\): void \{[\s\S]*?mainWindow\.webContents\.send\('scope-popout:bounds-changed', kind, toLogicalBounds\(window\)\)[\s\S]*?\}/)
+  assert.match(mainSource, /function flushScopePopoutBoundsChanged\(kind: ScopeKind, window: BrowserWindow\): void \{[\s\S]*?popoutBoundsTimers\.delete\(kind\)[\s\S]*?suppressNextPopoutBoundsEvents\.delete\(kind\)[\s\S]*?sendScopePopoutBoundsChanged\(kind, window\)[\s\S]*?\}/)
+  assert.match(mainSource, /applyLogicalBounds\(targetWindow, \{[\s\S]*?height: logicalBounds\.height,[\s\S]*?\}\)\s*flushRepositionedWindowBounds\(targetWindow\)\s*return/)
+  assert.match(mainSource, /targetWindow\.setSize\(workArea\.width, height\)\s*flushRepositionedWindowBounds\(targetWindow\)/)
+})
+
 test('toggleScope appends now playing to the scope order when it is enabled from an opt-in profile', () => {
   const previousSettingsState = useSettingsStore.getState()
   const fakeWindow = installFakeElectronWindow()

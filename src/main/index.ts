@@ -444,21 +444,37 @@ async function syncNativeThemeAppearance(): Promise<void> {
   applyNativeThemeSnapshot(await getThemeLibrary().getSnapshot())
 }
 
+function clearPendingMainWindowBoundsSave(): void {
+  if (!mainWindowBoundsTimer) return
+
+  clearTimeout(mainWindowBoundsTimer)
+  mainWindowBoundsTimer = null
+}
+
+function sendMainWindowBoundsChanged(window: BrowserWindow): void {
+  if (!isMainRendererWindow(window) || !mainRendererReady || !supportsGeometryPersistence()) return
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return
+
+  window.webContents.send('window:bounds-changed', toLogicalBounds(window))
+}
+
 function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
   if (!isMainRendererWindow(window) || !mainRendererReady || !supportsGeometryPersistence()) return
 
-  if (mainWindowBoundsTimer) {
-    clearTimeout(mainWindowBoundsTimer)
-  }
+  clearPendingMainWindowBoundsSave()
 
   mainWindowBoundsTimer = setTimeout(() => {
     mainWindowBoundsTimer = null
-    if (window.isDestroyed() || window.webContents.isDestroyed()) return
     if (isMainWindowSyncSuppressed()) {
       return
     }
-    window.webContents.send('window:bounds-changed', toLogicalBounds(window))
+    sendMainWindowBoundsChanged(window)
   }, 80)
+}
+
+function flushMainWindowBoundsChanged(window: BrowserWindow): void {
+  clearPendingMainWindowBoundsSave()
+  sendMainWindowBoundsChanged(window)
 }
 
 function normalizeIncomingProfile(raw: unknown, fallbackName = 'Profile'): Profile {
@@ -1055,6 +1071,18 @@ function createMainWindow(): void {
   loadRendererTarget(mainWindow, { window: 'main' })
 }
 
+function sendScopePopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
+  if (
+    !mainWindow
+    || mainWindow.isDestroyed()
+    || window.isDestroyed()
+    || !mainRendererReady
+    || !supportsGeometryPersistence()
+  ) return
+
+  mainWindow.webContents.send('scope-popout:bounds-changed', kind, toLogicalBounds(window))
+}
+
 function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
   if (
     !mainWindow
@@ -1077,11 +1105,33 @@ function emitPopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
       suppressNextPopoutBoundsEvents.delete(kind)
       return
     }
-    const bounds = toLogicalBounds(window)
-    mainWindow.webContents.send('scope-popout:bounds-changed', kind, bounds)
+    sendScopePopoutBoundsChanged(kind, window)
   }, 80)
 
   popoutBoundsTimers.set(kind, timer)
+}
+
+function flushScopePopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
+  const existingTimer = popoutBoundsTimers.get(kind)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+    popoutBoundsTimers.delete(kind)
+  }
+
+  suppressNextPopoutBoundsEvents.delete(kind)
+  sendScopePopoutBoundsChanged(kind, window)
+}
+
+function flushRepositionedWindowBounds(window: BrowserWindow): void {
+  if (isMainRendererWindow(window)) {
+    flushMainWindowBoundsChanged(window)
+    return
+  }
+
+  const kind = getScopeKindForWindow(window)
+  if (kind) {
+    flushScopePopoutBoundsChanged(kind, window)
+  }
 }
 
 function destroyScopePopoutWindow(kind: ScopeKind): void {
@@ -1773,6 +1823,7 @@ function setupIPC(): void {
         width: workArea.width,
         height: logicalBounds.height,
       })
+      flushRepositionedWindowBounds(targetWindow)
       return
     }
 
@@ -1784,6 +1835,7 @@ function setupIPC(): void {
       targetWindow.setPosition(workArea.x, workArea.y + workArea.height - height)
     }
     targetWindow.setSize(workArea.width, height)
+    flushRepositionedWindowBounds(targetWindow)
   })
 
   ipcMain.on('window:expand-settings', (event, panelHeight: number) => {
