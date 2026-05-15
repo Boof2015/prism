@@ -1337,7 +1337,7 @@ button.toolbar__version:hover {
 
 .settings-scope-section__controls {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 148px), 1fr));
   gap: 12px 14px;
   align-content: start;
 }
@@ -1380,7 +1380,11 @@ button.toolbar__version:hover {
   position: relative;
   display: block;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 34px;
+  box-sizing: border-box;
+  overflow: hidden;
   border-radius: 10px;
   border: 1px solid var(--control-border);
   background: var(--control-bg);
@@ -1400,6 +1404,7 @@ button.toolbar__version:hover {
 .themed-select__control {
   display: block;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
   min-height: 32px;
   padding: 0 36px 0 12px;
@@ -1412,6 +1417,9 @@ button.toolbar__version:hover {
   font-size: 11px;
   line-height: 1.2;
   outline: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
@@ -1556,16 +1564,23 @@ button.toolbar__version:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  width: 100%;
+  min-width: 0;
 }
 
 .settings-chip {
+  max-width: 100%;
+  min-width: 0;
   min-height: 28px;
+  box-sizing: border-box;
   padding: 0 11px;
   border-radius: 9px;
   border: 1px solid var(--control-border);
   background: var(--control-bg);
   color: var(--text-secondary);
   font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
   transition:
