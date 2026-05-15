@@ -251,6 +251,7 @@ export function scopeSettingsToOptions(
         contrast: s.contrast,
         clarityMode: s.clarityMode,
         scaleMode: s.scaleMode,
+        orientation: s.orientation,
         colorScheme: s.colorScheme,
       }
     }

@@ -6,13 +6,16 @@ import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
   DEFAULT_SPECTROGRAM_CLARITY_MODE,
   DEFAULT_SPECTROGRAM_CONTRAST,
+  DEFAULT_SPECTROGRAM_ORIENTATION,
   DEFAULT_SPECTROGRAM_SCALE_MODE,
   DEFAULT_SPECTROGRAM_SCROLL_SPEED,
   clampSpectrogramContrast,
   clampSpectrogramScrollSpeed,
   isSpectrogramClarityMode,
+  isSpectrogramOrientation,
   isSpectrogramScaleMode,
   type SpectrogramClarityMode,
+  type SpectrogramOrientation,
   type SpectrogramScaleMode,
 } from '../../types/spectrogram'
 import {
@@ -35,6 +38,7 @@ export interface SpectrogramOptions {
   contrast?: number
   clarityMode?: SpectrogramClarityMode
   scaleMode?: SpectrogramScaleMode
+  orientation?: SpectrogramOrientation
   colorScheme?: 'heat' | 'mono'
   lineColor?: string
   heatColors?: [string, string, string]
@@ -66,6 +70,7 @@ const defaultOptions: ResolvedSpectrogramOptions = {
   contrast: DEFAULT_SPECTROGRAM_CONTRAST,
   clarityMode: DEFAULT_SPECTROGRAM_CLARITY_MODE,
   scaleMode: DEFAULT_SPECTROGRAM_SCALE_MODE,
+  orientation: DEFAULT_SPECTROGRAM_ORIENTATION,
   colorScheme: 'heat',
   lineColor: '#38bdf8',
   heatColors: ['rgb(15, 7, 33)', 'rgb(163, 26, 121)', 'rgb(255, 241, 209)'],
@@ -96,6 +101,10 @@ function resolveScaleMode(value: unknown, fallback: SpectrogramScaleMode): Spect
   return isSpectrogramScaleMode(value) ? value : fallback
 }
 
+function resolveOrientation(value: unknown, fallback: SpectrogramOrientation): SpectrogramOrientation {
+  return isSpectrogramOrientation(value) ? value : fallback
+}
+
 function resolveOptions(base: ResolvedSpectrogramOptions, overrides: Partial<SpectrogramOptions>): ResolvedSpectrogramOptions {
   return {
     fftSize: typeof overrides.fftSize === 'number' ? overrides.fftSize : base.fftSize,
@@ -111,6 +120,7 @@ function resolveOptions(base: ResolvedSpectrogramOptions, overrides: Partial<Spe
       : clampSpectrogramContrast(overrides.contrast),
     clarityMode: resolveClarityMode(overrides.clarityMode, base.clarityMode),
     scaleMode: resolveScaleMode(overrides.scaleMode, base.scaleMode),
+    orientation: resolveOrientation(overrides.orientation, base.orientation),
     colorScheme: overrides.colorScheme ?? base.colorScheme,
     lineColor: overrides.lineColor ?? base.lineColor,
     heatColors: overrides.heatColors ?? base.heatColors,
@@ -365,6 +375,7 @@ export class Spectrogram {
   private lastMinFrequency = 0
   private lastMaxFrequency = 0
   private lastScaleMode: SpectrogramScaleMode | null = null
+  private lastOrientation: SpectrogramOrientation | null = null
   private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: SpectrogramOptions = {}) {
@@ -440,7 +451,10 @@ export class Spectrogram {
       this.sampleBufferPos = 0
       this.lastFftSize = 0
       this.resetDisplay()
-    } else if (this.options.scaleMode !== previousOptions.scaleMode) {
+    } else if (
+      this.options.scaleMode !== previousOptions.scaleMode
+      || this.options.orientation !== previousOptions.orientation
+    ) {
       this.resetDisplay()
     }
 
@@ -465,16 +479,27 @@ export class Spectrogram {
     this.invalidate()
   }
 
-  private ensureColumnBuffers(height: number): void {
-    if (height <= 0) return
-    if (this.columnValues.length === height && this.columnImageData && this.columnImageData.height === height) {
+  private getFrequencyPixelCount(width: number, height: number): number {
+    return this.options.orientation === 'vertical' ? width : height
+  }
+
+  private ensureColumnBuffers(pixelCount: number): void {
+    if (pixelCount <= 0) return
+    const imageWidth = this.options.orientation === 'vertical' ? pixelCount : 1
+    const imageHeight = this.options.orientation === 'vertical' ? 1 : pixelCount
+    if (
+      this.columnValues.length === pixelCount
+      && this.columnImageData
+      && this.columnImageData.width === imageWidth
+      && this.columnImageData.height === imageHeight
+    ) {
       return
     }
 
-    this.columnValues = new Float32Array(height)
-    this.rawColumnValues = new Float32Array(height)
-    this.heatColumnValues = new Float32Array(height)
-    this.columnImageData = new ImageData(1, height)
+    this.columnValues = new Float32Array(pixelCount)
+    this.rawColumnValues = new Float32Array(pixelCount)
+    this.heatColumnValues = new Float32Array(pixelCount)
+    this.columnImageData = new ImageData(imageWidth, imageHeight)
   }
 
   private shiftAndPaintColumn(values: Float32Array, heatValues: Float32Array = values): void {
@@ -484,14 +509,22 @@ export class Spectrogram {
 
     this.paintColumnImage(values, heatValues)
 
-    // Shift existing content left by 1 pixel
     const previousCompositeOperation = this.waterfallCtx.globalCompositeOperation
     this.waterfallCtx.globalCompositeOperation = 'copy'
-    this.waterfallCtx.drawImage(this.waterfallCanvas, -1, 0)
+    if (this.options.orientation === 'vertical') {
+      // Shift existing content up by 1 pixel.
+      this.waterfallCtx.drawImage(this.waterfallCanvas, 0, -1)
+    } else {
+      // Shift existing content left by 1 pixel.
+      this.waterfallCtx.drawImage(this.waterfallCanvas, -1, 0)
+    }
     this.waterfallCtx.globalCompositeOperation = previousCompositeOperation
 
-    // Paint new column at right edge
-    this.waterfallCtx.putImageData(this.columnImageData, width - 1, 0)
+    if (this.options.orientation === 'vertical') {
+      this.waterfallCtx.putImageData(this.columnImageData, 0, height - 1)
+    } else {
+      this.waterfallCtx.putImageData(this.columnImageData, width - 1, 0)
+    }
   }
 
   private ensureBandMapping(): void {
@@ -499,6 +532,7 @@ export class Spectrogram {
     const width = canvas.width
     const height = canvas.height
     const fftSize = options.fftSize
+    const frequencyPixelCount = this.getFrequencyPixelCount(width, height)
     const sampleRate = Math.max(1, this.dataSource.getSampleRate())
     const nyquist = sampleRate / 2
     const minFrequency = Math.max(1, Math.min(options.minFrequency, nyquist))
@@ -512,6 +546,7 @@ export class Spectrogram {
       && minFrequency === this.lastMinFrequency
       && maxFrequency === this.lastMaxFrequency
       && options.scaleMode === this.lastScaleMode
+      && options.orientation === this.lastOrientation
     ) {
       return
     }
@@ -523,28 +558,39 @@ export class Spectrogram {
     this.lastMinFrequency = minFrequency
     this.lastMaxFrequency = maxFrequency
     this.lastScaleMode = options.scaleMode
+    this.lastOrientation = options.orientation
 
     const numBins = (fftSize * FFT_PAD_FACTOR) / 2
-    const rowSpan = Math.max(1, height - 1)
+    const rowSpan = Math.max(1, frequencyPixelCount - 1)
     const binWidth = nyquist / numBins
 
-    this.rowCenterBins = new Float32Array(height)
-    this.rowBandStartBins = new Float32Array(height)
-    this.rowBandEndBins = new Float32Array(height)
-    for (let row = 0; row < height; row += 1) {
-      const normalizedPosition = 1 - (row / rowSpan)
+    this.rowCenterBins = new Float32Array(frequencyPixelCount)
+    this.rowBandStartBins = new Float32Array(frequencyPixelCount)
+    this.rowBandEndBins = new Float32Array(frequencyPixelCount)
+    for (let row = 0; row < frequencyPixelCount; row += 1) {
+      const normalizedPosition = options.orientation === 'vertical'
+        ? row / rowSpan
+        : 1 - (row / rowSpan)
       const centerFrequency = frequencyFromScale(
         options.scaleMode,
         minFrequency,
         maxFrequency,
         normalizedPosition
       )
-      const upperEdgeNormalized = row === 0
-        ? 1
-        : 1 - ((row - 0.5) / rowSpan)
-      const lowerEdgeNormalized = row === height - 1
-        ? 0
-        : 1 - ((row + 0.5) / rowSpan)
+      const upperEdgeNormalized = options.orientation === 'vertical'
+        ? row === frequencyPixelCount - 1
+          ? 1
+          : (row + 0.5) / rowSpan
+        : row === 0
+          ? 1
+          : 1 - ((row - 0.5) / rowSpan)
+      const lowerEdgeNormalized = options.orientation === 'vertical'
+        ? row === 0
+          ? 0
+          : (row - 0.5) / rowSpan
+        : row === height - 1
+          ? 0
+          : 1 - ((row + 0.5) / rowSpan)
       const upperEdgeFrequency = frequencyFromScale(
         options.scaleMode,
         minFrequency,
@@ -563,7 +609,7 @@ export class Spectrogram {
       this.rowBandEndBins[row] = Math.max(0, Math.min(numBins, upperEdgeFrequency / binWidth))
     }
 
-    this.ensureColumnBuffers(height)
+    this.ensureColumnBuffers(frequencyPixelCount)
   }
 
   private processFFT(samples: Float32Array): Float32Array {
@@ -626,10 +672,12 @@ export class Spectrogram {
   }
 
   private drawColumn(magnitudes: Float32Array): Float32Array {
+    const width = this.waterfallCanvas.width
     const height = this.waterfallCanvas.height
-    if (height <= 0) return this.columnValues
+    const frequencyPixelCount = this.getFrequencyPixelCount(width, height)
+    if (frequencyPixelCount <= 0) return this.columnValues
 
-    this.ensureColumnBuffers(height)
+    this.ensureColumnBuffers(frequencyPixelCount)
     const values = this.columnValues
     const raw = this.rawColumnValues
     const heat = this.heatColumnValues
@@ -644,7 +692,7 @@ export class Spectrogram {
     const binWidth = (sampleRate / 2) / numBins
 
     // Pass 1: sub-bin interpolation + tilt/gain -> raw normalized values (no gamma yet)
-    for (let row = 0; row < height; row += 1) {
+    for (let row = 0; row < frequencyPixelCount; row += 1) {
       const centerBin = this.rowCenterBins[row]
 
       // 4-point Catmull–Rom cubic interpolation in dB — captures the Hann
@@ -684,7 +732,7 @@ export class Spectrogram {
       // Target visual line width in pixels — suppression scales to achieve this
       const TARGET_LINE_WIDTH = clarity.lineWidth
 
-      for (let row = 0; row < height; row += 1) {
+      for (let row = 0; row < frequencyPixelCount; row += 1) {
         // Adaptive window: mainlobe width in pixel rows at this frequency
         const bandWidthPerRow = Math.max(0.1, this.rowBandEndBins[row] - this.rowBandStartBins[row])
         const mainlobePixels = mainlobePaddedBins / bandWidthPerRow
@@ -700,7 +748,7 @@ export class Spectrogram {
         let localMax = raw[row]
         for (let d = 1; d <= halfWin; d += 1) {
           if (row - d >= 0 && raw[row - d] > localMax) localMax = raw[row - d]
-          if (row + d < height && raw[row + d] > localMax) localMax = raw[row + d]
+          if (row + d < frequencyPixelCount && raw[row + d] > localMax) localMax = raw[row + d]
         }
 
         // Suppress off-peak values: peak stays bright, slopes get crushed
@@ -715,7 +763,7 @@ export class Spectrogram {
 
     // Pass 3: apply gamma scaled by user contrast (1.0 = profile default)
     const effectiveGamma = clarity.gamma * this.options.contrast
-    for (let row = 0; row < height; row += 1) {
+    for (let row = 0; row < frequencyPixelCount; row += 1) {
       values[row] = Math.pow(raw[row], effectiveGamma)
     }
 
@@ -745,16 +793,28 @@ export class Spectrogram {
       this.waterfallCanvas.height = height
       this.waterfallCtx.imageSmoothingEnabled = false
 
-      // Anchor right edge — newest columns stay, old data crops naturally
       if (previousCtx && previousCanvas.width > 0 && previousCanvas.height > 0) {
-        const srcX = Math.max(0, previousCanvas.width - width)
-        const srcW = Math.min(previousCanvas.width, width)
-        const dstX = Math.max(0, width - previousCanvas.width)
-        this.waterfallCtx.drawImage(
-          previousCanvas,
-          srcX, 0, srcW, previousCanvas.height,
-          dstX, 0, srcW, height
-        )
+        if (this.options.orientation === 'vertical') {
+          // Anchor bottom edge so newest rows stay visible.
+          const srcY = Math.max(0, previousCanvas.height - height)
+          const srcH = Math.min(previousCanvas.height, height)
+          const dstY = Math.max(0, height - previousCanvas.height)
+          this.waterfallCtx.drawImage(
+            previousCanvas,
+            0, srcY, previousCanvas.width, srcH,
+            0, dstY, width, srcH
+          )
+        } else {
+          // Anchor right edge so newest columns stay visible.
+          const srcX = Math.max(0, previousCanvas.width - width)
+          const srcW = Math.min(previousCanvas.width, width)
+          const dstX = Math.max(0, width - previousCanvas.width)
+          this.waterfallCtx.drawImage(
+            previousCanvas,
+            srcX, 0, srcW, previousCanvas.height,
+            dstX, 0, srcW, height
+          )
+        }
       }
 
       this.lastWidth = 0
@@ -791,7 +851,7 @@ export class Spectrogram {
         if (this.sampleBufferPos >= fftSize) {
           const magnitudes = this.processFFT(this.sampleBuffer)
           const values = this.drawColumn(magnitudes)
-          // Each FFT hop = exactly 1 pixel column. No accumulation, no duplication.
+          // Each FFT hop = exactly 1 pixel slice. No accumulation, no duplication.
           this.shiftAndPaintColumn(values, this.heatColumnValues)
 
           this.sampleBuffer.copyWithin(0, hopSize)

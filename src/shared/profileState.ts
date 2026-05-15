@@ -16,6 +16,7 @@ import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } fr
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 import { isLUFSMeterReadout } from '../types/lufsmeter'
 import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
+import { isSpectrogramOrientation } from '../types/spectrogram'
 import { isVUMeterNeedleChannels, sanitizeVUReferenceDbfs } from '../types/vumeter'
 import { clampWaveformScrollSpeed } from '../types/waveform'
 
@@ -137,6 +138,9 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
   const rawSpectrum: Partial<ScopeSettings['spectrum']> = typeof parsed.spectrum === 'object' && parsed.spectrum !== null
     ? parsed.spectrum
     : {}
+  const rawSpectrogram: Partial<ScopeSettings['spectrogram']> = typeof parsed.spectrogram === 'object' && parsed.spectrogram !== null
+    ? parsed.spectrogram
+    : {}
   const rawWaveform: Partial<ScopeSettings['waveform']> = typeof parsed.waveform === 'object' && parsed.waveform !== null
     ? parsed.waveform
     : {}
@@ -158,7 +162,13 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
     },
     oscilloscope: { ...DEFAULT_SCOPE_SETTINGS.oscilloscope, ...(parsed.oscilloscope ?? {}) },
     vectorscope: { ...DEFAULT_SCOPE_SETTINGS.vectorscope, ...(parsed.vectorscope ?? {}) },
-    spectrogram: { ...DEFAULT_SCOPE_SETTINGS.spectrogram, ...(parsed.spectrogram ?? {}) },
+    spectrogram: {
+      ...DEFAULT_SCOPE_SETTINGS.spectrogram,
+      ...rawSpectrogram,
+      orientation: isSpectrogramOrientation(rawSpectrogram.orientation)
+        ? rawSpectrogram.orientation
+        : DEFAULT_SCOPE_SETTINGS.spectrogram.orientation,
+    },
     vumeter: {
       ...DEFAULT_SCOPE_SETTINGS.vumeter,
       ...rawVUMeter,

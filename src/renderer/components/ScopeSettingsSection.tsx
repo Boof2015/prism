@@ -83,7 +83,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     }
     case 'spectrogram': {
       const scopeSettings = settings as ScopeSettings['spectrogram']
-      return `${scopeSettings.scaleMode.toUpperCase()} · ${scopeSettings.clarityMode}`
+      return `${scopeSettings.orientation.toUpperCase()} · ${scopeSettings.scaleMode.toUpperCase()} · ${scopeSettings.clarityMode}`
     }
     case 'vumeter': {
       const scopeSettings = settings as ScopeSettings['vumeter']
@@ -505,6 +505,15 @@ export default function ScopeSettingsSection({
                 <option value="log">Log</option>
                 <option value="mel">Mel</option>
                 <option value="linear">Linear</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Orientation"
+                value={current.orientation}
+                onChange={(value) => onUpdate('spectrogram', { orientation: value as ScopeSettings['spectrogram']['orientation'] })}
+              >
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical">Vertical</option>
               </SelectControl>
 
               <SelectControl

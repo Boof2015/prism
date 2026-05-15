@@ -50,6 +50,7 @@ function createProfile(name: string): Profile {
   profile.scopeSettings.spectrum.showSideLine = true
   profile.scopeSettings.spectrum.heatmapSmoothing = 0.67
   profile.scopeSettings.spectrogram.colorScheme = 'mono'
+  profile.scopeSettings.spectrogram.orientation = 'vertical'
   return profile
 }
 
@@ -65,6 +66,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(JSON.stringify(file).includes('inputGainDb'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
   assert.equal(file.scopeSettings.spectrum.heatmapSmoothing, 0.67)
+  assert.equal(file.scopeSettings.spectrogram.orientation, 'vertical')
   assert.equal(file.scopeOrder.includes('nowPlaying'), false)
   assert.equal(file.hiddenScopes.includes('nowPlaying'), true)
   assert.equal(file.widthWeights.nowPlaying, 1)
@@ -75,7 +77,26 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrum.showSideLine, true)
   assert.equal(restored.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
+  assert.equal(restored.scopeSettings.spectrogram.orientation, 'vertical')
   assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
+})
+
+test('mergeScopeSettings defaults missing or invalid spectrogram orientation to horizontal', () => {
+  const vertical = mergeScopeSettings({
+    spectrogram: {
+      orientation: 'vertical',
+    },
+  })
+  const invalid = mergeScopeSettings({
+    spectrogram: {
+      orientation: 'diagonal',
+    },
+  })
+  const missing = mergeScopeSettings({})
+
+  assert.equal(vertical.spectrogram.orientation, 'vertical')
+  assert.equal(invalid.spectrogram.orientation, 'horizontal')
+  assert.equal(missing.spectrogram.orientation, 'horizontal')
 })
 
 test('mergeScopeSettings defaults missing or invalid VU needle channel settings to stereo', () => {

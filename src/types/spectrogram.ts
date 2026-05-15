@@ -1,5 +1,6 @@
 export type SpectrogramClarityMode = 'classic' | 'sharp' | 'sharper'
 export type SpectrogramScaleMode = 'mel' | 'log' | 'linear'
+export type SpectrogramOrientation = 'horizontal' | 'vertical'
 
 export const SPECTROGRAM_CLARITY_MODES: readonly SpectrogramClarityMode[] = [
   'classic',
@@ -11,9 +12,14 @@ export const SPECTROGRAM_SCALE_MODES: readonly SpectrogramScaleMode[] = [
   'log',
   'linear',
 ]
+export const SPECTROGRAM_ORIENTATIONS: readonly SpectrogramOrientation[] = [
+  'horizontal',
+  'vertical',
+]
 
 export const DEFAULT_SPECTROGRAM_CLARITY_MODE: SpectrogramClarityMode = 'sharper'
 export const DEFAULT_SPECTROGRAM_SCALE_MODE: SpectrogramScaleMode = 'log'
+export const DEFAULT_SPECTROGRAM_ORIENTATION: SpectrogramOrientation = 'horizontal'
 export const MIN_SPECTROGRAM_SCROLL_SPEED = 0.5
 export const MAX_SPECTROGRAM_SCROLL_SPEED = 4
 export const SPECTROGRAM_SCROLL_SPEED_STEP = 0.5
@@ -30,6 +36,10 @@ export function isSpectrogramClarityMode(value: unknown): value is SpectrogramCl
 
 export function isSpectrogramScaleMode(value: unknown): value is SpectrogramScaleMode {
   return typeof value === 'string' && SPECTROGRAM_SCALE_MODES.includes(value as SpectrogramScaleMode)
+}
+
+export function isSpectrogramOrientation(value: unknown): value is SpectrogramOrientation {
+  return typeof value === 'string' && SPECTROGRAM_ORIENTATIONS.includes(value as SpectrogramOrientation)
 }
 
 export function clampSpectrogramScrollSpeed(value: unknown): number {

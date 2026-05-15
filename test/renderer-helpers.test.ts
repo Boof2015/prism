@@ -558,8 +558,8 @@ interface FakeCanvasRecorder {
     lineDash: number[]
   }>
   lineDashes: number[][]
-  imageDataWrites: Array<{ x: number; y: number; data: number[] }>
-  drawImageCalls: Array<{ compositeOperation: GlobalCompositeOperation }>
+  imageDataWrites: Array<{ x: number; y: number; width: number; height: number; data: number[] }>
+  drawImageCalls: Array<{ compositeOperation: GlobalCompositeOperation; args: unknown[] }>
 }
 
 function createFakeCanvasRecorder(): FakeCanvasRecorder {
@@ -601,11 +601,11 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, anticlockwise = false) {
       recorder?.arcs.push({ x, y, radius, startAngle, endAngle, anticlockwise, lineDash: [...currentLineDash] })
     },
-    drawImage() {
-      recorder?.drawImageCalls.push({ compositeOperation: currentCompositeOperation })
+    drawImage(...args: unknown[]) {
+      recorder?.drawImageCalls.push({ compositeOperation: currentCompositeOperation, args })
     },
     putImageData(imageData: ImageData, x: number, y: number) {
-      recorder?.imageDataWrites.push({ x, y, data: Array.from(imageData.data) })
+      recorder?.imageDataWrites.push({ x, y, width: imageData.width, height: imageData.height, data: Array.from(imageData.data) })
     },
     save() {},
     restore() {},
@@ -973,12 +973,16 @@ function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, valu
   }
 }
 
-function renderSpectrogramShift(options: Partial<SpectrogramOptions>, values: number[]): FakeCanvasRecorder {
+function renderSpectrogramShift(
+  options: Partial<SpectrogramOptions>,
+  values: number[],
+  canvasSize: { width: number; height: number } = { width: 4, height: values.length },
+): FakeCanvasRecorder {
   const recorder = createFakeCanvasRecorder()
   const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
   const canvas = createFakeCanvas()
-  canvas.width = 4
-  canvas.height = values.length
+  canvas.width = canvasSize.width
+  canvas.height = canvasSize.height
   const dataSource = {
     getPendingSpectrogramSamples: () => [],
     getSampleRate: () => 48000,
@@ -1700,6 +1704,73 @@ test('Spectrogram shifts existing columns with copy compositing to avoid transpa
   assert.equal(recorder.drawImageCalls.at(-1)?.compositeOperation, 'copy')
 })
 
+test('Spectrogram vertical orientation paints newest frequency row at the bottom', () => {
+  const recorder = renderSpectrogramShift({
+    orientation: 'vertical',
+    colorScheme: 'mono',
+    lineColor: 'rgb(10, 20, 30)',
+  }, [0, 0.5, 1], { width: 3, height: 5 })
+  const write = recorder.imageDataWrites.at(-1)
+
+  assert.ok(write)
+  assert.equal(write.x, 0)
+  assert.equal(write.y, 4)
+  assert.equal(write.width, 3)
+  assert.equal(write.height, 1)
+  assert.deepEqual(write.data.slice(0, 3), [10, 20, 30])
+  assert.equal(write.data[3], 0)
+  assert.deepEqual(write.data.slice(4, 7), [10, 20, 30])
+  assert.equal(write.data[7], 128)
+  assert.deepEqual(write.data.slice(8, 11), [10, 20, 30])
+  assert.equal(write.data[11], 255)
+})
+
+test('Spectrogram vertical orientation shifts existing rows upward with copy compositing', () => {
+  const recorder = renderSpectrogramShift({
+    orientation: 'vertical',
+  }, [0.2, 0.6, 1], { width: 3, height: 5 })
+  const drawCall = recorder.drawImageCalls.at(-1)
+
+  assert.equal(drawCall?.compositeOperation, 'copy')
+  assert.equal(drawCall?.args[1], 0)
+  assert.equal(drawCall?.args[2], -1)
+})
+
+test('Spectrogram vertical orientation maps low frequencies to the left', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingSpectrogramSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const canvas = createFakeCanvas()
+  canvas.width = 3
+  canvas.height = 5
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    orientation: 'vertical',
+    scaleMode: 'linear',
+    minFrequency: 100,
+    maxFrequency: 300,
+  })
+
+  try {
+    const state = spectrogram as unknown as {
+      ensureBandMapping: () => void
+      rowCenterBins: Float32Array
+    }
+    state.ensureBandMapping()
+
+    assert.equal(state.rowCenterBins.length, 3)
+    assert.equal(state.rowCenterBins[0] < state.rowCenterBins[1], true)
+    assert.equal(state.rowCenterBins[1] < state.rowCenterBins[2], true)
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
 test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () => {
   const dom = installFakeCanvasDom()
   const sampleRate = 48000
@@ -2225,6 +2296,7 @@ test('Vectorscope keeps the original linear projection behavior', () => {
 
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
+  profile.scopeSettings.spectrogram.orientation = 'vertical'
   profile.scopeSettings.lufsmeter.readout = 'shortTerm'
   profile.scopeSettings.vumeter.needleChannels = 'combined'
   const authoredTheme = createDefaultTheme()
@@ -2239,6 +2311,7 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
 
   const spectrogram = scopeSettingsToOptions('spectrogram', profile.scopeSettings.spectrogram, theme.spectrogram)
   assert.equal(spectrogram.backgroundColor, 'rgb(6, 7, 8)')
+  assert.equal(spectrogram.orientation, 'vertical')
 
   const vumeter = scopeSettingsToOptions('vumeter', profile.scopeSettings.vumeter, theme.vumeter)
   assert.equal(vumeter.backgroundColor, 'rgb(6, 7, 8)')
@@ -2376,6 +2449,15 @@ test('scopeSummary includes spectrum peak mode when enabled', () => {
 
   profile.scopeSettings.spectrum.peakInfoMode = 'following'
   assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak Follow')
+})
+
+test('scopeSummary includes spectrogram orientation', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), 'HORIZONTAL · LOG · sharper')
+
+  profile.scopeSettings.spectrogram.orientation = 'vertical'
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), 'VERTICAL · LOG · sharper')
 })
 
 test('scopeSummary summarizes now playing field visibility', () => {
