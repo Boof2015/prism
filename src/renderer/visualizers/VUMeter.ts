@@ -1,4 +1,9 @@
 import { audioRouter } from '../audio/AudioRouter'
+import {
+  vumeter as nativeVUMeter,
+  type VUMeterNativeAnalyzer,
+  type VUMeterNativeSnapshot,
+} from '../audio/native'
 import { resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
@@ -39,9 +44,10 @@ export interface VUMeterOptions {
   referenceDb?: number
   dataSource?: VUMeterDataSource
   frameScheduler?: FrameScheduler
+  nativeAnalyzer?: VUMeterNativeAnalyzer | null
 }
 
-type ResolvedVUMeterOptions = Required<Omit<VUMeterOptions, 'dataSource' | 'frameScheduler'>>
+type ResolvedVUMeterOptions = Required<Omit<VUMeterOptions, 'dataSource' | 'frameScheduler' | 'nativeAnalyzer'>>
 
 const defaultOptions: ResolvedVUMeterOptions = {
   mode: 'bar',
@@ -63,6 +69,16 @@ const defaultOptions: ResolvedVUMeterOptions = {
 const defaultVUMeterDataSource: VUMeterDataSource = {
   getPendingVUMeterSamples: () => audioRouter.flushPendingVUMeterSamples(),
   ...defaultVisualizerSessionSource,
+}
+
+const INITIAL_NATIVE_SNAPSHOT: VUMeterNativeSnapshot = {
+  vuLDb: VU_METER_MIN_DB,
+  vuRDb: VU_METER_MIN_DB,
+  barLDb: VU_METER_MIN_DB,
+  barRDb: VU_METER_MIN_DB,
+  peakLDb: VU_METER_MIN_DB,
+  peakRDb: VU_METER_MIN_DB,
+  correlation: 0,
 }
 
 const NEEDLE_VISUAL_SMOOTHING_SECONDS = 0.065
@@ -91,6 +107,26 @@ function alphaColor(color: string, alpha: number): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
+}
+
+function finiteNumber(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback
+}
+
+function normalizeNativeSnapshot(snapshot: VUMeterNativeSnapshot | null): VUMeterNativeSnapshot {
+  if (!snapshot) {
+    return { ...INITIAL_NATIVE_SNAPSHOT }
+  }
+
+  return {
+    vuLDb: finiteNumber(snapshot.vuLDb, VU_METER_MIN_DB),
+    vuRDb: finiteNumber(snapshot.vuRDb, VU_METER_MIN_DB),
+    barLDb: finiteNumber(snapshot.barLDb, VU_METER_MIN_DB),
+    barRDb: finiteNumber(snapshot.barRDb, VU_METER_MIN_DB),
+    peakLDb: finiteNumber(snapshot.peakLDb, VU_METER_MIN_DB),
+    peakRDb: finiteNumber(snapshot.peakRDb, VU_METER_MIN_DB),
+    correlation: finiteNumber(snapshot.correlation, 0),
+  }
 }
 
 function normalizeDevicePixelRatio(devicePixelRatio: number): number {
@@ -255,8 +291,12 @@ export class VUMeter {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedVUMeterOptions
   private dataSource: VUMeterDataSource
+  private nativeAnalyzer: VUMeterNativeAnalyzer | null
   private frameLoop: VisualizerFrameLoop
   private meterBallistics: VUMeterBallistics
+  private currentSampleRate = 0
+  private pushScratchL = new Float32Array(0)
+  private pushScratchR = new Float32Array(0)
   private unsubscribeSessionChange: (() => void) | null = null
 
   // Meter state
@@ -277,15 +317,17 @@ export class VUMeter {
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
 
-    const { dataSource, frameScheduler, ...optionOverrides } = options
+    const { dataSource, frameScheduler, nativeAnalyzer, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultVUMeterDataSource
+    this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeVUMeter : nativeAnalyzer
     this.meterBallistics = new VUMeterBallistics(this.dataSource.getSampleRate())
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
       onFrame: this.drawFrame,
     })
+    this.resetMeters()
     this.subscribeToSessionChanges()
   }
 
@@ -299,21 +341,35 @@ export class VUMeter {
   }
 
   private resetMeters(): void {
-    this.meterBallistics.reinitialize(this.dataSource.getSampleRate())
+    this.currentSampleRate = Math.max(1, this.dataSource.getSampleRate())
+    this.meterBallistics.reinitialize(this.currentSampleRate)
+    if (this.isNativeAnalyzerReady()) {
+      this.nativeAnalyzer?.setSampleRate(this.currentSampleRate)
+      this.nativeAnalyzer?.reset()
+    }
     this.applySnapshot(this.meterBallistics.getSnapshot())
     this.resetNeedleVisuals()
     this.invalidate()
   }
 
   setOptions(options: Partial<VUMeterOptions>): void {
-    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, nativeAnalyzer, ...optionUpdates } = options
     this.options = { ...this.options, ...optionUpdates }
+    let didReset = false
+    if (nativeAnalyzer !== undefined && nativeAnalyzer !== this.nativeAnalyzer) {
+      this.nativeAnalyzer = nativeAnalyzer
+      this.resetMeters()
+      didReset = true
+    }
     if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
       this.subscribeToSessionChanges()
       this.resetMeters()
+      didReset = true
     }
-    this.invalidate()
+    if (!didReset) {
+      this.invalidate()
+    }
   }
 
   start(): void {
@@ -389,18 +445,81 @@ export class VUMeter {
   }
 
   private processAudio(nowMs = performance.now()): void {
-    const sampleRate = this.dataSource.getSampleRate()
-    if (Math.abs(sampleRate - this.meterBallistics.getSampleRate()) > 100) {
-      this.meterBallistics.reinitialize(sampleRate)
-    }
-
-    if (!this.dataSource.isPlaying()) {
-      this.applySnapshot(this.meterBallistics.getSnapshot())
-      return
+    const sampleRate = Math.max(1, this.dataSource.getSampleRate())
+    if (
+      Math.abs(sampleRate - this.currentSampleRate) > 100
+      || Math.abs(sampleRate - this.meterBallistics.getSampleRate()) > 100
+    ) {
+      this.resetMeters()
     }
 
     const chunks = this.dataSource.getPendingVUMeterSamples()
+    if (!this.dataSource.isPlaying()) {
+      const snapshot = this.isNativeAnalyzerReady()
+        ? normalizeNativeSnapshot(this.nativeAnalyzer?.getSnapshot() ?? null)
+        : this.meterBallistics.getSnapshot()
+      this.applySnapshot(snapshot)
+      return
+    }
+
+    if (this.isNativeAnalyzerReady()) {
+      if (chunks.length > 0) {
+        const batch = this.concatStereoChunks(chunks)
+        if (batch.left.length > 0 && batch.right.length > 0) {
+          this.nativeAnalyzer?.pushSamples(batch.left, batch.right)
+        }
+      }
+      this.applySnapshot(normalizeNativeSnapshot(this.nativeAnalyzer?.getSnapshot() ?? null))
+      return
+    }
+
     this.applySnapshot(this.meterBallistics.process(chunks, nowMs))
+  }
+
+  private isNativeAnalyzerReady(): boolean {
+    if (!this.nativeAnalyzer) {
+      return false
+    }
+    return this.nativeAnalyzer.isAvailable?.() ?? true
+  }
+
+  private concatStereoChunks(chunks: Array<{ left: Float32Array; right: Float32Array }>): { left: Float32Array; right: Float32Array } {
+    if (chunks.length === 1) {
+      const chunk = chunks[0]
+      const length = Math.min(chunk.left.length, chunk.right.length)
+      return {
+        left: chunk.left.length === length ? chunk.left : chunk.left.subarray(0, length),
+        right: chunk.right.length === length ? chunk.right : chunk.right.subarray(0, length),
+      }
+    }
+
+    let totalLength = 0
+    for (const chunk of chunks) {
+      totalLength += Math.min(chunk.left.length, chunk.right.length)
+    }
+    if (totalLength === 0) {
+      return { left: new Float32Array(0), right: new Float32Array(0) }
+    }
+
+    if (this.pushScratchL.length < totalLength) {
+      this.pushScratchL = new Float32Array(totalLength)
+      this.pushScratchR = new Float32Array(totalLength)
+    }
+
+    const left = this.pushScratchL.subarray(0, totalLength)
+    const right = this.pushScratchR.subarray(0, totalLength)
+    let offset = 0
+    for (const chunk of chunks) {
+      const length = Math.min(chunk.left.length, chunk.right.length)
+      if (length <= 0) {
+        continue
+      }
+      left.set(chunk.left.subarray(0, length), offset)
+      right.set(chunk.right.subarray(0, length), offset)
+      offset += length
+    }
+
+    return { left, right }
   }
 
   private dbToNormalized(db: number): number {
@@ -1136,6 +1255,9 @@ export class VUMeter {
     if (this.unsubscribeSessionChange) {
       this.unsubscribeSessionChange()
       this.unsubscribeSessionChange = null
+    }
+    if (this.isNativeAnalyzerReady()) {
+      this.nativeAnalyzer?.reset()
     }
   }
 }

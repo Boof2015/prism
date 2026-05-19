@@ -9,6 +9,7 @@ import type {
   SpectrogramNativeResult,
   VectorscopeResult,
   VectorscopePointsResult,
+  VUMeterNativeSnapshot,
 } from './visualizer-dsp'
 
 let nativeModule: VisualizerDSP | null = null
@@ -176,6 +177,14 @@ export interface LUFSMeterNativeAnalyzer {
   isAvailable?: () => boolean
 }
 
+export interface VUMeterNativeAnalyzer {
+  setSampleRate(sampleRate: number): void
+  pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void
+  getSnapshot(): VUMeterNativeSnapshot | null
+  reset(): void
+  isAvailable?: () => boolean
+}
+
 export const spectrogram: SpectrogramNativeAnalyzer = {
   isAvailable: (): boolean => {
     return Boolean(nativeModule?.spectrogram)
@@ -238,6 +247,29 @@ export const vectorscope = {
   }
 }
 
+export const vumeter: VUMeterNativeAnalyzer = {
+  isAvailable: (): boolean => {
+    return Boolean(nativeModule?.vumeter)
+  },
+
+  setSampleRate: (sampleRate: number): void => {
+    nativeModule?.vumeter?.setSampleRate(sampleRate)
+  },
+
+  pushSamples: (leftChannel: Float32Array, rightChannel: Float32Array): void => {
+    nativeModule?.vumeter?.pushSamples(leftChannel, rightChannel)
+  },
+
+  getSnapshot: (): VUMeterNativeSnapshot | null => {
+    if (!nativeModule?.vumeter) return null
+    return nativeModule.vumeter.getSnapshot()
+  },
+
+  reset: (): void => {
+    nativeModule?.vumeter?.reset()
+  },
+}
+
 export const lufsmeter: LUFSMeterNativeAnalyzer = {
   isAvailable: (): boolean => {
     return Boolean(nativeModule?.lufsmeter)
@@ -268,4 +300,5 @@ export type {
   SpectrogramNativeResult,
   VectorscopeResult,
   VectorscopePointsResult,
+  VUMeterNativeSnapshot,
 }

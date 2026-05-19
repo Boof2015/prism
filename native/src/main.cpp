@@ -1,4 +1,5 @@
 #include <napi.h>
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include "linux_capture.h"
@@ -8,6 +9,7 @@
 #include "spectrum.h"
 #include "spectrogram.h"
 #include "vectorscope.h"
+#include "vumeter.h"
 #include "lufsmeter.h"
 
 // Global instances
@@ -15,6 +17,7 @@ static Visualizer::Oscilloscope oscilloscope;
 static Visualizer::Spectrum spectrum(2048);
 static Visualizer::SpectrogramAnalyzer spectrogramAnalyzer;
 static Visualizer::Vectorscope vectorscope;
+static Visualizer::VUMeterAnalyzer vuMeter;
 static Visualizer::LUFSMeterAnalyzer lufsMeter;
 
 // ============== Oscilloscope ==============
@@ -428,6 +431,52 @@ Napi::Value VectorscopeReset(const Napi::CallbackInfo& info) {
     return info.Env().Undefined();
 }
 
+// ============== VU Meter ==============
+
+Napi::Value VUMeterSetSampleRate(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsNumber()) {
+        Napi::TypeError::New(env, "Expected sample rate").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    vuMeter.setSampleRate(info[0].As<Napi::Number>().FloatValue());
+    return env.Undefined();
+}
+
+Napi::Value VUMeterPushSamples(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected two Float32Arrays (left, right)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array leftData = info[0].As<Napi::Float32Array>();
+    Napi::Float32Array rightData = info[1].As<Napi::Float32Array>();
+    const size_t length = std::min(leftData.ElementLength(), rightData.ElementLength());
+    vuMeter.pushSamples(leftData.Data(), rightData.Data(), length);
+    return env.Undefined();
+}
+
+Napi::Value VUMeterGetSnapshot(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const auto snapshot = vuMeter.getSnapshot();
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("vuLDb", Napi::Number::New(env, snapshot.vuLDb));
+    obj.Set("vuRDb", Napi::Number::New(env, snapshot.vuRDb));
+    obj.Set("barLDb", Napi::Number::New(env, snapshot.barLDb));
+    obj.Set("barRDb", Napi::Number::New(env, snapshot.barRDb));
+    obj.Set("peakLDb", Napi::Number::New(env, snapshot.peakLDb));
+    obj.Set("peakRDb", Napi::Number::New(env, snapshot.peakRDb));
+    obj.Set("correlation", Napi::Number::New(env, snapshot.correlation));
+    return obj;
+}
+
+Napi::Value VUMeterReset(const Napi::CallbackInfo& info) {
+    vuMeter.reset();
+    return info.Env().Undefined();
+}
+
 // ============== LUFS Meter ==============
 
 Napi::Value LUFSMeterSetSampleRate(const Napi::CallbackInfo& info) {
@@ -528,6 +577,14 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     vecExports.Set("process", Napi::Function::New(env, VectorscopeProcess));
     vecExports.Set("reset", Napi::Function::New(env, VectorscopeReset));
     exports.Set("vectorscope", vecExports);
+
+    // VU Meter
+    Napi::Object vuExports = Napi::Object::New(env);
+    vuExports.Set("setSampleRate", Napi::Function::New(env, VUMeterSetSampleRate));
+    vuExports.Set("pushSamples", Napi::Function::New(env, VUMeterPushSamples));
+    vuExports.Set("getSnapshot", Napi::Function::New(env, VUMeterGetSnapshot));
+    vuExports.Set("reset", Napi::Function::New(env, VUMeterReset));
+    exports.Set("vumeter", vuExports);
 
     // LUFS Meter
     Napi::Object lufsExports = Napi::Object::New(env);

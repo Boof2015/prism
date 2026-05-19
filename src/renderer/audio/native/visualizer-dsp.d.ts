@@ -54,6 +54,16 @@ export interface LUFSMeterNativeSnapshot {
   correlation: number;
 }
 
+export interface VUMeterNativeSnapshot {
+  vuLDb: number;
+  vuRDb: number;
+  barLDb: number;
+  barRDb: number;
+  peakLDb: number;
+  peakRDb: number;
+  correlation: number;
+}
+
 // Circular buffer size (must match native code)
 export const OSCILLOSCOPE_BUFFER_SIZE = 32768;
 
@@ -122,11 +132,19 @@ export interface LUFSMeterModule {
   reset(): void;
 }
 
+export interface VUMeterModule {
+  setSampleRate(sampleRate: number): void;
+  pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void;
+  getSnapshot(): VUMeterNativeSnapshot;
+  reset(): void;
+}
+
 export interface VisualizerDSP {
   oscilloscope: OscilloscopeModule;
   spectrum: SpectrumModule;
   spectrogram: SpectrogramModule;
   vectorscope: VectorscopeModule;
+  vumeter: VUMeterModule;
   lufsmeter: LUFSMeterModule;
 }
 

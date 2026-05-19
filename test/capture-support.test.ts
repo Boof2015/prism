@@ -63,4 +63,5 @@ test('preload no longer exposes desktop source capture APIs', async () => {
   assert.doesNotMatch(preloadSource, /getDesktopSources/)
   assert.doesNotMatch(preloadSource, /capture:get-backend-support/)
   assert.doesNotMatch(preloadSource, /audio:get-desktop-sources/)
+  assert.match(preloadSource, /vumeter: nativeAddonModule\.vumeter/)
 })

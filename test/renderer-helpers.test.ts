@@ -81,6 +81,8 @@ import type {
   SpectrogramNativeAnalyzer,
   SpectrogramNativeOptions,
   SpectrogramNativeResult,
+  VUMeterNativeAnalyzer,
+  VUMeterNativeSnapshot,
 } from '../src/renderer/audio/native'
 import {
   HEAT_LOW_DB,
@@ -95,6 +97,7 @@ import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
 import {
+  VUMeter,
   VU_NEEDLE_FACE_HEIGHT_CSS_PX,
   VU_NEEDLE_FACE_WIDTH_CSS_PX,
   classicVuToNormalized,
@@ -4024,6 +4027,187 @@ test('MultibandSplitter and MultibandBuffer reuse caller-owned buffers', () => {
   assert.equal(pointCount, 8)
   assert.equal(pointTarget.mid.left, pointRef)
   assert.notEqual(pointTarget.low.left[0], 0)
+})
+
+function createFakeVUMeterNativeAnalyzer(
+  snapshotOverrides: Partial<VUMeterNativeSnapshot> = {},
+  available = true,
+): VUMeterNativeAnalyzer & {
+  pushed: Array<{ left: Float32Array; right: Float32Array }>
+  resetCount: number
+  sampleRates: number[]
+} {
+  const analyzer = {
+    pushed: [] as Array<{ left: Float32Array; right: Float32Array }>,
+    resetCount: 0,
+    sampleRates: [] as number[],
+    snapshot: {
+      vuLDb: -12,
+      vuRDb: -13,
+      barLDb: -10,
+      barRDb: -12,
+      peakLDb: -4,
+      peakRDb: -5,
+      correlation: 0.5,
+      ...snapshotOverrides,
+    } satisfies VUMeterNativeSnapshot,
+    isAvailable: () => available,
+    setSampleRate(sampleRate: number): void {
+      this.sampleRates.push(sampleRate)
+    },
+    pushSamples(left: Float32Array, right: Float32Array): void {
+      this.pushed.push({ left: new Float32Array(left), right: new Float32Array(right) })
+    },
+    getSnapshot(): VUMeterNativeSnapshot {
+      return this.snapshot
+    },
+    reset(): void {
+      this.resetCount += 1
+    },
+  }
+
+  return analyzer
+}
+
+test('VUMeter draws from native DSP snapshots when available', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dataSource = {
+    getPendingVUMeterSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const nativeAnalyzer = createFakeVUMeterNativeAnalyzer({
+    vuLDb: -12.4,
+    vuRDb: -16.2,
+    peakLDb: -3,
+    peakRDb: -5,
+    correlation: 0.25,
+  })
+  const meter = new VUMeter(createFakeCanvas(recorder), {
+    dataSource,
+    nativeAnalyzer,
+    lineColor: 'rgb(255, 0, 96)',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    assert.equal(nativeAnalyzer.pushed.length, 0)
+    assert.equal(recorder.fillTexts.some((text) => text.text === '-12.4'), true)
+    assert.equal(recorder.fillTexts.some((text) => text.text === '-16.2'), true)
+    assert.equal(
+      recorder.fillRects.some((rect) => rect.fillStyle === 'rgba(255, 0, 96, 0.82)'),
+      true,
+    )
+  } finally {
+    meter.dispose()
+  }
+})
+
+test('VUMeter concatenates queued chunks before pushing them to native DSP', () => {
+  const chunkQueue: Array<{ left: Float32Array; right: Float32Array }> = [
+    {
+      left: new Float32Array([1, 2, 3]),
+      right: new Float32Array([4, 5, 6]),
+    },
+    {
+      left: new Float32Array([7, 8]),
+      right: new Float32Array([9, 10]),
+    },
+  ]
+  const dataSource = {
+    getPendingVUMeterSamples: () => {
+      const drained = chunkQueue.slice()
+      chunkQueue.length = 0
+      return drained
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const nativeAnalyzer = createFakeVUMeterNativeAnalyzer()
+  const meter = new VUMeter(createFakeCanvas(), { dataSource, nativeAnalyzer })
+
+  try {
+    ;(meter as unknown as { processAudio: () => void }).processAudio()
+
+    assert.equal(nativeAnalyzer.pushed.length, 1)
+    assert.deepEqual(Array.from(nativeAnalyzer.pushed[0]?.left ?? []), [1, 2, 3, 7, 8])
+    assert.deepEqual(Array.from(nativeAnalyzer.pushed[0]?.right ?? []), [4, 5, 6, 9, 10])
+  } finally {
+    meter.dispose()
+  }
+})
+
+test('VUMeter resets native DSP when the sample rate or session changes', () => {
+  let sampleRate = 48000
+  let pendingChunks: Array<{ left: Float32Array; right: Float32Array }> = [
+    { left: new Float32Array([0.1]), right: new Float32Array([0.2]) },
+  ]
+  let sessionListener: (() => void) | null = null
+  const dataSource = {
+    getPendingVUMeterSamples: () => {
+      const drained = pendingChunks
+      pendingChunks = []
+      return drained
+    },
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: (listener: () => void) => {
+      sessionListener = listener
+      return () => {}
+    },
+  }
+  const nativeAnalyzer = createFakeVUMeterNativeAnalyzer()
+  const meter = new VUMeter(createFakeCanvas(), { dataSource, nativeAnalyzer })
+  const processAudio = (meter as unknown as { processAudio: () => void }).processAudio.bind(meter)
+
+  try {
+    processAudio()
+    sampleRate = 96000
+    pendingChunks = [{ left: new Float32Array([0.3]), right: new Float32Array([0.4]) }]
+    processAudio()
+    sessionListener?.()
+
+    assert.deepEqual(nativeAnalyzer.sampleRates, [48000, 96000, 96000])
+    assert.equal(nativeAnalyzer.resetCount, 3)
+  } finally {
+    meter.dispose()
+  }
+})
+
+test('VUMeter drains audio and renders fallback state when native DSP is unavailable', () => {
+  const recorder = createFakeCanvasRecorder()
+  let pendingChunks: Array<{ left: Float32Array; right: Float32Array }> = [
+    { left: new Float32Array([0.5, 0.5, 0.5, 0.5]), right: new Float32Array([0.5, 0.5, 0.5, 0.5]) },
+  ]
+  const dataSource = {
+    getPendingVUMeterSamples: () => {
+      const drained = pendingChunks
+      pendingChunks = []
+      return drained
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const nativeAnalyzer = createFakeVUMeterNativeAnalyzer({ vuLDb: -1, vuRDb: -1 }, false)
+  const meter = new VUMeter(createFakeCanvas(recorder), {
+    dataSource,
+    nativeAnalyzer,
+    lineColor: 'rgb(255, 0, 96)',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    assert.equal(nativeAnalyzer.pushed.length, 0)
+    assert.equal(pendingChunks.length, 0)
+    assert.equal(recorder.fillTexts.some((text) => text.text === '-6.0'), true)
+  } finally {
+    meter.dispose()
+  }
 })
 
 function createFakeLUFSMeterNativeAnalyzer(

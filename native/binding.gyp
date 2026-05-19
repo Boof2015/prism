@@ -11,6 +11,7 @@
         "src/spectrum.cpp",
         "src/spectrogram.cpp",
         "src/vectorscope.cpp",
+        "src/vumeter.cpp",
         "src/lufsmeter.cpp",
         "src/dsp_utils.cpp"
       ],
