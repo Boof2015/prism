@@ -8,12 +8,14 @@
 #include "spectrum.h"
 #include "spectrogram.h"
 #include "vectorscope.h"
+#include "lufsmeter.h"
 
 // Global instances
 static Visualizer::Oscilloscope oscilloscope;
 static Visualizer::Spectrum spectrum(2048);
 static Visualizer::SpectrogramAnalyzer spectrogramAnalyzer;
 static Visualizer::Vectorscope vectorscope;
+static Visualizer::LUFSMeterAnalyzer lufsMeter;
 
 // ============== Oscilloscope ==============
 
@@ -426,6 +428,55 @@ Napi::Value VectorscopeReset(const Napi::CallbackInfo& info) {
     return info.Env().Undefined();
 }
 
+// ============== LUFS Meter ==============
+
+Napi::Value LUFSMeterSetSampleRate(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsNumber()) {
+        Napi::TypeError::New(env, "Expected sample rate").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    lufsMeter.setSampleRate(info[0].As<Napi::Number>().FloatValue());
+    return env.Undefined();
+}
+
+Napi::Value LUFSMeterPushSamples(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected two Float32Arrays (left, right)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array leftData = info[0].As<Napi::Float32Array>();
+    Napi::Float32Array rightData = info[1].As<Napi::Float32Array>();
+    const size_t length = std::min(leftData.ElementLength(), rightData.ElementLength());
+    lufsMeter.pushSamples(leftData.Data(), rightData.Data(), length);
+    return env.Undefined();
+}
+
+Napi::Value LUFSMeterGetSnapshot(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const auto snapshot = lufsMeter.getSnapshot();
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("momentaryLUFS", Napi::Number::New(env, snapshot.momentaryLUFS));
+    obj.Set("shortTermLUFS", Napi::Number::New(env, snapshot.shortTermLUFS));
+    obj.Set("integratedLUFS", Napi::Number::New(env, snapshot.integratedLUFS));
+    obj.Set("vuLDb", Napi::Number::New(env, snapshot.vuLDb));
+    obj.Set("vuRDb", Napi::Number::New(env, snapshot.vuRDb));
+    obj.Set("barLDb", Napi::Number::New(env, snapshot.barLDb));
+    obj.Set("barRDb", Napi::Number::New(env, snapshot.barRDb));
+    obj.Set("peakLDb", Napi::Number::New(env, snapshot.peakLDb));
+    obj.Set("peakRDb", Napi::Number::New(env, snapshot.peakRDb));
+    obj.Set("correlation", Napi::Number::New(env, snapshot.correlation));
+    return obj;
+}
+
+Napi::Value LUFSMeterReset(const Napi::CallbackInfo& info) {
+    lufsMeter.reset();
+    return info.Env().Undefined();
+}
+
 // ============== Module Init ==============
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
@@ -477,6 +528,14 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     vecExports.Set("process", Napi::Function::New(env, VectorscopeProcess));
     vecExports.Set("reset", Napi::Function::New(env, VectorscopeReset));
     exports.Set("vectorscope", vecExports);
+
+    // LUFS Meter
+    Napi::Object lufsExports = Napi::Object::New(env);
+    lufsExports.Set("setSampleRate", Napi::Function::New(env, LUFSMeterSetSampleRate));
+    lufsExports.Set("pushSamples", Napi::Function::New(env, LUFSMeterPushSamples));
+    lufsExports.Set("getSnapshot", Napi::Function::New(env, LUFSMeterGetSnapshot));
+    lufsExports.Set("reset", Napi::Function::New(env, LUFSMeterReset));
+    exports.Set("lufsmeter", lufsExports);
 
     RegisterMacOSCapture(env, exports);
     RegisterWindowsCapture(env, exports);

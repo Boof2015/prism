@@ -41,6 +41,19 @@ export interface SpectrogramNativeResult {
   rowCount: number;
 }
 
+export interface LUFSMeterNativeSnapshot {
+  momentaryLUFS: number;
+  shortTermLUFS: number;
+  integratedLUFS: number;
+  vuLDb: number;
+  vuRDb: number;
+  barLDb: number;
+  barRDb: number;
+  peakLDb: number;
+  peakRDb: number;
+  correlation: number;
+}
+
 // Circular buffer size (must match native code)
 export const OSCILLOSCOPE_BUFFER_SIZE = 32768;
 
@@ -102,11 +115,19 @@ export interface VectorscopeModule {
   reset(): void;
 }
 
+export interface LUFSMeterModule {
+  setSampleRate(sampleRate: number): void;
+  pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void;
+  getSnapshot(): LUFSMeterNativeSnapshot;
+  reset(): void;
+}
+
 export interface VisualizerDSP {
   oscilloscope: OscilloscopeModule;
   spectrum: SpectrumModule;
   spectrogram: SpectrogramModule;
   vectorscope: VectorscopeModule;
+  lufsmeter: LUFSMeterModule;
 }
 
 declare const visualizerDSP: VisualizerDSP;

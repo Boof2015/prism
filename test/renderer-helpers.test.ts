@@ -76,6 +76,8 @@ import {
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
 import type {
+  LUFSMeterNativeAnalyzer,
+  LUFSMeterNativeSnapshot,
   SpectrogramNativeAnalyzer,
   SpectrogramNativeOptions,
   SpectrogramNativeResult,
@@ -4024,6 +4026,49 @@ test('MultibandSplitter and MultibandBuffer reuse caller-owned buffers', () => {
   assert.notEqual(pointTarget.low.left[0], 0)
 })
 
+function createFakeLUFSMeterNativeAnalyzer(
+  snapshotOverrides: Partial<LUFSMeterNativeSnapshot> = {},
+  available = true,
+): LUFSMeterNativeAnalyzer & {
+  pushed: Array<{ left: Float32Array; right: Float32Array }>
+  resetCount: number
+  sampleRates: number[]
+} {
+  const analyzer = {
+    pushed: [] as Array<{ left: Float32Array; right: Float32Array }>,
+    resetCount: 0,
+    sampleRates: [] as number[],
+    snapshot: {
+      momentaryLUFS: -18.4,
+      shortTermLUFS: -19.1,
+      integratedLUFS: -20.2,
+      vuLDb: -12,
+      vuRDb: -13,
+      barLDb: -10,
+      barRDb: -12,
+      peakLDb: -4,
+      peakRDb: -5,
+      correlation: 0.5,
+      ...snapshotOverrides,
+    } satisfies LUFSMeterNativeSnapshot,
+    isAvailable: () => available,
+    setSampleRate(sampleRate: number): void {
+      this.sampleRates.push(sampleRate)
+    },
+    pushSamples(left: Float32Array, right: Float32Array): void {
+      this.pushed.push({ left: new Float32Array(left), right: new Float32Array(right) })
+    },
+    getSnapshot(): LUFSMeterNativeSnapshot {
+      return this.snapshot
+    },
+    reset(): void {
+      this.resetCount += 1
+    },
+  }
+
+  return analyzer
+}
+
 test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and attached readout', () => {
   const dom = installFakeCanvasDom()
   const recorder = createFakeCanvasRecorder()
@@ -4048,8 +4093,10 @@ test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and a
     isPlaying: () => true,
     subscribeToSessionChanges: () => () => {},
   }
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ momentaryLUFS: -18.4 })
   const meter = new LUFSMeter(createFakeCanvas(recorder), {
     dataSource,
+    nativeAnalyzer,
     readout: 'momentary',
     lineColor: 'rgb(255, 0, 96)',
     trackColor: 'rgba(255, 0, 96, 0.08)',
@@ -4061,6 +4108,8 @@ test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and a
   try {
     ;(meter as unknown as { drawFrame: () => void }).drawFrame()
 
+    assert.equal(nativeAnalyzer.pushed.length, 1)
+    assert.equal(nativeAnalyzer.pushed[0]?.left.length, leftChunk.length)
     const trackRects = recorder.fillRects.filter((rect) => rect.fillStyle === 'rgba(255, 0, 96, 0.08)')
     assert.equal(trackRects.length >= 3, true)
     assert.equal(trackRects.some((rect) => rect.width > 12), true)
@@ -4120,8 +4169,10 @@ test('LUFSMeter fits readout text inside narrow tags', () => {
     isPlaying: () => true,
     subscribeToSessionChanges: () => () => {},
   }
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ momentaryLUFS: -8.1 })
   const meter = new LUFSMeter(createFakeCanvas(recorder, 180, 360), {
     dataSource,
+    nativeAnalyzer,
     readout: 'momentary',
     lineColor: 'rgb(255, 0, 96)',
     trackColor: 'rgba(255, 0, 96, 0.08)',
@@ -4149,8 +4200,17 @@ test('LUFSMeter fits readout text inside narrow tags', () => {
   }
 })
 
-test('LUFSMeter keeps integrated history bounded over long runs', () => {
-  const chunkQueue: Array<{ left: Float32Array; right: Float32Array }> = []
+test('LUFSMeter concatenates queued chunks before pushing them to native DSP', () => {
+  const chunkQueue: Array<{ left: Float32Array; right: Float32Array }> = [
+    {
+      left: new Float32Array([1, 2, 3]),
+      right: new Float32Array([4, 5, 6]),
+    },
+    {
+      left: new Float32Array([7, 8]),
+      right: new Float32Array([9, 10]),
+    },
+  ]
   const dataSource = {
     getPendingLUFSMeterSamples: () => {
       const drained = chunkQueue.slice()
@@ -4161,30 +4221,94 @@ test('LUFSMeter keeps integrated history bounded over long runs', () => {
     isPlaying: () => true,
     subscribeToSessionChanges: () => () => {},
   }
-  const meter = new LUFSMeter(createFakeCanvas(), { dataSource })
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer()
+  const meter = new LUFSMeter(createFakeCanvas(), { dataSource, nativeAnalyzer })
+
+  try {
+    ;(meter as unknown as { processAudio: () => void }).processAudio()
+
+    assert.equal(nativeAnalyzer.pushed.length, 1)
+    assert.deepEqual(Array.from(nativeAnalyzer.pushed[0]?.left ?? []), [1, 2, 3, 7, 8])
+    assert.deepEqual(Array.from(nativeAnalyzer.pushed[0]?.right ?? []), [4, 5, 6, 9, 10])
+  } finally {
+    meter.dispose()
+  }
+})
+
+test('LUFSMeter resets native DSP when the sample rate or session changes', () => {
+  let sampleRate = 48000
+  let pendingChunks: Array<{ left: Float32Array; right: Float32Array }> = [
+    { left: new Float32Array([0.1]), right: new Float32Array([0.2]) },
+  ]
+  let sessionListener: (() => void) | null = null
+  const dataSource = {
+    getPendingLUFSMeterSamples: () => {
+      const drained = pendingChunks
+      pendingChunks = []
+      return drained
+    },
+    getSampleRate: () => sampleRate,
+    isPlaying: () => true,
+    subscribeToSessionChanges: (listener: () => void) => {
+      sessionListener = listener
+      return () => {}
+    },
+  }
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer()
+  const meter = new LUFSMeter(createFakeCanvas(), { dataSource, nativeAnalyzer })
   const processAudio = (meter as unknown as { processAudio: () => void }).processAudio.bind(meter)
-  const leftChunk = new Float32Array(4800)
-  const rightChunk = new Float32Array(4800)
-  for (let index = 0; index < leftChunk.length; index += 1) {
-    const sample = index % 2 === 0 ? 0.35 : -0.35
-    leftChunk[index] = sample
-    rightChunk[index] = sample
-  }
 
-  for (let iteration = 0; iteration < 400; iteration += 1) {
-    chunkQueue.push({
-      left: leftChunk,
-      right: rightChunk,
-    })
+  try {
     processAudio()
-  }
+    sampleRate = 96000
+    pendingChunks = [{ left: new Float32Array([0.3]), right: new Float32Array([0.4]) }]
+    processAudio()
+    sessionListener?.()
 
-  const histogramCounts = (meter as unknown as { integratedHistogramCounts: Uint32Array }).integratedHistogramCounts
-  const storedBlocks = histogramCounts.reduce((total, count) => total + count, 0)
-  assert.equal(Object.prototype.hasOwnProperty.call(meter, 'integratedBlockLoudness'), false)
-  assert.equal(histogramCounts.length > 0, true)
-  assert.equal(storedBlocks > 100, true)
-  assert.equal(Number.isFinite((meter as unknown as { integratedLUFS: number }).integratedLUFS), true)
+    assert.deepEqual(nativeAnalyzer.sampleRates, [48000, 96000, 96000])
+    assert.equal(nativeAnalyzer.resetCount, 3)
+  } finally {
+    meter.dispose()
+  }
+})
+
+test('LUFSMeter drains audio and renders silence when native DSP is unavailable', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  let pendingChunks: Array<{ left: Float32Array; right: Float32Array }> = [
+    { left: new Float32Array([0.9, 0.9]), right: new Float32Array([0.9, 0.9]) },
+  ]
+  const dataSource = {
+    getPendingLUFSMeterSamples: () => {
+      const drained = pendingChunks
+      pendingChunks = []
+      return drained
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ momentaryLUFS: -5 }, false)
+  const meter = new LUFSMeter(createFakeCanvas(recorder), {
+    dataSource,
+    nativeAnalyzer,
+    readout: 'momentary',
+    lineColor: 'rgb(255, 0, 96)',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    assert.equal(nativeAnalyzer.pushed.length, 0)
+    assert.equal(pendingChunks.length, 0)
+    assert.equal(
+      recorder.fillTexts.some((text) => text.text === '-∞LUFS'),
+      true,
+    )
+  } finally {
+    meter.dispose()
+    dom.restore()
+  }
 })
 
 test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-document backoff, and cancels on stop', async () => {

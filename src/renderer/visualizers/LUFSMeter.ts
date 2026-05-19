@@ -1,14 +1,14 @@
 import { audioRouter } from '../audio/AudioRouter'
+import {
+  lufsmeter as nativeLUFSMeter,
+  type LUFSMeterNativeAnalyzer,
+  type LUFSMeterNativeSnapshot,
+} from '../audio/native'
 import type { LUFSMeterMode, LUFSMeterReadout } from '../../types/lufsmeter'
 import { resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
-import {
-  VUMeterBallistics,
-  VU_METER_MIN_DB,
-  type VUMeterSnapshot,
-} from './vuMeterBallistics'
 
 export interface LUFSMeterDataSource extends VisualizerSessionSource {
   getPendingLUFSMeterSamples: () => Array<{ left: Float32Array; right: Float32Array }>
@@ -25,9 +25,10 @@ export interface LUFSMeterOptions {
   labelColor?: string
   dataSource?: LUFSMeterDataSource
   frameScheduler?: FrameScheduler
+  nativeAnalyzer?: LUFSMeterNativeAnalyzer | null
 }
 
-type ResolvedLUFSMeterOptions = Required<Omit<LUFSMeterOptions, 'dataSource' | 'frameScheduler'>>
+type ResolvedLUFSMeterOptions = Required<Omit<LUFSMeterOptions, 'dataSource' | 'frameScheduler' | 'nativeAnalyzer'>>
 
 const defaultOptions: ResolvedLUFSMeterOptions = {
   mode: 'bar',
@@ -67,112 +68,43 @@ function contrastRatio(luminanceA: number, luminanceB: number): number {
 const METER_MIN_LUFS = -60
 const COMPACT_METER_MIN_DB = -50
 const COMPACT_METER_MAX_DB = 0
-const MOMENTARY_WINDOW_S = 0.4
-const SHORT_TERM_WINDOW_S = 3.0
-const INTEGRATED_BLOCK_S = 0.4
-const INTEGRATED_HOP_S = 0.1
-const ABSOLUTE_GATE_LUFS = -70
-const RELATIVE_GATE_OFFSET = -10
 const TARGET_LUFS = -14
-const SMOOTHING = 0.7
-const INTEGRATED_HISTOGRAM_MIN_LUFS = ABSOLUTE_GATE_LUFS
-const INTEGRATED_HISTOGRAM_MAX_LUFS = 10
-const INTEGRATED_HISTOGRAM_BIN_WIDTH = 0.1
-const INTEGRATED_HISTOGRAM_BIN_COUNT = Math.round(
-  (INTEGRATED_HISTOGRAM_MAX_LUFS - INTEGRATED_HISTOGRAM_MIN_LUFS) / INTEGRATED_HISTOGRAM_BIN_WIDTH
-) + 1
+const METER_MIN_DB = -60
 
-const INITIAL_VU_SNAPSHOT: VUMeterSnapshot = {
-  vuLDb: VU_METER_MIN_DB,
-  vuRDb: VU_METER_MIN_DB,
-  barLDb: VU_METER_MIN_DB,
-  barRDb: VU_METER_MIN_DB,
-  peakLDb: VU_METER_MIN_DB,
-  peakRDb: VU_METER_MIN_DB,
+const INITIAL_NATIVE_SNAPSHOT: LUFSMeterNativeSnapshot = {
+  momentaryLUFS: METER_MIN_LUFS,
+  shortTermLUFS: METER_MIN_LUFS,
+  integratedLUFS: METER_MIN_LUFS,
+  vuLDb: METER_MIN_DB,
+  vuRDb: METER_MIN_DB,
+  barLDb: METER_MIN_DB,
+  barRDb: METER_MIN_DB,
+  peakLDb: METER_MIN_DB,
+  peakRDb: METER_MIN_DB,
   correlation: 0,
 }
 
-// ---- K-weighting filter coefficients (ITU-R BS.1770-4) ----
-
-interface BiquadCoeffs {
-  b0: number; b1: number; b2: number
-  a1: number; a2: number
+function finiteNumber(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback
 }
 
-// BS.1770-4 reference design parameters. The values below reproduce the
-// standard's reference coefficients at 48 kHz to within 1e-5 and remain
-// accurate at any sample rate (44.1k, 48k, 88.2k, 96k, 192k) via the
-// bilinear transform with frequency pre-warping. Derivation follows the
-// canonical analog prototype used by the ITU reference and pyloudnorm.
-const PRE_FILTER_F0_HZ = 1681.9744509555319
-const PRE_FILTER_GAIN_DB = 3.999843853973347
-const PRE_FILTER_Q = 0.7071752369554193
-const RLB_FILTER_F0_HZ = 38.13547087613982
-const RLB_FILTER_Q = 0.5003270373223665
-
-function preFilterCoeffs(sampleRate: number): BiquadCoeffs {
-  const K = Math.tan(Math.PI * PRE_FILTER_F0_HZ / sampleRate)
-  const Vh = Math.pow(10, PRE_FILTER_GAIN_DB / 20)
-  const Vb = Math.pow(Vh, 0.499666774155997)
-  const KK = K * K
-  const a0 = 1 + K / PRE_FILTER_Q + KK
-  return {
-    b0: (Vh + (Vb * K) / PRE_FILTER_Q + KK) / a0,
-    b1: (2 * (KK - Vh)) / a0,
-    b2: (Vh - (Vb * K) / PRE_FILTER_Q + KK) / a0,
-    a1: (2 * (KK - 1)) / a0,
-    a2: (1 - K / PRE_FILTER_Q + KK) / a0,
+function normalizeNativeSnapshot(snapshot: LUFSMeterNativeSnapshot | null): LUFSMeterNativeSnapshot {
+  if (!snapshot) {
+    return { ...INITIAL_NATIVE_SNAPSHOT }
   }
-}
 
-function rlbFilterCoeffs(sampleRate: number): BiquadCoeffs {
-  const K = Math.tan(Math.PI * RLB_FILTER_F0_HZ / sampleRate)
-  const KK = K * K
-  const a0 = 1 + K / RLB_FILTER_Q + KK
   return {
-    b0: 1,
-    b1: -2,
-    b2: 1,
-    a1: (2 * (KK - 1)) / a0,
-    a2: (1 - K / RLB_FILTER_Q + KK) / a0,
+    momentaryLUFS: finiteNumber(snapshot.momentaryLUFS, METER_MIN_LUFS),
+    shortTermLUFS: finiteNumber(snapshot.shortTermLUFS, METER_MIN_LUFS),
+    integratedLUFS: finiteNumber(snapshot.integratedLUFS, METER_MIN_LUFS),
+    vuLDb: finiteNumber(snapshot.vuLDb, METER_MIN_DB),
+    vuRDb: finiteNumber(snapshot.vuRDb, METER_MIN_DB),
+    barLDb: finiteNumber(snapshot.barLDb, METER_MIN_DB),
+    barRDb: finiteNumber(snapshot.barRDb, METER_MIN_DB),
+    peakLDb: finiteNumber(snapshot.peakLDb, METER_MIN_DB),
+    peakRDb: finiteNumber(snapshot.peakRDb, METER_MIN_DB),
+    correlation: finiteNumber(snapshot.correlation, 0),
   }
-}
-
-function getKWeightingCoeffs(sampleRate: number): { pre: BiquadCoeffs; rlb: BiquadCoeffs } {
-  return {
-    pre: preFilterCoeffs(sampleRate),
-    rlb: rlbFilterCoeffs(sampleRate),
-  }
-}
-
-// ---- Biquad filter state ----
-
-interface BiquadState {
-  x1: number; x2: number
-  y1: number; y2: number
-}
-
-function createBiquadState(): BiquadState {
-  return { x1: 0, x2: 0, y1: 0, y2: 0 }
-}
-
-function applyBiquad(coeffs: BiquadCoeffs, state: BiquadState, input: number): number {
-  const output = coeffs.b0 * input + coeffs.b1 * state.x1 + coeffs.b2 * state.x2
-    - coeffs.a1 * state.y1 - coeffs.a2 * state.y2
-  state.x2 = state.x1
-  state.x1 = input
-  state.y2 = state.y1
-  state.y1 = output
-  return output
-}
-
-function histogramIndexFromLufs(lufs: number): number {
-  const normalized = (lufs - INTEGRATED_HISTOGRAM_MIN_LUFS) / INTEGRATED_HISTOGRAM_BIN_WIDTH
-  return Math.max(0, Math.min(INTEGRATED_HISTOGRAM_BIN_COUNT - 1, Math.round(normalized)))
-}
-
-function histogramLufsAtIndex(index: number): number {
-  return INTEGRATED_HISTOGRAM_MIN_LUFS + (index * INTEGRATED_HISTOGRAM_BIN_WIDTH)
 }
 
 // ---- Loudness meter class ----
@@ -182,34 +114,12 @@ export class LUFSMeter {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedLUFSMeterOptions
   private dataSource: LUFSMeterDataSource
+  private nativeAnalyzer: LUFSMeterNativeAnalyzer | null
   private frameLoop: VisualizerFrameLoop
-  private meterBallistics: VUMeterBallistics
-
-  // K-weighting filter state (per channel, two stages)
-  private preFilterL = createBiquadState()
-  private preFilterR = createBiquadState()
-  private rlbFilterL = createBiquadState()
-  private rlbFilterR = createBiquadState()
-  private currentSampleRate = 48000
-  private kWeightingCoeffs = getKWeightingCoeffs(48000)
-
-  // Ring buffer for K-weighted squared samples (sized for SHORT_TERM_WINDOW_S)
-  private ringBufferL = new Float32Array(0)
-  private ringBufferR = new Float32Array(0)
-  private ringBufferPos = 0
-  private ringBufferFilled = 0  // how many samples have been written total (capped at buffer size)
-
-  // Integrated loudness: emit one 400ms block per 100ms hop, summed directly
-  // from the K-weighted ring buffer (BS.1770-4 overlapping-block method).
-  private integratedHopCounter = 0
-  private integratedHistogramCounts = new Uint32Array(INTEGRATED_HISTOGRAM_BIN_COUNT)
-  private integratedHistogramPowerSums = new Float64Array(INTEGRATED_HISTOGRAM_BIN_COUNT)
-
-  // Smoothed display values
-  private momentaryLUFS = METER_MIN_LUFS
-  private shortTermLUFS = METER_MIN_LUFS
-  private integratedLUFS = METER_MIN_LUFS
-  private fastSnapshot: VUMeterSnapshot = { ...INITIAL_VU_SNAPSHOT }
+  private currentSampleRate = 0
+  private snapshot: LUFSMeterNativeSnapshot = { ...INITIAL_NATIVE_SNAPSHOT }
+  private pushScratchL = new Float32Array(0)
+  private pushScratchR = new Float32Array(0)
   private unsubscribeSessionChange: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement, options: LUFSMeterOptions = {}) {
@@ -218,17 +128,17 @@ export class LUFSMeter {
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
 
-    const { dataSource, frameScheduler, ...optionOverrides } = options
+    const { dataSource, frameScheduler, nativeAnalyzer, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultLUFSMeterDataSource
-    this.meterBallistics = new VUMeterBallistics(this.dataSource.getSampleRate())
+    this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeLUFSMeter : nativeAnalyzer
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
       onFrame: this.drawFrame,
     })
 
-    this.initRingBuffer(this.dataSource.getSampleRate())
+    this.resetMeters()
     this.subscribeToSessionChanges()
   }
 
@@ -241,47 +151,34 @@ export class LUFSMeter {
     })
   }
 
-  private initRingBuffer(sampleRate: number): void {
-    this.currentSampleRate = Math.max(1, sampleRate)
-    this.kWeightingCoeffs = getKWeightingCoeffs(this.currentSampleRate)
-    this.meterBallistics.reinitialize(this.currentSampleRate)
-    const bufferSize = Math.ceil(this.currentSampleRate * SHORT_TERM_WINDOW_S)
-    this.ringBufferL = new Float32Array(bufferSize)
-    this.ringBufferR = new Float32Array(bufferSize)
-    this.ringBufferPos = 0
-    this.ringBufferFilled = 0
-  }
-
   private resetMeters(): void {
-    this.momentaryLUFS = METER_MIN_LUFS
-    this.shortTermLUFS = METER_MIN_LUFS
-    this.integratedLUFS = METER_MIN_LUFS
-    this.meterBallistics.reset()
-    this.fastSnapshot = this.meterBallistics.getSnapshot()
-    this.ringBufferL.fill(0)
-    this.ringBufferR.fill(0)
-    this.ringBufferPos = 0
-    this.ringBufferFilled = 0
-    this.integratedHopCounter = 0
-    this.integratedHistogramCounts.fill(0)
-    this.integratedHistogramPowerSums.fill(0)
-    this.preFilterL = createBiquadState()
-    this.preFilterR = createBiquadState()
-    this.rlbFilterL = createBiquadState()
-    this.rlbFilterR = createBiquadState()
+    this.currentSampleRate = Math.max(1, this.dataSource.getSampleRate())
+    this.snapshot = { ...INITIAL_NATIVE_SNAPSHOT }
+    if (this.isNativeAnalyzerReady()) {
+      this.nativeAnalyzer?.setSampleRate(this.currentSampleRate)
+      this.nativeAnalyzer?.reset()
+    }
     this.invalidate()
   }
 
   setOptions(options: Partial<LUFSMeterOptions>): void {
-    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, nativeAnalyzer, ...optionUpdates } = options
     this.options = { ...this.options, ...optionUpdates }
+    let didReset = false
+    if (nativeAnalyzer !== undefined && nativeAnalyzer !== this.nativeAnalyzer) {
+      this.nativeAnalyzer = nativeAnalyzer
+      this.resetMeters()
+      didReset = true
+    }
     if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
       this.subscribeToSessionChanges()
-      this.initRingBuffer(this.dataSource.getSampleRate())
       this.resetMeters()
+      didReset = true
     }
-    this.invalidate()
+    if (!didReset) {
+      this.invalidate()
+    }
   }
 
   start(): void {
@@ -303,149 +200,72 @@ export class LUFSMeter {
 
   private processAudio(): void {
     const chunks = this.dataSource.getPendingLUFSMeterSamples()
+    const sampleRate = Math.max(1, this.dataSource.getSampleRate())
 
-    // Check if sample rate changed
-    const sr = this.dataSource.getSampleRate()
-    if (Math.abs(sr - this.currentSampleRate) > 100) {
-      this.initRingBuffer(sr)
+    if (Math.abs(sampleRate - this.currentSampleRate) > 100) {
       this.resetMeters()
     }
 
-    const playing = this.dataSource.isPlaying()
-
-    if (!playing && chunks.length === 0) {
-      this.meterBallistics.reset()
-      this.fastSnapshot = this.meterBallistics.getSnapshot()
-      // Decay toward silence only when truly stopped
-      this.momentaryLUFS = this.momentaryLUFS * SMOOTHING + METER_MIN_LUFS * (1 - SMOOTHING)
-      this.shortTermLUFS = this.shortTermLUFS * SMOOTHING + METER_MIN_LUFS * (1 - SMOOTHING)
+    if (!this.isNativeAnalyzerReady() || !this.dataSource.isPlaying()) {
+      this.nativeAnalyzer?.reset()
+      this.snapshot = { ...INITIAL_NATIVE_SNAPSHOT }
       return
     }
 
-    this.fastSnapshot = this.meterBallistics.process(chunks, performance.now())
-
-    // Process any new audio chunks into the ring buffer
     if (chunks.length > 0) {
-      const { pre, rlb } = this.kWeightingCoeffs
-      const bufLen = this.ringBufferL.length
-      const hopSamples = Math.round(this.currentSampleRate * INTEGRATED_HOP_S)
-      const blockSamples = Math.round(this.currentSampleRate * INTEGRATED_BLOCK_S)
-
-      for (const chunk of chunks) {
-        const len = Math.min(chunk.left.length, chunk.right.length)
-        for (let i = 0; i < len; i++) {
-          // Apply K-weighting: pre-filter then RLB, per channel
-          const kwL = applyBiquad(rlb, this.rlbFilterL, applyBiquad(pre, this.preFilterL, chunk.left[i]))
-          const kwR = applyBiquad(rlb, this.rlbFilterR, applyBiquad(pre, this.preFilterR, chunk.right[i]))
-
-          // Store squared K-weighted samples in ring buffer
-          const sqL = kwL * kwL
-          const sqR = kwR * kwR
-          this.ringBufferL[this.ringBufferPos] = sqL
-          this.ringBufferR[this.ringBufferPos] = sqR
-          this.ringBufferPos = (this.ringBufferPos + 1) % bufLen
-          if (this.ringBufferFilled < bufLen) this.ringBufferFilled++
-
-          this.integratedHopCounter++
-
-          // Every hop interval (100ms), emit one 400ms block computed from
-          // the ring buffer per BS.1770-4 overlapping-block method.
-          if (this.integratedHopCounter >= hopSamples && this.ringBufferFilled >= blockSamples) {
-            let sumL = 0
-            let sumR = 0
-            for (let j = 0; j < blockSamples; j++) {
-              const idx = (this.ringBufferPos - 1 - j + bufLen) % bufLen
-              sumL += this.ringBufferL[idx]
-              sumR += this.ringBufferR[idx]
-            }
-            const blockPower = Math.max(sumL / blockSamples + sumR / blockSamples, 1e-10)
-            const blockLUFS = -0.691 + 10 * Math.log10(blockPower)
-            if (blockLUFS > ABSOLUTE_GATE_LUFS) {
-              const histogramIndex = histogramIndexFromLufs(blockLUFS)
-              this.integratedHistogramCounts[histogramIndex] += 1
-              this.integratedHistogramPowerSums[histogramIndex] += blockPower
-            }
-            this.integratedHopCounter = 0
-          }
-        }
+      const batch = this.concatStereoChunks(chunks)
+      if (batch.left.length > 0 && batch.right.length > 0) {
+        this.nativeAnalyzer?.pushSamples(batch.left, batch.right)
       }
     }
 
-    // Always compute M/S from the ring buffer (it persists across frames)
-    const bufLen = this.ringBufferL.length
-
-    // Compute momentary loudness (last 400ms)
-    const momentarySamples = Math.min(
-      Math.round(this.currentSampleRate * MOMENTARY_WINDOW_S),
-      this.ringBufferFilled
-    )
-    if (momentarySamples > 0) {
-      let sumL = 0, sumR = 0
-      for (let i = 0; i < momentarySamples; i++) {
-        const idx = (this.ringBufferPos - 1 - i + bufLen) % bufLen
-        sumL += this.ringBufferL[idx]
-        sumR += this.ringBufferR[idx]
-      }
-      const rawM = -0.691 + 10 * Math.log10(Math.max(sumL / momentarySamples + sumR / momentarySamples, 1e-10))
-      this.momentaryLUFS = Math.max(METER_MIN_LUFS, rawM)
-    }
-
-    // Compute short-term loudness (last 3s)
-    const shortTermSamples = Math.min(
-      Math.round(this.currentSampleRate * SHORT_TERM_WINDOW_S),
-      this.ringBufferFilled
-    )
-    if (shortTermSamples > 0) {
-      let sumL = 0, sumR = 0
-      for (let i = 0; i < shortTermSamples; i++) {
-        const idx = (this.ringBufferPos - 1 - i + bufLen) % bufLen
-        sumL += this.ringBufferL[idx]
-        sumR += this.ringBufferR[idx]
-      }
-      const rawS = -0.691 + 10 * Math.log10(Math.max(sumL / shortTermSamples + sumR / shortTermSamples, 1e-10))
-      this.shortTermLUFS = Math.max(METER_MIN_LUFS, rawS)
-    }
-
-    // Compute integrated loudness with gating
-    this.integratedLUFS = this.computeGatedIntegratedLoudness()
+    this.snapshot = normalizeNativeSnapshot(this.nativeAnalyzer?.getSnapshot() ?? null)
   }
 
-  private computeGatedIntegratedLoudness(): number {
-    let absoluteCount = 0
-    let absolutePowerSum = 0
-    for (let index = 0; index < this.integratedHistogramCounts.length; index += 1) {
-      const count = this.integratedHistogramCounts[index]
-      if (count === 0) {
-        continue
-      }
-      absoluteCount += count
-      absolutePowerSum += this.integratedHistogramPowerSums[index]
+  private isNativeAnalyzerReady(): boolean {
+    if (!this.nativeAnalyzer) {
+      return false
     }
-    if (absoluteCount === 0 || absolutePowerSum <= 0) {
-      return METER_MIN_LUFS
+    return this.nativeAnalyzer.isAvailable?.() ?? true
+  }
+
+  private concatStereoChunks(chunks: Array<{ left: Float32Array; right: Float32Array }>): { left: Float32Array; right: Float32Array } {
+    if (chunks.length === 1) {
+      const chunk = chunks[0]
+      const length = Math.min(chunk.left.length, chunk.right.length)
+      return {
+        left: chunk.left.length === length ? chunk.left : chunk.left.subarray(0, length),
+        right: chunk.right.length === length ? chunk.right : chunk.right.subarray(0, length),
+      }
     }
 
-    const ungatedMean = -0.691 + 10 * Math.log10(absolutePowerSum / absoluteCount)
-    const relativeThreshold = ungatedMean + RELATIVE_GATE_OFFSET
-
-    let relativeCount = 0
-    let relativePowerSum = 0
-    for (let index = 0; index < this.integratedHistogramCounts.length; index += 1) {
-      const count = this.integratedHistogramCounts[index]
-      if (count === 0) {
-        continue
-      }
-      if (histogramLufsAtIndex(index) <= relativeThreshold) {
-        continue
-      }
-      relativeCount += count
-      relativePowerSum += this.integratedHistogramPowerSums[index]
+    let totalLength = 0
+    for (const chunk of chunks) {
+      totalLength += Math.min(chunk.left.length, chunk.right.length)
     }
-    if (relativeCount === 0 || relativePowerSum <= 0) {
-      return METER_MIN_LUFS
+    if (totalLength === 0) {
+      return { left: new Float32Array(0), right: new Float32Array(0) }
     }
 
-    return Math.max(METER_MIN_LUFS, -0.691 + 10 * Math.log10(relativePowerSum / relativeCount))
+    if (this.pushScratchL.length < totalLength) {
+      this.pushScratchL = new Float32Array(totalLength)
+      this.pushScratchR = new Float32Array(totalLength)
+    }
+
+    const left = this.pushScratchL.subarray(0, totalLength)
+    const right = this.pushScratchR.subarray(0, totalLength)
+    let offset = 0
+    for (const chunk of chunks) {
+      const length = Math.min(chunk.left.length, chunk.right.length)
+      if (length <= 0) {
+        continue
+      }
+      left.set(chunk.left.subarray(0, length), offset)
+      right.set(chunk.right.subarray(0, length), offset)
+      offset += length
+    }
+
+    return { left, right }
   }
 
   private drawFrame = (): void => {
@@ -471,12 +291,12 @@ export class LUFSMeter {
   private selectedLufs(): number {
     switch (this.options.readout) {
       case 'momentary':
-        return this.momentaryLUFS
+        return this.snapshot.momentaryLUFS
       case 'shortTerm':
-        return this.shortTermLUFS
+        return this.snapshot.shortTermLUFS
       case 'integrated':
       default:
-        return this.integratedLUFS
+        return this.snapshot.integratedLUFS
     }
   }
 
@@ -578,8 +398,8 @@ export class LUFSMeter {
       meterTop,
       barWidth,
       meterHeight,
-      this.fastSnapshot.barLDb,
-      this.fastSnapshot.peakLDb,
+      this.snapshot.barLDb,
+      this.snapshot.peakLDb,
       tint,
       dpr,
     )
@@ -588,8 +408,8 @@ export class LUFSMeter {
       meterTop,
       barWidth,
       meterHeight,
-      this.fastSnapshot.barRDb,
-      this.fastSnapshot.peakRDb,
+      this.snapshot.barRDb,
+      this.snapshot.peakRDb,
       tint,
       dpr,
     )
@@ -670,6 +490,9 @@ export class LUFSMeter {
     if (this.unsubscribeSessionChange) {
       this.unsubscribeSessionChange()
       this.unsubscribeSessionChange = null
+    }
+    if (this.isNativeAnalyzerReady()) {
+      this.nativeAnalyzer?.reset()
     }
   }
 }

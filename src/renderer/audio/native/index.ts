@@ -4,6 +4,7 @@
 import type {
   VisualizerDSP,
   OscilloscopeResult,
+  LUFSMeterNativeSnapshot,
   SpectrogramNativeOptions,
   SpectrogramNativeResult,
   VectorscopeResult,
@@ -167,6 +168,14 @@ export interface SpectrogramNativeAnalyzer {
   isAvailable?: () => boolean
 }
 
+export interface LUFSMeterNativeAnalyzer {
+  setSampleRate(sampleRate: number): void
+  pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void
+  getSnapshot(): LUFSMeterNativeSnapshot | null
+  reset(): void
+  isAvailable?: () => boolean
+}
+
 export const spectrogram: SpectrogramNativeAnalyzer = {
   isAvailable: (): boolean => {
     return Boolean(nativeModule?.spectrogram)
@@ -229,7 +238,31 @@ export const vectorscope = {
   }
 }
 
+export const lufsmeter: LUFSMeterNativeAnalyzer = {
+  isAvailable: (): boolean => {
+    return Boolean(nativeModule?.lufsmeter)
+  },
+
+  setSampleRate: (sampleRate: number): void => {
+    nativeModule?.lufsmeter?.setSampleRate(sampleRate)
+  },
+
+  pushSamples: (leftChannel: Float32Array, rightChannel: Float32Array): void => {
+    nativeModule?.lufsmeter?.pushSamples(leftChannel, rightChannel)
+  },
+
+  getSnapshot: (): LUFSMeterNativeSnapshot | null => {
+    if (!nativeModule?.lufsmeter) return null
+    return nativeModule.lufsmeter.getSnapshot()
+  },
+
+  reset: (): void => {
+    nativeModule?.lufsmeter?.reset()
+  },
+}
+
 export type {
+  LUFSMeterNativeSnapshot,
   OscilloscopeResult,
   SpectrogramNativeOptions,
   SpectrogramNativeResult,
