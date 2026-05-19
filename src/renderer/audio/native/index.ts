@@ -39,6 +39,25 @@ export function getNativeLoadError(): Error | null {
 // Circular buffer size (must match native code)
 export const OSCILLOSCOPE_BUFFER_SIZE = 32768
 
+export interface SpectrumNativeAnalyzer {
+  setFFTSize(size: number): void
+  getFFTSize(): number
+  setSampleRate(sampleRate: number): void
+  setSmoothing(smoothing: number): void
+  pushSamples(audioData: Float32Array): void
+  pushStereoSamples(leftChannel: Float32Array, rightChannel: Float32Array): void
+  fillRawMagnitudes(output: Float32Array): number
+  fillMagnitudes(output: Float32Array): number
+  fillSideMagnitudes(output: Float32Array): number
+  getRawMagnitudes(): Float32Array | null
+  getMagnitudes(): Float32Array | null
+  getSideMagnitudes(): Float32Array | null
+  process(audioData: Float32Array): Float32Array | null
+  binToFrequency(bin: number): number
+  reset(): void
+  isAvailable?: () => boolean
+}
+
 // Export the native module functions with type safety
 export const oscilloscope = {
   setSampleRate: (sampleRate: number): void => {
@@ -98,7 +117,11 @@ export const oscilloscope = {
   }
 }
 
-export const spectrum = {
+export const spectrum: SpectrumNativeAnalyzer = {
+  isAvailable: (): boolean => {
+    return Boolean(nativeModule?.spectrum)
+  },
+
   setFFTSize: (size: number): void => {
     nativeModule?.spectrum.setFFTSize(size)
   },
@@ -117,6 +140,10 @@ export const spectrum = {
 
   pushSamples: (audioData: Float32Array): void => {
     nativeModule?.spectrum.pushSamples(audioData)
+  },
+
+  pushStereoSamples: (leftChannel: Float32Array, rightChannel: Float32Array): void => {
+    nativeModule?.spectrum.pushStereoSamples(leftChannel, rightChannel)
   },
 
   fillRawMagnitudes: (output: Float32Array): number => {
@@ -139,6 +166,16 @@ export const spectrum = {
     return count
   },
 
+  fillSideMagnitudes: (output: Float32Array): number => {
+    if (!nativeModule) return 0
+    const magnitudes = nativeModule.spectrum.getSideMagnitudes()
+    const count = Math.min(output.length, magnitudes.length)
+    if (count > 0) {
+      output.set(magnitudes.subarray(0, count), 0)
+    }
+    return count
+  },
+
   getMagnitudes: (): Float32Array | null => {
     if (!nativeModule) return null
     return nativeModule.spectrum.getMagnitudes()
@@ -147,6 +184,11 @@ export const spectrum = {
   getRawMagnitudes: (): Float32Array | null => {
     if (!nativeModule) return null
     return nativeModule.spectrum.getRawMagnitudes()
+  },
+
+  getSideMagnitudes: (): Float32Array | null => {
+    if (!nativeModule) return null
+    return nativeModule.spectrum.getSideMagnitudes()
   },
 
   process: (audioData: Float32Array): Float32Array | null => {

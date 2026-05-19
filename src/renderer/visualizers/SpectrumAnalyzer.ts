@@ -1,5 +1,5 @@
 import { audioRouter } from '../audio/AudioRouter'
-import { spectrum as nativeSpectrum, isNativeAvailable } from '../audio/native'
+import { spectrum as defaultNativeSpectrum, type SpectrumNativeAnalyzer } from '../audio/native'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
@@ -57,9 +57,10 @@ export interface SpectrumAnalyzerOptions {
   onPeakInfo?: (peakInfo: SpectrumPeakInfo | null) => void
   dataSource?: SpectrumAnalyzerDataSource
   frameScheduler?: FrameScheduler
+  nativeAnalyzer?: SpectrumNativeAnalyzer | null
 }
 
-type ResolvedSpectrumAnalyzerOptions = Required<Omit<SpectrumAnalyzerOptions, 'dataSource' | 'frameScheduler'>>
+type ResolvedSpectrumAnalyzerOptions = Required<Omit<SpectrumAnalyzerOptions, 'dataSource' | 'frameScheduler' | 'nativeAnalyzer'>>
 type SpectrumPointFillResult = {
   pointCount: number
   peakInfo: SpectrumPeakInfo | null
@@ -81,8 +82,6 @@ const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
 
 const HEATMAP_GAMMA = 1.4
 const FFT_SILENCE_DB = -100
-const SPECTRUM_DB_FLOOR = -120
-const SPECTRUM_DB_CEILING = 12
 const SIDE_LINE_WIDTH_RATIO = 0.75
 const PEAK_SELECTION_MAX_DISTANCE_OCTAVES = 0.5
 const PEAK_SELECTION_SWITCH_THRESHOLD_DB = 4
@@ -92,74 +91,6 @@ const NOOP_SPECTRUM_PEAK_INFO_CALLBACK = (_peakInfo: SpectrumPeakInfo | null): v
 
 function clampSmoothing(value: number): number {
   return Math.min(0.99, Math.max(0, value))
-}
-
-const hannWindowCache = new Map<number, Float32Array>()
-
-function getHannWindow(size: number): Float32Array {
-  let window = hannWindowCache.get(size)
-  if (window) return window
-
-  window = new Float32Array(size)
-  for (let index = 0; index < size; index += 1) {
-    window[index] = 0.5 * (1 - Math.cos((2 * Math.PI * index) / (size - 1)))
-  }
-
-  hannWindowCache.set(size, window)
-  return window
-}
-
-function fft(re: Float32Array, im: Float32Array): void {
-  const size = re.length
-  if (size <= 1) return
-
-  let j = 0
-  for (let i = 1; i < size; i += 1) {
-    let bit = size >> 1
-    while (j & bit) {
-      j ^= bit
-      bit >>= 1
-    }
-    j ^= bit
-
-    if (i < j) {
-      let tmp = re[i]
-      re[i] = re[j]
-      re[j] = tmp
-      tmp = im[i]
-      im[i] = im[j]
-      im[j] = tmp
-    }
-  }
-
-  for (let len = 2; len <= size; len <<= 1) {
-    const halfLen = len >> 1
-    const angle = -2 * Math.PI / len
-    const wRe = Math.cos(angle)
-    const wIm = Math.sin(angle)
-
-    for (let i = 0; i < size; i += len) {
-      let curRe = 1
-      let curIm = 0
-
-      for (let k = 0; k < halfLen; k += 1) {
-        const evenIndex = i + k
-        const oddIndex = i + k + halfLen
-
-        const tRe = curRe * re[oddIndex] - curIm * im[oddIndex]
-        const tIm = curRe * im[oddIndex] + curIm * re[oddIndex]
-
-        re[oddIndex] = re[evenIndex] - tRe
-        im[oddIndex] = im[evenIndex] - tIm
-        re[evenIndex] += tRe
-        im[evenIndex] += tIm
-
-        const nextRe = curRe * wRe - curIm * wIm
-        curIm = curRe * wIm + curIm * wRe
-        curRe = nextRe
-      }
-    }
-  }
 }
 
 function isLegacyDefaultHeatColors(colors: [string, string, string]): boolean {
@@ -285,6 +216,7 @@ export class SpectrumAnalyzer {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedSpectrumAnalyzerOptions
   private dataSource: SpectrumAnalyzerDataSource
+  private nativeAnalyzer: SpectrumNativeAnalyzer | null
   private frameLoop: VisualizerFrameLoop
   private nativeInitialized = false
   private sampleRate = 48000
@@ -295,22 +227,14 @@ export class SpectrumAnalyzer {
   private staticLayerKey = ''
   private unsubscribeSessionChange: (() => void) | null = null
 
-  private jsMidHistory = new Float32Array(defaultOptions.fftSize)
-  private jsSideHistory = new Float32Array(defaultOptions.fftSize)
-  private jsMidRawMagnitudes = new Float32Array(defaultOptions.fftSize / 2)
-  private jsRawScratch = new Float32Array(defaultOptions.fftSize / 2)
-  private jsMidMagnitudes = new Float32Array(defaultOptions.fftSize / 2)
-  private jsSideMagnitudes = new Float32Array(defaultOptions.fftSize / 2)
-  private jsFftRe = new Float32Array(defaultOptions.fftSize)
-  private jsFftIm = new Float32Array(defaultOptions.fftSize)
-  private jsBufferedSamples = 0
-  private jsHasSpectrumData = false
   private nativeMagnitudeBuffer = new Float32Array(0)
   private nativeRawMagnitudeBuffer = new Float32Array(0)
+  private nativeSideMagnitudeBuffer = new Float32Array(0)
   private heatmapMagnitudeBuffer = new Float32Array(0)
   private nativeBufferedSamples = 0
   private nativeHasSpectrumData = false
   private pushScratch = new Float32Array(0)
+  private pushScratchRight = new Float32Array(0)
   private primaryPointX = new Float32Array(0)
   private primaryPointY = new Float32Array(0)
   private heatmapPointY = new Float32Array(0)
@@ -327,7 +251,7 @@ export class SpectrumAnalyzer {
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
 
-    const { dataSource, frameScheduler, ...optionOverrides } = options
+    const { dataSource, frameScheduler, nativeAnalyzer, ...optionOverrides } = options
     this.options = {
       ...defaultOptions,
       ...optionOverrides,
@@ -339,6 +263,7 @@ export class SpectrumAnalyzer {
       ),
     }
     this.dataSource = dataSource ?? defaultSpectrumDataSource
+    this.nativeAnalyzer = nativeAnalyzer === undefined ? defaultNativeSpectrum : nativeAnalyzer
     this.heatLut = buildHeatLUT(this.options.heatColors)
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
@@ -350,7 +275,7 @@ export class SpectrumAnalyzer {
     if (!staticLayerCtx) throw new Error('Could not get offscreen 2D context')
     this.staticLayerCtx = staticLayerCtx
 
-    this.resetJsState()
+    this.resetAnalyzerBuffers()
     this.initNative()
     this.subscribeToSessionChanges()
   }
@@ -369,31 +294,15 @@ export class SpectrumAnalyzer {
     this.sampleRate = Math.max(1, this.dataSource.getSampleRate())
     this.lastSampleRate = 0
 
-    if (isNativeAvailable() && !this.nativeInitialized) {
-      nativeSpectrum.setFFTSize(this.options.fftSize)
-      nativeSpectrum.setSampleRate(this.sampleRate)
-      nativeSpectrum.setSmoothing(this.getNativeSmoothing())
+    if (this.isNativeAvailable() && !this.nativeInitialized) {
+      this.nativeAnalyzer?.setFFTSize(this.options.fftSize)
+      this.nativeAnalyzer?.setSampleRate(this.sampleRate)
+      this.nativeAnalyzer?.setSmoothing(this.getNativeSmoothing())
       this.nativeInitialized = true
       console.log(`SpectrumAnalyzer: Using native DSP (${this.sampleRate}Hz)`)
-    } else if (!isNativeAvailable() && !this.options.showSideLine) {
+    } else if (!this.isNativeAvailable()) {
       console.error('SpectrumAnalyzer: Native DSP not available!')
     }
-  }
-
-  private ensureJsStateSize(): void {
-    const { fftSize } = this.options
-    if (this.jsMidHistory.length === fftSize) {
-      return
-    }
-
-    this.jsMidHistory = new Float32Array(fftSize)
-    this.jsSideHistory = new Float32Array(fftSize)
-    this.jsMidRawMagnitudes = new Float32Array(fftSize / 2)
-    this.jsRawScratch = new Float32Array(fftSize / 2)
-    this.jsMidMagnitudes = new Float32Array(fftSize / 2)
-    this.jsSideMagnitudes = new Float32Array(fftSize / 2)
-    this.jsFftRe = new Float32Array(fftSize)
-    this.jsFftIm = new Float32Array(fftSize)
   }
 
   private ensureMagnitudeBufferSize(): void {
@@ -404,29 +313,27 @@ export class SpectrumAnalyzer {
     if (this.nativeRawMagnitudeBuffer.length !== length) {
       this.nativeRawMagnitudeBuffer = new Float32Array(length)
     }
+    if (this.nativeSideMagnitudeBuffer.length !== length) {
+      this.nativeSideMagnitudeBuffer = new Float32Array(length)
+    }
     if (this.heatmapMagnitudeBuffer.length !== length) {
       this.heatmapMagnitudeBuffer = new Float32Array(length)
     }
   }
 
-  private resetJsState(): void {
-    this.ensureJsStateSize()
+  private resetAnalyzerBuffers(): void {
     this.ensureMagnitudeBufferSize()
-    this.jsMidHistory.fill(0)
-    this.jsSideHistory.fill(0)
-    this.jsMidRawMagnitudes.fill(FFT_SILENCE_DB)
-    this.jsMidMagnitudes.fill(FFT_SILENCE_DB)
-    this.jsSideMagnitudes.fill(FFT_SILENCE_DB)
     this.nativeMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.nativeRawMagnitudeBuffer.fill(FFT_SILENCE_DB)
+    this.nativeSideMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.heatmapMagnitudeBuffer.fill(FFT_SILENCE_DB)
-    this.jsFftRe.fill(0)
-    this.jsFftIm.fill(0)
-    this.jsBufferedSamples = 0
-    this.jsHasSpectrumData = false
     this.nativeBufferedSamples = 0
     this.nativeHasSpectrumData = false
     this.lastSelectedPeakInfo = null
+  }
+
+  private isNativeAvailable(): boolean {
+    return Boolean(this.nativeAnalyzer) && this.nativeAnalyzer?.isAvailable?.() !== false
   }
 
   private updateSampleRateIfNeeded(): void {
@@ -434,8 +341,8 @@ export class SpectrumAnalyzer {
     if (currentRate !== this.lastSampleRate && currentRate > 0) {
       this.sampleRate = currentRate
       this.lastSampleRate = currentRate
-      if (isNativeAvailable()) {
-        nativeSpectrum.setSampleRate(currentRate)
+      if (this.isNativeAvailable()) {
+        this.nativeAnalyzer?.setSampleRate(currentRate)
       }
       console.log(`SpectrumAnalyzer: Sample rate updated to ${currentRate}Hz`)
     }
@@ -448,17 +355,17 @@ export class SpectrumAnalyzer {
   }
 
   private resetState(): void {
-    if (isNativeAvailable()) {
-      nativeSpectrum.reset()
+    if (this.isNativeAvailable()) {
+      this.nativeAnalyzer?.reset()
     }
-    this.resetJsState()
+    this.resetAnalyzerBuffers()
     this.sampleRate = Math.max(1, this.dataSource.getSampleRate())
     this.lastSampleRate = 0
     this.invalidate()
   }
 
   setOptions(options: Partial<SpectrumAnalyzerOptions>): void {
-    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, nativeAnalyzer, ...optionUpdates } = options
     const nextOptions = { ...this.options, ...optionUpdates }
     if (optionUpdates.tiltDbPerOctave !== undefined) {
       nextOptions.tiltDbPerOctave = clampSpectrumTiltDbPerOctave(optionUpdates.tiltDbPerOctave)
@@ -478,6 +385,14 @@ export class SpectrumAnalyzer {
     this.heatLut = buildHeatLUT(this.options.heatColors)
     let didReset = false
 
+    if (nativeAnalyzer !== undefined && nativeAnalyzer !== this.nativeAnalyzer) {
+      this.nativeAnalyzer = nativeAnalyzer
+      this.nativeInitialized = false
+      this.initNative()
+      this.resetState()
+      didReset = true
+    }
+
     if (dataSource && dataSource !== this.dataSource) {
       this.dataSource = dataSource
       this.subscribeToSessionChanges()
@@ -485,12 +400,12 @@ export class SpectrumAnalyzer {
       didReset = true
     }
 
-    if (isNativeAvailable()) {
+    if (this.isNativeAvailable()) {
       if (options.fftSize !== undefined) {
-        nativeSpectrum.setFFTSize(options.fftSize)
+        this.nativeAnalyzer?.setFFTSize(options.fftSize)
       }
       if (options.smoothing !== undefined || options.fftSize !== undefined) {
-        nativeSpectrum.setSmoothing(this.getNativeSmoothing())
+        this.nativeAnalyzer?.setSmoothing(this.getNativeSmoothing())
       }
     }
 
@@ -623,7 +538,7 @@ export class SpectrumAnalyzer {
 
     if (pendingSpectrum.length === 1) {
       if (pendingSpectrum[0].length > 0) {
-        nativeSpectrum.pushSamples(pendingSpectrum[0])
+        this.nativeAnalyzer?.pushSamples(pendingSpectrum[0])
         this.recordNativeBufferedSamples(pendingSpectrum[0].length)
       }
       return pendingSpectrum[0].length
@@ -651,7 +566,57 @@ export class SpectrumAnalyzer {
       }
     }
 
-    nativeSpectrum.pushSamples(merged)
+    this.nativeAnalyzer?.pushSamples(merged)
+    this.recordNativeBufferedSamples(totalLength)
+    return totalLength
+  }
+
+  private pushPendingSpectrumStereoChunks(pendingSpectrum: SpectrumStereoChunk[]): number {
+    if (pendingSpectrum.length === 0) return 0
+
+    if (pendingSpectrum.length === 1) {
+      const chunk = pendingSpectrum[0]
+      const length = Math.min(chunk.left.length, chunk.right.length)
+      if (length > 0) {
+        const left = chunk.left.length === length ? chunk.left : chunk.left.subarray(0, length)
+        const right = chunk.right.length === length ? chunk.right : chunk.right.subarray(0, length)
+        this.nativeAnalyzer?.pushStereoSamples(left, right)
+        this.recordNativeBufferedSamples(length)
+      }
+      return length
+    }
+
+    let totalLength = 0
+    for (const chunk of pendingSpectrum) {
+      totalLength += Math.min(chunk.left.length, chunk.right.length)
+    }
+    if (totalLength === 0) return 0
+
+    if (this.pushScratch.length < totalLength) {
+      this.pushScratch = new Float32Array(totalLength)
+    }
+    if (this.pushScratchRight.length < totalLength) {
+      this.pushScratchRight = new Float32Array(totalLength)
+    }
+
+    const mergedLeft = this.pushScratch.length === totalLength
+      ? this.pushScratch
+      : this.pushScratch.subarray(0, totalLength)
+    const mergedRight = this.pushScratchRight.length === totalLength
+      ? this.pushScratchRight
+      : this.pushScratchRight.subarray(0, totalLength)
+
+    let offset = 0
+    for (const chunk of pendingSpectrum) {
+      const length = Math.min(chunk.left.length, chunk.right.length)
+      if (length > 0) {
+        mergedLeft.set(chunk.left.subarray(0, length), offset)
+        mergedRight.set(chunk.right.subarray(0, length), offset)
+        offset += length
+      }
+    }
+
+    this.nativeAnalyzer?.pushStereoSamples(mergedLeft, mergedRight)
     this.recordNativeBufferedSamples(totalLength)
     return totalLength
   }
@@ -659,32 +624,6 @@ export class SpectrumAnalyzer {
   private clearPendingSpectrumQueues(): void {
     this.dataSource.getPendingSpectrumSamples()
     this.dataSource.getPendingSpectrumStereoSamples()
-  }
-
-  private pushJsSpectrumHistory(left: Float32Array, right: Float32Array, length: number): void {
-    const fftSize = this.options.fftSize
-    if (length >= fftSize) {
-      const start = length - fftSize
-      for (let index = 0; index < fftSize; index += 1) {
-        const leftValue = left[start + index] ?? 0
-        const rightValue = right[start + index] ?? leftValue
-        this.jsMidHistory[index] = (leftValue + rightValue) * 0.5
-        this.jsSideHistory[index] = (leftValue - rightValue) * 0.5
-      }
-      this.jsBufferedSamples = fftSize
-      return
-    }
-
-    this.jsMidHistory.copyWithin(0, length)
-    this.jsSideHistory.copyWithin(0, length)
-    const writeStart = fftSize - length
-    for (let index = 0; index < length; index += 1) {
-      const leftValue = left[index] ?? 0
-      const rightValue = right[index] ?? leftValue
-      this.jsMidHistory[writeStart + index] = (leftValue + rightValue) * 0.5
-      this.jsSideHistory[writeStart + index] = (leftValue - rightValue) * 0.5
-    }
-    this.jsBufferedSamples = Math.min(fftSize, this.jsBufferedSamples + length)
   }
 
   private updateSmoothedMagnitudes(
@@ -714,68 +653,6 @@ export class SpectrumAnalyzer {
     }
 
     return count
-  }
-
-  private updateJsMagnitudes(
-    history: Float32Array,
-    smoothedMagnitudes: Float32Array,
-    rawMagnitudesOut: Float32Array | null = null,
-  ): void {
-    const fftSize = this.options.fftSize
-    const window = getHannWindow(fftSize)
-
-    for (let index = 0; index < fftSize; index += 1) {
-      this.jsFftRe[index] = history[index] * window[index]
-      this.jsFftIm[index] = 0
-    }
-
-    fft(this.jsFftRe, this.jsFftIm)
-
-    const scale = 2 / fftSize
-    const rawMagnitudes = rawMagnitudesOut ?? this.jsRawScratch
-    for (let index = 0; index < smoothedMagnitudes.length; index += 1) {
-      const magnitude = Math.hypot(this.jsFftRe[index], this.jsFftIm[index]) * scale
-      let db = 20 * Math.log10(Math.max(magnitude, 1e-10))
-      db += 6
-      db = Math.min(SPECTRUM_DB_CEILING, Math.max(SPECTRUM_DB_FLOOR, db))
-      rawMagnitudes[index] = db
-    }
-
-    this.updateSmoothedMagnitudes(
-      rawMagnitudes,
-      rawMagnitudes.length,
-      smoothedMagnitudes,
-      this.options.smoothing,
-      this.jsBufferedSamples < fftSize,
-    )
-  }
-
-  private processJsSpectrumChunks(pendingSpectrum: SpectrumStereoChunk[]): void {
-    let didReceiveAudio = false
-    for (const chunk of pendingSpectrum) {
-      const length = Math.min(chunk.left.length, chunk.right.length)
-      if (length <= 0) {
-        continue
-      }
-
-      this.pushJsSpectrumHistory(chunk.left, chunk.right, length)
-      didReceiveAudio = true
-    }
-
-    if (!didReceiveAudio) {
-      return
-    }
-
-    this.updateJsMagnitudes(this.jsMidHistory, this.jsMidMagnitudes, this.jsMidRawMagnitudes)
-    this.updateJsMagnitudes(this.jsSideHistory, this.jsSideMagnitudes)
-    this.updateSmoothedMagnitudes(
-      this.jsMidRawMagnitudes,
-      this.jsMidRawMagnitudes.length,
-      this.heatmapMagnitudeBuffer,
-      this.options.heatmapSmoothing,
-      this.jsBufferedSamples < this.options.fftSize,
-    )
-    this.jsHasSpectrumData = true
   }
 
   private fillSpectrumPoints(
@@ -1098,10 +975,10 @@ export class SpectrumAnalyzer {
 
     if (!this.dataSource.isPlaying()) {
       this.clearPendingSpectrumQueues()
-      if (isNativeAvailable()) {
-        nativeSpectrum.reset()
+      if (this.isNativeAvailable()) {
+        this.nativeAnalyzer?.reset()
       }
-      this.resetJsState()
+      this.resetAnalyzerBuffers()
       this.renderStaticLayer(minFrequency, maxFrequency)
       this.emitPeakInfo(null)
       return
@@ -1114,46 +991,43 @@ export class SpectrumAnalyzer {
     let heatmapDataLength = 0
     let secondaryDataLength = 0
 
+    if (!this.isNativeAvailable()) {
+      this.clearPendingSpectrumQueues()
+      console.error('SpectrumAnalyzer: Native DSP required')
+      this.renderStaticLayer(minFrequency, maxFrequency)
+      this.emitPeakInfo(null)
+      return
+    }
+
+    const receivedNativeSamples = options.showSideLine
+      ? this.pushPendingSpectrumStereoChunks(this.dataSource.getPendingSpectrumStereoSamples())
+      : this.pushPendingSpectrumChunks(this.dataSource.getPendingSpectrumSamples())
+
+    this.ensureMagnitudeBufferSize()
+    primaryData = this.nativeMagnitudeBuffer
+    primaryDataLength = this.nativeAnalyzer?.fillMagnitudes(this.nativeMagnitudeBuffer) ?? 0
+
+    if (receivedNativeSamples > 0 || !this.nativeHasSpectrumData) {
+      heatmapDataLength = this.nativeAnalyzer?.fillRawMagnitudes(this.nativeRawMagnitudeBuffer) ?? 0
+      if (heatmapDataLength > 0) {
+        this.updateSmoothedMagnitudes(
+          this.nativeRawMagnitudeBuffer,
+          heatmapDataLength,
+          this.heatmapMagnitudeBuffer,
+          options.heatmapSmoothing,
+          this.nativeBufferedSamples < options.fftSize,
+        )
+        this.nativeHasSpectrumData = true
+      }
+    } else if (this.nativeHasSpectrumData) {
+      heatmapDataLength = this.heatmapMagnitudeBuffer.length
+    }
+
+    heatmapData = this.nativeHasSpectrumData ? this.heatmapMagnitudeBuffer : null
+
     if (options.showSideLine) {
-      this.processJsSpectrumChunks(this.dataSource.getPendingSpectrumStereoSamples())
-      primaryData = this.jsHasSpectrumData ? this.jsMidMagnitudes : null
-      heatmapData = this.jsHasSpectrumData ? this.heatmapMagnitudeBuffer : null
-      secondaryData = this.jsHasSpectrumData ? this.jsSideMagnitudes : null
-      primaryDataLength = primaryData?.length ?? 0
-      heatmapDataLength = heatmapData?.length ?? 0
-      secondaryDataLength = secondaryData?.length ?? 0
-    } else {
-      if (!isNativeAvailable()) {
-        console.error('SpectrumAnalyzer: Native DSP required')
-        this.renderStaticLayer(minFrequency, maxFrequency)
-        this.emitPeakInfo(null)
-        return
-      }
-
-      const pendingSpectrum = this.dataSource.getPendingSpectrumSamples()
-      const receivedNativeSamples = this.pushPendingSpectrumChunks(pendingSpectrum)
-
-      this.ensureMagnitudeBufferSize()
-      primaryData = this.nativeMagnitudeBuffer
-      primaryDataLength = nativeSpectrum.fillMagnitudes(this.nativeMagnitudeBuffer)
-
-      if (receivedNativeSamples > 0 || !this.nativeHasSpectrumData) {
-        heatmapDataLength = nativeSpectrum.fillRawMagnitudes(this.nativeRawMagnitudeBuffer)
-        if (heatmapDataLength > 0) {
-          this.updateSmoothedMagnitudes(
-            this.nativeRawMagnitudeBuffer,
-            heatmapDataLength,
-            this.heatmapMagnitudeBuffer,
-            options.heatmapSmoothing,
-            this.nativeBufferedSamples < options.fftSize,
-          )
-          this.nativeHasSpectrumData = true
-        }
-      } else if (this.nativeHasSpectrumData) {
-        heatmapDataLength = this.heatmapMagnitudeBuffer.length
-      }
-
-      heatmapData = this.nativeHasSpectrumData ? this.heatmapMagnitudeBuffer : null
+      secondaryData = this.nativeSideMagnitudeBuffer
+      secondaryDataLength = this.nativeAnalyzer?.fillSideMagnitudes(this.nativeSideMagnitudeBuffer) ?? 0
     }
 
     if (!primaryData || primaryDataLength === 0) {
@@ -1336,10 +1210,10 @@ export class SpectrumAnalyzer {
       this.unsubscribeSessionChange = null
     }
 
-    if (isNativeAvailable()) {
-      nativeSpectrum.reset()
+    if (this.isNativeAvailable()) {
+      this.nativeAnalyzer?.reset()
     }
-    this.resetJsState()
+    this.resetAnalyzerBuffers()
     this.lastSampleRate = 0
     this.emitPeakInfo(null)
   }

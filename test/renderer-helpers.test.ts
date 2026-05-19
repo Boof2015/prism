@@ -81,6 +81,7 @@ import type {
   SpectrogramNativeAnalyzer,
   SpectrogramNativeOptions,
   SpectrogramNativeResult,
+  SpectrumNativeAnalyzer,
   VectorscopeNativeAnalyzer,
   VUMeterNativeAnalyzer,
   VUMeterNativeSnapshot,
@@ -773,6 +774,242 @@ function assertArraysDiffer(actual: number[], expected: number[], tolerance: num
   assert.fail(message)
 }
 
+interface FakeSpectrumNativeAnalyzer extends SpectrumNativeAnalyzer {
+  calls: {
+    monoPushes: Float32Array[]
+    stereoPushes: Array<{ left: Float32Array; right: Float32Array }>
+    fillMagnitudes: number
+    fillRawMagnitudes: number
+    fillSideMagnitudes: number
+    resets: number
+  }
+}
+
+function runFft(re: Float32Array, im: Float32Array): void {
+  const size = re.length
+  if (size <= 1) return
+
+  let j = 0
+  for (let i = 1; i < size; i += 1) {
+    let bit = size >> 1
+    while (j & bit) {
+      j ^= bit
+      bit >>= 1
+    }
+    j ^= bit
+
+    if (i < j) {
+      let tmp = re[i]
+      re[i] = re[j]
+      re[j] = tmp
+      tmp = im[i]
+      im[i] = im[j]
+      im[j] = tmp
+    }
+  }
+
+  for (let len = 2; len <= size; len <<= 1) {
+    const halfLen = len >> 1
+    const angle = -2 * Math.PI / len
+    const wRe = Math.cos(angle)
+    const wIm = Math.sin(angle)
+
+    for (let i = 0; i < size; i += len) {
+      let curRe = 1
+      let curIm = 0
+
+      for (let k = 0; k < halfLen; k += 1) {
+        const evenIndex = i + k
+        const oddIndex = i + k + halfLen
+        const tRe = curRe * re[oddIndex] - curIm * im[oddIndex]
+        const tIm = curRe * im[oddIndex] + curIm * re[oddIndex]
+
+        re[oddIndex] = re[evenIndex] - tRe
+        im[oddIndex] = im[evenIndex] - tIm
+        re[evenIndex] += tRe
+        im[evenIndex] += tIm
+
+        const nextRe = curRe * wRe - curIm * wIm
+        curIm = curRe * wIm + curIm * wRe
+        curRe = nextRe
+      }
+    }
+  }
+}
+
+function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
+  let fftSize = 2048
+  let sampleRate = 48000
+  let smoothing = 0.9
+  let bufferedSamples = 0
+  let history = new Float32Array(fftSize)
+  let sideHistory = new Float32Array(fftSize)
+  let rawMagnitudes = new Float32Array(fftSize / 2)
+  let magnitudes = new Float32Array(fftSize / 2)
+  let sideMagnitudes = new Float32Array(fftSize / 2)
+  let re = new Float32Array(fftSize)
+  let im = new Float32Array(fftSize)
+  rawMagnitudes.fill(-100)
+  magnitudes.fill(-100)
+  sideMagnitudes.fill(-100)
+
+  const calls: FakeSpectrumNativeAnalyzer['calls'] = {
+    monoPushes: [],
+    stereoPushes: [],
+    fillMagnitudes: 0,
+    fillRawMagnitudes: 0,
+    fillSideMagnitudes: 0,
+    resets: 0,
+  }
+
+  const resize = (size: number): void => {
+    fftSize = size
+    bufferedSamples = 0
+    history = new Float32Array(fftSize)
+    sideHistory = new Float32Array(fftSize)
+    rawMagnitudes = new Float32Array(fftSize / 2)
+    magnitudes = new Float32Array(fftSize / 2)
+    sideMagnitudes = new Float32Array(fftSize / 2)
+    re = new Float32Array(fftSize)
+    im = new Float32Array(fftSize)
+    rawMagnitudes.fill(-100)
+    magnitudes.fill(-100)
+    sideMagnitudes.fill(-100)
+  }
+
+  const updateMagnitudes = (source: Float32Array, output: Float32Array, rawOutput: Float32Array | null): void => {
+    for (let index = 0; index < fftSize; index += 1) {
+      const window = fftSize <= 1 ? 1 : 0.5 * (1 - Math.cos((2 * Math.PI * index) / (fftSize - 1)))
+      re[index] = source[index] * window
+      im[index] = 0
+    }
+    runFft(re, im)
+
+    const scale = 2 / fftSize
+    for (let index = 0; index < output.length; index += 1) {
+      const magnitude = Math.hypot(re[index], im[index]) * scale
+      let db = 20 * Math.log10(Math.max(magnitude, 1e-10))
+      db += 6
+      db = Math.min(12, Math.max(-120, db))
+      if (rawOutput) {
+        rawOutput[index] = db
+      }
+      output[index] = bufferedSamples < fftSize
+        ? db
+        : smoothing * output[index] + (1 - smoothing) * db
+    }
+  }
+
+  const pushMonoHistory = (samples: Float32Array): void => {
+    const length = samples.length
+    if (length >= fftSize) {
+      history.set(samples.subarray(length - fftSize))
+      sideHistory.fill(0)
+      bufferedSamples = fftSize
+      return
+    }
+
+    history.copyWithin(0, length)
+    sideHistory.copyWithin(0, length)
+    history.set(samples, fftSize - length)
+    sideHistory.fill(0, fftSize - length)
+    bufferedSamples = Math.min(fftSize, bufferedSamples + length)
+  }
+
+  const pushStereoHistory = (left: Float32Array, right: Float32Array): void => {
+    const length = Math.min(left.length, right.length)
+    if (length >= fftSize) {
+      const start = length - fftSize
+      for (let index = 0; index < fftSize; index += 1) {
+        const leftValue = left[start + index]
+        const rightValue = right[start + index]
+        history[index] = (leftValue + rightValue) * 0.5
+        sideHistory[index] = (leftValue - rightValue) * 0.5
+      }
+      bufferedSamples = fftSize
+      return
+    }
+
+    history.copyWithin(0, length)
+    sideHistory.copyWithin(0, length)
+    const writeStart = fftSize - length
+    for (let index = 0; index < length; index += 1) {
+      history[writeStart + index] = (left[index] + right[index]) * 0.5
+      sideHistory[writeStart + index] = (left[index] - right[index]) * 0.5
+    }
+    bufferedSamples = Math.min(fftSize, bufferedSamples + length)
+  }
+
+  const copyInto = (source: Float32Array, output: Float32Array): number => {
+    const count = Math.min(source.length, output.length)
+    output.set(source.subarray(0, count), 0)
+    return count
+  }
+
+  const analyzer: FakeSpectrumNativeAnalyzer = {
+    calls,
+    isAvailable: () => true,
+    setFFTSize: (size) => {
+      if (size !== fftSize) {
+        resize(size)
+      }
+    },
+    getFFTSize: () => fftSize,
+    setSampleRate: (nextSampleRate) => {
+      sampleRate = nextSampleRate
+    },
+    setSmoothing: (nextSmoothing) => {
+      smoothing = Math.min(0.99, Math.max(0, nextSmoothing))
+    },
+    pushSamples: (audioData) => {
+      calls.monoPushes.push(new Float32Array(audioData))
+      pushMonoHistory(audioData)
+      updateMagnitudes(history, magnitudes, rawMagnitudes)
+      updateMagnitudes(sideHistory, sideMagnitudes, null)
+    },
+    pushStereoSamples: (leftChannel, rightChannel) => {
+      calls.stereoPushes.push({
+        left: new Float32Array(leftChannel),
+        right: new Float32Array(rightChannel),
+      })
+      pushStereoHistory(leftChannel, rightChannel)
+      updateMagnitudes(history, magnitudes, rawMagnitudes)
+      updateMagnitudes(sideHistory, sideMagnitudes, null)
+    },
+    fillRawMagnitudes: (output) => {
+      calls.fillRawMagnitudes += 1
+      return copyInto(rawMagnitudes, output)
+    },
+    fillMagnitudes: (output) => {
+      calls.fillMagnitudes += 1
+      return copyInto(magnitudes, output)
+    },
+    fillSideMagnitudes: (output) => {
+      calls.fillSideMagnitudes += 1
+      return copyInto(sideMagnitudes, output)
+    },
+    getRawMagnitudes: () => rawMagnitudes,
+    getMagnitudes: () => magnitudes,
+    getSideMagnitudes: () => sideMagnitudes,
+    process: (audioData) => {
+      analyzer.pushSamples(audioData)
+      return magnitudes
+    },
+    binToFrequency: (bin) => bin * sampleRate / fftSize,
+    reset: () => {
+      calls.resets += 1
+      history.fill(0)
+      sideHistory.fill(0)
+      rawMagnitudes.fill(-100)
+      magnitudes.fill(-100)
+      sideMagnitudes.fill(-100)
+      bufferedSamples = 0
+    },
+  }
+
+  return analyzer
+}
+
 function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
   primaryPointY: number[]
   heatmapPointY: number[]
@@ -795,6 +1032,7 @@ function renderSpectrumSnapshot(options: Partial<SpectrumAnalyzerOptions>): {
     fillGradient: false,
     showGrid: false,
     dataSource,
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
     ...options,
   })
 
@@ -862,6 +1100,7 @@ function renderSpectrumHeatmap(
     fillGradient: false,
     showGrid: false,
     dataSource,
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
     ...options,
   })
 
@@ -907,6 +1146,7 @@ function projectSpectrumDb(options: Partial<SpectrumAnalyzerOptions>, db: number
     showSideLine: true,
     showGrid: false,
     dataSource,
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
     ...options,
   })
 
@@ -1331,6 +1571,52 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.lineColor, theme.spectrum.line)
   assert.equal(options.backgroundColor, theme.spectrum.background)
   assert.equal(options.gridColor, theme.spectrum.guides)
+})
+
+test('SpectrumAnalyzer side line uses native stereo spectrum without draining mono samples', () => {
+  const dom = installFakeCanvasDom()
+  const nativeAnalyzer = createFakeSpectrumNativeAnalyzer()
+  let monoDrains = 0
+  let stereoDrains = 0
+  const left = new Float32Array([1, 0.5, -0.5, -1])
+  const right = new Float32Array([-1, -0.5, 0.5, 1])
+  const dataSource = {
+    getPendingSpectrumSamples: () => {
+      monoDrains += 1
+      return [new Float32Array([0.25, 0.25, 0.25, 0.25])]
+    },
+    getPendingSpectrumStereoSamples: () => {
+      stereoDrains += 1
+      return [{ left, right }]
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: true,
+    showGrid: false,
+    fillGradient: false,
+    dataSource,
+    nativeAnalyzer,
+  })
+
+  try {
+    const state = analyzer as unknown as { drawFrame: () => void }
+    state.drawFrame()
+
+    assert.equal(monoDrains, 0)
+    assert.equal(stereoDrains, 1)
+    assert.equal(nativeAnalyzer.calls.monoPushes.length, 0)
+    assert.equal(nativeAnalyzer.calls.stereoPushes.length, 1)
+    assert.deepEqual(Array.from(nativeAnalyzer.calls.stereoPushes[0]?.left ?? []), Array.from(left))
+    assert.deepEqual(Array.from(nativeAnalyzer.calls.stereoPushes[0]?.right ?? []), Array.from(right))
+    assert.equal(nativeAnalyzer.calls.fillSideMagnitudes, 1)
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
 })
 
 test('default profile starts with spectrum peak info disabled', () => {
@@ -1835,6 +2121,7 @@ test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () =>
     tiltDbPerOctave: 0,
     fftSize: 4096,
     dataSource,
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
     capturePeakInfo: true,
     onPeakInfo: (nextPeakInfo) => {
       peakInfo = nextPeakInfo
@@ -1919,6 +2206,7 @@ test('SpectrumAnalyzer smooths peak selection without smoothing the reported pos
     tiltDbPerOctave: 0,
     fftSize: 4096,
     dataSource,
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
     capturePeakInfo: true,
     onPeakInfo: (nextPeakInfo) => {
       if (nextPeakInfo) {
@@ -1968,6 +2256,7 @@ test('SpectrumAnalyzer does not over-bias toward an octave-lower peak', () => {
     tiltDbPerOctave: 0,
     fftSize: 4096,
     dataSource,
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
     capturePeakInfo: true,
     onPeakInfo: (nextPeakInfo) => {
       peakInfo = nextPeakInfo

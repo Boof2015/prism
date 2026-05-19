@@ -174,6 +174,19 @@ Napi::Value SpectrumPushSamples(const Napi::CallbackInfo& info) {
     return env.Undefined();
 }
 
+Napi::Value SpectrumPushStereoSamples(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected left and right Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    Napi::Float32Array leftData = info[0].As<Napi::Float32Array>();
+    Napi::Float32Array rightData = info[1].As<Napi::Float32Array>();
+    const size_t length = std::min(leftData.ElementLength(), rightData.ElementLength());
+    spectrum.pushStereoSamples(leftData.Data(), rightData.Data(), length);
+    return env.Undefined();
+}
+
 Napi::Value SpectrumGetMagnitudes(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     const auto& magnitudes = spectrum.getMagnitudes();
@@ -185,6 +198,14 @@ Napi::Value SpectrumGetMagnitudes(const Napi::CallbackInfo& info) {
 Napi::Value SpectrumGetRawMagnitudes(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     const auto& magnitudes = spectrum.getRawMagnitudes();
+    Napi::Float32Array result = Napi::Float32Array::New(env, magnitudes.size());
+    memcpy(result.Data(), magnitudes.data(), magnitudes.size() * sizeof(float));
+    return result;
+}
+
+Napi::Value SpectrumGetSideMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const auto& magnitudes = spectrum.getSideMagnitudes();
     Napi::Float32Array result = Napi::Float32Array::New(env, magnitudes.size());
     memcpy(result.Data(), magnitudes.data(), magnitudes.size() * sizeof(float));
     return result;
@@ -215,6 +236,22 @@ Napi::Value SpectrumFillMagnitudes(const Napi::CallbackInfo& info) {
 
     Napi::Float32Array output = info[0].As<Napi::Float32Array>();
     const auto& magnitudes = spectrum.getMagnitudes();
+    const size_t count = std::min(output.ElementLength(), magnitudes.size());
+    if (count > 0) {
+        memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
+    }
+    return Napi::Number::New(env, static_cast<double>(count));
+}
+
+Napi::Value SpectrumFillSideMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected output Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array output = info[0].As<Napi::Float32Array>();
+    const auto& magnitudes = spectrum.getSideMagnitudes();
     const size_t count = std::min(output.ElementLength(), magnitudes.size());
     if (count > 0) {
         memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
@@ -644,10 +681,13 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("setSampleRate", Napi::Function::New(env, SpectrumSetSampleRate));
     specExports.Set("setSmoothing", Napi::Function::New(env, SpectrumSetSmoothing));
     specExports.Set("pushSamples", Napi::Function::New(env, SpectrumPushSamples));
+    specExports.Set("pushStereoSamples", Napi::Function::New(env, SpectrumPushStereoSamples));
     specExports.Set("fillRawMagnitudes", Napi::Function::New(env, SpectrumFillRawMagnitudes));
     specExports.Set("fillMagnitudes", Napi::Function::New(env, SpectrumFillMagnitudes));
+    specExports.Set("fillSideMagnitudes", Napi::Function::New(env, SpectrumFillSideMagnitudes));
     specExports.Set("getRawMagnitudes", Napi::Function::New(env, SpectrumGetRawMagnitudes));
     specExports.Set("getMagnitudes", Napi::Function::New(env, SpectrumGetMagnitudes));
+    specExports.Set("getSideMagnitudes", Napi::Function::New(env, SpectrumGetSideMagnitudes));
     specExports.Set("process", Napi::Function::New(env, SpectrumProcess));
     specExports.Set("binToFrequency", Napi::Function::New(env, SpectrumBinToFrequency));
     specExports.Set("reset", Napi::Function::New(env, SpectrumReset));
