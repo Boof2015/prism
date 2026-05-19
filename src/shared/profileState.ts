@@ -9,7 +9,7 @@ import {
   type ProfileLocalMetadata,
   type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV2,
+  type PrismProfileFileV3,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
@@ -43,6 +43,19 @@ export function isScopeKind(value: unknown): value is ScopeKind {
 
 export function cloneScopeSettings(settings: ScopeSettings): ScopeSettings {
   return JSON.parse(JSON.stringify(settings)) as ScopeSettings
+}
+
+function isLegacyProfileFileVersion(version: unknown): boolean {
+  return version === 1 || version === 2
+}
+
+function normalizeWaveformScrollSpeed(value: unknown, legacyProfileFileScale: boolean): number {
+  if (legacyProfileFileScale && value !== undefined && value !== null) {
+    const numeric = Number(value)
+    return clampWaveformScrollSpeed(Number.isFinite(numeric) ? numeric / 2 : value)
+  }
+
+  return clampWaveformScrollSpeed(value ?? DEFAULT_SCOPE_SETTINGS.waveform.scrollSpeed)
 }
 
 export function createDefaultScopePopouts(): ScopePopoutStateMap {
@@ -131,7 +144,10 @@ export function normalizeWidthWeights(raw: unknown): Record<ScopeKind, number> {
   }, {} as Record<ScopeKind, number>)
 }
 
-export function mergeScopeSettings(raw: unknown): ScopeSettings {
+export function mergeScopeSettings(
+  raw: unknown,
+  options: { legacyProfileFileScale?: boolean } = {},
+): ScopeSettings {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<ScopeSettings>
     : {}
@@ -195,7 +211,7 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
       mode: rawWaveform.mode === 'stereo' || rawWaveform.mode === 'mono'
         ? rawWaveform.mode
         : DEFAULT_SCOPE_SETTINGS.waveform.mode,
-      scrollSpeed: clampWaveformScrollSpeed(rawWaveform.scrollSpeed ?? DEFAULT_SCOPE_SETTINGS.waveform.scrollSpeed),
+      scrollSpeed: normalizeWaveformScrollSpeed(rawWaveform.scrollSpeed, Boolean(options.legacyProfileFileScale)),
       multiband: typeof rawWaveform.multiband === 'boolean'
         ? rawWaveform.multiband
         : DEFAULT_SCOPE_SETTINGS.waveform.multiband,
@@ -272,7 +288,7 @@ export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-) : PrismProfileFileV2 {
+) : PrismProfileFileV3 {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<PrismProfileFile>
     : {}
@@ -291,12 +307,14 @@ export function normalizeProfileFile(
     scopeOrder: normalizeScopeOrder(parsed.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
-    scopeSettings: mergeScopeSettings(parsed.scopeSettings),
+    scopeSettings: mergeScopeSettings(parsed.scopeSettings, {
+      legacyProfileFileScale: isLegacyProfileFileVersion(parsed.version),
+    }),
     scopePopouts: normalizeProfileFileScopePopouts(parsed.scopePopouts),
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV2 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV3 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {
@@ -402,7 +420,9 @@ export function profileFileToProfile(
     scopeOrder: normalizeScopeOrder(file.scopeOrder),
     hiddenScopes: normalizeHiddenScopes(file.hiddenScopes),
     widthWeights: normalizeWidthWeights(file.widthWeights),
-    scopeSettings: mergeScopeSettings(file.scopeSettings),
+    scopeSettings: mergeScopeSettings(file.scopeSettings, {
+      legacyProfileFileScale: isLegacyProfileFileVersion(file.version),
+    }),
     scopePopouts: SCOPE_KINDS.reduce((acc, kind) => {
       acc[kind] = {
         poppedOut: Boolean(file.scopePopouts[kind]?.poppedOut),

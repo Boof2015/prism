@@ -4501,6 +4501,34 @@ test('Waveform reconfigures and resets native multiband state on option changes'
   }
 })
 
+test('Waveform maps x4 to the old max scroll rate and x8 to faster headroom', () => {
+  const dom = installFakeCanvasDom()
+  const nativeAnalyzer = createFakeWaveformNativeAnalyzer()
+  const dataSource = {
+    getPendingWaveformSamples: () => [],
+    getPendingWaveformStereoSamples: () => [],
+    getSampleRate: () => 4096,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const waveform = new Waveform(createFakeCanvas(), {
+    dataSource,
+    nativeAnalyzer,
+    scrollSpeed: 4,
+  })
+
+  try {
+    assert.equal(nativeAnalyzer.configs.at(-1)?.samplesPerColumn, 8)
+
+    nativeAnalyzer.configs.length = 0
+    waveform.setOptions({ scrollSpeed: 8 })
+    assert.equal(nativeAnalyzer.configs.at(-1)?.samplesPerColumn, 4)
+  } finally {
+    waveform.dispose()
+    dom.restore()
+  }
+})
+
 test('Vectorscope multiband uses native interleaved band points when available', () => {
   const recorder = createFakeCanvasRecorder()
   const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))

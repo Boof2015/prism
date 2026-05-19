@@ -1,8 +1,8 @@
 export type WaveformMode = 'mono' | 'stereo'
 
-export const MIN_WAVEFORM_SCROLL_SPEED = 0.5
+export const MIN_WAVEFORM_SCROLL_SPEED = 1
 export const MAX_WAVEFORM_SCROLL_SPEED = 8
-export const WAVEFORM_SCROLL_SPEED_STEP = 0.5
+export const WAVEFORM_SCROLL_SPEED_STEP = 1
 export const DEFAULT_WAVEFORM_SCROLL_SPEED = 1
 export const DEFAULT_WAVEFORM_MODE: WaveformMode = 'mono'
 

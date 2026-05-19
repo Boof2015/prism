@@ -18,6 +18,11 @@ import {
   findVUReferencePreset,
   sanitizeVUReferenceDbfs,
 } from '../../types/vumeter'
+import {
+  MAX_WAVEFORM_SCROLL_SPEED,
+  MIN_WAVEFORM_SCROLL_SPEED,
+  WAVEFORM_SCROLL_SPEED_STEP,
+} from '../../types/waveform'
 import ThemedSelect from './ThemedSelect'
 
 function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): string {
@@ -669,9 +674,9 @@ export default function ScopeSettingsSection({
                 label="Speed"
                 value={current.scrollSpeed}
                 valueLabel={`x${current.scrollSpeed.toFixed(0)}`}
-                min={1}
-                max={8}
-                step={1}
+                min={MIN_WAVEFORM_SCROLL_SPEED}
+                max={MAX_WAVEFORM_SCROLL_SPEED}
+                step={WAVEFORM_SCROLL_SPEED_STEP}
                 fullWidth={false}
                 onChange={(value) => onUpdate('waveform', { scrollSpeed: value })}
               />

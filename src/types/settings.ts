@@ -9,7 +9,7 @@ import {
 } from './spectrogram'
 import { DEFAULT_VU_REFERENCE_DBFS, type VUMeterMode, type VUMeterNeedleChannels, type VUMeterOrientation } from './vumeter'
 import { DEFAULT_LUFS_METER_READOUT, type LUFSMeterMode, type LUFSMeterReadout } from './lufsmeter'
-import { DEFAULT_WAVEFORM_MODE, type WaveformMode } from './waveform'
+import { DEFAULT_WAVEFORM_MODE, DEFAULT_WAVEFORM_SCROLL_SPEED, type WaveformMode } from './waveform'
 import { DEFAULT_SPECTRUM_PEAK_INFO_MODE, type SpectrumPeakInfoMode } from './spectrum'
 
 export interface ScopeSettings {
@@ -80,7 +80,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   spectrogram: { fftSize: 4096, tiltDbPerOctave: DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE, scrollSpeed: 2, contrast: DEFAULT_SPECTROGRAM_CONTRAST, clarityMode: 'sharper', scaleMode: 'log', orientation: DEFAULT_SPECTROGRAM_ORIENTATION, colorScheme: 'heat' },
   vumeter: { mode: 'bar', orientation: 'horizontal', needleChannels: 'stereo', referenceDb: DEFAULT_VU_REFERENCE_DBFS },
   lufsmeter: { mode: 'bar', readout: DEFAULT_LUFS_METER_READOUT },
-  waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, multiband: false },
+  waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: DEFAULT_WAVEFORM_SCROLL_SPEED, multiband: false },
   nowPlaying: {
     showCoverArt: true,
     showTitle: true,

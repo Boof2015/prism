@@ -8,6 +8,7 @@ import {
   createDefaultProfile,
   extractLocalProfileMetadata,
   mergeScopeSettings,
+  normalizeProfileFile,
   normalizeScopeOrder,
   profileFileToProfile,
   profileToFileData,
@@ -79,6 +80,38 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
   assert.equal(restored.scopeSettings.spectrogram.orientation, 'vertical')
   assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
+})
+
+test('profile file waveform speed migration preserves legacy scroll feel', () => {
+  const base = profileToFileData('profile_speed', createDefaultProfile('Speed'))
+  const withWaveformSpeed = (version: number, scrollSpeed: unknown) => normalizeProfileFile({
+    ...base,
+    version,
+    scopeSettings: {
+      ...base.scopeSettings,
+      waveform: {
+        ...base.scopeSettings.waveform,
+        scrollSpeed,
+      },
+    },
+  }, 'profile_speed')
+
+  assert.equal(withWaveformSpeed(1, 8).scopeSettings.waveform.scrollSpeed, 4)
+  assert.equal(withWaveformSpeed(2, 8).scopeSettings.waveform.scrollSpeed, 4)
+  assert.equal(withWaveformSpeed(PROFILE_FILE_VERSION, 4).scopeSettings.waveform.scrollSpeed, 4)
+  assert.equal(withWaveformSpeed(1, 'fast').scopeSettings.waveform.scrollSpeed, 1)
+
+  const legacyMissingSpeed = normalizeProfileFile({
+    ...base,
+    version: 1,
+    scopeSettings: {
+      ...base.scopeSettings,
+      waveform: {
+        mode: 'mono',
+      },
+    },
+  }, 'profile_speed')
+  assert.equal(legacyMissingSpeed.scopeSettings.waveform.scrollSpeed, 1)
 })
 
 test('mergeScopeSettings defaults missing or invalid spectrogram orientation to horizontal', () => {
@@ -253,7 +286,7 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrogram.colorScheme, 'heat')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.lufsmeter.readout, 'shortTerm')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.mode, 'stereo')
-    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.scrollSpeed, 2)
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.scrollSpeed, 1)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.multiband, true)
     assert.equal(Object.hasOwn(partialSnapshot.profiles.profile_partial.scopeSettings.waveform, 'gainDb'), false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopePopouts.spectrogram.poppedOut, true)
@@ -285,7 +318,7 @@ test('legacy profile files with themeId import successfully and ignore embedded 
     const legacyPath = join(harness.rootDir, 'legacy-theme.prsm')
     await writeFile(legacyPath, `${JSON.stringify({
       format: PROFILE_FILE_FORMAT,
-      version: PROFILE_FILE_VERSION,
+      version: 2,
       id: 'profile_legacy_theme',
       name: 'Legacy Theme',
       themeId: 'theme_midnight',

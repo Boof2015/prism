@@ -3,7 +3,7 @@ import type { ScopeKind } from './scope'
 import type { ScopeSettings } from './settings'
 
 export const PROFILE_FILE_FORMAT = 'prism-profile'
-export const PROFILE_FILE_VERSION = 2
+export const PROFILE_FILE_VERSION = 3
 export const PROFILE_LOCAL_STATE_FORMAT = 'prism-profile-local'
 export const PROFILE_LOCAL_STATE_VERSION = 1
 export const LEGACY_PROFILE_MIGRATION_VERSION = 1
@@ -40,6 +40,19 @@ export interface PrismProfileFileV1 {
 
 export interface PrismProfileFileV2 {
   format: typeof PROFILE_FILE_FORMAT
+  version: 2
+  id: string
+  name: string
+  themeId?: string | null
+  scopeOrder: ScopeKind[]
+  hiddenScopes: ScopeKind[]
+  widthWeights: Record<ScopeKind, number>
+  scopeSettings: ScopeSettings
+  scopePopouts: PrismProfileFileScopePopoutMap
+}
+
+export interface PrismProfileFileV3 {
+  format: typeof PROFILE_FILE_FORMAT
   version: typeof PROFILE_FILE_VERSION
   id: string
   name: string
@@ -51,7 +64,7 @@ export interface PrismProfileFileV2 {
   scopePopouts: PrismProfileFileScopePopoutMap
 }
 
-export type PrismProfileFile = PrismProfileFileV1 | PrismProfileFileV2
+export type PrismProfileFile = PrismProfileFileV1 | PrismProfileFileV2 | PrismProfileFileV3
 
 export interface ProfileLocalMetadata {
   windowBounds?: WindowBounds
