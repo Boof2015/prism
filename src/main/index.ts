@@ -763,9 +763,9 @@ function isCursorInsideWindow(window: BrowserWindow): boolean {
     && cursor.y < bounds.y + bounds.height
 }
 
-function getFramelessWindowChromeOptions(): Pick<
+function getSnapCapableFramelessWindowOptions(): Pick<
   BrowserWindowConstructorOptions,
-  'frame' | 'transparent' | 'backgroundColor' | 'roundedCorners' | 'hasShadow' | 'thickFrame' | 'backgroundMaterial'
+  'frame' | 'transparent' | 'backgroundColor' | 'roundedCorners' | 'hasShadow' | 'thickFrame' | 'backgroundMaterial' | 'resizable' | 'maximizable' | 'fullscreenable' | 'minimizable' | 'skipTaskbar'
 > {
   return {
     frame: false,
@@ -775,10 +775,15 @@ function getFramelessWindowChromeOptions(): Pick<
     hasShadow: false,
     ...(process.platform === 'win32'
       ? {
-          thickFrame: false,
+          thickFrame: true,
           backgroundMaterial: 'none',
         }
       : {}),
+    resizable: true,
+    maximizable: true,
+    fullscreenable: true,
+    minimizable: true,
+    skipTaskbar: false,
   }
 }
 
@@ -988,7 +993,7 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     ...WINDOW_DEFAULTS,
-    ...getFramelessWindowChromeOptions(),
+    ...getSnapCapableFramelessWindowOptions(),
     alwaysOnTop: getWindowStateStore().getMainAlwaysOnTop(),
     autoHideMenuBar: true,
     resizable: true,
@@ -1192,12 +1197,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     height: bounds.height,
     minWidth: POPOUT_DEFAULTS.minWidth,
     minHeight: POPOUT_DEFAULTS.minHeight,
-    ...getFramelessWindowChromeOptions(),
-    resizable: true,
-    fullscreenable: false,
-    maximizable: false,
-    minimizable: true,
-    skipTaskbar: true,
+    ...getSnapCapableFramelessWindowOptions(),
     autoHideMenuBar: true,
     title: `Prism ${SCOPE_LABELS[kind]}`,
     alwaysOnTop: getWindowStateStore().getPopoutAlwaysOnTop(kind),
@@ -1365,11 +1365,7 @@ function createNowPlayingConfigWindow(): BrowserWindow {
     height: bounds.height,
     minWidth: NOW_PLAYING_CONFIG_DEFAULTS.minWidth,
     minHeight: NOW_PLAYING_CONFIG_DEFAULTS.minHeight,
-    ...getFramelessWindowChromeOptions(),
-    resizable: true,
-    fullscreenable: false,
-    maximizable: false,
-    minimizable: true,
+    ...getSnapCapableFramelessWindowOptions(),
     autoHideMenuBar: true,
     title: 'Prism Now Playing',
     show: false,

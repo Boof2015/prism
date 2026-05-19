@@ -76,7 +76,7 @@ function resolveLinuxDisplayServer(
 }
 
 export function resolveWindowCapabilities(options: WindowCapabilityResolutionOptions): WindowCapabilities {
-  if (options.platform === 'win32') {
+  if (options.platform === 'darwin' || options.platform === 'win32') {
     return {
       ...DEFAULT_WINDOW_CAPABILITIES,
       useNativeDragRegions: true,

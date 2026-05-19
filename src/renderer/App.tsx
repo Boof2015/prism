@@ -4,7 +4,6 @@ import Toolbar from './components/Toolbar'
 import SettingsPanel from './components/SettingsPanel'
 import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
-import WindowResizeOverlay from './components/WindowResizeOverlay'
 import AppBanner from './components/AppBanner'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
@@ -306,7 +305,6 @@ export default function App(): JSX.Element {
         <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
       </div>
 
-      <WindowResizeOverlay />
     </div>
   )
 }

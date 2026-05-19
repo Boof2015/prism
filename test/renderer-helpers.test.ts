@@ -2876,7 +2876,7 @@ test('resolveWindowCapabilities detects X11 sessions on Linux', () => {
   )
 })
 
-test('resolveWindowCapabilities leaves non-Linux platforms on the full-featured path', () => {
+test('resolveWindowCapabilities uses native drag regions on macOS while preserving geometry controls', () => {
   assert.deepEqual(
     resolveWindowCapabilities({
       platform: 'darwin',
@@ -2885,7 +2885,7 @@ test('resolveWindowCapabilities leaves non-Linux platforms on the full-featured 
     }),
     {
       displayServer: 'other',
-      useNativeDragRegions: false,
+      useNativeDragRegions: true,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
     },
@@ -2911,8 +2911,6 @@ test('resolveWindowCapabilities uses native drag regions on Windows while preser
 test('Wayland window controls use native drag regions and omit unsupported reposition/geometry paths', async () => {
   const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
   const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
-  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
-  const nowPlayingSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'NowPlayingConfigWindow.tsx'), 'utf8')
   const bridgeSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ScopePopoutBridge.tsx'), 'utf8')
   const stripSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Strip.tsx'), 'utf8')
   const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
@@ -2921,12 +2919,27 @@ test('Wayland window controls use native drag regions and omit unsupported repos
   assert.match(toolbarSource, /disabled=\{!supportsProgrammaticReposition\}/)
   assert.match(toolbarSource, /useNativeDragRegions \? 'is-native-drag' : ''/)
   assert.match(appSource, /onMouseDown=\{useNativeDragRegions \? undefined : handleAltDragStart\}/)
-  assert.match(popoutSource, /scope-popout__header \$\{useNativeDragRegions \? 'is-native-drag' : ''\}/)
-  assert.match(nowPlayingSource, /now-playing-config__toolbar \$\{useNativeDragRegions \? 'is-native-drag' : ''\}/)
   assert.match(bridgeSource, /bounds: supportsGeometryPersistence\s*\?\s*scopePopouts\[kind\]\?\.windowBounds\s*:\s*undefined/)
   assert.match(stripSource, /if \(!supportsGeometryPersistence\) \{\s*popOutScope\(kind\)/)
   assert.match(stylesSource, /\.toolbar\.is-native-drag \{/)
   assert.match(stylesSource, /\.scope-popout__header\.is-native-drag \{/)
+})
+
+test('main and detached windows keep frameless Prism chrome while enabling snap-compatible OS window semantics', async () => {
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
+  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
+  const nowPlayingSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'NowPlayingConfigWindow.tsx'), 'utf8')
+
+  assert.match(mainSource, /function getSnapCapableFramelessWindowOptions\(\): Pick<[\s\S]*?return \{[\s\S]*?frame: false,[\s\S]*?roundedCorners: false,[\s\S]*?hasShadow: false,[\s\S]*?thickFrame: true,[\s\S]*?resizable: true,[\s\S]*?maximizable: true,[\s\S]*?fullscreenable: true,[\s\S]*?skipTaskbar: false,[\s\S]*?\}/)
+  assert.match(mainSource, /function createMainWindow\(\): void \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
+  assert.match(mainSource, /function createScopePopoutWindow\(kind: ScopeKind, rawBounds\?: WindowBounds\): BrowserWindow \| null \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
+  assert.match(mainSource, /function createNowPlayingConfigWindow\(\): BrowserWindow \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
+  assert.match(popoutSource, /useWindowManagerDragRegions = getRendererWindowCapabilities\(\)\.useNativeDragRegions/)
+  assert.match(nowPlayingSource, /useWindowManagerDragRegions = getRendererWindowCapabilities\(\)\.useNativeDragRegions/)
+  assert.doesNotMatch(appSource, /WindowResizeOverlay/)
+  assert.doesNotMatch(popoutSource, /WindowResizeOverlay/)
+  assert.doesNotMatch(nowPlayingSource, /WindowResizeOverlay/)
 })
 
 test('programmatic top/bottom reposition flushes fresh bounds through persistence channels', async () => {

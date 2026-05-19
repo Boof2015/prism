@@ -10,7 +10,6 @@ import {
 } from 'react'
 import type { NowPlayingProviderDefinition, NowPlayingProviderId, NowPlayingProviderState } from '../../types/nowPlaying'
 import AppBanner from './AppBanner'
-import WindowResizeOverlay from './WindowResizeOverlay'
 import { useNowPlayingStore } from '../stores/nowPlayingStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useUiStore } from '../stores/uiStore'
@@ -307,8 +306,8 @@ export default function NowPlayingConfigWindow(): JSX.Element {
   const [expandedProviderId, setExpandedProviderId] = useState<NowPlayingProviderId | null>('astra')
   const [draggedProviderId, setDraggedProviderId] = useState<NowPlayingProviderId | null>(null)
   const [dropTargetProviderId, setDropTargetProviderId] = useState<NowPlayingProviderId | null>(null)
-  const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
   const platform = window.electronAPI.platform
+  const useWindowManagerDragRegions = getRendererWindowCapabilities().useNativeDragRegions
 
   useEffect(() => {
     let disposed = false
@@ -341,14 +340,14 @@ export default function NowPlayingConfigWindow(): JSX.Element {
   }, [nowPlayingState.configs.astra.baseUrl, nowPlayingState.configs.astra.hasToken])
 
   const handleToolbarDragStart = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (useNativeDragRegions || isToolbarInteractiveTarget(event.target) || event.button !== 0) return
+    if (useWindowManagerDragRegions || isToolbarInteractiveTarget(event.target) || event.button !== 0) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     window.electronAPI.startWindowMove()
-  }, [useNativeDragRegions])
+  }, [useWindowManagerDragRegions])
 
   const handleToolbarDragEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (useNativeDragRegions) {
+    if (useWindowManagerDragRegions) {
       return
     }
 
@@ -356,7 +355,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     window.electronAPI.stopWindowMove()
-  }, [useNativeDragRegions])
+  }, [useWindowManagerDragRegions])
 
   const handleSaveAstraConfig = useCallback(async (): Promise<void> => {
     try {
@@ -437,11 +436,11 @@ export default function NowPlayingConfigWindow(): JSX.Element {
     <div className="now-playing-config">
       <div className="now-playing-config__shell">
         <header
-          className={`toolbar now-playing-config__toolbar ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}
-          onPointerDown={useNativeDragRegions ? undefined : handleToolbarDragStart}
-          onPointerUp={useNativeDragRegions ? undefined : handleToolbarDragEnd}
-          onPointerCancel={useNativeDragRegions ? undefined : handleToolbarDragEnd}
-          onLostPointerCapture={useNativeDragRegions ? undefined : handleToolbarDragEnd}
+          className={`toolbar now-playing-config__toolbar ${useWindowManagerDragRegions ? 'is-native-drag' : ''}`.trim()}
+          onPointerDown={useWindowManagerDragRegions ? undefined : handleToolbarDragStart}
+          onPointerUp={useWindowManagerDragRegions ? undefined : handleToolbarDragEnd}
+          onPointerCancel={useWindowManagerDragRegions ? undefined : handleToolbarDragEnd}
+          onLostPointerCapture={useWindowManagerDragRegions ? undefined : handleToolbarDragEnd}
         >
           <div className="now-playing-config__toolbar-copy">
             <div className="now-playing-config__toolbar-title">Now Playing</div>
@@ -699,7 +698,6 @@ export default function NowPlayingConfigWindow(): JSX.Element {
       </div>
 
       <AppBanner />
-      <WindowResizeOverlay />
     </div>
   )
 }
