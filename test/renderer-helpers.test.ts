@@ -81,8 +81,10 @@ import type {
   SpectrogramNativeAnalyzer,
   SpectrogramNativeOptions,
   SpectrogramNativeResult,
+  VectorscopeNativeAnalyzer,
   VUMeterNativeAnalyzer,
   VUMeterNativeSnapshot,
+  WaveformNativeAnalyzer,
 } from '../src/renderer/audio/native'
 import {
   HEAT_LOW_DB,
@@ -96,6 +98,7 @@ import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
+import { Waveform } from '../src/renderer/visualizers/Waveform'
 import {
   VUMeter,
   VU_NEEDLE_FACE_HEIGHT_CSS_PX,
@@ -4027,6 +4030,260 @@ test('MultibandSplitter and MultibandBuffer reuse caller-owned buffers', () => {
   assert.equal(pointCount, 8)
   assert.equal(pointTarget.mid.left, pointRef)
   assert.notEqual(pointTarget.low.left[0], 0)
+})
+
+function createFakeWaveformNativeAnalyzer(options: {
+  available?: boolean
+  monoSummary?: Float32Array
+  stereoSummary?: Float32Array
+} = {}): WaveformNativeAnalyzer & {
+  configs: Array<{ sampleRate: number; samplesPerColumn: number }>
+  monoPushes: Float32Array[]
+  stereoPushes: Array<{ left: Float32Array; right: Float32Array }>
+  resetCount: number
+} {
+  return {
+    configs: [],
+    monoPushes: [],
+    stereoPushes: [],
+    resetCount: 0,
+    isAvailable: () => options.available ?? true,
+    configure(sampleRate, samplesPerColumn) {
+      this.configs.push({ sampleRate, samplesPerColumn })
+    },
+    processMono(samples) {
+      this.monoPushes.push(samples)
+      return options.monoSummary ?? new Float32Array(0)
+    },
+    processStereo(left, right) {
+      this.stereoPushes.push({ left, right })
+      return options.stereoSummary ?? new Float32Array(0)
+    },
+    reset() {
+      this.resetCount += 1
+    },
+  }
+}
+
+function createFakeVectorscopeNativeAnalyzer(options: {
+  multibandAvailable?: boolean
+  multibandData?: Float32Array
+  multibandCount?: number
+} = {}): VectorscopeNativeAnalyzer & {
+  sampleRates: number[]
+  multibandPushes: Array<{ left: Float32Array; right: Float32Array }>
+  multibandRequests: number[]
+  resetCount: number
+} {
+  const analyzer: VectorscopeNativeAnalyzer & {
+    sampleRates: number[]
+    multibandPushes: Array<{ left: Float32Array; right: Float32Array }>
+    multibandRequests: number[]
+    resetCount: number
+  } = {
+    sampleRates: [],
+    multibandPushes: [],
+    multibandRequests: [],
+    resetCount: 0,
+    isAvailable: () => true,
+    isMultibandAvailable: () => options.multibandAvailable ?? true,
+    setSampleRate(sampleRate) {
+      this.sampleRates.push(sampleRate)
+    },
+    pushSamples() {},
+    fillPoints() {
+      return 0
+    },
+    reset() {
+      this.resetCount += 1
+    },
+  }
+
+  if (options.multibandAvailable !== false) {
+    analyzer.pushMultibandSamples = (left, right) => {
+      analyzer.multibandPushes.push({ left, right })
+    }
+    analyzer.getMultibandPoints = (maxPoints) => {
+      analyzer.multibandRequests.push(maxPoints)
+      const data = options.multibandData ?? new Float32Array(0)
+      return {
+        data,
+        count: options.multibandCount ?? Math.floor(data.length / 6),
+      }
+    }
+  }
+
+  return analyzer
+}
+
+test('Waveform uses native multiband column summaries when available', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const nativeAnalyzer = createFakeWaveformNativeAnalyzer({
+    monoSummary: new Float32Array([-0.5, 0.5, 1, 0, 0]),
+  })
+  const dataSource = {
+    getPendingWaveformSamples: () => [new Float32Array([0.25])],
+    getPendingWaveformStereoSamples: () => [],
+    getSampleRate: () => 64,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const waveform = new Waveform(createFakeCanvas(recorder), {
+    dataSource,
+    multiband: true,
+    nativeAnalyzer,
+    bandColors: {
+      low: '#ff0000',
+      mid: '#00ff00',
+      high: '#0000ff',
+    },
+  })
+
+  try {
+    ;(waveform as unknown as { drawFrame: () => void }).drawFrame()
+    assert.equal(nativeAnalyzer.monoPushes.length, 1)
+    assert.equal(nativeAnalyzer.configs.at(-1)?.samplesPerColumn, 1)
+    assert.equal(
+      recorder.fillRects.some((rect) => rect.fillStyle === 'rgba(235, 20, 0, 0.72)'),
+      true,
+    )
+  } finally {
+    waveform.dispose()
+    dom.restore()
+  }
+})
+
+test('Waveform falls back to JavaScript multiband when native is unavailable', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const nativeAnalyzer = createFakeWaveformNativeAnalyzer({ available: false })
+  const dataSource = {
+    getPendingWaveformSamples: () => [new Float32Array([0.75])],
+    getPendingWaveformStereoSamples: () => [],
+    getSampleRate: () => 64,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const waveform = new Waveform(createFakeCanvas(recorder), {
+    dataSource,
+    multiband: true,
+    nativeAnalyzer,
+  })
+
+  try {
+    ;(waveform as unknown as { drawFrame: () => void }).drawFrame()
+    assert.equal(nativeAnalyzer.monoPushes.length, 0)
+    assert.equal(recorder.fillRects.some((rect) => rect.width === 1), true)
+  } finally {
+    waveform.dispose()
+    dom.restore()
+  }
+})
+
+test('Waveform reconfigures and resets native multiband state on option changes', () => {
+  const dom = installFakeCanvasDom()
+  const nativeAnalyzer = createFakeWaveformNativeAnalyzer()
+  const dataSource = {
+    getPendingWaveformSamples: () => [],
+    getPendingWaveformStereoSamples: () => [],
+    getSampleRate: () => 128,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const waveform = new Waveform(createFakeCanvas(), {
+    dataSource,
+    multiband: true,
+    nativeAnalyzer,
+  })
+
+  try {
+    nativeAnalyzer.configs.length = 0
+    nativeAnalyzer.resetCount = 0
+    waveform.setOptions({ scrollSpeed: 2 })
+    assert.equal(nativeAnalyzer.configs.at(-1)?.samplesPerColumn, 1)
+    assert.equal(nativeAnalyzer.resetCount > 0, true)
+
+    waveform.setOptions({ multiband: false })
+    assert.equal(nativeAnalyzer.resetCount > 1, true)
+  } finally {
+    waveform.dispose()
+    dom.restore()
+  }
+})
+
+test('Vectorscope multiband uses native interleaved band points when available', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const nativeAnalyzer = createFakeVectorscopeNativeAnalyzer({
+    multibandData: new Float32Array([0.1, 0.2, 0.2, 0.1, -0.1, 0.15]),
+    multibandCount: 1,
+  })
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [{ left: new Float32Array([0.2]), right: new Float32Array([0.1]) }],
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(recorder), {
+    dataSource,
+    multiband: true,
+    showGrid: false,
+    displayPoints: 1,
+    nativeAnalyzer,
+    bandColors: {
+      low: '#110000',
+      mid: '#001100',
+      high: '#000011',
+    },
+  })
+
+  try {
+    ;(vectorscope as unknown as { drawFrame: () => void }).drawFrame()
+    assert.equal(nativeAnalyzer.multibandPushes.length, 1)
+    assert.deepEqual(nativeAnalyzer.multibandRequests, [1])
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === '#110000'), true)
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === '#001100'), true)
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === '#000011'), true)
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
+})
+
+test('Vectorscope multiband falls back to JavaScript splitter when native multiband is missing', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const nativeAnalyzer = createFakeVectorscopeNativeAnalyzer({ multibandAvailable: false })
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [createSineStereoChunk(440, 48000, 8)],
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(recorder), {
+    dataSource,
+    multiband: true,
+    showGrid: false,
+    displayPoints: 8,
+    nativeAnalyzer,
+    bandColors: {
+      low: '#210000',
+      mid: '#002100',
+      high: '#000021',
+    },
+  })
+
+  try {
+    ;(vectorscope as unknown as { drawFrame: () => void }).drawFrame()
+    assert.equal(nativeAnalyzer.multibandPushes.length, 0)
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === '#210000'), true)
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === '#002100'), true)
+    assert.equal(recorder.fillRects.some((rect) => rect.fillStyle === '#000021'), true)
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
 })
 
 function createFakeVUMeterNativeAnalyzer(

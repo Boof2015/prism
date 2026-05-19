@@ -9,6 +9,7 @@
 #include "spectrum.h"
 #include "spectrogram.h"
 #include "vectorscope.h"
+#include "waveform.h"
 #include "vumeter.h"
 #include "lufsmeter.h"
 
@@ -17,6 +18,7 @@ static Visualizer::Oscilloscope oscilloscope;
 static Visualizer::Spectrum spectrum(2048);
 static Visualizer::SpectrogramAnalyzer spectrogramAnalyzer;
 static Visualizer::Vectorscope vectorscope;
+static Visualizer::WaveformMultibandAnalyzer waveform;
 static Visualizer::VUMeterAnalyzer vuMeter;
 static Visualizer::LUFSMeterAnalyzer lufsMeter;
 
@@ -350,6 +352,19 @@ Napi::Value VectorscopePushSamples(const Napi::CallbackInfo& info) {
     return env.Undefined();
 }
 
+Napi::Value VectorscopePushMultibandSamples(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected two Float32Arrays (left, right)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    Napi::Float32Array leftData = info[0].As<Napi::Float32Array>();
+    Napi::Float32Array rightData = info[1].As<Napi::Float32Array>();
+    size_t length = std::min(leftData.ElementLength(), rightData.ElementLength());
+    vectorscope.pushMultibandSamples(leftData.Data(), rightData.Data(), length);
+    return env.Undefined();
+}
+
 Napi::Value VectorscopeGetPoints(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsNumber()) {
@@ -371,6 +386,31 @@ Napi::Value VectorscopeGetPoints(const Napi::CallbackInfo& info) {
     } else {
         result.Set("x", xArray);
         result.Set("y", yArray);
+    }
+    result.Set("count", Napi::Number::New(env, static_cast<double>(actual)));
+    return result;
+}
+
+Napi::Value VectorscopeGetMultibandPoints(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsNumber()) {
+        Napi::TypeError::New(env, "Expected max points count").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    const size_t maxPoints = static_cast<size_t>(info[0].As<Napi::Number>().Uint32Value());
+    Napi::Float32Array data = Napi::Float32Array::New(env, maxPoints * Visualizer::MULTIBAND_POINT_STRIDE);
+    const size_t actual = vectorscope.getMultibandPoints(data.Data(), maxPoints);
+
+    Napi::Object result = Napi::Object::New(env);
+    if (actual < maxPoints) {
+        Napi::Float32Array trimmed = Napi::Float32Array::New(env, actual * Visualizer::MULTIBAND_POINT_STRIDE);
+        if (actual > 0) {
+            memcpy(trimmed.Data(), data.Data(), actual * Visualizer::MULTIBAND_POINT_STRIDE * sizeof(float));
+        }
+        result.Set("data", trimmed);
+    } else {
+        result.Set("data", data);
     }
     result.Set("count", Napi::Number::New(env, static_cast<double>(actual)));
     return result;
@@ -428,6 +468,60 @@ Napi::Value VectorscopeProcess(const Napi::CallbackInfo& info) {
 
 Napi::Value VectorscopeReset(const Napi::CallbackInfo& info) {
     vectorscope.reset();
+    return info.Env().Undefined();
+}
+
+// ============== Waveform ==============
+
+Napi::Value WaveformConfigure(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsNumber()) {
+        Napi::TypeError::New(env, "Expected sample rate and samples per column").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    const float sampleRate = info[0].As<Napi::Number>().FloatValue();
+    const size_t samplesPerColumn = static_cast<size_t>(info[1].As<Napi::Number>().Uint32Value());
+    waveform.configure(sampleRate, samplesPerColumn);
+    return env.Undefined();
+}
+
+Napi::Value WaveformProcessMono(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array samples = info[0].As<Napi::Float32Array>();
+    const auto& summaries = waveform.processMono(samples.Data(), samples.ElementLength());
+    Napi::Float32Array result = Napi::Float32Array::New(env, summaries.size());
+    if (!summaries.empty()) {
+        memcpy(result.Data(), summaries.data(), summaries.size() * sizeof(float));
+    }
+    return result;
+}
+
+Napi::Value WaveformProcessStereo(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected two Float32Arrays (left, right)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array leftData = info[0].As<Napi::Float32Array>();
+    Napi::Float32Array rightData = info[1].As<Napi::Float32Array>();
+    const size_t length = std::min(leftData.ElementLength(), rightData.ElementLength());
+    const auto& summaries = waveform.processStereo(leftData.Data(), rightData.Data(), length);
+    Napi::Float32Array result = Napi::Float32Array::New(env, summaries.size());
+    if (!summaries.empty()) {
+        memcpy(result.Data(), summaries.data(), summaries.size() * sizeof(float));
+    }
+    return result;
+}
+
+Napi::Value WaveformReset(const Napi::CallbackInfo& info) {
+    waveform.reset();
     return info.Env().Undefined();
 }
 
@@ -570,13 +664,23 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     Napi::Object vecExports = Napi::Object::New(env);
     vecExports.Set("setSampleRate", Napi::Function::New(env, VectorscopeSetSampleRate));
     vecExports.Set("pushSamples", Napi::Function::New(env, VectorscopePushSamples));
+    vecExports.Set("pushMultibandSamples", Napi::Function::New(env, VectorscopePushMultibandSamples));
     vecExports.Set("fillPoints", Napi::Function::New(env, VectorscopeFillPoints));
     vecExports.Set("getPoints", Napi::Function::New(env, VectorscopeGetPoints));
+    vecExports.Set("getMultibandPoints", Napi::Function::New(env, VectorscopeGetMultibandPoints));
     vecExports.Set("setBufferSize", Napi::Function::New(env, VectorscopeSetBufferSize));
     vecExports.Set("getBufferSize", Napi::Function::New(env, VectorscopeGetBufferSize));
     vecExports.Set("process", Napi::Function::New(env, VectorscopeProcess));
     vecExports.Set("reset", Napi::Function::New(env, VectorscopeReset));
     exports.Set("vectorscope", vecExports);
+
+    // Waveform
+    Napi::Object waveformExports = Napi::Object::New(env);
+    waveformExports.Set("configure", Napi::Function::New(env, WaveformConfigure));
+    waveformExports.Set("processMono", Napi::Function::New(env, WaveformProcessMono));
+    waveformExports.Set("processStereo", Napi::Function::New(env, WaveformProcessStereo));
+    waveformExports.Set("reset", Napi::Function::New(env, WaveformReset));
+    exports.Set("waveform", waveformExports);
 
     // VU Meter
     Napi::Object vuExports = Napi::Object::New(env);

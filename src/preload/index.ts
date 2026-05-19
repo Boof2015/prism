@@ -247,6 +247,7 @@ const visualizerAPI = nativeAddonModule
       spectrum: nativeAddonModule.spectrum,
       spectrogram: nativeAddonModule.spectrogram,
       vectorscope: nativeAddonModule.vectorscope,
+      waveform: nativeAddonModule.waveform,
       vumeter: nativeAddonModule.vumeter,
       lufsmeter: nativeAddonModule.lufsmeter,
     }

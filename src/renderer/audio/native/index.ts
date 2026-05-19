@@ -7,6 +7,7 @@ import type {
   LUFSMeterNativeSnapshot,
   SpectrogramNativeOptions,
   SpectrogramNativeResult,
+  VectorscopeMultibandPointsResult,
   VectorscopeResult,
   VectorscopePointsResult,
   VUMeterNativeSnapshot,
@@ -185,6 +186,25 @@ export interface VUMeterNativeAnalyzer {
   isAvailable?: () => boolean
 }
 
+export interface VectorscopeNativeAnalyzer {
+  setSampleRate(sampleRate: number): void
+  pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void
+  pushMultibandSamples?: (leftChannel: Float32Array, rightChannel: Float32Array) => void
+  fillPoints(xOut: Float32Array, yOut: Float32Array): number
+  getMultibandPoints?: (maxPoints: number) => VectorscopeMultibandPointsResult | null
+  reset(): void
+  isAvailable?: () => boolean
+  isMultibandAvailable?: () => boolean
+}
+
+export interface WaveformNativeAnalyzer {
+  configure(sampleRate: number, samplesPerColumn: number): void
+  processMono(samples: Float32Array): Float32Array | null
+  processStereo(leftChannel: Float32Array, rightChannel: Float32Array): Float32Array | null
+  reset(): void
+  isAvailable?: () => boolean
+}
+
 export const spectrogram: SpectrogramNativeAnalyzer = {
   isAvailable: (): boolean => {
     return Boolean(nativeModule?.spectrogram)
@@ -204,17 +224,37 @@ export const spectrogram: SpectrogramNativeAnalyzer = {
   },
 }
 
-export const vectorscope = {
+export const vectorscope: VectorscopeNativeAnalyzer & {
+  getPoints: (maxPoints: number) => VectorscopePointsResult | null
+  getBufferSize: () => number
+  setBufferSize: (size: number) => void
+  process: (leftChannel: Float32Array, rightChannel: Float32Array) => VectorscopeResult | null
+} = {
+  isAvailable: (): boolean => {
+    return Boolean(nativeModule?.vectorscope)
+  },
+
+  isMultibandAvailable: (): boolean => {
+    return Boolean(
+      nativeModule?.vectorscope?.pushMultibandSamples
+        && nativeModule?.vectorscope?.getMultibandPoints,
+    )
+  },
+
   setSampleRate: (sampleRate: number): void => {
-    nativeModule?.vectorscope.setSampleRate(sampleRate)
+    nativeModule?.vectorscope?.setSampleRate(sampleRate)
   },
 
   pushSamples: (leftChannel: Float32Array, rightChannel: Float32Array): void => {
-    nativeModule?.vectorscope.pushSamples(leftChannel, rightChannel)
+    nativeModule?.vectorscope?.pushSamples(leftChannel, rightChannel)
+  },
+
+  pushMultibandSamples: (leftChannel: Float32Array, rightChannel: Float32Array): void => {
+    nativeModule?.vectorscope?.pushMultibandSamples?.(leftChannel, rightChannel)
   },
 
   fillPoints: (xOut: Float32Array, yOut: Float32Array): number => {
-    if (!nativeModule) return 0
+    if (!nativeModule?.vectorscope) return 0
     const result = nativeModule.vectorscope.getPoints(Math.min(xOut.length, yOut.length))
     const count = Math.min(xOut.length, yOut.length, result.count, result.x.length, result.y.length)
     if (count > 0) {
@@ -224,13 +264,18 @@ export const vectorscope = {
     return count
   },
 
+  getMultibandPoints: (maxPoints: number): VectorscopeMultibandPointsResult | null => {
+    if (!nativeModule?.vectorscope?.getMultibandPoints) return null
+    return nativeModule.vectorscope.getMultibandPoints(maxPoints)
+  },
+
   getPoints: (maxPoints: number): VectorscopePointsResult | null => {
-    if (!nativeModule) return null
+    if (!nativeModule?.vectorscope) return null
     return nativeModule.vectorscope.getPoints(maxPoints)
   },
 
   setBufferSize: (size: number): void => {
-    nativeModule?.vectorscope.setBufferSize(size)
+    nativeModule?.vectorscope?.setBufferSize(size)
   },
 
   getBufferSize: (): number => {
@@ -238,13 +283,37 @@ export const vectorscope = {
   },
 
   process: (leftChannel: Float32Array, rightChannel: Float32Array): VectorscopeResult | null => {
-    if (!nativeModule) return null
+    if (!nativeModule?.vectorscope) return null
     return nativeModule.vectorscope.process(leftChannel, rightChannel)
   },
 
   reset: (): void => {
-    nativeModule?.vectorscope.reset()
+    nativeModule?.vectorscope?.reset()
   }
+}
+
+export const waveform: WaveformNativeAnalyzer = {
+  isAvailable: (): boolean => {
+    return Boolean(nativeModule?.waveform)
+  },
+
+  configure: (sampleRate: number, samplesPerColumn: number): void => {
+    nativeModule?.waveform?.configure(sampleRate, samplesPerColumn)
+  },
+
+  processMono: (samples: Float32Array): Float32Array | null => {
+    if (!nativeModule?.waveform) return null
+    return nativeModule.waveform.processMono(samples)
+  },
+
+  processStereo: (leftChannel: Float32Array, rightChannel: Float32Array): Float32Array | null => {
+    if (!nativeModule?.waveform) return null
+    return nativeModule.waveform.processStereo(leftChannel, rightChannel)
+  },
+
+  reset: (): void => {
+    nativeModule?.waveform?.reset()
+  },
 }
 
 export const vumeter: VUMeterNativeAnalyzer = {
@@ -300,5 +369,6 @@ export type {
   SpectrogramNativeResult,
   VectorscopeResult,
   VectorscopePointsResult,
+  VectorscopeMultibandPointsResult,
   VUMeterNativeSnapshot,
 }

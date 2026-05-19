@@ -18,6 +18,11 @@ export interface VectorscopePointsResult {
   count: number;
 }
 
+export interface VectorscopeMultibandPointsResult {
+  data: Float32Array;
+  count: number;
+}
+
 export interface SpectrogramNativeOptions {
   fftSize: number;
   sampleRate: number;
@@ -117,11 +122,20 @@ export interface SpectrogramModule {
 export interface VectorscopeModule {
   setSampleRate(sampleRate: number): void;
   pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void;
+  pushMultibandSamples?: (leftChannel: Float32Array, rightChannel: Float32Array) => void;
   fillPoints(xOut: Float32Array, yOut: Float32Array): number;
   getPoints(maxPoints: number): VectorscopePointsResult;
+  getMultibandPoints?: (maxPoints: number) => VectorscopeMultibandPointsResult;
   setBufferSize(size: number): void;
   getBufferSize(): number;
   process(leftChannel: Float32Array, rightChannel: Float32Array): VectorscopeResult;
+  reset(): void;
+}
+
+export interface WaveformModule {
+  configure(sampleRate: number, samplesPerColumn: number): void;
+  processMono(samples: Float32Array): Float32Array;
+  processStereo(leftChannel: Float32Array, rightChannel: Float32Array): Float32Array;
   reset(): void;
 }
 
@@ -144,6 +158,7 @@ export interface VisualizerDSP {
   spectrum: SpectrumModule;
   spectrogram: SpectrogramModule;
   vectorscope: VectorscopeModule;
+  waveform?: WaveformModule;
   vumeter: VUMeterModule;
   lufsmeter: LUFSMeterModule;
 }

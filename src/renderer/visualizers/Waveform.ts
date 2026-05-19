@@ -1,4 +1,5 @@
 import { audioRouter } from '../audio/AudioRouter'
+import { waveform as nativeWaveform, type WaveformNativeAnalyzer } from '../audio/native'
 import { resolveColorToRgb } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
@@ -36,9 +37,10 @@ export interface WaveformOptions {
   multiband?: boolean
   dataSource?: WaveformDataSource
   frameScheduler?: FrameScheduler
+  nativeAnalyzer?: WaveformNativeAnalyzer | null
 }
 
-type ResolvedWaveformOptions = Required<Omit<WaveformOptions, 'dataSource' | 'frameScheduler'>>
+type ResolvedWaveformOptions = Required<Omit<WaveformOptions, 'dataSource' | 'frameScheduler' | 'nativeAnalyzer'>>
 
 const defaultOptions: ResolvedWaveformOptions = {
   backgroundColor: 'transparent',
@@ -74,6 +76,7 @@ export class Waveform {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedWaveformOptions
   private dataSource: WaveformDataSource
+  private nativeAnalyzer: WaveformNativeAnalyzer | null
   private frameLoop: VisualizerFrameLoop
 
   private waterfallCanvas: HTMLCanvasElement
@@ -105,7 +108,7 @@ export class Waveform {
     this.ctx = ctx
     this.ctx.imageSmoothingEnabled = false
 
-    const { dataSource, frameScheduler, ...optionOverrides } = options
+    const { dataSource, frameScheduler, nativeAnalyzer, ...optionOverrides } = options
     this.options = {
       ...defaultOptions,
       ...optionOverrides,
@@ -114,6 +117,7 @@ export class Waveform {
       multiband: optionOverrides.multiband ?? defaultOptions.multiband,
     }
     this.dataSource = dataSource ?? defaultWaveformDataSource
+    this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeWaveform : nativeAnalyzer
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
@@ -150,7 +154,16 @@ export class Waveform {
     this.waterfallCtx.clearRect(0, 0, this.waterfallCanvas.width, this.waterfallCanvas.height)
     this.columnAccumulatorPos = 0
     this.splitter.reset()
+    this.nativeAnalyzer?.reset()
+    this.configureNativeAnalyzer()
     this.invalidate()
+  }
+
+  private configureNativeAnalyzer(): void {
+    if (this.nativeAnalyzer?.isAvailable?.() === false) {
+      return
+    }
+    this.nativeAnalyzer?.configure(this.lastSampleRate || Math.max(1, this.dataSource.getSampleRate()), this.samplesPerColumn)
   }
 
   private recomputeSamplesPerColumn(): void {
@@ -171,10 +184,11 @@ export class Waveform {
     }
     this.lastSampleRate = sampleRate
     this.splitter.configure(sampleRate)
+    this.configureNativeAnalyzer()
   }
 
   setOptions(options: Partial<WaveformOptions>): void {
-    const { dataSource, frameScheduler: _frameScheduler, ...optionUpdates } = options
+    const { dataSource, frameScheduler: _frameScheduler, nativeAnalyzer, ...optionUpdates } = options
     const nextOptions: ResolvedWaveformOptions = {
       ...this.options,
       ...optionUpdates,
@@ -187,8 +201,15 @@ export class Waveform {
     const multibandChanged = nextOptions.multiband !== this.options.multiband
     const modeChanged = nextOptions.mode !== this.options.mode
     const dataSourceChanged = Boolean(dataSource && dataSource !== this.dataSource)
+    const nativeAnalyzerChanged = nativeAnalyzer !== undefined && nativeAnalyzer !== this.nativeAnalyzer
 
     this.options = nextOptions
+
+    if (nativeAnalyzerChanged) {
+      this.nativeAnalyzer = nativeAnalyzer
+      this.nativeAnalyzer?.reset()
+      this.configureNativeAnalyzer()
+    }
 
     if (dataSourceChanged && dataSource) {
       this.dataSource = dataSource
@@ -201,10 +222,12 @@ export class Waveform {
 
     if (multibandChanged || modeChanged) {
       this.splitter.reset()
+      this.nativeAnalyzer?.reset()
+      this.configureNativeAnalyzer()
     }
 
     this.staticLayerKey = ''
-    if (dataSourceChanged || speedChanged || multibandChanged || modeChanged) {
+    if (dataSourceChanged || speedChanged || multibandChanged || modeChanged || nativeAnalyzerChanged) {
       this.resetDisplay()
     }
 
@@ -248,11 +271,8 @@ export class Waveform {
     midBandSamples: Float32Array,
     highBandSamples: Float32Array,
   ): [number, number, number] {
-    const lowBand = this.toBandColorTuple(this.options.bandColors.low)
-    const midBand = this.toBandColorTuple(this.options.bandColors.mid)
-    const highBand = this.toBandColorTuple(this.options.bandColors.high)
     const n = this.columnAccumulatorPos
-    if (n === 0) return midBand
+    if (n === 0) return this.toBandColorTuple(this.options.bandColors.mid)
 
     let lowSum = 0
     let midSum = 0
@@ -266,9 +286,21 @@ export class Waveform {
       highSum += high * high
     }
 
-    const lowRms = Math.sqrt(lowSum / n)
-    const midRms = Math.sqrt(midSum / n)
-    const highRms = Math.sqrt(highSum / n)
+    return this.computeBandColorFromRms(
+      Math.sqrt(lowSum / n),
+      Math.sqrt(midSum / n),
+      Math.sqrt(highSum / n),
+    )
+  }
+
+  private computeBandColorFromRms(
+    lowRms: number,
+    midRms: number,
+    highRms: number,
+  ): [number, number, number] {
+    const lowBand = this.toBandColorTuple(this.options.bandColors.low)
+    const midBand = this.toBandColorTuple(this.options.bandColors.mid)
+    const highBand = this.toBandColorTuple(this.options.bandColors.high)
     const total = lowRms + midRms + highRms
 
     if (total < 1e-10) return midBand
@@ -309,6 +341,15 @@ export class Waveform {
       Math.round(blended[1] * (1 - focusBlend) + focused[1] * focusBlend),
       Math.round(blended[2] * (1 - focusBlend) + focused[2] * focusBlend),
     ]
+  }
+
+  private resolveNativeColumnColor(lowRms: number, midRms: number, highRms: number): [number, number, number] {
+    if (this.options.multiband) {
+      return this.computeBandColorFromRms(lowRms, midRms, highRms)
+    }
+
+    const lineColor = resolveColorToRgb(this.options.lineColor)
+    return [lineColor.r, lineColor.g, lineColor.b]
   }
 
   private toBandColorTuple(color: string): [number, number, number] {
@@ -454,6 +495,12 @@ export class Waveform {
   }
 
   private processMonoChunk(chunk: Float32Array, width: number, height: number): void {
+    if (this.useNativeMultiband()) {
+      if (this.processNativeMonoChunk(chunk, width, height)) {
+        return
+      }
+    }
+
     let lowBand: Float32Array | null = null
     let midBand: Float32Array | null = null
     let highBand: Float32Array | null = null
@@ -492,6 +539,12 @@ export class Waveform {
 
     const leftSamples = chunk.left.length === length ? chunk.left : chunk.left.subarray(0, length)
     const rightSamples = chunk.right.length === length ? chunk.right : chunk.right.subarray(0, length)
+
+    if (this.useNativeMultiband()) {
+      if (this.processNativeStereoChunk(leftSamples, rightSamples, width, height)) {
+        return
+      }
+    }
 
     let lowLeft: Float32Array | null = null
     let midLeft: Float32Array | null = null
@@ -535,6 +588,47 @@ export class Waveform {
         this.columnAccumulatorPos = 0
       }
     }
+  }
+
+  private useNativeMultiband(): boolean {
+    return this.options.multiband && Boolean(this.nativeAnalyzer) && this.nativeAnalyzer?.isAvailable?.() !== false
+  }
+
+  private processNativeMonoChunk(chunk: Float32Array, width: number, height: number): boolean {
+    const summaries = this.nativeAnalyzer?.processMono(chunk)
+    if (!summaries) {
+      return false
+    }
+
+    const stride = 5
+    const columnCount = Math.floor(summaries.length / stride)
+    for (let column = 0; column < columnCount; column += 1) {
+      const offset = column * stride
+      const color = this.resolveNativeColumnColor(summaries[offset + 2], summaries[offset + 3], summaries[offset + 4])
+      this.shiftWaterfall()
+      this.paintColumn(summaries[offset], summaries[offset + 1], width, 0, height, color)
+    }
+    return true
+  }
+
+  private processNativeStereoChunk(leftSamples: Float32Array, rightSamples: Float32Array, width: number, height: number): boolean {
+    const summaries = this.nativeAnalyzer?.processStereo(leftSamples, rightSamples)
+    if (!summaries) {
+      return false
+    }
+
+    const stride = 10
+    const laneHeight = height / 2
+    const columnCount = Math.floor(summaries.length / stride)
+    for (let column = 0; column < columnCount; column += 1) {
+      const offset = column * stride
+      const leftColor = this.resolveNativeColumnColor(summaries[offset + 2], summaries[offset + 3], summaries[offset + 4])
+      const rightColor = this.resolveNativeColumnColor(summaries[offset + 7], summaries[offset + 8], summaries[offset + 9])
+      this.shiftWaterfall()
+      this.paintColumn(summaries[offset], summaries[offset + 1], width, 0, laneHeight, leftColor)
+      this.paintColumn(summaries[offset + 5], summaries[offset + 6], width, laneHeight, laneHeight, rightColor)
+    }
+    return true
   }
 
   private ensureMultibandScratch(length: number): MultibandChunk {
@@ -613,6 +707,7 @@ export class Waveform {
   dispose(): void {
     this.stop()
     this.frameLoop.dispose()
+    this.nativeAnalyzer?.reset()
     if (this.unsubscribeSessionChange) {
       this.unsubscribeSessionChange()
       this.unsubscribeSessionChange = null
