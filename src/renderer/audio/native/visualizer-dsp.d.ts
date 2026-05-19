@@ -18,6 +18,29 @@ export interface VectorscopePointsResult {
   count: number;
 }
 
+export interface SpectrogramNativeOptions {
+  fftSize: number;
+  sampleRate: number;
+  rowCount: number;
+  minFrequency: number;
+  maxFrequency: number;
+  minDecibels: number;
+  maxDecibels: number;
+  scrollSpeed: number;
+  contrast: number;
+  tiltDbPerOctave: number;
+  clarityMode: string;
+  scaleMode: string;
+  orientation: string;
+}
+
+export interface SpectrogramNativeResult {
+  display: Float32Array;
+  heat: Float32Array;
+  columnCount: number;
+  rowCount: number;
+}
+
 // Circular buffer size (must match native code)
 export const OSCILLOSCOPE_BUFFER_SIZE = 32768;
 
@@ -62,6 +85,12 @@ export interface SpectrumModule {
   reset(): void;
 }
 
+export interface SpectrogramModule {
+  configure(options: SpectrogramNativeOptions): void;
+  process(audioData: Float32Array): SpectrogramNativeResult;
+  reset(): void;
+}
+
 export interface VectorscopeModule {
   setSampleRate(sampleRate: number): void;
   pushSamples(leftChannel: Float32Array, rightChannel: Float32Array): void;
@@ -76,6 +105,7 @@ export interface VectorscopeModule {
 export interface VisualizerDSP {
   oscilloscope: OscilloscopeModule;
   spectrum: SpectrumModule;
+  spectrogram: SpectrogramModule;
   vectorscope: VectorscopeModule;
 }
 

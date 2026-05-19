@@ -2,6 +2,7 @@ import type { VectorscopeMode } from '../renderer/visualizers/Vectorscope'
 import {
   DEFAULT_SPECTROGRAM_CONTRAST,
   DEFAULT_SPECTROGRAM_ORIENTATION,
+  DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE,
   type SpectrogramClarityMode,
   type SpectrogramOrientation,
   type SpectrogramScaleMode,
@@ -39,6 +40,7 @@ export interface ScopeSettings {
   }
   spectrogram: {
     fftSize: number
+    tiltDbPerOctave: number
     scrollSpeed: number
     contrast: number
     clarityMode: SpectrogramClarityMode
@@ -75,7 +77,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   spectrum: { fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, heatmapSmoothing: 0.5, showGrid: true, smoothing: 0.9, fillGradient: true, showSideLine: false, peakInfoMode: DEFAULT_SPECTRUM_PEAK_INFO_MODE },
   oscilloscope: { pitchLock: true, underfillEnabled: false, showGrid: true, lineWidth: 2 },
   vectorscope: { mode: 'lissajous', multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
-  spectrogram: { fftSize: 2048, scrollSpeed: 2, contrast: DEFAULT_SPECTROGRAM_CONTRAST, clarityMode: 'sharper', scaleMode: 'log', orientation: DEFAULT_SPECTROGRAM_ORIENTATION, colorScheme: 'heat' },
+  spectrogram: { fftSize: 4096, tiltDbPerOctave: DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE, scrollSpeed: 2, contrast: DEFAULT_SPECTROGRAM_CONTRAST, clarityMode: 'sharper', scaleMode: 'log', orientation: DEFAULT_SPECTROGRAM_ORIENTATION, colorScheme: 'heat' },
   vumeter: { mode: 'bar', orientation: 'horizontal', needleChannels: 'stereo', referenceDb: DEFAULT_VU_REFERENCE_DBFS },
   lufsmeter: { mode: 'bar', readout: DEFAULT_LUFS_METER_READOUT },
   waveform: { mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: 1, multiband: false },

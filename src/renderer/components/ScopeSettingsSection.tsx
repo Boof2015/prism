@@ -4,8 +4,11 @@ import { SCOPE_LABELS } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import {
   MAX_SPECTROGRAM_CONTRAST,
+  MAX_SPECTROGRAM_TILT_DB_PER_OCTAVE,
   MIN_SPECTROGRAM_CONTRAST,
+  MIN_SPECTROGRAM_TILT_DB_PER_OCTAVE,
   SPECTROGRAM_CONTRAST_STEP,
+  SPECTROGRAM_TILT_STEP,
 } from '../../types/spectrogram'
 import {
   DEFAULT_VU_REFERENCE_DBFS,
@@ -490,7 +493,7 @@ export default function ScopeSettingsSection({
                 value={current.fftSize}
                 onChange={(value) => onUpdate('spectrogram', { fftSize: Number(value) })}
               >
-                {[512, 1024, 2048, 4096].map((option) => (
+                {[512, 1024, 2048, 4096, 8192].map((option) => (
                   <option key={option} value={option}>
                     {option}
                   </option>
@@ -555,6 +558,17 @@ export default function ScopeSettingsSection({
                 step={SPECTROGRAM_CONTRAST_STEP}
                 fullWidth={false}
                 onChange={(value) => onUpdate('spectrogram', { contrast: value })}
+              />
+
+              <RangeControl
+                label="Tilt"
+                value={current.tiltDbPerOctave}
+                valueLabel={`${current.tiltDbPerOctave.toFixed(1)} dB/oct`}
+                min={MIN_SPECTROGRAM_TILT_DB_PER_OCTAVE}
+                max={MAX_SPECTROGRAM_TILT_DB_PER_OCTAVE}
+                step={SPECTROGRAM_TILT_STEP}
+                fullWidth={false}
+                onChange={(value) => onUpdate('spectrogram', { tiltDbPerOctave: value })}
               />
             </>
           )

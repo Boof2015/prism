@@ -247,6 +247,7 @@ export function scopeSettingsToOptions(
         heatColors: t.heatColors,
         backgroundColor: t.background,
         fftSize: s.fftSize,
+        tiltDbPerOctave: s.tiltDbPerOctave,
         scrollSpeed: s.scrollSpeed,
         contrast: s.contrast,
         clarityMode: s.clarityMode,

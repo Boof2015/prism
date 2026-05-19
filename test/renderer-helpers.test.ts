@@ -75,6 +75,11 @@ import {
   NativeVisualizerTransport,
   type NativeVisualizerTransportBridge,
 } from '../src/renderer/audio/NativeVisualizerTransport'
+import type {
+  SpectrogramNativeAnalyzer,
+  SpectrogramNativeOptions,
+  SpectrogramNativeResult,
+} from '../src/renderer/audio/native'
 import {
   HEAT_LOW_DB,
   HEAT_MAX_DB,
@@ -1327,6 +1332,13 @@ test('default profile starts with spectrum peak info disabled', () => {
   assert.equal(normalizeSpectrumPeakInfoMode('nope'), DEFAULT_SPECTRUM_PEAK_INFO_MODE)
 })
 
+test('default profile starts with high-detail spectrogram FFT size', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(profile.scopeSettings.spectrogram.fftSize, 4096)
+  assert.equal(profile.scopeSettings.spectrogram.tiltDbPerOctave, 4)
+})
+
 test('spectrum pitch helpers format nearest note with octave and cents', () => {
   assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(440)), 'A4 0c')
   assert.equal(formatSpectrumPitchInfo(resolveSpectrumPitchInfo(261.6255653005986)), 'C4 0c')
@@ -1567,96 +1579,6 @@ test('Spectrogram keeps the historical display dB range for line thickness', () 
   }
 })
 
-test('Spectrogram display gain feeds both display and heat intensity', () => {
-  const dom = installFakeCanvasDom()
-  const dataSource = {
-    getPendingSpectrogramSamples: () => [],
-    getSampleRate: () => 48000,
-    isPlaying: () => false,
-    subscribeToSessionChanges: () => () => {},
-  }
-  const canvas = createFakeCanvas()
-  canvas.width = 1
-  canvas.height = 1
-  const spectrogram = new Spectrogram(canvas, {
-    dataSource,
-    clarityMode: 'classic',
-    minDecibels: -90,
-    maxDecibels: -12,
-  })
-
-  try {
-    const state = spectrogram as unknown as {
-      drawColumn: (magnitudes: Float32Array) => Float32Array
-      heatColumnValues: Float32Array
-      rowCenterBins: Float32Array
-      rowBandStartBins: Float32Array
-      rowBandEndBins: Float32Array
-    }
-    state.rowCenterBins = Float32Array.from([1])
-    state.rowBandStartBins = Float32Array.from([0.5])
-    state.rowBandEndBins = Float32Array.from([1.5])
-
-    const magnitudes = new Float32Array(24)
-    magnitudes.fill(-120)
-    magnitudes[1] = -66
-    const values = state.drawColumn(magnitudes)
-    const expectedDisplay = Math.pow((-64 - (-90)) / (-12 - (-90)), 1.4)
-    const expectedHeat = normalizeHeatDb(-58)
-
-    assertAlmostEqual(values[0], expectedDisplay, 1e-6, 'display intensity should include spectrogram display gain')
-    assertAlmostEqual(state.heatColumnValues[0], expectedHeat, 1e-6, 'heat color should include display gain before heat compensation')
-  } finally {
-    spectrogram.dispose()
-    dom.restore()
-  }
-})
-
-test('Spectrogram tilt adds 4 dB per octave above the reference frequency', () => {
-  const dom = installFakeCanvasDom()
-  const dataSource = {
-    getPendingSpectrogramSamples: () => [],
-    getSampleRate: () => 48000,
-    isPlaying: () => false,
-    subscribeToSessionChanges: () => () => {},
-  }
-  const canvas = createFakeCanvas()
-  canvas.width = 1
-  canvas.height = 1
-  const spectrogram = new Spectrogram(canvas, {
-    dataSource,
-    clarityMode: 'classic',
-    minDecibels: -90,
-    maxDecibels: -12,
-  })
-
-  try {
-    const state = spectrogram as unknown as {
-      drawColumn: (magnitudes: Float32Array) => Float32Array
-      heatColumnValues: Float32Array
-      rowCenterBins: Float32Array
-      rowBandStartBins: Float32Array
-      rowBandEndBins: Float32Array
-    }
-    state.rowCenterBins = Float32Array.from([2])
-    state.rowBandStartBins = Float32Array.from([1.5])
-    state.rowBandEndBins = Float32Array.from([2.5])
-
-    const magnitudes = new Float32Array(24)
-    magnitudes.fill(-120)
-    magnitudes[2] = -66
-    const values = state.drawColumn(magnitudes)
-    const expectedDisplay = Math.pow((-60 - (-90)) / (-12 - (-90)), 1.4)
-    const expectedHeat = normalizeHeatDb(-54)
-
-    assertAlmostEqual(values[0], expectedDisplay, 1e-6, 'display intensity should include +4 dB/oct spectrogram tilt')
-    assertAlmostEqual(state.heatColumnValues[0], expectedHeat, 1e-6, 'heat color should include +4 dB/oct spectrogram tilt')
-  } finally {
-    spectrogram.dispose()
-    dom.restore()
-  }
-})
-
 test('Spectrogram custom heat colors land on shared low mid and high thresholds', () => {
   const imageData = renderSpectrogramColumnImage({
     heatColors: [
@@ -1736,35 +1658,148 @@ test('Spectrogram vertical orientation shifts existing rows upward with copy com
   assert.equal(drawCall?.args[2], -1)
 })
 
-test('Spectrogram vertical orientation maps low frequencies to the left', () => {
-  const dom = installFakeCanvasDom()
+test('Spectrogram paints multiple native analyzer columns in order', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const canvas = createFakeCanvas(recorder, 4, 2)
+  let pending = [Float32Array.from([0, 1, 0, -1])]
   const dataSource = {
-    getPendingSpectrogramSamples: () => [],
+    getPendingSpectrogramSamples: () => {
+      const chunks = pending
+      pending = []
+      return chunks
+    },
     getSampleRate: () => 48000,
-    isPlaying: () => false,
+    isPlaying: () => true,
     subscribeToSessionChanges: () => () => {},
   }
-  const canvas = createFakeCanvas()
-  canvas.width = 3
-  canvas.height = 5
+  const nativeAnalyzer: SpectrogramNativeAnalyzer = {
+    isAvailable: () => true,
+    configure: () => {},
+    process: () => ({
+      display: Float32Array.from([0.25, 0.5, 0.75, 1]),
+      heat: Float32Array.from([0.25, 0.5, 0.75, 1]),
+      columnCount: 2,
+      rowCount: 2,
+    }),
+    reset: () => {},
+  }
   const spectrogram = new Spectrogram(canvas, {
     dataSource,
-    orientation: 'vertical',
-    scaleMode: 'linear',
-    minFrequency: 100,
-    maxFrequency: 300,
+    nativeAnalyzer,
+    colorScheme: 'mono',
+    lineColor: 'rgb(10, 20, 30)',
   })
 
   try {
-    const state = spectrogram as unknown as {
-      ensureBandMapping: () => void
-      rowCenterBins: Float32Array
-    }
-    state.ensureBandMapping()
+    const state = spectrogram as unknown as { drawFrame: () => void }
+    state.drawFrame()
 
-    assert.equal(state.rowCenterBins.length, 3)
-    assert.equal(state.rowCenterBins[0] < state.rowCenterBins[1], true)
-    assert.equal(state.rowCenterBins[1] < state.rowCenterBins[2], true)
+    const writes = recorder.imageDataWrites
+    assert.equal(writes.length, 2)
+    assert.deepEqual(writes[0].data.slice(0, 8), [10, 20, 30, 64, 10, 20, 30, 128])
+    assert.deepEqual(writes[1].data.slice(0, 8), [10, 20, 30, 191, 10, 20, 30, 255])
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
+test('Spectrogram forwards orientation and row count to the native analyzer', () => {
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas(null, 3, 5)
+  let capturedConfig: SpectrogramNativeOptions | null = null
+  let pending = [Float32Array.from([0, 0])]
+  const dataSource = {
+    getPendingSpectrogramSamples: () => {
+      const chunks = pending
+      pending = []
+      return chunks
+    },
+    getSampleRate: () => 44100,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const nativeAnalyzer: SpectrogramNativeAnalyzer = {
+    isAvailable: () => true,
+    configure: (options) => {
+      capturedConfig = options
+    },
+    process: (): SpectrogramNativeResult => ({
+      display: new Float32Array(0),
+      heat: new Float32Array(0),
+      columnCount: 0,
+      rowCount: 3,
+    }),
+    reset: () => {},
+  }
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    nativeAnalyzer,
+    orientation: 'vertical',
+    scaleMode: 'linear',
+    fftSize: 8192,
+    scrollSpeed: 4,
+    tiltDbPerOctave: 5.5,
+  })
+
+  try {
+    const state = spectrogram as unknown as { drawFrame: () => void }
+    state.drawFrame()
+
+    assert.equal(capturedConfig?.orientation, 'vertical')
+    assert.equal(capturedConfig?.rowCount, 3)
+    assert.equal(capturedConfig?.scaleMode, 'linear')
+    assert.equal(capturedConfig?.fftSize, 8192)
+    assert.equal(capturedConfig?.scrollSpeed, 4)
+    assert.equal(capturedConfig?.tiltDbPerOctave, 5.5)
+    assert.equal(capturedConfig?.sampleRate, 44100)
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
+test('Spectrogram freezes the waterfall when native analyzer is unavailable', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas(recorder, 4, 4)
+  let pending = [Float32Array.from([0, 1, 0, -1])]
+  let pendingFlushes = 0
+  let nativeProcessCalls = 0
+  const dataSource = {
+    getPendingSpectrogramSamples: () => {
+      pendingFlushes += 1
+      const chunks = pending
+      pending = []
+      return chunks
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const nativeAnalyzer: SpectrogramNativeAnalyzer = {
+    isAvailable: () => false,
+    configure: () => {},
+    process: () => {
+      nativeProcessCalls += 1
+      return null
+    },
+    reset: () => {},
+  }
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    nativeAnalyzer,
+  })
+
+  try {
+    const state = spectrogram as unknown as { drawFrame: () => void }
+    state.drawFrame()
+
+    assert.equal(pendingFlushes, 1)
+    assert.equal(nativeProcessCalls, 0)
+    assert.equal(recorder.imageDataWrites.length, 0)
+    assert.equal(recorder.drawImageCalls.length, 1)
   } finally {
     spectrogram.dispose()
     dom.restore()
@@ -2297,6 +2332,7 @@ test('Vectorscope keeps the original linear projection behavior', () => {
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
   profile.scopeSettings.spectrogram.orientation = 'vertical'
+  profile.scopeSettings.spectrogram.tiltDbPerOctave = 5.2
   profile.scopeSettings.lufsmeter.readout = 'shortTerm'
   profile.scopeSettings.vumeter.needleChannels = 'combined'
   const authoredTheme = createDefaultTheme()
@@ -2312,6 +2348,7 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
   const spectrogram = scopeSettingsToOptions('spectrogram', profile.scopeSettings.spectrogram, theme.spectrogram)
   assert.equal(spectrogram.backgroundColor, 'rgb(6, 7, 8)')
   assert.equal(spectrogram.orientation, 'vertical')
+  assert.equal(spectrogram.tiltDbPerOctave, 5.2)
 
   const vumeter = scopeSettingsToOptions('vumeter', profile.scopeSettings.vumeter, theme.vumeter)
   assert.equal(vumeter.backgroundColor, 'rgb(6, 7, 8)')

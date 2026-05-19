@@ -16,7 +16,10 @@ import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } fr
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 import { isLUFSMeterReadout } from '../types/lufsmeter'
 import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
-import { isSpectrogramOrientation } from '../types/spectrogram'
+import {
+  clampSpectrogramTiltDbPerOctave,
+  isSpectrogramOrientation,
+} from '../types/spectrogram'
 import { isVUMeterNeedleChannels, sanitizeVUReferenceDbfs } from '../types/vumeter'
 import { clampWaveformScrollSpeed } from '../types/waveform'
 
@@ -168,6 +171,9 @@ export function mergeScopeSettings(raw: unknown): ScopeSettings {
       orientation: isSpectrogramOrientation(rawSpectrogram.orientation)
         ? rawSpectrogram.orientation
         : DEFAULT_SCOPE_SETTINGS.spectrogram.orientation,
+      tiltDbPerOctave: clampSpectrogramTiltDbPerOctave(
+        rawSpectrogram.tiltDbPerOctave ?? DEFAULT_SCOPE_SETTINGS.spectrogram.tiltDbPerOctave
+      ),
     },
     vumeter: {
       ...DEFAULT_SCOPE_SETTINGS.vumeter,

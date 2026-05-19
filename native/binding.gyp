@@ -9,6 +9,7 @@
         "src/main.cpp",
         "src/oscilloscope.cpp",
         "src/spectrum.cpp",
+        "src/spectrogram.cpp",
         "src/vectorscope.cpp",
         "src/dsp_utils.cpp"
       ],

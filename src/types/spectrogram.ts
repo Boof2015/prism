@@ -30,6 +30,11 @@ export const MAX_SPECTROGRAM_CONTRAST = 2.0
 export const SPECTROGRAM_CONTRAST_STEP = 0.1
 export const DEFAULT_SPECTROGRAM_CONTRAST = 1.0
 
+export const DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE = 4.0
+export const MIN_SPECTROGRAM_TILT_DB_PER_OCTAVE = -2.0
+export const MAX_SPECTROGRAM_TILT_DB_PER_OCTAVE = 8.0
+export const SPECTROGRAM_TILT_STEP = 0.1
+
 export function isSpectrogramClarityMode(value: unknown): value is SpectrogramClarityMode {
   return typeof value === 'string' && SPECTROGRAM_CLARITY_MODES.includes(value as SpectrogramClarityMode)
 }
@@ -60,4 +65,18 @@ export function clampSpectrogramContrast(value: unknown): number {
 
   const snapped = Math.round(numeric / SPECTROGRAM_CONTRAST_STEP) * SPECTROGRAM_CONTRAST_STEP
   return Math.min(MAX_SPECTROGRAM_CONTRAST, Math.max(MIN_SPECTROGRAM_CONTRAST, snapped))
+}
+
+export function clampSpectrogramTiltDbPerOctave(value: unknown): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE
+  }
+
+  const snapped = Math.round(numeric / SPECTROGRAM_TILT_STEP) * SPECTROGRAM_TILT_STEP
+  const rounded = Math.round(snapped * 10) / 10
+  return Math.min(
+    MAX_SPECTROGRAM_TILT_DB_PER_OCTAVE,
+    Math.max(MIN_SPECTROGRAM_TILT_DB_PER_OCTAVE, rounded),
+  )
 }

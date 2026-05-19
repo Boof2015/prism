@@ -1,15 +1,18 @@
 #include <napi.h>
 #include <cstring>
+#include <string>
 #include "linux_capture.h"
 #include "macos_capture.h"
 #include "windows_capture.h"
 #include "oscilloscope.h"
 #include "spectrum.h"
+#include "spectrogram.h"
 #include "vectorscope.h"
 
 // Global instances
 static Visualizer::Oscilloscope oscilloscope;
 static Visualizer::Spectrum spectrum(2048);
+static Visualizer::SpectrogramAnalyzer spectrogramAnalyzer;
 static Visualizer::Vectorscope vectorscope;
 
 // ============== Oscilloscope ==============
@@ -239,6 +242,84 @@ Napi::Value SpectrumReset(const Napi::CallbackInfo& info) {
     return info.Env().Undefined();
 }
 
+// ============== Spectrogram ==============
+
+namespace {
+float GetObjectFloat(const Napi::Object& obj, const char* key, float fallback) {
+    Napi::Value value = obj.Get(key);
+    return value.IsNumber() ? value.As<Napi::Number>().FloatValue() : fallback;
+}
+
+size_t GetObjectSize(const Napi::Object& obj, const char* key, size_t fallback) {
+    Napi::Value value = obj.Get(key);
+    return value.IsNumber() ? static_cast<size_t>(value.As<Napi::Number>().Uint32Value()) : fallback;
+}
+
+std::string GetObjectString(const Napi::Object& obj, const char* key, const std::string& fallback) {
+    Napi::Value value = obj.Get(key);
+    return value.IsString() ? value.As<Napi::String>().Utf8Value() : fallback;
+}
+} // namespace
+
+Napi::Value SpectrogramConfigure(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected spectrogram options object").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Object options = info[0].As<Napi::Object>();
+    Visualizer::SpectrogramConfig config;
+    config.fftSize = GetObjectSize(options, "fftSize", config.fftSize);
+    config.sampleRate = GetObjectFloat(options, "sampleRate", config.sampleRate);
+    config.rowCount = GetObjectSize(options, "rowCount", config.rowCount);
+    config.minFrequency = GetObjectFloat(options, "minFrequency", config.minFrequency);
+    config.maxFrequency = GetObjectFloat(options, "maxFrequency", config.maxFrequency);
+    config.minDecibels = GetObjectFloat(options, "minDecibels", config.minDecibels);
+    config.maxDecibels = GetObjectFloat(options, "maxDecibels", config.maxDecibels);
+    config.scrollSpeed = GetObjectFloat(options, "scrollSpeed", config.scrollSpeed);
+    config.contrast = GetObjectFloat(options, "contrast", config.contrast);
+    config.tiltDbPerOctave = GetObjectFloat(options, "tiltDbPerOctave", config.tiltDbPerOctave);
+    config.clarityMode = GetObjectString(options, "clarityMode", config.clarityMode);
+    config.scaleMode = GetObjectString(options, "scaleMode", config.scaleMode);
+    config.orientation = GetObjectString(options, "orientation", config.orientation);
+
+    spectrogramAnalyzer.configure(config);
+    return env.Undefined();
+}
+
+Napi::Value SpectrogramProcess(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array audioData = info[0].As<Napi::Float32Array>();
+    auto result = spectrogramAnalyzer.process(audioData.Data(), audioData.ElementLength());
+
+    Napi::Float32Array display = Napi::Float32Array::New(env, result.display.size());
+    Napi::Float32Array heat = Napi::Float32Array::New(env, result.heat.size());
+    if (!result.display.empty()) {
+        memcpy(display.Data(), result.display.data(), result.display.size() * sizeof(float));
+    }
+    if (!result.heat.empty()) {
+        memcpy(heat.Data(), result.heat.data(), result.heat.size() * sizeof(float));
+    }
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("display", display);
+    obj.Set("heat", heat);
+    obj.Set("columnCount", Napi::Number::New(env, static_cast<double>(result.columnCount)));
+    obj.Set("rowCount", Napi::Number::New(env, static_cast<double>(result.rowCount)));
+    return obj;
+}
+
+Napi::Value SpectrogramReset(const Napi::CallbackInfo& info) {
+    spectrogramAnalyzer.reset();
+    return info.Env().Undefined();
+}
+
 // ============== Vectorscope ==============
 
 Napi::Value VectorscopeSetSampleRate(const Napi::CallbackInfo& info) {
@@ -377,6 +458,13 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("binToFrequency", Napi::Function::New(env, SpectrumBinToFrequency));
     specExports.Set("reset", Napi::Function::New(env, SpectrumReset));
     exports.Set("spectrum", specExports);
+
+    // Spectrogram
+    Napi::Object spectrogramExports = Napi::Object::New(env);
+    spectrogramExports.Set("configure", Napi::Function::New(env, SpectrogramConfigure));
+    spectrogramExports.Set("process", Napi::Function::New(env, SpectrogramProcess));
+    spectrogramExports.Set("reset", Napi::Function::New(env, SpectrogramReset));
+    exports.Set("spectrogram", spectrogramExports);
 
     // Vectorscope
     Napi::Object vecExports = Napi::Object::New(env);

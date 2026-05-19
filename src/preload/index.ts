@@ -245,6 +245,7 @@ const visualizerAPI = nativeAddonModule
   ? {
       oscilloscope: nativeAddonModule.oscilloscope,
       spectrum: nativeAddonModule.spectrum,
+      spectrogram: nativeAddonModule.spectrogram,
       vectorscope: nativeAddonModule.vectorscope,
     }
   : null

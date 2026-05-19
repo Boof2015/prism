@@ -1,7 +1,14 @@
 // Native visualizer DSP module loader
 // This loads the native C++ addon for high-performance audio visualization
 
-import type { VisualizerDSP, OscilloscopeResult, VectorscopeResult, VectorscopePointsResult } from './visualizer-dsp'
+import type {
+  VisualizerDSP,
+  OscilloscopeResult,
+  SpectrogramNativeOptions,
+  SpectrogramNativeResult,
+  VectorscopeResult,
+  VectorscopePointsResult,
+} from './visualizer-dsp'
 
 let nativeModule: VisualizerDSP | null = null
 let loadError: Error | null = null
@@ -153,6 +160,32 @@ export const spectrum = {
   }
 }
 
+export interface SpectrogramNativeAnalyzer {
+  configure(options: SpectrogramNativeOptions): void
+  process(audioData: Float32Array): SpectrogramNativeResult | null
+  reset(): void
+  isAvailable?: () => boolean
+}
+
+export const spectrogram: SpectrogramNativeAnalyzer = {
+  isAvailable: (): boolean => {
+    return Boolean(nativeModule?.spectrogram)
+  },
+
+  configure: (options: SpectrogramNativeOptions): void => {
+    nativeModule?.spectrogram?.configure(options)
+  },
+
+  process: (audioData: Float32Array): SpectrogramNativeResult | null => {
+    if (!nativeModule?.spectrogram) return null
+    return nativeModule.spectrogram.process(audioData)
+  },
+
+  reset: (): void => {
+    nativeModule?.spectrogram?.reset()
+  },
+}
+
 export const vectorscope = {
   setSampleRate: (sampleRate: number): void => {
     nativeModule?.vectorscope.setSampleRate(sampleRate)
@@ -196,4 +229,10 @@ export const vectorscope = {
   }
 }
 
-export type { OscilloscopeResult, VectorscopeResult, VectorscopePointsResult }
+export type {
+  OscilloscopeResult,
+  SpectrogramNativeOptions,
+  SpectrogramNativeResult,
+  VectorscopeResult,
+  VectorscopePointsResult,
+}
