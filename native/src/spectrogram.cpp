@@ -10,7 +10,9 @@ namespace Visualizer {
 namespace {
 constexpr size_t FFT_PAD_FACTOR = 4;
 constexpr float DISPLAY_GAIN_DB = 2.0f;
-constexpr float HEAT_GAIN_COMPENSATION_DB = 6.0f;
+constexpr float SPECTROGRAM_HEAT_GAMMA = 1.45f;
+constexpr float SPECTROGRAM_DISPLAY_STROKE_WEIGHT = 0.42f;
+constexpr float SPECTROGRAM_HEAT_STROKE_WEIGHT = 0.32f;
 constexpr float TILT_REFERENCE_HZ = 1000.0f;
 constexpr float HEAT_MIN_DB = -100.0f;
 constexpr float HEAT_MAX_DB = -20.0f;
@@ -177,6 +179,10 @@ void SpectrogramAnalyzer::rebuildFrequencyMapping() {
     reassignedPower_.assign(rowCount, 0.0f);
     blendedRaw_.assign(rowCount, 0.0f);
     blendedHeat_.assign(rowCount, 0.0f);
+    shapedDisplay_.assign(rowCount, 0.0f);
+    shapedHeat_.assign(rowCount, 0.0f);
+    strokedDisplay_.assign(rowCount, 0.0f);
+    strokedHeat_.assign(rowCount, 0.0f);
 
     const float rowSpan = static_cast<float>(std::max(static_cast<size_t>(1), rowCount - 1));
     const float numBins = static_cast<float>(std::max(static_cast<size_t>(1), paddedSize_ / 2));
@@ -295,7 +301,7 @@ void SpectrogramAnalyzer::computeStandardSpectrum() {
     for (size_t row = 0; row < rowCount; row += 1) {
         const float displayDb = applyDisplayTilt(sampleDbAtBin(rowCenterBins_[row]), rowCenterFrequencies_[row]);
         standardRaw_[row] = displayDbToIntensity(displayDb);
-        standardHeat_[row] = normalizeHeatDb(displayDb + HEAT_GAIN_COMPENSATION_DB);
+        standardHeat_[row] = normalizeHeatDb(displayDb);
     }
 }
 
@@ -380,7 +386,7 @@ void SpectrogramAnalyzer::blendAndShapeColumn(std::vector<float>& display, std::
             const float reassignedDb = 20.0f * std::log10(std::max(reassignedMag, 1.0e-10f));
             const float displayDb = applyDisplayTilt(reassignedDb, rowCenterFrequencies_[row]);
             reassignedRaw = displayDbToIntensity(displayDb);
-            reassignedHeat = normalizeHeatDb(displayDb + HEAT_GAIN_COMPENSATION_DB);
+            reassignedHeat = normalizeHeatDb(displayDb);
         }
 
         blendedRaw_[row] = std::max(standardRaw_[row] * standardWeight, reassignedRaw * reassignedWeight);
@@ -421,12 +427,32 @@ void SpectrogramAnalyzer::blendAndShapeColumn(std::vector<float>& display, std::
     }
 
     const float effectiveGamma = clarity.gamma * config_.contrast;
+    for (size_t row = 0; row < rowCount; row += 1) {
+        shapedDisplay_[row] = std::pow(clamp01(blendedRaw_[row]), effectiveGamma);
+        shapedHeat_[row] = std::pow(clamp01(blendedHeat_[row]), SPECTROGRAM_HEAT_GAMMA);
+        strokedDisplay_[row] = shapedDisplay_[row];
+        strokedHeat_[row] = shapedHeat_[row];
+    }
+
+    for (size_t row = 0; row < rowCount; row += 1) {
+        const float displayShoulder = shapedDisplay_[row] * SPECTROGRAM_DISPLAY_STROKE_WEIGHT;
+        const float heatShoulder = shapedHeat_[row] * SPECTROGRAM_HEAT_STROKE_WEIGHT;
+        if (row > 0) {
+            strokedDisplay_[row - 1] = std::max(strokedDisplay_[row - 1], displayShoulder);
+            strokedHeat_[row - 1] = std::max(strokedHeat_[row - 1], heatShoulder);
+        }
+        if (row + 1 < rowCount) {
+            strokedDisplay_[row + 1] = std::max(strokedDisplay_[row + 1], displayShoulder);
+            strokedHeat_[row + 1] = std::max(strokedHeat_[row + 1], heatShoulder);
+        }
+    }
+
     const size_t offset = display.size();
     display.resize(offset + rowCount);
     heat.resize(offset + rowCount);
     for (size_t row = 0; row < rowCount; row += 1) {
-        display[offset + row] = std::pow(clamp01(blendedRaw_[row]), effectiveGamma);
-        heat[offset + row] = clamp01(blendedHeat_[row]);
+        display[offset + row] = strokedDisplay_[row];
+        heat[offset + row] = strokedHeat_[row];
     }
 }
 

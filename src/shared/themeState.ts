@@ -966,7 +966,7 @@ labels = 56, 58, 61
 mono = 230, 0, 69
 heat_low = 180, 20, 40, 200
 heat_mid = 220, 0, 55, 250
-heat_high = 255, 90, 90, 255
+heat_high = 255, 200, 200
 
 [VUMeter]
 background = 15, 15, 15

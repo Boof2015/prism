@@ -71,6 +71,10 @@ private:
     std::vector<float> reassignedPower_;
     std::vector<float> blendedRaw_;
     std::vector<float> blendedHeat_;
+    std::vector<float> shapedDisplay_;
+    std::vector<float> shapedHeat_;
+    std::vector<float> strokedDisplay_;
+    std::vector<float> strokedHeat_;
 
     void configureFft(size_t fftSize);
     void rebuildFrequencyMapping();
