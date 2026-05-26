@@ -1,0 +1,66 @@
+# Prism Spectrum — DAW plugin POC
+
+A proof-of-concept JUCE 8 plugin (VST3 / AU / Standalone, macOS) that renders Prism's
+Spectrum scope inside a DAW. It **reuses Prism's existing C++ DSP** (`native/src/spectrum.cpp`,
+`dsp_utils.cpp`) and the **existing React canvas UI** (`src/plugin-ui`, which imports
+`src/renderer/visualizers/SpectrumAnalyzer.ts`).
+
+## How it fits together
+
+```
+DAW track audio
+  → processBlock (RT thread): mix to mono, write to lock-free FIFO     [Source/PluginProcessor.cpp]
+  → 60 Hz timer (message thread): drain FIFO → Visualizer::Spectrum    [Source/PluginEditor.cpp + native/src/spectrum.cpp]
+  → emit "spectrumFrame" (base64 Float32 magnitudes) to the webview
+  → juceBridge.ts decodes → BridgeSpectrumAnalyzer (a SpectrumNativeAnalyzer shim)
+  → SpectrumAnalyzer.ts renders to canvas (unchanged Electron code)    [src/plugin-ui]
+```
+
+No DSP or allocation runs on the realtime audio thread; audio passes through unmodified.
+
+## Build & run (macOS)
+
+Prereqs: CMake ≥ 3.22, Xcode command-line tools, Node.
+
+### Default: self-contained build (embedded UI)
+
+The UI is bundled into the plugin binary and served via JUCE's resource provider —
+**no dev server needed at runtime.**
+
+```sh
+npm run plugin-ui:build                                   # build the webview bundle → plugin/webview-dist
+cmake -B plugin/build -S plugin -DCMAKE_BUILD_TYPE=Release # embeds the bundle (reconfigure to pick up UI changes)
+cmake --build plugin/build --config Release
+```
+
+`COPY_PLUGIN_AFTER_BUILD` installs into your user plugin folders:
+- AU:   `~/Library/Audio/Plug-Ins/Components/Prism Spectrum.component`
+- VST3: `~/Library/Audio/Plug-Ins/VST3/Prism Spectrum.vst3`
+
+Run the **Standalone** (`plugin/build/.../Standalone/Prism Spectrum.app`) or load the
+VST3/AU on a track in Ableton / FL / Logic / Reaper, play audio, and the spectrum animates.
+(To use a local JUCE checkout instead of fetching: add `-DJUCE_PATH=/path/to/JUCE`.)
+
+### UI development: dev-server mode (hot reload)
+
+```sh
+npm run plugin-ui:dev                                      # serve UI on :5174 with HMR
+cmake -B plugin/build -S plugin -DPRISM_DEV_SERVER=ON      # editor loads http://localhost:5174
+cmake --build plugin/build --config Release
+```
+
+Edit React → the plugin window hot-reloads. The UI also runs in a plain browser at
+`http://localhost:5174` (no JUCE host → it shows a synthetic spectrum so the UI is
+developable outside a DAW). Reconfigure without `-DPRISM_DEV_SERVER=ON` to go back to embedded.
+
+## Notes
+
+- **Refresh rate (macOS):** frames are emitted on `juce::VBlankAttachment` (synced to the
+  display, adapts to 60/120/144 Hz) and the webview renders via the `display-sync`
+  FrameScheduler. WKWebView otherwise throttles `requestAnimationFrame` to 60 fps regardless
+  of display — `Source/WebViewFrameRate.mm` lifts that by disabling WebKit's private
+  `PreferPageRenderingUpdatesNear60FPSEnabled` feature on the live web view (no public API
+  exists; fine for a non-App-Store FOSS plugin). To diagnose, set `showFpsMeter` on
+  `<SpectrumScope/>` to overlay `render / data` fps.
+- **Windows (later):** bump `NEEDS_WEBVIEW2 TRUE`; the DSP is already cross-platform. The
+  frame-rate workaround is macOS-only (WebView2 has its own rate behavior).

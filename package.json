@@ -23,6 +23,8 @@
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
     "test:build-metadata": "node scripts/run-build-metadata-tests.mjs",
     "test:updates": "node scripts/run-update-tests.mjs",
+    "plugin-ui:dev": "vite --config vite.plugin-ui.config.ts",
+    "plugin-ui:build": "vite build --config vite.plugin-ui.config.ts",
     "build:native": "cd native && node-gyp rebuild",
     "rebuild:native": "node -e \"const e=require('electron/package.json').version;const a=process.arch;const{execSync}=require('child_process');execSync('node-gyp rebuild --target='+e+' --arch='+a+' --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native'})\"",
     "postinstall": "npm run rebuild:native || echo 'Native build failed, will use JS fallback'",
