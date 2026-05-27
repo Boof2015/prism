@@ -350,6 +350,99 @@ export function connectLUFSMeterBridge(handlers: LUFSMeterBridgeHandlers): () =>
 }
 
 // ---------------------------------------------------------------------------
+// Vectorscope frames (event "vectorscopeFrame"): a point cloud, either standard
+// (x, y base64) or multiband (data base64, 6 floats/point), flagged by `multiband`.
+
+export interface VectorscopeFrame {
+  sampleRate: number
+  multiband: boolean
+  count: number
+  x?: Float32Array
+  y?: Float32Array
+  data?: Float32Array
+}
+
+interface VectorscopeFramePayload {
+  sampleRate?: number
+  multiband?: boolean
+  count?: number
+  x?: string
+  y?: string
+  data?: string
+}
+
+function decodeVectorscopeFrame(payload: unknown): VectorscopeFrame | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const { sampleRate, multiband, count, x, y, data } = payload as VectorscopeFramePayload
+  const frame: VectorscopeFrame = {
+    sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,
+    multiband: Boolean(multiband),
+    count: typeof count === 'number' ? count : 0,
+  }
+  if (frame.multiband) {
+    if (typeof data !== 'string') return null
+    frame.data = base64ToFloat32Array(data)
+  } else {
+    if (typeof x !== 'string' || typeof y !== 'string') return null
+    frame.x = base64ToFloat32Array(x)
+    frame.y = base64ToFloat32Array(y)
+  }
+  return frame
+}
+
+export interface VectorscopeBridgeHandlers {
+  onFrame: (frame: VectorscopeFrame) => void
+  onConnected?: (usingMock: boolean) => void
+}
+
+export function connectVectorscopeBridge(handlers: VectorscopeBridgeHandlers): () => void {
+  let disposed = false
+  let listenerId: number | null = null
+  let mockRaf: number | null = null
+
+  const startMock = (): void => {
+    handlers.onConnected?.(true)
+    console.warn('[prism-plugin] no JUCE host — using synthetic vectorscope (browser dev mode)')
+    const count = 2048
+    const x = new Float32Array(count)
+    const y = new Float32Array(count)
+    let phase = 0
+    const tick = (): void => {
+      if (disposed) return
+      phase += 0.03
+      for (let i = 0; i < count; i += 1) {
+        const t = (i / count) * Math.PI * 2
+        x[i] = Math.sin(t * 3 + phase) * 0.7
+        y[i] = Math.sin(t * 2 + phase * 1.3) * 0.7
+      }
+      handlers.onFrame({ sampleRate: 48000, multiband: false, count, x, y })
+      mockRaf = requestAnimationFrame(tick)
+    }
+    mockRaf = requestAnimationFrame(tick)
+  }
+
+  void ensureBackend().then((backend) => {
+    if (disposed) return
+    if (backend) {
+      listenerId = backend.addEventListener('vectorscopeFrame', (payload) => {
+        const frame = decodeVectorscopeFrame(payload)
+        if (frame) handlers.onFrame(frame)
+      })
+      handlers.onConnected?.(false)
+      console.log('[prism-plugin] connected to JUCE host (vectorscope)')
+    } else {
+      startMock()
+    }
+  })
+
+  return () => {
+    disposed = true
+    if (mockRaf !== null) cancelAnimationFrame(mockRaf)
+    if (listenerId !== null) window.__JUCE__?.backend?.removeEventListener?.(listenerId)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Oscilloscope frames (event "oscilloscopeFrame": { sampleRate, samples, pitch }).
 
 export interface OscilloscopeFrame {

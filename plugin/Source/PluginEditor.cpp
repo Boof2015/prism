@@ -3,6 +3,7 @@
 #include "OscilloscopeEngine.h"
 #include "VUMeterEngine.h"
 #include "LUFSMeterEngine.h"
+#include "VectorscopeEngine.h"
 #include <cstring>
 
 #if ! PRISM_USE_DEV_SERVER
@@ -20,7 +21,9 @@ namespace
 
     std::unique_ptr<ScopeEngine> makeEngine()
     {
-#if defined(PRISM_SCOPE_LUFSMETER) && PRISM_SCOPE_LUFSMETER
+#if defined(PRISM_SCOPE_VECTORSCOPE) && PRISM_SCOPE_VECTORSCOPE
+        return std::make_unique<VectorscopeEngine>();
+#elif defined(PRISM_SCOPE_LUFSMETER) && PRISM_SCOPE_LUFSMETER
         return std::make_unique<LUFSMeterEngine>();
 #elif defined(PRISM_SCOPE_VUMETER) && PRISM_SCOPE_VUMETER
         return std::make_unique<VUMeterEngine>();

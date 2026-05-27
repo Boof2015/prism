@@ -62,6 +62,12 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     return []
   }
 
+  // Vectorscope reads the C++-pushed point cloud via fillPoints/getMultibandPoints
+  // each frame — no raw samples drain here, and no sentinel is needed.
+  getPendingVectorscopeSamples(): Array<{ left: Float32Array; right: Float32Array }> {
+    return []
+  }
+
   getSampleRate(): number {
     return this.sessionState.sampleRate
   }

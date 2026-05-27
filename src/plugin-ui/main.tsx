@@ -7,12 +7,14 @@ import SpectrumScope from './SpectrumScope'
 import OscilloscopeScope from './OscilloscopeScope'
 import VUMeterScope from './VUMeterScope'
 import LUFSMeterScope from './LUFSMeterScope'
+import VectorscopeScope from './VectorscopeScope'
 import { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import { BridgeOscilloscopeAnalyzer } from './BridgeOscilloscopeAnalyzer'
 import { BridgeVUMeterAnalyzer } from './BridgeVUMeterAnalyzer'
 import { BridgeLUFSMeterAnalyzer } from './BridgeLUFSMeterAnalyzer'
+import { BridgeVectorscopeAnalyzer } from './BridgeVectorscopeAnalyzer'
 import { PluginWebViewDataSource } from './PluginWebViewDataSource'
-import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge } from './juceBridge'
+import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge, connectVectorscopeBridge } from './juceBridge'
 
 // The C++ plugin tells us which scope it is via JUCE initialisation data.
 // JUCE stores each value as an array (e.g. prismScope = ["oscilloscope"]).
@@ -27,6 +29,34 @@ function getScopeKind(): string {
 const dataSource = new PluginWebViewDataSource()
 
 function buildApp(): JSX.Element {
+  if (getScopeKind() === 'vectorscope') {
+    const analyzer = new BridgeVectorscopeAnalyzer()
+    connectVectorscopeBridge({
+      onFrame: (frame) => {
+        if (frame.multiband && frame.data) {
+          analyzer.setMultiband(frame.data, frame.count)
+        } else if (frame.x && frame.y) {
+          analyzer.setStandard(frame.x, frame.y, frame.count)
+        }
+        dataSource.setSampleRate(frame.sampleRate)
+        dataSource.setPlaying(true)
+      },
+    })
+    return (
+      <ScopeApp
+        kind="vectorscope"
+        renderScope={(settings, theme) => (
+          <VectorscopeScope
+            settings={settings}
+            theme={theme.vectorscope}
+            dataSource={dataSource}
+            nativeAnalyzer={analyzer}
+          />
+        )}
+      />
+    )
+  }
+
   if (getScopeKind() === 'lufsmeter') {
     const analyzer = new BridgeLUFSMeterAnalyzer()
     connectLUFSMeterBridge({
