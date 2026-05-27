@@ -1,8 +1,8 @@
 import { audioRouter } from '../audio/AudioRouter'
 import {
-  oscilloscope as nativeOscilloscope,
+  oscilloscope as defaultNativeOscilloscope,
   OSCILLOSCOPE_BUFFER_SIZE,
-  isNativeAvailable
+  type OscilloscopeNativeAnalyzer,
 } from '../audio/native'
 import { getNormalizedOscilloscopeDisplaySamples } from '../audio/native/oscilloscopeDisplaySamples'
 import { colorToRgbChannels, multiplyColorAlpha } from '../utils/color'
@@ -26,9 +26,10 @@ export interface OscilloscopeOptions {
   underfillEnabled?: boolean
   dataSource?: OscilloscopeDataSource
   frameScheduler?: FrameScheduler
+  nativeAnalyzer?: OscilloscopeNativeAnalyzer | null
 }
 
-type ResolvedOscilloscopeOptions = Required<Omit<OscilloscopeOptions, 'dataSource' | 'frameScheduler'>>
+type ResolvedOscilloscopeOptions = Required<Omit<OscilloscopeOptions, 'dataSource' | 'frameScheduler' | 'nativeAnalyzer'>>
 
 const defaultOptions: ResolvedOscilloscopeOptions = {
   lineColor: '#00ffff',
@@ -77,6 +78,7 @@ export class Oscilloscope {
   private ctx: CanvasRenderingContext2D
   private options: ResolvedOscilloscopeOptions
   private dataSource: OscilloscopeDataSource
+  private nativeAnalyzer: OscilloscopeNativeAnalyzer
   private frameLoop: VisualizerFrameLoop
   private nativeInitialized = false
   private samplesReceived = 0
@@ -95,9 +97,10 @@ export class Oscilloscope {
     if (!ctx) throw new Error('Could not get 2D context')
     this.ctx = ctx
 
-    const { dataSource, frameScheduler, ...optionOverrides } = options
+    const { dataSource, frameScheduler, nativeAnalyzer, ...optionOverrides } = options
     this.options = { ...defaultOptions, ...optionOverrides }
     this.dataSource = dataSource ?? defaultOscilloscopeDataSource
+    this.nativeAnalyzer = nativeAnalyzer === undefined ? defaultNativeOscilloscope : (nativeAnalyzer ?? defaultNativeOscilloscope)
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
@@ -121,27 +124,31 @@ export class Oscilloscope {
     })
   }
 
+  private nativeReady(): boolean {
+    return Boolean(this.nativeAnalyzer) && this.nativeAnalyzer.isAvailable?.() !== false
+  }
+
   private initNative(): void {
-    if (isNativeAvailable() && !this.nativeInitialized) {
+    if (this.nativeReady() && !this.nativeInitialized) {
       const sampleRate = this.dataSource.getSampleRate()
       this.lastSampleRate = 0
-      nativeOscilloscope.setSampleRate(sampleRate)
-      nativeOscilloscope.setPitchLock(this.options.pitchLock)
-      nativeOscilloscope.setDisplaySamples(getNormalizedOscilloscopeDisplaySamples(sampleRate))
+      this.nativeAnalyzer.setSampleRate(sampleRate)
+      this.nativeAnalyzer.setPitchLock(this.options.pitchLock)
+      this.nativeAnalyzer.setDisplaySamples(getNormalizedOscilloscopeDisplaySamples(sampleRate))
       this.nativeInitialized = true
       console.log(`Oscilloscope: Using native DSP with AudioWorklet (${sampleRate}Hz)`)
-    } else if (!isNativeAvailable()) {
+    } else if (!this.nativeReady()) {
       console.error('Oscilloscope: Native DSP not available!')
     }
   }
 
   private updateSampleRateIfNeeded(): void {
-    if (!isNativeAvailable()) return
+    if (!this.nativeReady()) return
     const currentRate = this.dataSource.getSampleRate()
     if (currentRate !== this.lastSampleRate && currentRate > 0) {
       this.lastSampleRate = currentRate
-      nativeOscilloscope.setSampleRate(currentRate)
-      nativeOscilloscope.setDisplaySamples(getNormalizedOscilloscopeDisplaySamples(currentRate))
+      this.nativeAnalyzer.setSampleRate(currentRate)
+      this.nativeAnalyzer.setDisplaySamples(getNormalizedOscilloscopeDisplaySamples(currentRate))
       console.log(`Oscilloscope: Sample rate updated to ${currentRate}Hz`)
     }
   }
@@ -155,8 +162,8 @@ export class Oscilloscope {
       this.reset()
     }
 
-    if (isNativeAvailable() && options.pitchLock !== undefined) {
-      nativeOscilloscope.setPitchLock(options.pitchLock)
+    if (this.nativeReady() && options.pitchLock !== undefined) {
+      this.nativeAnalyzer.setPitchLock(options.pitchLock)
     }
 
     this.staticLayerKey = ''
@@ -226,7 +233,7 @@ export class Oscilloscope {
 
     this.renderStaticLayer()
 
-    if (!isNativeAvailable()) {
+    if (!this.nativeReady()) {
       console.error('Oscilloscope: Native DSP required')
       return
     }
@@ -240,7 +247,7 @@ export class Oscilloscope {
     const pendingSamples = this.dataSource.getPendingOscilloscopeSamples()
     if (pendingSamples.length > 0) {
       const merged = this.concatMonoChunks(pendingSamples)
-      nativeOscilloscope.pushSamples(merged)
+      this.nativeAnalyzer.pushSamples(merged)
       this.samplesReceived += merged.length
     }
 
@@ -248,7 +255,7 @@ export class Oscilloscope {
       return
     }
 
-    const result = nativeOscilloscope.processContinuous()
+    const result = this.nativeAnalyzer.processContinuous()
     if (!result) {
       return
     }
@@ -263,7 +270,7 @@ export class Oscilloscope {
     }
 
     const renderData = this.ensureRenderBuffer(samplesToShow)
-    const sampleCount = nativeOscilloscope.fillSamples(triggerIndex, renderData)
+    const sampleCount = this.nativeAnalyzer.fillSamples(triggerIndex, renderData)
     if (sampleCount < 2) {
       return
     }
@@ -383,8 +390,8 @@ export class Oscilloscope {
   reset(): void {
     this.samplesReceived = 0
 
-    if (isNativeAvailable()) {
-      nativeOscilloscope.reset()
+    if (this.nativeReady()) {
+      this.nativeAnalyzer.reset()
     }
 
     this.invalidate()
@@ -399,8 +406,8 @@ export class Oscilloscope {
       this.unsubscribeSessionChange = null
     }
 
-    if (isNativeAvailable()) {
-      nativeOscilloscope.reset()
+    if (this.nativeReady()) {
+      this.nativeAnalyzer.reset()
     }
 
     this.samplesReceived = 0

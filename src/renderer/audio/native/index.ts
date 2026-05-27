@@ -58,8 +58,25 @@ export interface SpectrumNativeAnalyzer {
   isAvailable?: () => boolean
 }
 
+// Injectable interface for the oscilloscope DSP (mirrors SpectrumNativeAnalyzer)
+// so the visualizer can be driven by a non-N-API source (e.g. a plugin webview).
+export interface OscilloscopeNativeAnalyzer {
+  setSampleRate(sampleRate: number): void
+  setPitchLock(enabled: boolean): void
+  setDisplaySamples(samples: number): void
+  pushSamples(samples: Float32Array): void
+  processContinuous(): OscilloscopeResult | null
+  fillSamples(startPos: number, output: Float32Array): number
+  reset(): void
+  isAvailable?: () => boolean
+}
+
 // Export the native module functions with type safety
 export const oscilloscope = {
+  isAvailable: (): boolean => {
+    return Boolean(nativeModule?.oscilloscope)
+  },
+
   setSampleRate: (sampleRate: number): void => {
     nativeModule?.oscilloscope.setSampleRate(sampleRate)
   },

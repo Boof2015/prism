@@ -1,4 +1,6 @@
 #include "PluginEditor.h"
+#include "SpectrumEngine.h"
+#include "OscilloscopeEngine.h"
 #include <cstring>
 
 #if ! PRISM_USE_DEV_SERVER
@@ -11,15 +13,21 @@
 
 namespace
 {
-    const juce::Identifier kSpectrumFrameEvent { "spectrumFrame" };
     const juce::Identifier kRestoreSettingsEvent { "prismRestoreSettings" };
     constexpr int kDrainCapacity = 16384;
 
+    std::unique_ptr<ScopeEngine> makeEngine()
+    {
+#if defined(PRISM_SCOPE_OSCILLOSCOPE) && PRISM_SCOPE_OSCILLOSCOPE
+        return std::make_unique<OscilloscopeEngine>();
+#else
+        return std::make_unique<SpectrumEngine>();
+#endif
+    }
+
 #if PRISM_USE_DEV_SERVER
-    // Hot-reload path: load the Vite dev server (run `npm run plugin-ui:dev`).
     const juce::String kDevServerUrl { "http://localhost:5174" };
 #else
-    // Self-contained path: serve the bundle embedded via juce_add_binary_data.
     juce::String mimeForExtension(const juce::String& name)
     {
         if (name.endsWithIgnoreCase(".html"))  return "text/html";
@@ -54,10 +62,11 @@ namespace
     }
 #endif
 
-    juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor)
+    juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor, const char* scopeId)
     {
         auto options = juce::WebBrowserComponent::Options{}
             .withNativeIntegrationEnabled()
+            .withInitialisationData("prismScope", juce::String(scopeId))
             .withEventListener("prismConfig", [&editor](juce::var v) { editor.onPrismConfig(std::move(v)); })
             .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); });
 #if ! PRISM_USE_DEV_SERVER
@@ -65,19 +74,13 @@ namespace
 #endif
         return options;
     }
-
-    juce::String floatBufferToBase64(const std::vector<float>& data)
-    {
-        if (data.empty())
-            return {};
-        return juce::Base64::toBase64(data.data(), data.size() * sizeof(float));
-    }
 }
 
 PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     : juce::AudioProcessorEditor(&p),
       processorRef(p),
-      webView(makeWebOptions(*this))
+      engine(makeEngine()),
+      webView(makeWebOptions(*this, engine->scopeId()))
 {
     drainLeft.assign((size_t) kDrainCapacity, 0.0f);
     drainRight.assign((size_t) kDrainCapacity, 0.0f);
@@ -105,24 +108,28 @@ void PrismSpectrumEditor::resized()
 
 void PrismSpectrumEditor::onPrismConfig(juce::var payload)
 {
+    const auto settings = payload.getProperty("settings", juce::var());
+
     // Persist only genuine per-instance overrides (persist=true). App-default /
     // restore-driven updates carry persist=false so a non-overridden instance
     // keeps re-reading the app's current settings on reopen.
     if ((bool) payload.getProperty("persist", false))
-        processorRef.setSettingsJson(payload.getProperty("json", juce::var(juce::String())).toString());
+        processorRef.setSettingsJson(juce::JSON::toString(settings));
 
-    // Apply the DSP-relevant settings to the (message-thread-owned) analyzer.
-    const int fftSize = (int) payload.getProperty("fftSize", 2048);
-    if (fftSize > 0 && (size_t) fftSize != spectrum.getFFTSize())
-        spectrum.setFFTSize((size_t) fftSize);
-
-    spectrum.setSmoothing((float) (double) payload.getProperty("smoothing", 0.9));
+    engine->configure(settings);
 }
 
 void PrismSpectrumEditor::onPrismReady()
 {
     pushRestoreSettings();
     sendAppDefaults();
+}
+
+void PrismSpectrumEditor::pushRestoreSettings()
+{
+    auto* obj = new juce::DynamicObject();
+    obj->setProperty("json", processorRef.getSettingsJson());
+    webView.emitEventIfBrowserIsVisible(kRestoreSettingsEvent, juce::var(obj));
 }
 
 void PrismSpectrumEditor::sendAppDefaults()
@@ -137,7 +144,6 @@ void PrismSpectrumEditor::sendAppDefaults()
 
     juce::String themeId, themeFile, profileJson;
 
-    // Active theme id -> its .iro file (the app loads the file, so it matches exactly).
     if (const auto themeState = juce::JSON::parse(appData.getChildFile("theme-state.json"));
         auto* obj = themeState.getDynamicObject())
         themeId = obj->getProperty("activeThemeId").toString();
@@ -149,7 +155,6 @@ void PrismSpectrumEditor::sendAppDefaults()
             themeFile = file.loadFileAsString();
     }
 
-    // Active profile id -> the .prsm whose inner "id" matches (filenames are by name).
     juce::String activeProfileId;
     if (const auto profileState = juce::JSON::parse(appData.getChildFile("profile-state.json"));
         auto* obj = profileState.getDynamicObject())
@@ -178,13 +183,6 @@ void PrismSpectrumEditor::sendAppDefaults()
     webView.emitEventIfBrowserIsVisible(juce::Identifier("prismAppDefaults"), juce::var(payload));
 }
 
-void PrismSpectrumEditor::pushRestoreSettings()
-{
-    auto* obj = new juce::DynamicObject();
-    obj->setProperty("json", processorRef.getSettingsJson());
-    webView.emitEventIfBrowserIsVisible(kRestoreSettingsEvent, juce::var(obj));
-}
-
 void PrismSpectrumEditor::renderFrame()
 {
 #if JUCE_MAC
@@ -199,24 +197,12 @@ void PrismSpectrumEditor::renderFrame()
     const double sampleRate = processorRef.getSampleRateHz();
     if (sampleRate > 0.0 && sampleRate != lastSampleRate)
     {
-        spectrum.setSampleRate((float) sampleRate);
+        engine->setSampleRate(sampleRate);
         lastSampleRate = sampleRate;
     }
 
     const int drained = processorRef.drainStereo(drainLeft.data(), drainRight.data(), (int) drainLeft.size());
-    if (drained > 0)
-        spectrum.pushStereoSamples(drainLeft.data(), drainRight.data(), (size_t) drained);
-    else
-        spectrum.pushStereoSamples(nullptr, nullptr, 0); // recompute so smoothing keeps decaying
+    engine->process(drainLeft.data(), drainRight.data(), drained);
 
-    const auto& mid = spectrum.getMagnitudes();
-    if (mid.empty())
-        return;
-
-    auto* payload = new juce::DynamicObject();
-    payload->setProperty("sampleRate", sampleRate);
-    payload->setProperty("magnitudes", floatBufferToBase64(mid));
-    payload->setProperty("side", floatBufferToBase64(spectrum.getSideMagnitudes()));
-
-    webView.emitEventIfBrowserIsVisible(kSpectrumFrameEvent, juce::var(payload));
+    webView.emitEventIfBrowserIsVisible(engine->frameEventId(), engine->buildFrame(sampleRate));
 }

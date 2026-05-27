@@ -2,7 +2,8 @@
 
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "PluginProcessor.h"
-#include "spectrum.h"   // reused, unmodified, from native/src
+#include "ScopeEngine.h"
+#include <memory>
 #include <vector>
 
 /**
@@ -39,7 +40,7 @@ private:
 
     PrismSpectrumProcessor& processorRef;
 
-    Visualizer::Spectrum spectrum { 2048 };
+    std::unique_ptr<ScopeEngine> engine;
     std::vector<float> drainLeft, drainRight;
     double lastSampleRate = 0.0;
 

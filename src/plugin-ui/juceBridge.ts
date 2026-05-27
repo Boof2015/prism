@@ -89,7 +89,7 @@ export function onHostEvent(eventId: string, handler: (payload: unknown) => void
   }
 }
 
-function base64ToFloat32Array(b64: string): Float32Array {
+export function base64ToFloat32Array(b64: string): Float32Array {
   if (!b64) return new Float32Array(0)
   const binary = atob(b64)
   const byteLength = binary.length
@@ -154,6 +154,83 @@ export function connectSpectrumBridge(handlers: SpectrumBridgeHandlers): () => v
       })
       handlers.onConnected?.(false)
       console.log('[prism-plugin] connected to JUCE host')
+    } else {
+      startMock()
+    }
+  })
+
+  return () => {
+    disposed = true
+    if (mockRaf !== null) cancelAnimationFrame(mockRaf)
+    if (listenerId !== null) window.__JUCE__?.backend?.removeEventListener?.(listenerId)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Oscilloscope frames (event "oscilloscopeFrame": { sampleRate, samples, pitch }).
+
+export interface OscilloscopeFrame {
+  sampleRate: number
+  /** Already-triggered display window of time-domain samples. */
+  samples: Float32Array
+  detectedPitch: number
+}
+
+interface OscilloscopeFramePayload {
+  sampleRate?: number
+  samples?: string
+  pitch?: number
+}
+
+function decodeOscilloscopeFrame(payload: unknown): OscilloscopeFrame | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const { sampleRate, samples, pitch } = payload as OscilloscopeFramePayload
+  if (typeof samples !== 'string' || samples.length === 0) return null
+  return {
+    sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,
+    samples: base64ToFloat32Array(samples),
+    detectedPitch: typeof pitch === 'number' ? pitch : 0,
+  }
+}
+
+export interface OscilloscopeBridgeHandlers {
+  onFrame: (frame: OscilloscopeFrame) => void
+  onConnected?: (usingMock: boolean) => void
+}
+
+export function connectOscilloscopeBridge(handlers: OscilloscopeBridgeHandlers): () => void {
+  let disposed = false
+  let listenerId: number | null = null
+  let mockRaf: number | null = null
+
+  const startMock = (): void => {
+    handlers.onConnected?.(true)
+    console.warn('[prism-plugin] no JUCE host — using synthetic oscilloscope (browser dev mode)')
+    const count = 2048
+    const samples = new Float32Array(count)
+    let phase = 0
+    const tick = (): void => {
+      if (disposed) return
+      phase += 0.08
+      for (let i = 0; i < count; i += 1) {
+        const t = (i / count) * Math.PI * 2 * 3
+        samples[i] = Math.sin(t + phase) * 0.7 + Math.sin(t * 2 + phase) * 0.15
+      }
+      handlers.onFrame({ sampleRate: 48000, samples, detectedPitch: 220 })
+      mockRaf = requestAnimationFrame(tick)
+    }
+    mockRaf = requestAnimationFrame(tick)
+  }
+
+  void ensureBackend().then((backend) => {
+    if (disposed) return
+    if (backend) {
+      listenerId = backend.addEventListener('oscilloscopeFrame', (payload) => {
+        const frame = decodeOscilloscopeFrame(payload)
+        if (frame) handlers.onFrame(frame)
+      })
+      handlers.onConnected?.(false)
+      console.log('[prism-plugin] connected to JUCE host (oscilloscope)')
     } else {
       startMock()
     }

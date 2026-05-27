@@ -46,6 +46,12 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     return this.sessionState.capturing ? [this.sentinelStereo] : []
   }
 
+  // Oscilloscope: same sentinel trick — the DSP runs in C++ and pushes finished
+  // display windows; this just advances the visualizer's warmup/"new data" gate.
+  getPendingOscilloscopeSamples(): Float32Array[] {
+    return this.sessionState.capturing ? [this.sentinel] : []
+  }
+
   getSampleRate(): number {
     return this.sessionState.sampleRate
   }
