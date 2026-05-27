@@ -254,6 +254,102 @@ export function connectVUMeterBridge(handlers: VUMeterBridgeHandlers): () => voi
 }
 
 // ---------------------------------------------------------------------------
+// Loudness meter frames (event "lufsmeterFrame": scalar snapshot, no base64).
+
+export interface LUFSMeterFrame {
+  sampleRate: number
+  momentaryLUFS: number
+  shortTermLUFS: number
+  integratedLUFS: number
+  vuLDb: number
+  vuRDb: number
+  barLDb: number
+  barRDb: number
+  peakLDb: number
+  peakRDb: number
+  correlation: number
+}
+
+function decodeLUFSMeterFrame(payload: unknown): LUFSMeterFrame | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as Record<string, unknown>
+  const num = (key: string, fallback: number): number =>
+    typeof p[key] === 'number' && Number.isFinite(p[key]) ? (p[key] as number) : fallback
+  return {
+    sampleRate: num('sampleRate', 48000) > 0 ? num('sampleRate', 48000) : 48000,
+    momentaryLUFS: num('momentaryLUFS', -70),
+    shortTermLUFS: num('shortTermLUFS', -70),
+    integratedLUFS: num('integratedLUFS', -70),
+    vuLDb: num('vuLDb', -60),
+    vuRDb: num('vuRDb', -60),
+    barLDb: num('barLDb', -60),
+    barRDb: num('barRDb', -60),
+    peakLDb: num('peakLDb', -60),
+    peakRDb: num('peakRDb', -60),
+    correlation: num('correlation', 0),
+  }
+}
+
+export interface LUFSMeterBridgeHandlers {
+  onFrame: (frame: LUFSMeterFrame) => void
+  onConnected?: (usingMock: boolean) => void
+}
+
+export function connectLUFSMeterBridge(handlers: LUFSMeterBridgeHandlers): () => void {
+  let disposed = false
+  let listenerId: number | null = null
+  let mockRaf: number | null = null
+
+  const startMock = (): void => {
+    handlers.onConnected?.(true)
+    console.warn('[prism-plugin] no JUCE host — using synthetic LUFS meter (browser dev mode)')
+    let phase = 0
+    const tick = (): void => {
+      if (disposed) return
+      phase += 0.04
+      const lufs = (offset: number): number => -24 + Math.sin(phase + offset) * 6
+      const vuL = -36 + (Math.sin(phase) * 0.5 + 0.5) * 30
+      const vuR = -36 + (Math.sin(phase + 0.7) * 0.5 + 0.5) * 30
+      handlers.onFrame({
+        sampleRate: 48000,
+        momentaryLUFS: lufs(0),
+        shortTermLUFS: lufs(0.5),
+        integratedLUFS: -23,
+        vuLDb: vuL,
+        vuRDb: vuR,
+        barLDb: vuL,
+        barRDb: vuR,
+        peakLDb: vuL + 3,
+        peakRDb: vuR + 3,
+        correlation: Math.sin(phase * 0.3),
+      })
+      mockRaf = requestAnimationFrame(tick)
+    }
+    mockRaf = requestAnimationFrame(tick)
+  }
+
+  void ensureBackend().then((backend) => {
+    if (disposed) return
+    if (backend) {
+      listenerId = backend.addEventListener('lufsmeterFrame', (payload) => {
+        const frame = decodeLUFSMeterFrame(payload)
+        if (frame) handlers.onFrame(frame)
+      })
+      handlers.onConnected?.(false)
+      console.log('[prism-plugin] connected to JUCE host (lufsmeter)')
+    } else {
+      startMock()
+    }
+  })
+
+  return () => {
+    disposed = true
+    if (mockRaf !== null) cancelAnimationFrame(mockRaf)
+    if (listenerId !== null) window.__JUCE__?.backend?.removeEventListener?.(listenerId)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Oscilloscope frames (event "oscilloscopeFrame": { sampleRate, samples, pitch }).
 
 export interface OscilloscopeFrame {

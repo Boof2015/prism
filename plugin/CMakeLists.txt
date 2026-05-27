@@ -58,6 +58,7 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         ${PRISM_NATIVE_DIR}/spectrum.cpp
         ${PRISM_NATIVE_DIR}/oscilloscope.cpp
         ${PRISM_NATIVE_DIR}/vumeter.cpp
+        ${PRISM_NATIVE_DIR}/lufsmeter.cpp
         ${PRISM_NATIVE_DIR}/dsp_utils.cpp)
 
     target_include_directories(${TARGET} PRIVATE Source ${PRISM_NATIVE_DIR})
@@ -96,3 +97,4 @@ endfunction()
 add_prism_scope(PrismSpectrum     "Prism Spectrum"     Pspc "")
 add_prism_scope(PrismOscilloscope "Prism Oscilloscope" Posc "PRISM_SCOPE_OSCILLOSCOPE=1")
 add_prism_scope(PrismVUMeter      "Prism VU Meter"     Pvum "PRISM_SCOPE_VUMETER=1")
+add_prism_scope(PrismLUFSMeter    "Prism Loudness Meter" Pluf "PRISM_SCOPE_LUFSMETER=1")
