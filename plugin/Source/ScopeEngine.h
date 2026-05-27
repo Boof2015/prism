@@ -24,6 +24,13 @@ public:
     /** Apply scope settings (the JS settings object) to the DSP. */
     virtual void configure(const juce::var& settings) = 0;
 
+    /**
+     * Apply a scope-specific native config pushed from the UI on the
+     * "prismSpectrogramConfig" event. Default no-op; only scopes whose DSP needs
+     * canvas-derived parameters (e.g. the spectrogram's rowCount) override this.
+     */
+    virtual void configureNative(const juce::var&) {}
+
     /** Feed audio (called off the realtime thread). numSamples may be 0. */
     virtual void process(const float* left, const float* right, int numSamples) = 0;
 

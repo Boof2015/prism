@@ -8,13 +8,15 @@ import OscilloscopeScope from './OscilloscopeScope'
 import VUMeterScope from './VUMeterScope'
 import LUFSMeterScope from './LUFSMeterScope'
 import VectorscopeScope from './VectorscopeScope'
+import SpectrogramScope from './SpectrogramScope'
 import { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import { BridgeOscilloscopeAnalyzer } from './BridgeOscilloscopeAnalyzer'
 import { BridgeVUMeterAnalyzer } from './BridgeVUMeterAnalyzer'
 import { BridgeLUFSMeterAnalyzer } from './BridgeLUFSMeterAnalyzer'
 import { BridgeVectorscopeAnalyzer } from './BridgeVectorscopeAnalyzer'
+import { BridgeSpectrogramAnalyzer } from './BridgeSpectrogramAnalyzer'
 import { PluginWebViewDataSource } from './PluginWebViewDataSource'
-import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge, connectVectorscopeBridge } from './juceBridge'
+import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge, connectVectorscopeBridge, connectSpectrogramBridge } from './juceBridge'
 
 // The C++ plugin tells us which scope it is via JUCE initialisation data.
 // JUCE stores each value as an array (e.g. prismScope = ["oscilloscope"]).
@@ -29,6 +31,31 @@ function getScopeKind(): string {
 const dataSource = new PluginWebViewDataSource()
 
 function buildApp(): JSX.Element {
+  if (getScopeKind() === 'spectrogram') {
+    const analyzer = new BridgeSpectrogramAnalyzer()
+    connectSpectrogramBridge({
+      onFrame: (frame) => {
+        analyzer.pushFrame(frame.display, frame.heat, frame.columnCount, frame.rowCount)
+        dataSource.setSampleRate(frame.sampleRate)
+        dataSource.setPlaying(true)
+      },
+      getRowCount: () => analyzer.getExpectedRowCount(),
+    })
+    return (
+      <ScopeApp
+        kind="spectrogram"
+        renderScope={(settings, theme) => (
+          <SpectrogramScope
+            settings={settings}
+            theme={theme.spectrogram}
+            dataSource={dataSource}
+            nativeAnalyzer={analyzer}
+          />
+        )}
+      />
+    )
+  }
+
   if (getScopeKind() === 'vectorscope') {
     const analyzer = new BridgeVectorscopeAnalyzer()
     connectVectorscopeBridge({

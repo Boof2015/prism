@@ -27,6 +27,9 @@ public:
     void onPrismConfig(juce::var payload);
     void onPrismReady();
 
+    // Scope-specific native config (e.g. the spectrogram's canvas-derived rowCount).
+    void onScopeNativeConfig(juce::var payload);
+
     // Push the processor's saved settings to the UI (used on ready + on host
     // state restore, to cover either ordering).
     void pushRestoreSettings();

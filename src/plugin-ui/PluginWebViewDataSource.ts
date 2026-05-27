@@ -52,6 +52,12 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     return this.sessionState.capturing ? [this.sentinel] : []
   }
 
+  // Spectrogram: needs a sentinel so the visualizer calls the analyzer's process()
+  // each frame (it only does so per pending chunk) to drain the C++ column queue.
+  getPendingSpectrogramSamples(): Float32Array[] {
+    return this.sessionState.capturing ? [this.sentinel] : []
+  }
+
   // VU + loudness meters read the C++-pushed snapshot from the bridge analyzer
   // every frame, so there are no raw samples to drain here (no sentinel needed).
   getPendingVUMeterSamples(): Array<{ left: Float32Array; right: Float32Array }> {

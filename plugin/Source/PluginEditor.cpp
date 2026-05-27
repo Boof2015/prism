@@ -4,6 +4,7 @@
 #include "VUMeterEngine.h"
 #include "LUFSMeterEngine.h"
 #include "VectorscopeEngine.h"
+#include "SpectrogramEngine.h"
 #include <cstring>
 
 #if ! PRISM_USE_DEV_SERVER
@@ -21,7 +22,9 @@ namespace
 
     std::unique_ptr<ScopeEngine> makeEngine()
     {
-#if defined(PRISM_SCOPE_VECTORSCOPE) && PRISM_SCOPE_VECTORSCOPE
+#if defined(PRISM_SCOPE_SPECTROGRAM) && PRISM_SCOPE_SPECTROGRAM
+        return std::make_unique<SpectrogramEngine>();
+#elif defined(PRISM_SCOPE_VECTORSCOPE) && PRISM_SCOPE_VECTORSCOPE
         return std::make_unique<VectorscopeEngine>();
 #elif defined(PRISM_SCOPE_LUFSMETER) && PRISM_SCOPE_LUFSMETER
         return std::make_unique<LUFSMeterEngine>();
@@ -77,7 +80,8 @@ namespace
             .withNativeIntegrationEnabled()
             .withInitialisationData("prismScope", juce::String(scopeId))
             .withEventListener("prismConfig", [&editor](juce::var v) { editor.onPrismConfig(std::move(v)); })
-            .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); });
+            .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); })
+            .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); });
 #if ! PRISM_USE_DEV_SERVER
         options = options.withResourceProvider([](const auto& url) { return provideResource(url); });
 #endif
@@ -132,6 +136,11 @@ void PrismSpectrumEditor::onPrismReady()
 {
     pushRestoreSettings();
     sendAppDefaults();
+}
+
+void PrismSpectrumEditor::onScopeNativeConfig(juce::var payload)
+{
+    engine->configureNative(payload);
 }
 
 void PrismSpectrumEditor::pushRestoreSettings()

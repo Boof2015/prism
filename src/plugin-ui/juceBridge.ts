@@ -443,6 +443,99 @@ export function connectVectorscopeBridge(handlers: VectorscopeBridgeHandlers): (
 }
 
 // ---------------------------------------------------------------------------
+// Spectrogram frames (event "spectrogramFrame"): the new display+heat columns
+// produced since the last frame, base64-encoded, tagged with rowCount/columnCount.
+
+export interface SpectrogramFrame {
+  sampleRate: number
+  display: Float32Array
+  heat: Float32Array
+  columnCount: number
+  rowCount: number
+}
+
+interface SpectrogramFramePayload {
+  sampleRate?: number
+  display?: string
+  heat?: string
+  columnCount?: number
+  rowCount?: number
+}
+
+function decodeSpectrogramFrame(payload: unknown): SpectrogramFrame | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const { sampleRate, display, heat, columnCount, rowCount } = payload as SpectrogramFramePayload
+  return {
+    sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,
+    display: typeof display === 'string' ? base64ToFloat32Array(display) : new Float32Array(0),
+    heat: typeof heat === 'string' ? base64ToFloat32Array(heat) : new Float32Array(0),
+    columnCount: typeof columnCount === 'number' ? columnCount : 0,
+    rowCount: typeof rowCount === 'number' ? rowCount : 0,
+  }
+}
+
+export interface SpectrogramBridgeHandlers {
+  onFrame: (frame: SpectrogramFrame) => void
+  onConnected?: (usingMock: boolean) => void
+  /** Lets the dev mock size its columns to the canvas-derived rowCount. */
+  getRowCount?: () => number
+}
+
+export function connectSpectrogramBridge(handlers: SpectrogramBridgeHandlers): () => void {
+  let disposed = false
+  let listenerId: number | null = null
+  let mockRaf: number | null = null
+
+  const startMock = (): void => {
+    handlers.onConnected?.(true)
+    console.warn('[prism-plugin] no JUCE host — using synthetic spectrogram (browser dev mode)')
+    let phase = 0
+    const tick = (): void => {
+      if (disposed) return
+      phase += 0.08
+      const rowCount = handlers.getRowCount?.() ?? 0
+      if (rowCount > 0) {
+        const columnCount = 2
+        const display = new Float32Array(rowCount * columnCount)
+        const heat = new Float32Array(rowCount * columnCount)
+        for (let c = 0; c < columnCount; c += 1) {
+          for (let r = 0; r < rowCount; r += 1) {
+            const t = r / rowCount
+            const band = Math.exp(-Math.pow((t - (0.3 + 0.2 * Math.sin(phase))) * 6, 2))
+            const v = Math.min(1, band + Math.random() * 0.15)
+            display[c * rowCount + r] = v
+            heat[c * rowCount + r] = v
+          }
+        }
+        handlers.onFrame({ sampleRate: 48000, display, heat, columnCount, rowCount })
+      }
+      mockRaf = requestAnimationFrame(tick)
+    }
+    mockRaf = requestAnimationFrame(tick)
+  }
+
+  void ensureBackend().then((backend) => {
+    if (disposed) return
+    if (backend) {
+      listenerId = backend.addEventListener('spectrogramFrame', (payload) => {
+        const frame = decodeSpectrogramFrame(payload)
+        if (frame) handlers.onFrame(frame)
+      })
+      handlers.onConnected?.(false)
+      console.log('[prism-plugin] connected to JUCE host (spectrogram)')
+    } else {
+      startMock()
+    }
+  })
+
+  return () => {
+    disposed = true
+    if (mockRaf !== null) cancelAnimationFrame(mockRaf)
+    if (listenerId !== null) window.__JUCE__?.backend?.removeEventListener?.(listenerId)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Oscilloscope frames (event "oscilloscopeFrame": { sampleRate, samples, pitch }).
 
 export interface OscilloscopeFrame {
