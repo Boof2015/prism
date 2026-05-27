@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "SpectrumEngine.h"
 #include "OscilloscopeEngine.h"
+#include "VUMeterEngine.h"
 #include <cstring>
 
 #if ! PRISM_USE_DEV_SERVER
@@ -18,7 +19,9 @@ namespace
 
     std::unique_ptr<ScopeEngine> makeEngine()
     {
-#if defined(PRISM_SCOPE_OSCILLOSCOPE) && PRISM_SCOPE_OSCILLOSCOPE
+#if defined(PRISM_SCOPE_VUMETER) && PRISM_SCOPE_VUMETER
+        return std::make_unique<VUMeterEngine>();
+#elif defined(PRISM_SCOPE_OSCILLOSCOPE) && PRISM_SCOPE_OSCILLOSCOPE
         return std::make_unique<OscilloscopeEngine>();
 #else
         return std::make_unique<SpectrumEngine>();

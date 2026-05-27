@@ -52,6 +52,12 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     return this.sessionState.capturing ? [this.sentinel] : []
   }
 
+  // VU meter reads the C++-pushed snapshot from the bridge analyzer every frame,
+  // so there are no raw samples to drain here (no sentinel needed).
+  getPendingVUMeterSamples(): Array<{ left: Float32Array; right: Float32Array }> {
+    return []
+  }
+
   getSampleRate(): number {
     return this.sessionState.sampleRate
   }

@@ -5,10 +5,12 @@ import './styles.css'
 import ScopeApp from './ScopeApp'
 import SpectrumScope from './SpectrumScope'
 import OscilloscopeScope from './OscilloscopeScope'
+import VUMeterScope from './VUMeterScope'
 import { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import { BridgeOscilloscopeAnalyzer } from './BridgeOscilloscopeAnalyzer'
+import { BridgeVUMeterAnalyzer } from './BridgeVUMeterAnalyzer'
 import { PluginWebViewDataSource } from './PluginWebViewDataSource'
-import { connectOscilloscopeBridge, connectSpectrumBridge } from './juceBridge'
+import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge } from './juceBridge'
 
 // The C++ plugin tells us which scope it is via JUCE initialisation data.
 // JUCE stores each value as an array (e.g. prismScope = ["oscilloscope"]).
@@ -23,6 +25,30 @@ function getScopeKind(): string {
 const dataSource = new PluginWebViewDataSource()
 
 function buildApp(): JSX.Element {
+  if (getScopeKind() === 'vumeter') {
+    const analyzer = new BridgeVUMeterAnalyzer()
+    connectVUMeterBridge({
+      onFrame: (frame) => {
+        analyzer.setSnapshot(frame)
+        dataSource.setSampleRate(frame.sampleRate)
+        dataSource.setPlaying(true)
+      },
+    })
+    return (
+      <ScopeApp
+        kind="vumeter"
+        renderScope={(settings, theme) => (
+          <VUMeterScope
+            settings={settings}
+            theme={theme.vumeter}
+            dataSource={dataSource}
+            nativeAnalyzer={analyzer}
+          />
+        )}
+      />
+    )
+  }
+
   if (getScopeKind() === 'oscilloscope') {
     const analyzer = new BridgeOscilloscopeAnalyzer()
     connectOscilloscopeBridge({

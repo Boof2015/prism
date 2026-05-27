@@ -167,6 +167,93 @@ export function connectSpectrumBridge(handlers: SpectrumBridgeHandlers): () => v
 }
 
 // ---------------------------------------------------------------------------
+// VU meter frames (event "vumeterFrame": scalar snapshot, no base64).
+
+export interface VUMeterFrame {
+  sampleRate: number
+  vuLDb: number
+  vuRDb: number
+  barLDb: number
+  barRDb: number
+  peakLDb: number
+  peakRDb: number
+  correlation: number
+}
+
+function decodeVUMeterFrame(payload: unknown): VUMeterFrame | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as Record<string, unknown>
+  const num = (key: string, fallback: number): number =>
+    typeof p[key] === 'number' && Number.isFinite(p[key]) ? (p[key] as number) : fallback
+  return {
+    sampleRate: num('sampleRate', 48000) > 0 ? num('sampleRate', 48000) : 48000,
+    vuLDb: num('vuLDb', -60),
+    vuRDb: num('vuRDb', -60),
+    barLDb: num('barLDb', -60),
+    barRDb: num('barRDb', -60),
+    peakLDb: num('peakLDb', -60),
+    peakRDb: num('peakRDb', -60),
+    correlation: num('correlation', 0),
+  }
+}
+
+export interface VUMeterBridgeHandlers {
+  onFrame: (frame: VUMeterFrame) => void
+  onConnected?: (usingMock: boolean) => void
+}
+
+export function connectVUMeterBridge(handlers: VUMeterBridgeHandlers): () => void {
+  let disposed = false
+  let listenerId: number | null = null
+  let mockRaf: number | null = null
+
+  const startMock = (): void => {
+    handlers.onConnected?.(true)
+    console.warn('[prism-plugin] no JUCE host — using synthetic VU meter (browser dev mode)')
+    let phase = 0
+    const tick = (): void => {
+      if (disposed) return
+      phase += 0.04
+      const level = (offset: number): number => -40 + (Math.sin(phase + offset) * 0.5 + 0.5) * 42
+      const vuL = level(0)
+      const vuR = level(0.7)
+      handlers.onFrame({
+        sampleRate: 48000,
+        vuLDb: vuL,
+        vuRDb: vuR,
+        barLDb: vuL,
+        barRDb: vuR,
+        peakLDb: vuL + 3,
+        peakRDb: vuR + 3,
+        correlation: Math.sin(phase * 0.3),
+      })
+      mockRaf = requestAnimationFrame(tick)
+    }
+    mockRaf = requestAnimationFrame(tick)
+  }
+
+  void ensureBackend().then((backend) => {
+    if (disposed) return
+    if (backend) {
+      listenerId = backend.addEventListener('vumeterFrame', (payload) => {
+        const frame = decodeVUMeterFrame(payload)
+        if (frame) handlers.onFrame(frame)
+      })
+      handlers.onConnected?.(false)
+      console.log('[prism-plugin] connected to JUCE host (vumeter)')
+    } else {
+      startMock()
+    }
+  })
+
+  return () => {
+    disposed = true
+    if (mockRaf !== null) cancelAnimationFrame(mockRaf)
+    if (listenerId !== null) window.__JUCE__?.backend?.removeEventListener?.(listenerId)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Oscilloscope frames (event "oscilloscopeFrame": { sampleRate, samples, pitch }).
 
 export interface OscilloscopeFrame {
