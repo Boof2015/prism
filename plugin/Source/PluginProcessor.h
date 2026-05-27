@@ -7,10 +7,13 @@
 /**
  * Prism Spectrum — analyzer plugin.
  *
- * Passes audio through unchanged. On the realtime thread (processBlock) it mixes
- * the input to mono and writes it into a lock-free FIFO. The editor's timer drains
- * the FIFO off the realtime thread, runs the reused Prism DSP (native/src/spectrum.cpp),
- * and pushes magnitudes to the webview. No DSP or allocation happens on the audio thread.
+ * Passes audio through unchanged. On the realtime thread (processBlock) it writes
+ * the input's L/R into a lock-free FIFO. The editor's frame callback drains the
+ * FIFO off the realtime thread, runs the reused Prism DSP (native/src/spectrum.cpp)
+ * as stereo (so mid + side are available), and pushes magnitudes to the webview.
+ *
+ * UI settings (JSON) are owned here so they survive editor open/close and DAW
+ * session save/restore.
  */
 class PrismSpectrumProcessor : public juce::AudioProcessor
 {
@@ -38,22 +41,27 @@ public:
     const juce::String getProgramName(int) override { return {}; }
     void changeProgramName(int, const juce::String&) override {}
 
-    void getStateInformation(juce::MemoryBlock&) override {}
-    void setStateInformation(const void*, int) override {}
+    void getStateInformation(juce::MemoryBlock&) override;
+    void setStateInformation(const void*, int) override;
 
-    /** Latest negotiated sample rate (read from the message thread). */
     double getSampleRateHz() const noexcept { return currentSampleRate.load(); }
 
-    /** Copy up to `maxSamples` of buffered mono audio into `dest`; returns count written. */
-    int drainSamples(float* dest, int maxSamples) noexcept;
+    /** Copy up to `maxSamples` of buffered L/R audio into the destinations; returns count. */
+    int drainStereo(float* destLeft, float* destRight, int maxSamples) noexcept;
+
+    /** Persisted UI settings as a JSON string (set from the editor, read on save). */
+    void setSettingsJson(const juce::String& json);
+    juce::String getSettingsJson() const;
 
 private:
-    void pushMonoToFifo(const float* data, int num) noexcept;
+    void pushStereoToFifo(const float* left, const float* right, int num) noexcept;
 
     juce::AbstractFifo fifo { 1 << 16 };
-    std::vector<float> fifoBuffer;       // backing storage for `fifo`
-    std::vector<float> monoScratch;      // realtime-thread mono mixdown buffer
+    std::vector<float> leftBuffer, rightBuffer; // backing storage for `fifo`
     std::atomic<double> currentSampleRate { 48000.0 };
+
+    juce::CriticalSection settingsLock;
+    juce::String settingsJson;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PrismSpectrumProcessor)
 };

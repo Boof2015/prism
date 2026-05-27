@@ -17,14 +17,19 @@ body,
 }
 
 body {
-  background: #0a0a0f;
+  background: #000;
   font-family: 'Inter', system-ui, sans-serif;
 }
 
-.spectrum-scope {
+.spectrum-app {
   position: relative;
   width: 100%;
   height: 100%;
+}
+
+.spectrum-scope {
+  position: absolute;
+  inset: 0;
 }
 
 .spectrum-scope__canvas {
@@ -35,15 +40,83 @@ body {
   display: block;
 }
 
-.spectrum-scope__fps {
+/* Settings gear — appears on hover (like the app's scope chrome). */
+.spectrum-app__gear {
   position: absolute;
-  top: 6px;
-  left: 8px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.45);
-  color: #7dd3fc;
-  font: 11px/1.4 'JetBrains Mono', ui-monospace, monospace;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+  background: var(--control-bg, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--control-border, rgba(255, 255, 255, 0.08));
+  border-radius: 7px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.spectrum-app:hover .spectrum-app__gear,
+.spectrum-app__gear.is-active {
+  opacity: 1;
+}
+
+.spectrum-app__gear:hover {
+  color: var(--text-primary, #fff);
+  background: var(--control-bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.spectrum-app__gear.is-active {
+  color: var(--accent, #38bdf8);
+  border-color: var(--control-border-active, rgba(56, 189, 248, 0.4));
+}
+
+.spectrum-app__settings {
+  position: absolute;
+  top: 44px;
+  right: 8px;
+  z-index: 5;
+  width: 320px;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 56px);
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--settings-bg-top, rgba(8, 10, 14, 0.96));
+  border: 1px solid var(--panel-outline, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  box-shadow: var(--panel-shadow, 0 14px 34px rgba(0, 0, 0, 0.4));
+  backdrop-filter: blur(12px);
+}
+
+.spectrum-scope__peak {
+  position: absolute;
+  z-index: 4;
   pointer-events: none;
-  user-select: none;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font: 11px/1.3 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--scope-overlay-text, rgba(255, 255, 255, 0.82));
+  background: var(--scope-overlay-surface, rgba(8, 12, 18, 0.82));
+  border: 1px solid var(--scope-overlay-border, rgba(255, 255, 255, 0.12));
+}
+
+.spectrum-scope__peak.is-corner {
+  top: 8px;
+  left: 8px;
+}
+
+.spectrum-scope__peak.is-following {
+  transform: translate(-50%, -120%);
+}
+
+.spectrum-scope__peak-sep {
+  opacity: 0.4;
 }

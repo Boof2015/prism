@@ -1,115 +1,129 @@
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { SpectrumAnalyzer } from '../renderer/visualizers/SpectrumAnalyzer'
+import type { ScopeSettings } from '../types/settings'
+import type { ResolvedSpectrumTheme } from '../types/theme'
+import type { SpectrumPeakInfo } from '../types/spectrum'
 import type { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import type { PluginWebViewDataSource } from './PluginWebViewDataSource'
+import { spectrumSettingsToOptions } from './spectrumOptions'
+import {
+  formatSpectrumPeakDb,
+  formatSpectrumPeakFrequency,
+  measureCanvasResizeState,
+  resolveFollowingPeakOverlayStyle,
+  type CanvasResizeState,
+  type SizeMeasurement,
+} from './peakOverlay'
 
 interface SpectrumScopeProps {
   dataSource: PluginWebViewDataSource
   nativeAnalyzer: BridgeSpectrumAnalyzer
-  /** Returns the cumulative count of frames received from the host (for the FPS meter). */
-  getDataFrameCount?: () => number
-  /** Show the render/data FPS diagnostic overlay. */
-  showFpsMeter?: boolean
-}
-
-// POC visual defaults. A later phase can sync these to Prism's theme/settings
-// (the same `scopeSettingsToOptions` mapping ScopeModule already uses).
-const VISUAL_OPTIONS = {
-  lineColor: '#22d3ee',
-  lineWidth: 2,
-  fillGradient: true,
-  gradientColors: ['rgba(34, 211, 238, 0)', 'rgba(34, 211, 238, 0.25)', 'rgba(139, 92, 246, 0.45)'],
-  backgroundColor: 'transparent',
-  showGrid: true,
-  gridColor: 'rgba(255, 255, 255, 0.1)',
-  scaleType: 'log' as const,
-  fftSize: 2048,
-  minFrequency: 20,
-  maxFrequency: 20000,
-  minDecibels: -90,
-  maxDecibels: -10,
+  settings: ScopeSettings['spectrum']
+  theme: ResolvedSpectrumTheme
 }
 
 export default function SpectrumScope({
   dataSource,
   nativeAnalyzer,
-  getDataFrameCount,
-  showFpsMeter = false,
+  settings,
+  theme,
 }: SpectrumScopeProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [fps, setFps] = useState({ render: 0, data: 0 })
+  const analyzerRef = useRef<SpectrumAnalyzer | null>(null)
+  const resizeStateRef = useRef<CanvasResizeState | null>(null)
+  const peakOverlayRef = useRef<HTMLDivElement | null>(null)
+  const [peak, setPeak] = useState<SpectrumPeakInfo | null>(null)
+  const [overlaySize, setOverlaySize] = useState<SizeMeasurement | null>(null)
 
+  const peakMode = settings.peakInfoMode
+
+  // Create the analyzer once per data source / shim.
   useEffect(() => {
     const container = containerRef.current
     const canvas = canvasRef.current
     if (!container || !canvas) return
 
     const analyzer = new SpectrumAnalyzer(canvas, {
-      ...VISUAL_OPTIONS,
+      ...spectrumSettingsToOptions(settings, theme),
+      capturePeakInfo: settings.peakInfoMode !== 'off',
+      onPeakInfo: setPeak,
       dataSource,
       nativeAnalyzer,
     })
+    analyzerRef.current = analyzer
 
     const applySize = (): void => {
-      const rect = container.getBoundingClientRect()
-      const dpr = window.devicePixelRatio || 1
-      const pixelWidth = Math.max(1, Math.floor(rect.width * dpr))
-      const pixelHeight = Math.max(1, Math.floor(rect.height * dpr))
-      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-        canvas.width = pixelWidth
-        canvas.height = pixelHeight
+      const state = measureCanvasResizeState(container)
+      resizeStateRef.current = state
+      if (canvas.width !== state.pixelWidth || canvas.height !== state.pixelHeight) {
+        canvas.width = state.pixelWidth
+        canvas.height = state.pixelHeight
         analyzer.resize()
       }
     }
 
     applySize()
     analyzer.start()
-
     const observer = new ResizeObserver(applySize)
     observer.observe(container)
 
     return () => {
       observer.disconnect()
       analyzer.dispose()
+      analyzerRef.current = null
     }
+    // settings/theme are applied via setOptions below, not on recreation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataSource, nativeAnalyzer])
 
-  // Independent FPS meter: counts our own rAF ticks (the webview's actual render
-  // rate) and the host data-frame delta over each measurement window.
+  // Apply settings/theme changes live.
   useEffect(() => {
-    if (!showFpsMeter) return
-    let raf = 0
-    let renderCount = 0
-    let lastData = getDataFrameCount?.() ?? 0
-    let lastT = performance.now()
+    if (settings.peakInfoMode === 'off') setPeak(null)
+    analyzerRef.current?.setOptions({
+      ...spectrumSettingsToOptions(settings, theme),
+      capturePeakInfo: settings.peakInfoMode !== 'off',
+      onPeakInfo: setPeak,
+    })
+  }, [settings, theme])
 
-    const loop = (t: number): void => {
-      renderCount += 1
-      const elapsed = t - lastT
-      if (elapsed >= 500) {
-        const dataNow = getDataFrameCount?.() ?? 0
-        const seconds = elapsed / 1000
-        setFps({
-          render: Math.round(renderCount / seconds),
-          data: Math.round((dataNow - lastData) / seconds),
-        })
-        renderCount = 0
-        lastData = dataNow
-        lastT = t
-      }
-      raf = requestAnimationFrame(loop)
+  // Measure the overlay so "following" placement can avoid the screen edges.
+  useLayoutEffect(() => {
+    const overlay = peakOverlayRef.current
+    if (peakMode !== 'following' || !peak || !overlay) {
+      setOverlaySize(null)
+      return
     }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [showFpsMeter, getDataFrameCount])
+    const measure = (): void => {
+      const next = { width: overlay.offsetWidth, height: overlay.offsetHeight }
+      setOverlaySize((prev) => (prev?.width === next.width && prev?.height === next.height ? prev : next))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(overlay)
+    return () => observer.disconnect()
+  }, [peakMode, peak])
+
+  const showPeak = peakMode !== 'off' && peak !== null
+  const overlayStyle: CSSProperties | undefined =
+    peakMode === 'following' && peak
+      ? resolveFollowingPeakOverlayStyle(peak, resizeStateRef.current, overlaySize)
+      : undefined
 
   return (
     <div ref={containerRef} className="spectrum-scope">
       <canvas ref={canvasRef} className="spectrum-scope__canvas" />
-      {showFpsMeter && (
-        <div className="spectrum-scope__fps">
-          render {fps.render} fps · data {fps.data} fps · dpr {window.devicePixelRatio || 1}
+      {showPeak && peak && (
+        <div
+          ref={peakMode === 'following' ? peakOverlayRef : null}
+          className={['scope-module__peak-info', peakMode === 'following' ? 'is-following' : 'is-corner'].join(' ')}
+          style={overlayStyle}
+        >
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakDb(peak.db)}</span>
+          <span className="scope-module__peak-info-separator">/</span>
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(peak.frequencyHz)}</span>
+          <span className="scope-module__peak-info-separator">/</span>
+          <span className="scope-module__peak-info-value">{peak.key}</span>
         </div>
       )}
     </div>

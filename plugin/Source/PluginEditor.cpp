@@ -12,6 +12,7 @@
 namespace
 {
     const juce::Identifier kSpectrumFrameEvent { "spectrumFrame" };
+    const juce::Identifier kRestoreSettingsEvent { "prismRestoreSettings" };
     constexpr int kDrainCapacity = 16384;
 
 #if PRISM_USE_DEV_SERVER
@@ -34,8 +35,6 @@ namespace
 
     std::optional<juce::WebBrowserComponent::Resource> provideResource(const juce::String& url)
     {
-        // "/" -> index.html; otherwise match the request's basename against the
-        // embedded originals (juce_add_binary_data stores files by basename).
         auto name = (url == "/") ? juce::String("index.html")
                                  : url.fromLastOccurrenceOf("/", false, false);
         name = name.upToFirstOccurrenceOf("?", false, false);
@@ -55,22 +54,33 @@ namespace
     }
 #endif
 
-    juce::WebBrowserComponent::Options makeWebOptions()
+    juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor)
     {
-        auto options = juce::WebBrowserComponent::Options{}.withNativeIntegrationEnabled();
+        auto options = juce::WebBrowserComponent::Options{}
+            .withNativeIntegrationEnabled()
+            .withEventListener("prismConfig", [&editor](juce::var v) { editor.onPrismConfig(std::move(v)); })
+            .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); });
 #if ! PRISM_USE_DEV_SERVER
-        options = options.withResourceProvider ([] (const auto& url) { return provideResource (url); });
+        options = options.withResourceProvider([](const auto& url) { return provideResource(url); });
 #endif
         return options;
+    }
+
+    juce::String floatBufferToBase64(const std::vector<float>& data)
+    {
+        if (data.empty())
+            return {};
+        return juce::Base64::toBase64(data.data(), data.size() * sizeof(float));
     }
 }
 
 PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     : juce::AudioProcessorEditor(&p),
       processorRef(p),
-      webView(makeWebOptions())
+      webView(makeWebOptions(*this))
 {
-    drainScratch.assign((size_t) kDrainCapacity, 0.0f);
+    drainLeft.assign((size_t) kDrainCapacity, 0.0f);
+    drainRight.assign((size_t) kDrainCapacity, 0.0f);
 
     addAndMakeVisible(webView);
 
@@ -93,12 +103,91 @@ void PrismSpectrumEditor::resized()
     webView.setBounds(getLocalBounds());
 }
 
+void PrismSpectrumEditor::onPrismConfig(juce::var payload)
+{
+    // Persist only genuine per-instance overrides (persist=true). App-default /
+    // restore-driven updates carry persist=false so a non-overridden instance
+    // keeps re-reading the app's current settings on reopen.
+    if ((bool) payload.getProperty("persist", false))
+        processorRef.setSettingsJson(payload.getProperty("json", juce::var(juce::String())).toString());
+
+    // Apply the DSP-relevant settings to the (message-thread-owned) analyzer.
+    const int fftSize = (int) payload.getProperty("fftSize", 2048);
+    if (fftSize > 0 && (size_t) fftSize != spectrum.getFFTSize())
+        spectrum.setFFTSize((size_t) fftSize);
+
+    spectrum.setSmoothing((float) (double) payload.getProperty("smoothing", 0.9));
+}
+
+void PrismSpectrumEditor::onPrismReady()
+{
+    pushRestoreSettings();
+    sendAppDefaults();
+}
+
+void PrismSpectrumEditor::sendAppDefaults()
+{
+    // macOS userApplicationDataDirectory is ~/Library, so append "Application Support".
+    const auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                             .getChildFile("Application Support")
+                             .getChildFile("prism");
+    const auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    const auto themesDir = docs.getChildFile("Prism Themes");
+    const auto profilesDir = docs.getChildFile("Prism Profiles");
+
+    juce::String themeId, themeFile, profileJson;
+
+    // Active theme id -> its .iro file (the app loads the file, so it matches exactly).
+    if (const auto themeState = juce::JSON::parse(appData.getChildFile("theme-state.json"));
+        auto* obj = themeState.getDynamicObject())
+        themeId = obj->getProperty("activeThemeId").toString();
+
+    if (themeId.isNotEmpty())
+    {
+        const auto file = themesDir.getChildFile(themeId + ".iro");
+        if (file.existsAsFile())
+            themeFile = file.loadFileAsString();
+    }
+
+    // Active profile id -> the .prsm whose inner "id" matches (filenames are by name).
+    juce::String activeProfileId;
+    if (const auto profileState = juce::JSON::parse(appData.getChildFile("profile-state.json"));
+        auto* obj = profileState.getDynamicObject())
+        activeProfileId = obj->getProperty("activeProfileId").toString();
+
+    if (activeProfileId.isNotEmpty() && profilesDir.isDirectory())
+    {
+        for (const auto& file : profilesDir.findChildFiles(juce::File::findFiles, false, "*.prsm"))
+        {
+            const auto content = file.loadFileAsString();
+            if (const auto parsed = juce::JSON::parse(content); auto* o = parsed.getDynamicObject())
+            {
+                if (o->getProperty("id").toString() == activeProfileId)
+                {
+                    profileJson = content;
+                    break;
+                }
+            }
+        }
+    }
+
+    auto* payload = new juce::DynamicObject();
+    payload->setProperty("themeId", themeId);
+    payload->setProperty("themeFile", themeFile);
+    payload->setProperty("profileJson", profileJson);
+    webView.emitEventIfBrowserIsVisible(juce::Identifier("prismAppDefaults"), juce::var(payload));
+}
+
+void PrismSpectrumEditor::pushRestoreSettings()
+{
+    auto* obj = new juce::DynamicObject();
+    obj->setProperty("json", processorRef.getSettingsJson());
+    webView.emitEventIfBrowserIsVisible(kRestoreSettingsEvent, juce::var(obj));
+}
+
 void PrismSpectrumEditor::renderFrame()
 {
 #if JUCE_MAC
-    // Once the editor is on screen, lift WKWebView's private 60fps cap so the
-    // canvas repaints at the display's native rate (e.g. 120Hz). Retry a few
-    // frames until the web view exists in the hierarchy, then stop.
     if (! frameRateUncapped && uncapAttempts < 300)
     {
         ++uncapAttempts;
@@ -114,22 +203,20 @@ void PrismSpectrumEditor::renderFrame()
         lastSampleRate = sampleRate;
     }
 
-    const int drained = processorRef.drainSamples(drainScratch.data(), (int) drainScratch.size());
+    const int drained = processorRef.drainStereo(drainLeft.data(), drainRight.data(), (int) drainLeft.size());
     if (drained > 0)
-        spectrum.pushSamples(drainScratch.data(), (size_t) drained);
+        spectrum.pushStereoSamples(drainLeft.data(), drainRight.data(), (size_t) drained);
     else
-        spectrum.pushSamples(nullptr, 0); // recompute so smoothing keeps decaying to silence
+        spectrum.pushStereoSamples(nullptr, nullptr, 0); // recompute so smoothing keeps decaying
 
-    const auto& magnitudes = spectrum.getMagnitudes();
-    if (magnitudes.empty())
+    const auto& mid = spectrum.getMagnitudes();
+    if (mid.empty())
         return;
-
-    const auto encoded = juce::Base64::toBase64(magnitudes.data(),
-                                                magnitudes.size() * sizeof(float));
 
     auto* payload = new juce::DynamicObject();
     payload->setProperty("sampleRate", sampleRate);
-    payload->setProperty("magnitudes", encoded);
+    payload->setProperty("magnitudes", floatBufferToBase64(mid));
+    payload->setProperty("side", floatBufferToBase64(spectrum.getSideMagnitudes()));
 
     webView.emitEventIfBrowserIsVisible(kSpectrumFrameEvent, juce::var(payload));
 }

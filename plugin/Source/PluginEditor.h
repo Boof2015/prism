@@ -9,10 +9,10 @@
  * Hosts the React webview UI and bridges the reused Prism spectrum DSP to it.
  *
  * Driven by a VBlankAttachment (message thread, synced to the display's refresh
- * rate — so it adapts to 60/120/144 Hz panels). Each vblank it drains audio
- * buffered by the processor, runs Visualizer::Spectrum (native/src/spectrum.cpp),
- * and emits magnitudes to the webview as a "spectrumFrame" event. The webview
- * (src/plugin-ui) renders them with the existing SpectrumAnalyzer canvas code.
+ * rate). Each vblank it drains stereo audio buffered by the processor, runs
+ * Visualizer::Spectrum, and emits mid + side magnitudes to the webview as a
+ * "spectrumFrame" event. Receives "prismConfig" (settings + fftSize/smoothing)
+ * and "prismReady" events from the UI.
  */
 class PrismSpectrumEditor : public juce::AudioProcessorEditor
 {
@@ -22,13 +22,25 @@ public:
 
     void resized() override;
 
+    // Called by the webview event listeners (message thread).
+    void onPrismConfig(juce::var payload);
+    void onPrismReady();
+
+    // Push the processor's saved settings to the UI (used on ready + on host
+    // state restore, to cover either ordering).
+    void pushRestoreSettings();
+
+    // Read the user's Prism app theme + active profile from disk and send them
+    // to the UI as defaults (per-instance overrides still win).
+    void sendAppDefaults();
+
 private:
     void renderFrame();
 
     PrismSpectrumProcessor& processorRef;
 
     Visualizer::Spectrum spectrum { 2048 };
-    std::vector<float> drainScratch;
+    std::vector<float> drainLeft, drainRight;
     double lastSampleRate = 0.0;
 
     // One-time attempt to lift WKWebView's private 60fps cap (macOS).

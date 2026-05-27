@@ -1,25 +1,21 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import SpectrumScope from './SpectrumScope'
+import '../renderer/styles/globals.css'
+import './styles.css'
+import SpectrumApp from './SpectrumApp'
 import { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import { PluginWebViewDataSource } from './PluginWebViewDataSource'
 import { connectSpectrumBridge } from './juceBridge'
-import './styles.css'
 
 // One shared analyzer shim + data source for the lifetime of the page.
 const nativeAnalyzer = new BridgeSpectrumAnalyzer(2048)
 const dataSource = new PluginWebViewDataSource()
 
-// Diagnostic: count host frames so the FPS meter (off by default) can show the
-// data push rate. Toggle it on by adding `showFpsMeter` to <SpectrumScope/>.
-let dataFrameCount = 0
-
 // Pipe host frames into the shim/data source. The SpectrumAnalyzer (mounted by
-// <SpectrumScope/>) reads from both on its own render loop.
+// <SpectrumApp/>) reads from both on its own render loop.
 connectSpectrumBridge({
   onFrame: (frame) => {
-    dataFrameCount += 1
-    nativeAnalyzer.setMagnitudes(frame.magnitudes)
+    nativeAnalyzer.setMagnitudes(frame.magnitudes, frame.side)
     dataSource.setSampleRate(frame.sampleRate)
     dataSource.setPlaying(true)
   },
@@ -32,10 +28,6 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <SpectrumScope
-      dataSource={dataSource}
-      nativeAnalyzer={nativeAnalyzer}
-      getDataFrameCount={() => dataFrameCount}
-    />
+    <SpectrumApp dataSource={dataSource} nativeAnalyzer={nativeAnalyzer} />
   </StrictMode>,
 )

@@ -25,12 +25,25 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
 
   private readonly listeners = new Set<(state: ScopePopoutSessionState) => void>()
 
+  // The DSP runs in C++ and pushes finished magnitudes (no raw samples flow
+  // through here). But SpectrumAnalyzer only refreshes its heatmap buffer when
+  // it sees "new samples arrived" (a non-empty pending queue). We therefore
+  // hand it a reusable sentinel chunk each frame to signal a fresh frame. Its
+  // length saturates `nativeBufferedSamples` so heatmap smoothing applies — the
+  // values are unused (the shim's pushSamples is a no-op; magnitudes come from
+  // fillMagnitudes). Sized to the max FFT so any fftSize saturates in one frame.
+  private readonly sentinel = new Float32Array(16384)
+  private readonly sentinelStereo: SpectrumStereoChunk = {
+    left: this.sentinel,
+    right: this.sentinel,
+  }
+
   getPendingSpectrumSamples(): Float32Array[] {
-    return []
+    return this.sessionState.capturing ? [this.sentinel] : []
   }
 
   getPendingSpectrumStereoSamples(): SpectrumStereoChunk[] {
-    return []
+    return this.sessionState.capturing ? [this.sentinelStereo] : []
   }
 
   getSampleRate(): number {
