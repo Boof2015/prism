@@ -58,6 +58,16 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     return this.sessionState.capturing ? [this.sentinel] : []
   }
 
+  // Waveform: same sentinel trick — the visualizer calls processMono/processStereo
+  // per pending chunk, which drains the C++-pushed column summaries from the bridge.
+  getPendingWaveformSamples(): Float32Array[] {
+    return this.sessionState.capturing ? [this.sentinel] : []
+  }
+
+  getPendingWaveformStereoSamples(): SpectrumStereoChunk[] {
+    return this.sessionState.capturing ? [this.sentinelStereo] : []
+  }
+
   // VU + loudness meters read the C++-pushed snapshot from the bridge analyzer
   // every frame, so there are no raw samples to drain here (no sentinel needed).
   getPendingVUMeterSamples(): Array<{ left: Float32Array; right: Float32Array }> {

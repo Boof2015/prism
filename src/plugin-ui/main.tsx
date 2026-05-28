@@ -9,14 +9,16 @@ import VUMeterScope from './VUMeterScope'
 import LUFSMeterScope from './LUFSMeterScope'
 import VectorscopeScope from './VectorscopeScope'
 import SpectrogramScope from './SpectrogramScope'
+import WaveformScope from './WaveformScope'
 import { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import { BridgeOscilloscopeAnalyzer } from './BridgeOscilloscopeAnalyzer'
 import { BridgeVUMeterAnalyzer } from './BridgeVUMeterAnalyzer'
 import { BridgeLUFSMeterAnalyzer } from './BridgeLUFSMeterAnalyzer'
 import { BridgeVectorscopeAnalyzer } from './BridgeVectorscopeAnalyzer'
 import { BridgeSpectrogramAnalyzer } from './BridgeSpectrogramAnalyzer'
+import { BridgeWaveformAnalyzer } from './BridgeWaveformAnalyzer'
 import { PluginWebViewDataSource } from './PluginWebViewDataSource'
-import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge, connectVectorscopeBridge, connectSpectrogramBridge } from './juceBridge'
+import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge, connectVectorscopeBridge, connectSpectrogramBridge, connectWaveformBridge } from './juceBridge'
 
 // The C++ plugin tells us which scope it is via JUCE initialisation data.
 // JUCE stores each value as an array (e.g. prismScope = ["oscilloscope"]).
@@ -31,6 +33,30 @@ function getScopeKind(): string {
 const dataSource = new PluginWebViewDataSource()
 
 function buildApp(): JSX.Element {
+  if (getScopeKind() === 'waveform') {
+    const analyzer = new BridgeWaveformAnalyzer()
+    connectWaveformBridge({
+      onFrame: (frame) => {
+        analyzer.pushFrame(frame.summaries, frame.stereo)
+        dataSource.setSampleRate(frame.sampleRate)
+        dataSource.setPlaying(true)
+      },
+    })
+    return (
+      <ScopeApp
+        kind="waveform"
+        renderScope={(settings, theme) => (
+          <WaveformScope
+            settings={settings}
+            theme={theme.waveform}
+            dataSource={dataSource}
+            nativeAnalyzer={analyzer}
+          />
+        )}
+      />
+    )
+  }
+
   if (getScopeKind() === 'spectrogram') {
     const analyzer = new BridgeSpectrogramAnalyzer()
     connectSpectrogramBridge({

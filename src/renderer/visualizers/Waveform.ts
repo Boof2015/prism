@@ -495,7 +495,7 @@ export class Waveform {
   }
 
   private processMonoChunk(chunk: Float32Array, width: number, height: number): void {
-    if (this.useNativeMultiband()) {
+    if (this.useNativeAnalyzer()) {
       if (this.processNativeMonoChunk(chunk, width, height)) {
         return
       }
@@ -540,7 +540,7 @@ export class Waveform {
     const leftSamples = chunk.left.length === length ? chunk.left : chunk.left.subarray(0, length)
     const rightSamples = chunk.right.length === length ? chunk.right : chunk.right.subarray(0, length)
 
-    if (this.useNativeMultiband()) {
+    if (this.useNativeAnalyzer()) {
       if (this.processNativeStereoChunk(leftSamples, rightSamples, width, height)) {
         return
       }
@@ -590,8 +590,13 @@ export class Waveform {
     }
   }
 
-  private useNativeMultiband(): boolean {
-    return this.options.multiband && Boolean(this.nativeAnalyzer) && this.nativeAnalyzer?.isAvailable?.() !== false
+  private useNativeAnalyzer(): boolean {
+    // The native analyzer computes per-column min/max (and band RMS) identically to
+    // the JS sample loop, so prefer it whenever available — for plain mode it just
+    // colors columns with lineColor. The JS path below remains the fallback when no
+    // native analyzer is present (and is what feeds raw samples in the Electron app
+    // when the addon is unavailable).
+    return Boolean(this.nativeAnalyzer) && this.nativeAnalyzer?.isAvailable?.() !== false
   }
 
   private processNativeMonoChunk(chunk: Float32Array, width: number, height: number): boolean {

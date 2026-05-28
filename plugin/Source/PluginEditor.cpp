@@ -5,6 +5,7 @@
 #include "LUFSMeterEngine.h"
 #include "VectorscopeEngine.h"
 #include "SpectrogramEngine.h"
+#include "WaveformEngine.h"
 #include <cstring>
 
 #if ! PRISM_USE_DEV_SERVER
@@ -22,7 +23,9 @@ namespace
 
     std::unique_ptr<ScopeEngine> makeEngine()
     {
-#if defined(PRISM_SCOPE_SPECTROGRAM) && PRISM_SCOPE_SPECTROGRAM
+#if defined(PRISM_SCOPE_WAVEFORM) && PRISM_SCOPE_WAVEFORM
+        return std::make_unique<WaveformEngine>();
+#elif defined(PRISM_SCOPE_SPECTROGRAM) && PRISM_SCOPE_SPECTROGRAM
         return std::make_unique<SpectrogramEngine>();
 #elif defined(PRISM_SCOPE_VECTORSCOPE) && PRISM_SCOPE_VECTORSCOPE
         return std::make_unique<VectorscopeEngine>();

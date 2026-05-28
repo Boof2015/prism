@@ -536,6 +536,94 @@ export function connectSpectrogramBridge(handlers: SpectrogramBridgeHandlers): (
 }
 
 // ---------------------------------------------------------------------------
+// Waveform frames (event "waveformFrame"): per-column summaries (base64), stride 10
+// in stereo mode / stride 5 in mono, flagged by `stereo`.
+
+export interface WaveformFrame {
+  sampleRate: number
+  stereo: boolean
+  columnCount: number
+  summaries: Float32Array
+}
+
+interface WaveformFramePayload {
+  sampleRate?: number
+  stereo?: boolean
+  columnCount?: number
+  summaries?: string
+}
+
+function decodeWaveformFrame(payload: unknown): WaveformFrame | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const { sampleRate, stereo, columnCount, summaries } = payload as WaveformFramePayload
+  return {
+    sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,
+    stereo: Boolean(stereo),
+    columnCount: typeof columnCount === 'number' ? columnCount : 0,
+    summaries: typeof summaries === 'string' ? base64ToFloat32Array(summaries) : new Float32Array(0),
+  }
+}
+
+export interface WaveformBridgeHandlers {
+  onFrame: (frame: WaveformFrame) => void
+  onConnected?: (usingMock: boolean) => void
+}
+
+export function connectWaveformBridge(handlers: WaveformBridgeHandlers): () => void {
+  let disposed = false
+  let listenerId: number | null = null
+  let mockRaf: number | null = null
+
+  const startMock = (): void => {
+    handlers.onConnected?.(true)
+    console.warn('[prism-plugin] no JUCE host — using synthetic waveform (browser dev mode)')
+    let phase = 0
+    const tick = (): void => {
+      if (disposed) return
+      phase += 0.12
+      const columns = 2
+      // Emit both mono (stride 5) and stereo (stride 10) so the dev mock works in
+      // either mode (the analyzer serves whichever the visualizer asks for).
+      const mono = new Float32Array(columns * 5)
+      const stereo = new Float32Array(columns * 10)
+      for (let c = 0; c < columns; c += 1) {
+        const amp = 0.3 + 0.6 * Math.abs(Math.sin(phase + c * 0.4))
+        const m = c * 5
+        mono[m] = -amp; mono[m + 1] = amp; mono[m + 2] = amp * 0.5; mono[m + 3] = amp * 0.7; mono[m + 4] = amp * 0.3
+        const s = c * 10
+        stereo[s] = -amp; stereo[s + 1] = amp; stereo[s + 2] = amp * 0.5; stereo[s + 3] = amp * 0.7; stereo[s + 4] = amp * 0.3
+        const ampR = amp * 0.85
+        stereo[s + 5] = -ampR; stereo[s + 6] = ampR; stereo[s + 7] = ampR * 0.5; stereo[s + 8] = ampR * 0.7; stereo[s + 9] = ampR * 0.3
+      }
+      handlers.onFrame({ sampleRate: 48000, stereo: false, columnCount: columns, summaries: mono })
+      handlers.onFrame({ sampleRate: 48000, stereo: true, columnCount: columns, summaries: stereo })
+      mockRaf = requestAnimationFrame(tick)
+    }
+    mockRaf = requestAnimationFrame(tick)
+  }
+
+  void ensureBackend().then((backend) => {
+    if (disposed) return
+    if (backend) {
+      listenerId = backend.addEventListener('waveformFrame', (payload) => {
+        const frame = decodeWaveformFrame(payload)
+        if (frame) handlers.onFrame(frame)
+      })
+      handlers.onConnected?.(false)
+      console.log('[prism-plugin] connected to JUCE host (waveform)')
+    } else {
+      startMock()
+    }
+  })
+
+  return () => {
+    disposed = true
+    if (mockRaf !== null) cancelAnimationFrame(mockRaf)
+    if (listenerId !== null) window.__JUCE__?.backend?.removeEventListener?.(listenerId)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Oscilloscope frames (event "oscilloscopeFrame": { sampleRate, samples, pitch }).
 
 export interface OscilloscopeFrame {
