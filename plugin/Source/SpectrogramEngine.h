@@ -22,6 +22,7 @@ class SpectrogramEngine : public ScopeEngine
 public:
     const char* scopeId() const override { return "spectrogram"; }
     juce::Identifier frameEventId() const override { return frameId; }
+    PreferredSize preferredSize() const override { return { 700, 340, 360, 200 }; }
 
     void setSampleRate(double sampleRate) override
     {

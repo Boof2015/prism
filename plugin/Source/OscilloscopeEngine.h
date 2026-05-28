@@ -11,6 +11,7 @@ class OscilloscopeEngine : public ScopeEngine
 public:
     const char* scopeId() const override { return "oscilloscope"; }
     juce::Identifier frameEventId() const override { return frameId; }
+    PreferredSize preferredSize() const override { return { 760, 300, 320, 160 }; }
 
     void setSampleRate(double sampleRate) override
     {

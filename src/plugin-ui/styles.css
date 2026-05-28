@@ -22,9 +22,17 @@ body {
 }
 
 .spectrum-app {
-  position: relative;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100%;
+}
+
+/* The scope fills everything above the (optional) bottom settings panel. */
+.spectrum-app__viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .spectrum-scope {
@@ -76,21 +84,17 @@ body {
   border-color: var(--control-border-active, rgba(56, 189, 248, 0.4));
 }
 
-.spectrum-app__settings {
-  position: absolute;
-  top: 44px;
-  right: 8px;
-  z-index: 5;
-  width: 320px;
-  max-width: calc(100% - 16px);
-  max-height: calc(100% - 56px);
+/* Settings panel along the bottom (like the app). The editor window grows by exactly
+   this height when it opens, so the scope viewport above keeps its size. The fixed
+   basis MUST match PANEL_HEIGHT in ScopeApp.tsx (the grow delta), or the scope would
+   shift. Content taller than this scrolls. */
+.spectrum-app__panel {
+  flex: 0 0 280px;
+  width: 100%;
   overflow-y: auto;
   padding: 12px;
   background: var(--settings-bg-top, rgba(8, 10, 14, 0.96));
-  border: 1px solid var(--panel-outline, rgba(255, 255, 255, 0.12));
-  border-radius: 10px;
-  box-shadow: var(--panel-shadow, 0 14px 34px rgba(0, 0, 0, 0.4));
-  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--panel-outline, rgba(255, 255, 255, 0.12));
 }
 
 .spectrum-scope__peak {

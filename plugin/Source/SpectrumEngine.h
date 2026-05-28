@@ -9,6 +9,7 @@ class SpectrumEngine : public ScopeEngine
 public:
     const char* scopeId() const override { return "spectrum"; }
     juce::Identifier frameEventId() const override { return frameId; }
+    PreferredSize preferredSize() const override { return { 820, 320, 360, 180 }; }
 
     void setSampleRate(double sampleRate) override
     {

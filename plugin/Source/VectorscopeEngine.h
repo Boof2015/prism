@@ -17,6 +17,7 @@ class VectorscopeEngine : public ScopeEngine
 public:
     const char* scopeId() const override { return "vectorscope"; }
     juce::Identifier frameEventId() const override { return frameId; }
+    PreferredSize preferredSize() const override { return { 440, 440, 240, 200 }; }
 
     void setSampleRate(double sampleRate) override
     {

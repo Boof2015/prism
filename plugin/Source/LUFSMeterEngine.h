@@ -16,6 +16,7 @@ class LUFSMeterEngine : public ScopeEngine
 public:
     const char* scopeId() const override { return "lufsmeter"; }
     juce::Identifier frameEventId() const override { return frameId; }
+    PreferredSize preferredSize() const override { return { 360, 340, 240, 220 }; }
 
     void setSampleRate(double sampleRate) override
     {

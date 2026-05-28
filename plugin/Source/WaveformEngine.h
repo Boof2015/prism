@@ -22,6 +22,7 @@ public:
 
     const char* scopeId() const override { return "waveform"; }
     juce::Identifier frameEventId() const override { return frameId; }
+    PreferredSize preferredSize() const override { return { 720, 260, 360, 140 }; }
 
     void setSampleRate(double sr) override
     {

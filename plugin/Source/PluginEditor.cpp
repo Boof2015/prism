@@ -84,7 +84,8 @@ namespace
             .withInitialisationData("prismScope", juce::String(scopeId))
             .withEventListener("prismConfig", [&editor](juce::var v) { editor.onPrismConfig(std::move(v)); })
             .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); })
-            .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); });
+            .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
+            .withEventListener("prismSettingsPanel", [&editor](juce::var v) { editor.onSettingsPanel(std::move(v)); });
 #if ! PRISM_USE_DEV_SERVER
         options = options.withResourceProvider([](const auto& url) { return provideResource(url); });
 #endif
@@ -109,9 +110,11 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     webView.goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
 #endif
 
+    // Per-scope sizing: open at the scope's preferred default, with a per-scope min.
+    const auto pref = engine->preferredSize();
     setResizable(true, true);
-    setResizeLimits(360, 200, 4096, 4096);
-    setSize(900, 480);
+    setResizeLimits(pref.minWidth, pref.minHeight, 4096, 4096);
+    setSize(pref.defaultWidth, pref.defaultHeight);
 
     // Drive frames at the display's refresh rate (adapts to 60/120/144 Hz).
     vblank = juce::VBlankAttachment(this, [this] { renderFrame(); });
@@ -120,6 +123,20 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
 void PrismSpectrumEditor::resized()
 {
     webView.setBounds(getLocalBounds());
+}
+
+void PrismSpectrumEditor::onSettingsPanel(juce::var payload)
+{
+    const int height = juce::jmax(0, (int) payload.getProperty("height", 0));
+    const int delta = height - settingsPanelHeight;
+    if (delta == 0)
+        return;
+
+    settingsPanelHeight = height;
+    // Grow/shrink the window by exactly the panel height so the scope area is
+    // unchanged. Deliberately NOT touching resize limits — doing so makes JUCE's
+    // constrainer snap the window and double the applied size.
+    setSize(getWidth(), getHeight() + delta);
 }
 
 void PrismSpectrumEditor::onPrismConfig(juce::var payload)

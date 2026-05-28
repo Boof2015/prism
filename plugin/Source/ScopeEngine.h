@@ -13,6 +13,16 @@ class ScopeEngine
 public:
     virtual ~ScopeEngine() = default;
 
+    /** Editor window sizing (logical px). Each scope picks a shape that fits it. */
+    struct PreferredSize
+    {
+        int defaultWidth  = 720;
+        int defaultHeight = 320;
+        int minWidth      = 320;
+        int minHeight     = 160;
+    };
+    virtual PreferredSize preferredSize() const { return {}; }
+
     /** Stable id sent to the webview (via initialisation data) to pick the UI scope. */
     virtual const char* scopeId() const = 0;
 

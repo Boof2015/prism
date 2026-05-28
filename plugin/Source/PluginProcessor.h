@@ -62,6 +62,8 @@ private:
 
     juce::CriticalSection settingsLock;
     juce::String settingsJson;
+    std::atomic<int> editorWidth { 0 };
+    std::atomic<int> editorHeight { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PrismSpectrumProcessor)
 };

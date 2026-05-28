@@ -15,6 +15,7 @@ class VUMeterEngine : public ScopeEngine
 public:
     const char* scopeId() const override { return "vumeter"; }
     juce::Identifier frameEventId() const override { return frameId; }
+    PreferredSize preferredSize() const override { return { 480, 300, 280, 180 }; }
 
     void setSampleRate(double sampleRate) override
     {

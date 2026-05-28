@@ -30,6 +30,11 @@ public:
     // Scope-specific native config (e.g. the spectrogram's canvas-derived rowCount).
     void onScopeNativeConfig(juce::var payload);
 
+    // The UI's settings panel opened/closed along the bottom. Grow/shrink the editor
+    // height by exactly the panel height so the scope area is unchanged (the window
+    // accommodates the panel, like the app). 0 = closed.
+    void onSettingsPanel(juce::var payload);
+
     // Push the processor's saved settings to the UI (used on ready + on host
     // state restore, to cover either ordering).
     void pushRestoreSettings();
@@ -46,6 +51,9 @@ private:
     std::unique_ptr<ScopeEngine> engine;
     std::vector<float> drainLeft, drainRight;
     double lastSampleRate = 0.0;
+
+    // Height (px) the editor is currently grown by for the open settings panel.
+    int settingsPanelHeight = 0;
 
     // One-time attempt to lift WKWebView's private 60fps cap (macOS).
     bool frameRateUncapped = false;
