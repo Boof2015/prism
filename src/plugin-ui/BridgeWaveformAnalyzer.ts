@@ -5,6 +5,12 @@ interface QueuedColumns {
   stereo: boolean
 }
 
+// The C++ engine emits columns every vblank (audio-driven), independently of how
+// fast the webview renders them. Cap the backlog so an overloaded consumer drops the
+// OLDEST columns rather than accumulating unbounded latency (which death-spirals into
+// stutter at high scroll speeds). One entry == one emitted frame.
+const MAX_QUEUED_FRAMES = 8
+
 /**
  * Drop-in `WaveformNativeAnalyzer` for the plugin webview.
  *
@@ -23,6 +29,10 @@ export class BridgeWaveformAnalyzer implements WaveformNativeAnalyzer {
   pushFrame(summaries: Float32Array, stereo: boolean): void {
     if (summaries.length === 0) return
     this.queue.push({ summaries, stereo })
+    // Drop oldest backlog beyond the cap so we stay near real-time under overload.
+    while (this.queue.length > MAX_QUEUED_FRAMES) {
+      this.queue.shift()
+    }
   }
 
   isAvailable(): boolean {

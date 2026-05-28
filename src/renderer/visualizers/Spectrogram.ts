@@ -352,28 +352,38 @@ export class Spectrogram {
     this.columnImageData = new ImageData(imageWidth, imageHeight)
   }
 
-  private shiftAndPaintColumn(values: Float32Array, heatValues: Float32Array = values): void {
+  // Scroll the waterfall once for the whole batch of new columns, then paint them —
+  // far cheaper than a full-canvas self-blit per column (which dominates cost at high
+  // scroll speeds / large windows). `display`/`heat` are columnCount * rowCount long.
+  private shiftAndPaintColumns(display: Float32Array, heat: Float32Array, columnCount: number, rowCount: number): void {
     const width = this.waterfallCanvas.width
     const height = this.waterfallCanvas.height
-    if (width <= 0 || height <= 0 || !this.columnImageData) return
+    if (width <= 0 || height <= 0 || columnCount <= 0 || rowCount <= 0 || !this.columnImageData) return
 
-    this.paintColumnImage(values, heatValues)
+    const vertical = this.options.orientation === 'vertical'
+    const span = vertical ? height : width
+    const shift = Math.min(columnCount, span)
 
     const previousCompositeOperation = this.waterfallCtx.globalCompositeOperation
     this.waterfallCtx.globalCompositeOperation = 'copy'
-    if (this.options.orientation === 'vertical') {
-      // Shift existing content up by 1 pixel.
-      this.waterfallCtx.drawImage(this.waterfallCanvas, 0, -1)
+    if (vertical) {
+      this.waterfallCtx.drawImage(this.waterfallCanvas, 0, -shift)
     } else {
-      // Shift existing content left by 1 pixel.
-      this.waterfallCtx.drawImage(this.waterfallCanvas, -1, 0)
+      this.waterfallCtx.drawImage(this.waterfallCanvas, -shift, 0)
     }
     this.waterfallCtx.globalCompositeOperation = previousCompositeOperation
 
-    if (this.options.orientation === 'vertical') {
-      this.waterfallCtx.putImageData(this.columnImageData, 0, height - 1)
-    } else {
-      this.waterfallCtx.putImageData(this.columnImageData, width - 1, 0)
+    for (let column = 0; column < columnCount; column += 1) {
+      const dst = span - columnCount + column
+      if (dst < 0) continue
+      const start = column * rowCount
+      const end = start + rowCount
+      this.paintColumnImage(display.subarray(start, end), heat.subarray(start, end))
+      if (vertical) {
+        this.waterfallCtx.putImageData(this.columnImageData, 0, dst)
+      } else {
+        this.waterfallCtx.putImageData(this.columnImageData, dst, 0)
+      }
     }
   }
 
@@ -480,14 +490,7 @@ export class Spectrogram {
     }
 
     for (const result of results) {
-      for (let column = 0; column < result.columnCount; column += 1) {
-        const start = column * result.rowCount
-        const end = start + result.rowCount
-        this.shiftAndPaintColumn(
-          result.display.subarray(start, end),
-          result.heat.subarray(start, end),
-        )
-      }
+      this.shiftAndPaintColumns(result.display, result.heat, result.columnCount, result.rowCount)
     }
 
     return true

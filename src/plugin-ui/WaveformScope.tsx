@@ -5,6 +5,7 @@ import type { ResolvedWaveformTheme } from '../types/theme'
 import type { BridgeWaveformAnalyzer } from './BridgeWaveformAnalyzer'
 import type { PluginWebViewDataSource } from './PluginWebViewDataSource'
 import { waveformSettingsToOptions } from './waveformOptions'
+import { resolveScrollingCanvasSize } from './scrollingCanvas'
 
 interface WaveformScopeProps {
   dataSource: PluginWebViewDataSource
@@ -38,11 +39,10 @@ export default function WaveformScope({
     const applySize = (): void => {
       const rect = container.getBoundingClientRect()
       const dpr = window.devicePixelRatio || 1
-      const pixelWidth = Math.max(1, Math.floor(rect.width * dpr))
-      const pixelHeight = Math.max(1, Math.floor(rect.height * dpr))
-      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-        canvas.width = pixelWidth
-        canvas.height = pixelHeight
+      const { width, height } = resolveScrollingCanvasSize(rect.width, rect.height, dpr)
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width
+        canvas.height = height
         viz.resize()
       }
     }

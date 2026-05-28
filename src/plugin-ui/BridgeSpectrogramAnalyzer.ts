@@ -3,6 +3,19 @@ import { emitToHost } from './juceBridge'
 
 const EMPTY = new Float32Array(0)
 
+// The C++ engine emits columns every vblank (audio-driven), independently of how
+// fast the webview can render them. Cap the backlog so that when the consumer falls
+// behind we drop the OLDEST columns instead of accumulating unbounded latency (which
+// otherwise death-spirals into stutter at high scroll speeds). One entry == one
+// emitted frame, so this bounds latency to ~N display frames regardless of rate.
+const MAX_QUEUED_FRAMES = 8
+
+interface QueuedColumns {
+  display: Float32Array
+  heat: Float32Array
+  columnCount: number
+}
+
 /**
  * Drop-in `SpectrogramNativeAnalyzer` for the plugin webview.
  *
@@ -20,8 +33,7 @@ const EMPTY = new Float32Array(0)
  */
 export class BridgeSpectrogramAnalyzer implements SpectrogramNativeAnalyzer {
   private expectedRowCount = 0
-  private queuedDisplay: Float32Array[] = []
-  private queuedHeat: Float32Array[] = []
+  private queue: QueuedColumns[] = []
   private queuedColumns = 0
 
   configure(options: SpectrogramNativeOptions): void {
@@ -36,9 +48,13 @@ export class BridgeSpectrogramAnalyzer implements SpectrogramNativeAnalyzer {
   pushFrame(display: Float32Array, heat: Float32Array, columnCount: number, rowCount: number): void {
     if (rowCount !== this.expectedRowCount || columnCount <= 0) return
     if (display.length < columnCount * rowCount || heat.length < columnCount * rowCount) return
-    this.queuedDisplay.push(display)
-    this.queuedHeat.push(heat)
+    this.queue.push({ display, heat, columnCount })
     this.queuedColumns += columnCount
+    // Drop oldest backlog beyond the cap so we stay near real-time under overload.
+    while (this.queue.length > MAX_QUEUED_FRAMES) {
+      const dropped = this.queue.shift()
+      if (dropped) this.queuedColumns -= dropped.columnCount
+    }
   }
 
   /** The rowCount the UI last asked for (0 until first configure). */
@@ -60,10 +76,10 @@ export class BridgeSpectrogramAnalyzer implements SpectrogramNativeAnalyzer {
     const display = new Float32Array(total)
     const heat = new Float32Array(total)
     let offset = 0
-    for (let i = 0; i < this.queuedDisplay.length; i += 1) {
-      display.set(this.queuedDisplay[i], offset)
-      heat.set(this.queuedHeat[i], offset)
-      offset += this.queuedDisplay[i].length
+    for (const entry of this.queue) {
+      display.set(entry.display, offset)
+      heat.set(entry.heat, offset)
+      offset += entry.display.length
     }
 
     const columnCount = this.queuedColumns
@@ -76,8 +92,7 @@ export class BridgeSpectrogramAnalyzer implements SpectrogramNativeAnalyzer {
   }
 
   private clearQueue(): void {
-    this.queuedDisplay = []
-    this.queuedHeat = []
+    this.queue = []
     this.queuedColumns = 0
   }
 }
