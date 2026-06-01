@@ -61,6 +61,51 @@ jobs:
           fi
           echo "Native module built successfully: $(ls -lh native/build/Release/visualizer_dsp.node)"
 
+      # --- JUCE plugins (macOS + Windows). Linux defers; we still create the
+      # staging dir so electron-builder's extraResources entry doesn't choke. ---
+
+      - name: Build plugin webview bundle
+        if: runner.os != 'Linux'
+        run: npm run plugin-ui:build
+
+      - name: Configure JUCE plugins (macOS)
+        if: runner.os == 'macOS'
+        run: cmake -B plugin/build -S plugin -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure JUCE plugins (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -B plugin/build -S plugin -G "Visual Studio 17 2022" -A x64
+
+      - name: Build JUCE plugins
+        if: runner.os != 'Linux'
+        run: cmake --build plugin/build --config Release
+
+      - name: Stage plugins for installer
+        shell: bash
+        run: |
+          rm -rf plugin/dist-installer
+          mkdir -p plugin/dist-installer
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "Linux: skipping plugin staging (no DAW-plugin install path yet)."
+            exit 0
+          fi
+          mkdir -p plugin/dist-installer/VST3
+          [ "$RUNNER_OS" = "macOS" ] && mkdir -p plugin/dist-installer/AU
+          for art in PrismSpectrum PrismOscilloscope PrismVUMeter PrismLUFSMeter PrismVectorscope PrismSpectrogram PrismWaveform; do
+            vst3_dir="plugin/build/${art}_artefacts/Release/VST3"
+            [ -d "$vst3_dir" ] && find "$vst3_dir" -maxdepth 1 -name "*.vst3" -exec cp -R {} plugin/dist-installer/VST3/ \;
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              au_dir="plugin/build/${art}_artefacts/Release/AU"
+              [ -d "$au_dir" ] && find "$au_dir" -maxdepth 1 -name "*.component" -exec cp -R {} plugin/dist-installer/AU/ \;
+            fi
+          done
+          echo "--- staged VST3 ---"
+          ls -la plugin/dist-installer/VST3 || true
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "--- staged AU ---"
+            ls -la plugin/dist-installer/AU || true
+          fi
+
       - name: Build distributable
         run: npm run ${{ matrix.dist_cmd }}
         env:
@@ -72,7 +117,7 @@ jobs:
           name: prism-${{ runner.os }}${{ inputs.version_tag && format('-{0}', inputs.version_tag) || '' }}
           path: |
             dist/*.exe
-            dist/*.dmg
+            dist/*.pkg
             dist/*.zip
             dist/*.AppImage
             dist/*.deb

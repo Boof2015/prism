@@ -1,9 +1,11 @@
-# Prism Spectrum — DAW plugin POC
+# Prism — DAW plugins
 
-A proof-of-concept JUCE 8 plugin (VST3 / AU / Standalone, macOS) that renders Prism's
-Spectrum scope inside a DAW. It **reuses Prism's existing C++ DSP** (`native/src/spectrum.cpp`,
-`dsp_utils.cpp`) and the **existing React canvas UI** (`src/plugin-ui`, which imports
-`src/renderer/visualizers/SpectrumAnalyzer.ts`).
+JUCE 8 plugins (VST3 / AU / Standalone) that render Prism's scopes inside a DAW —
+one plugin per scope: **spectrum, oscilloscope, vectorscope, spectrogram, VU meter,
+loudness meter, waveform**. They **reuse Prism's existing C++ DSP** (`native/src/*.cpp`)
+and the **existing React canvas UI** (`src/plugin-ui`, importing the unchanged
+visualizers from `src/renderer/visualizers/`). Built for macOS and Windows; Linux
+untested but should follow the same recipe.
 
 ## How it fits together
 
@@ -33,12 +35,13 @@ cmake -B plugin/build -S plugin -DCMAKE_BUILD_TYPE=Release # embeds the bundle (
 cmake --build plugin/build --config Release
 ```
 
-`COPY_PLUGIN_AFTER_BUILD` installs into your user plugin folders:
-- AU:   `~/Library/Audio/Plug-Ins/Components/Prism Spectrum.component`
-- VST3: `~/Library/Audio/Plug-Ins/VST3/Prism Spectrum.vst3`
+`COPY_PLUGIN_AFTER_BUILD` installs all seven plugins into your user plugin folders:
+- AU:   `~/Library/Audio/Plug-Ins/Components/Prism *.component`
+- VST3: `~/Library/Audio/Plug-Ins/VST3/Prism *.vst3`
 
-Run the **Standalone** (`plugin/build/.../Standalone/Prism Spectrum.app`) or load the
-VST3/AU on a track in Ableton / FL / Logic / Reaper, play audio, and the spectrum animates.
+Load any `Prism *` AU / VST3 on a track in Ableton / FL / Logic / Reaper (or run the
+matching **Standalone** from `plugin/build/Prism*_artefacts/Release/Standalone/`),
+play audio, and the scope animates.
 (To use a local JUCE checkout instead of fetching: add `-DJUCE_PATH=/path/to/JUCE`.)
 
 ### UI development: dev-server mode (hot reload)
@@ -53,6 +56,29 @@ Edit React → the plugin window hot-reloads. The UI also runs in a plain browse
 `http://localhost:5174` (no JUCE host → it shows a synthetic spectrum so the UI is
 developable outside a DAW). Reconfigure without `-DPRISM_DEV_SERVER=ON` to go back to embedded.
 
+## Build & run (Windows)
+
+Prereqs: Visual Studio 2022 with the "Desktop development with C++" workload,
+CMake ≥ 3.22, Node.js. Modern Win10 / Win11 ships with the Microsoft Edge WebView2
+Runtime preinstalled; if it's missing, install the "Evergreen Standalone Installer"
+from Microsoft.
+
+```sh
+npm install
+npm run plugin-ui:build
+cmake -B plugin\build -S plugin -G "Visual Studio 17 2022" -A x64
+cmake --build plugin\build --config Release
+```
+
+`COPY_PLUGIN_AFTER_BUILD` targets the system VST3 folder
+(`C:\Program Files\Common Files\VST3\Prism *.vst3`), which **needs admin
+privileges**. Either run the `cmake --build` step from an elevated shell, or copy
+the built bundles from `plugin\build\Prism*_artefacts\Release\VST3\` into your
+user-local VST3 folder (`%LOCALAPPDATA%\Programs\Common\VST3\`) by hand — most
+DAWs scan both.
+
+Dev-server mode works the same as macOS: `-DPRISM_DEV_SERVER=ON` + `npm run plugin-ui:dev`.
+
 ## Notes
 
 - **Refresh rate (macOS):** frames are emitted on `juce::VBlankAttachment` (synced to the
@@ -62,5 +88,7 @@ developable outside a DAW). Reconfigure without `-DPRISM_DEV_SERVER=ON` to go ba
   `PreferPageRenderingUpdatesNear60FPSEnabled` feature on the live web view (no public API
   exists; fine for a non-App-Store FOSS plugin). To diagnose, set `showFpsMeter` on
   `<SpectrumScope/>` to overlay `render / data` fps.
-- **Windows (later):** bump `NEEDS_WEBVIEW2 TRUE`; the DSP is already cross-platform. The
-  frame-rate workaround is macOS-only (WebView2 has its own rate behavior).
+- **Windows:** `NEEDS_WEBVIEW2 TRUE` in CMake links Microsoft's Edge WebView2 runtime.
+  The macOS 120 Hz uncap (`Source/WebViewFrameRate.mm`, gated `if(APPLE)`) doesn't
+  apply — WebView2 has its own rate behavior; please report actual fps if it ever
+  feels low.

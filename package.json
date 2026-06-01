@@ -92,15 +92,23 @@
       {
         "from": "resources/icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "plugin/dist-installer/",
+        "to": "plugins/"
       }
     ],
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": ["pkg", "zip"],
       "icon": "resources/icon.icns",
       "category": "public.app-category.music",
       "hardenedRuntime": true,
       "entitlements": "resources/entitlements.mac.plist",
       "entitlementsInherit": "resources/entitlements.mac.inherit.plist"
+    },
+    "pkg": {
+      "installLocation": "/Applications",
+      "scripts": "resources/installer/macos-scripts"
     },
     "win": {
       "target": [
@@ -108,6 +116,9 @@
         { "target": "portable", "arch": ["x64"] }
       ],
       "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "include": "resources/installer/windows-vst3.nsh"
     },
     "linux": {
       "target": ["AppImage", "deb"],

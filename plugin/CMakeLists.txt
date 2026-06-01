@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.22)
 
+# macOS deployment target. Without an override, the build inherits the host SDK
+# (e.g. 26 on a current Mac) which restricts the plugin to that macOS or newer.
+# 11.0 (Big Sur) is a reasonable floor; well within JUCE 8's supported range.
+# Override on the command line with -DCMAKE_OSX_DEPLOYMENT_TARGET=X.X — the FORCE
+# is only applied when the value is empty/unset, so explicit overrides win.
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version supported" FORCE)
+endif()
+
 project(PrismPlugins VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -49,7 +58,7 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         NEEDS_MIDI_INPUT FALSE
         NEEDS_MIDI_OUTPUT FALSE
         IS_MIDI_EFFECT FALSE
-        NEEDS_WEBVIEW2 FALSE          # macOS uses WKWebView; flip on for Windows later
+        NEEDS_WEBVIEW2 TRUE           # Windows: links Microsoft Edge WebView2. No-op elsewhere.
         COPY_PLUGIN_AFTER_BUILD TRUE)
 
     target_sources(${TARGET} PRIVATE

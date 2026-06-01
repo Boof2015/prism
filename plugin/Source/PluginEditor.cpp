@@ -172,10 +172,19 @@ void PrismSpectrumEditor::pushRestoreSettings()
 
 void PrismSpectrumEditor::sendAppDefaults()
 {
-    // macOS userApplicationDataDirectory is ~/Library, so append "Application Support".
+    // Resolve Prism's app-data dir to match Electron's userData per platform.
+    // macOS: userApplicationDataDirectory == ~/Library, so the Electron path is
+    //   ~/Library/Application Support/prism (the extra subfolder only exists on mac).
+    // Windows/Linux: JUCE's userApplicationDataDirectory already points at the right
+    //   per-platform config root (%APPDATA% / ~/.config), so no extra append needed.
+   #if JUCE_MAC
     const auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
                              .getChildFile("Application Support")
                              .getChildFile("prism");
+   #else
+    const auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                             .getChildFile("prism");
+   #endif
     const auto docs = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
     const auto themesDir = docs.getChildFile("Prism Themes");
     const auto profilesDir = docs.getChildFile("Prism Profiles");
