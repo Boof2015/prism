@@ -80,6 +80,15 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         JUCE_WEB_BROWSER=1            # enables WebBrowserComponent (WKWebView on macOS)
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0)
+    if(WIN32)
+        # NEEDS_WEBVIEW2 links the WebView2 SDK but doesn't turn on the JUCE compile
+        # paths that gate withResourceProvider. JUCE_USE_WIN_WEBVIEW2=1 enables the
+        # WebView2-aware code (incl. the resource provider); _WITH_STATIC_LINKING=1
+        # matches the static-linked SDK that NEEDS_WEBVIEW2 wires up.
+        target_compile_definitions(${TARGET} PRIVATE
+            JUCE_USE_WIN_WEBVIEW2=1
+            JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1)
+    endif()
     if(NOT SCOPE_DEFINE STREQUAL "")
         target_compile_definitions(${TARGET} PRIVATE ${SCOPE_DEFINE})
     endif()
