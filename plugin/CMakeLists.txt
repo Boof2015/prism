@@ -33,6 +33,11 @@ set(PRISM_NATIVE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../native/src)
 # UI delivery: bundled (self-contained, default) vs Vite dev server (hot reload).
 option(PRISM_DEV_SERVER "Load the webview UI from the Vite dev server instead of the embedded bundle" OFF)
 
+# Build controls. Defaults preserve the full local build; CI narrows these to
+# the formats that are actually packaged.
+set(PRISM_PLUGIN_FORMATS "AU;VST3;Standalone" CACHE STRING "JUCE plugin formats to build")
+option(PRISM_COPY_PLUGIN_AFTER_BUILD "Copy built plugins into user plugin folders after build" ON)
+
 # Embed the built webview bundle once; every scope plugin shares it (the C++ tells
 # the UI which scope to mount via initialisation data).
 if(NOT PRISM_DEV_SERVER)
@@ -53,13 +58,13 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         BUNDLE_ID com.astra.prism.${TARGET}
         PLUGIN_MANUFACTURER_CODE Prsm
         PLUGIN_CODE ${PLUGIN_CODE}
-        FORMATS AU VST3 Standalone
+        FORMATS ${PRISM_PLUGIN_FORMATS}
         IS_SYNTH FALSE
         NEEDS_MIDI_INPUT FALSE
         NEEDS_MIDI_OUTPUT FALSE
         IS_MIDI_EFFECT FALSE
         NEEDS_WEBVIEW2 TRUE           # Windows: links Microsoft Edge WebView2. No-op elsewhere.
-        COPY_PLUGIN_AFTER_BUILD TRUE)
+        COPY_PLUGIN_AFTER_BUILD ${PRISM_COPY_PLUGIN_AFTER_BUILD})
 
     target_sources(${TARGET} PRIVATE
         Source/PluginProcessor.cpp
@@ -123,3 +128,23 @@ add_prism_scope(PrismLUFSMeter    "Prism Loudness Meter" Pluf "PRISM_SCOPE_LUFSM
 add_prism_scope(PrismVectorscope  "Prism Vectorscope"  Pvct "PRISM_SCOPE_VECTORSCOPE=1")
 add_prism_scope(PrismSpectrogram  "Prism Spectrogram"  Pspg "PRISM_SCOPE_SPECTROGRAM=1")
 add_prism_scope(PrismWaveform     "Prism Waveform"     Pwav "PRISM_SCOPE_WAVEFORM=1")
+
+set(PRISM_SCOPE_TARGETS
+    PrismSpectrum
+    PrismOscilloscope
+    PrismVUMeter
+    PrismLUFSMeter
+    PrismVectorscope
+    PrismSpectrogram
+    PrismWaveform)
+
+add_custom_target(PrismInstallerPlugins)
+foreach(PRISM_SCOPE_TARGET IN LISTS PRISM_SCOPE_TARGETS)
+    if("VST3" IN_LIST PRISM_PLUGIN_FORMATS)
+        add_dependencies(PrismInstallerPlugins ${PRISM_SCOPE_TARGET}_VST3)
+    endif()
+
+    if(APPLE AND "AU" IN_LIST PRISM_PLUGIN_FORMATS)
+        add_dependencies(PrismInstallerPlugins ${PRISM_SCOPE_TARGET}_AU)
+    endif()
+endforeach()

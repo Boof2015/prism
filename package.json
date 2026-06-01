@@ -27,7 +27,7 @@
     "plugin-ui:build": "vite build --config vite.plugin-ui.config.ts",
     "build:native": "cd native && node-gyp rebuild",
     "rebuild:native": "node -e \"const e=require('electron/package.json').version;const a=process.arch;const{execSync}=require('child_process');execSync('node-gyp rebuild --target='+e+' --arch='+a+' --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native'})\"",
-    "postinstall": "npm run rebuild:native || echo 'Native build failed, will use JS fallback'",
+    "postinstall": "node scripts/build/postinstall-native.cjs",
     "dist": "npm run build && electron-builder --publish never",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "dist:win": "npm run build && electron-builder --win --publish never",

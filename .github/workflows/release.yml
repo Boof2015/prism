@@ -12,6 +12,12 @@ jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      PRISM_JUCE_VERSION: 8.0.4
+      PRISM_WEBVIEW2_VERSION: 1.0.1901.177
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -43,7 +49,31 @@ jobs:
             ~/.cache/electron-builder
           key: ${{ runner.os }}-electron-cache
 
+      - name: Setup sccache
+        if: runner.os != 'Linux'
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache JUCE
+        if: runner.os != 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/juce/JUCE-${{ env.PRISM_JUCE_VERSION }}
+          key: ${{ runner.os }}-juce-${{ env.PRISM_JUCE_VERSION }}-v1
+
+      - name: Prepare JUCE checkout
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          juce_dir=".ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}"
+          if [ ! -f "$juce_dir/CMakeLists.txt" ]; then
+            rm -rf "$juce_dir"
+            mkdir -p "$(dirname "$juce_dir")"
+            git clone --depth 1 --branch "$PRISM_JUCE_VERSION" https://github.com/juce-framework/JUCE.git "$juce_dir"
+          fi
+
       - name: Install dependencies
+        env:
+          PRISM_SKIP_NATIVE_POSTINSTALL: '1'
         run: npm ci
 
       - name: Install Linux native build dependencies
@@ -73,27 +103,62 @@ jobs:
 
       - name: Configure JUCE plugins (macOS)
         if: runner.os == 'macOS'
-        run: cmake -B plugin/build -S plugin -DCMAKE_BUILD_TYPE=Release
+        run: |
+          cmake -B plugin/build -S plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
+            -DPRISM_PLUGIN_FORMATS="AU;VST3" \
+            -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       # JUCE's NEEDS_WEBVIEW2 expects the Microsoft.Web.WebView2 NuGet package
       # to already be installed locally; it doesn't fetch it itself. Install it
       # and point CMake at the resulting folder via JUCE_WEBVIEW2_PACKAGE_LOCATION.
+      - name: Cache WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/webview2
+          key: ${{ runner.os }}-webview2-${{ env.PRISM_WEBVIEW2_VERSION }}-v1
+
       - name: Install WebView2 SDK (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $sdkRoot = "$env:RUNNER_TEMP\webview2"
-          New-Item -ItemType Directory -Force -Path $sdkRoot | Out-Null
-          nuget install Microsoft.Web.WebView2 -Version 1.0.1901.177 -OutputDirectory $sdkRoot -ExcludeVersion
+          $packageRoot = Join-Path $sdkRoot "Microsoft.Web.WebView2"
+          $webViewHeader = Join-Path $packageRoot "build\native\include\WebView2.h"
+          if (-not (Test-Path $webViewHeader)) {
+            Remove-Item -Recurse -Force $sdkRoot -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $sdkRoot | Out-Null
+            nuget install Microsoft.Web.WebView2 -Version $env:PRISM_WEBVIEW2_VERSION -OutputDirectory $sdkRoot -ExcludeVersion
+          }
           "JUCE_WEBVIEW2_PACKAGE_LOCATION=$sdkRoot" >> $env:GITHUB_ENV
 
       - name: Configure JUCE plugins (Windows)
         if: runner.os == 'Windows'
-        run: cmake -B plugin/build -S plugin -G "Visual Studio 17 2022" -A x64 -DJUCE_WEBVIEW2_PACKAGE_LOCATION="$env:JUCE_WEBVIEW2_PACKAGE_LOCATION"
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="%GITHUB_WORKSPACE%\.ci-cache\juce\JUCE-%PRISM_JUCE_VERSION%" -DPRISM_PLUGIN_FORMATS=VST3 -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF -DJUCE_WEBVIEW2_PACKAGE_LOCATION="%JUCE_WEBVIEW2_PACKAGE_LOCATION%" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-      - name: Build JUCE plugins
+      - name: Build JUCE plugins (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
+      - name: Build JUCE plugins (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build plugin/build --target PrismInstallerPlugins --config Release --parallel 4
+
+      - name: Show sccache stats
         if: runner.os != 'Linux'
-        run: cmake --build plugin/build --config Release
+        run: sccache --show-stats
 
       - name: Stage plugins for installer
         shell: bash
@@ -115,10 +180,20 @@ jobs:
             fi
           done
           echo "--- staged VST3 ---"
-          ls -la plugin/dist-installer/VST3 || true
+          ls -la plugin/dist-installer/VST3
+          vst3_count="$(find plugin/dist-installer/VST3 -maxdepth 1 -name "*.vst3" | wc -l | tr -d ' ')"
+          if [ "$vst3_count" -ne 7 ]; then
+            echo "ERROR: expected 7 VST3 plugins, found $vst3_count"
+            exit 1
+          fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             echo "--- staged AU ---"
-            ls -la plugin/dist-installer/AU || true
+            ls -la plugin/dist-installer/AU
+            au_count="$(find plugin/dist-installer/AU -maxdepth 1 -name "*.component" | wc -l | tr -d ' ')"
+            if [ "$au_count" -ne 7 ]; then
+              echo "ERROR: expected 7 AU plugins, found $au_count"
+              exit 1
+            fi
           fi
 
       - name: Build distributable
