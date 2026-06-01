@@ -50,6 +50,13 @@ jobs:
           sudo apt-get install -y libpulse-dev
 
       - name: Build native DSP module
+        env:
+          # node-gyp's Visual Studio auto-detect shells out a PowerShell script
+          # whose output overflows its internal stdout buffer on windows-latest
+          # (RangeError ERR_CHILD_PROCESS_STDIO_MAXBUFFER → "Could not find any
+          # Visual Studio installation"). Telling it the version directly skips
+          # the broken enumeration. Harmless on macOS / Linux.
+          GYP_MSVS_VERSION: 2022
         run: npm run rebuild:native
 
       - name: Verify native module exists
