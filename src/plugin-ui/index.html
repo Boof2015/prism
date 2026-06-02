@@ -4,9 +4,62 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Prism Spectrum</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: #000;
+      }
+
+      body {
+        overflow: hidden;
+        color: rgba(255, 255, 255, 0.82);
+        font-family: Inter, system-ui, sans-serif;
+      }
+
+      #prism-plugin-status {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: #000;
+        color: rgba(255, 255, 255, 0.72);
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        text-align: center;
+        white-space: pre-wrap;
+      }
+
+      html.prism-plugin-mounted #prism-plugin-status {
+        display: none;
+      }
+    </style>
+    <script>
+      window.__PRISM_PLUGIN_ERROR__ = function (message) {
+        var status = document.getElementById('prism-plugin-status')
+        if (status) status.textContent = 'Prism plugin UI failed to load\n\n' + message
+      }
+
+      window.addEventListener('error', function (event) {
+        window.__PRISM_PLUGIN_ERROR__(
+          event.message || (event.error && event.error.message) || 'Unknown error'
+        )
+      })
+
+      window.addEventListener('unhandledrejection', function (event) {
+        var reason = event.reason
+        window.__PRISM_PLUGIN_ERROR__(
+          (reason && reason.message) || String(reason || 'Unhandled promise rejection')
+        )
+      })
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <div id="prism-plugin-status">Loading Prism plugin UI...</div>
     <script type="module" src="/main.tsx"></script>
   </body>
 </html>

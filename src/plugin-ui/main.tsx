@@ -210,4 +210,13 @@ if (!rootElement) {
   throw new Error('Missing #root element')
 }
 
-createRoot(rootElement).render(<StrictMode>{buildApp()}</StrictMode>)
+try {
+  createRoot(rootElement).render(<StrictMode>{buildApp()}</StrictMode>)
+  document.documentElement.classList.add('prism-plugin-mounted')
+} catch (error) {
+  const reporter = (window as unknown as {
+    __PRISM_PLUGIN_ERROR__?: (message: string) => void
+  }).__PRISM_PLUGIN_ERROR__
+  reporter?.(error instanceof Error ? error.message : String(error))
+  throw error
+}
