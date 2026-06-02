@@ -108,7 +108,7 @@
     },
     "pkg": {
       "installLocation": "/Applications",
-      "scripts": "resources/installer/macos-scripts"
+      "scripts": "../resources/installer/macos-scripts"
     },
     "win": {
       "target": [
