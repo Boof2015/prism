@@ -86,6 +86,21 @@ namespace
             .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); })
             .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
             .withEventListener("prismSettingsPanel", [&editor](juce::var v) { editor.onSettingsPanel(std::move(v)); });
+
+        // WebView2's default user-data folder is created next to the host executable.
+        // For plugins installed under Program Files\Common Files\VST3\..., that path
+        // is read-only to the (non-admin) DAW process → WebView2 silently fails to
+        // initialise → blank webview → "navigation to the webpage was canceled".
+        // Point it at a writable per-user folder instead (JUCE's docs flag this
+        // explicitly for plugin projects). Ignored on non-Windows builds.
+        const auto webView2DataDir =
+            juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                .getChildFile("prism")
+                .getChildFile("WebView2");
+        webView2DataDir.createDirectory();
+        options = options.withWinWebView2Options(
+            juce::WebBrowserComponent::Options::WinWebView2{}.withUserDataFolder(webView2DataDir));
+
 #if ! PRISM_USE_DEV_SERVER
         options = options.withResourceProvider([](const auto& url) { return provideResource(url); });
 #endif
