@@ -57,7 +57,7 @@ endif()
 
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(PRISM_LINUX_WEBVIEW_DEPS REQUIRED IMPORTED_TARGET
+    pkg_check_modules(PRISM_LINUX_WEBVIEW_DEPS REQUIRED
         webkit2gtk-4.1
         gtk+-x11-3.0)
 endif()
@@ -134,7 +134,12 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         juce::juce_recommended_warning_flags)
 
     if(UNIX AND NOT APPLE)
-        target_link_libraries(${TARGET} PRIVATE PkgConfig::PRISM_LINUX_WEBVIEW_DEPS)
+        # JUCE's Linux WebBrowserComponent dynamically opens WebKitGTK/GTK when
+        # the editor is created. We need their headers to compile, but linking
+        # them here makes DAW plugin scanners resolve WebKitGTK/JSC before the UI
+        # is even opened, which is fragile when hosts carry their own GLib stack.
+        target_include_directories(${TARGET} PRIVATE ${PRISM_LINUX_WEBVIEW_DEPS_INCLUDE_DIRS})
+        target_compile_options(${TARGET} PRIVATE ${PRISM_LINUX_WEBVIEW_DEPS_CFLAGS_OTHER})
     endif()
 endfunction()
 
