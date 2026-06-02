@@ -55,6 +55,13 @@ if(NOT PRISM_DEV_SERVER)
     juce_add_binary_data(PrismWebUI SOURCES ${PRISM_WEBUI_FILES})
 endif()
 
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PRISM_LINUX_WEBVIEW_DEPS REQUIRED IMPORTED_TARGET
+        webkit2gtk-4.1
+        gtk+-x11-3.0)
+endif()
+
 # Define one per-scope plugin product from the shared codebase.
 # SCOPE_DEFINE selects the ScopeEngine at compile time (empty = spectrum default).
 function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
@@ -125,6 +132,10 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(${TARGET} PRIVATE PkgConfig::PRISM_LINUX_WEBVIEW_DEPS)
+    endif()
 endfunction()
 
 add_prism_scope(PrismSpectrum     "Prism Spectrum"     Pspc "")
