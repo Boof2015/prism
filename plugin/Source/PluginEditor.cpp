@@ -40,7 +40,7 @@ namespace
 #endif
 
 #if JUCE_LINUX
-    constexpr int kLinuxFrameRateHz = 30;
+    constexpr int kLinuxFrameRateHz = 20;
 #endif
 
     std::unique_ptr<ScopeEngine> makeEngine()
@@ -413,6 +413,12 @@ void PrismSpectrumEditor::renderFrame()
     }
 
     const int drained = processorRef.drainStereo(drainLeft.data(), drainRight.data(), (int) drainLeft.size());
+
+#if JUCE_LINUX
+    if (drained <= 0)
+        return;
+#endif
+
     engine->process(drainLeft.data(), drainRight.data(), drained);
 
     webView->emitEventIfBrowserIsVisible(engine->frameEventId(), engine->buildFrame(sampleRate));
