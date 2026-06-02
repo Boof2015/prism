@@ -90,6 +90,7 @@ jobs:
             libcurl4-openssl-dev \
             libfreetype-dev \
             libfontconfig1-dev \
+            libgtk-3-dev \
             libx11-dev \
             libxcomposite-dev \
             libxcursor-dev \

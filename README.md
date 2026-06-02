@@ -59,7 +59,7 @@ Prebuilt binaries for Windows, macOS, and Linux are available on the [Releases](
 |----------|-----------|
 | macOS | Xcode Command Line Tools |
 | Windows | Visual Studio Build Tools |
-| Linux | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev`, `libwebkit2gtk-4.1-dev` |
+| Linux | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev` |
 
 ```bash
 git clone https://github.com/Boof2015/prism.git
