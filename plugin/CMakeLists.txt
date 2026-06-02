@@ -140,6 +140,12 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         # is even opened, which is fragile when hosts carry their own GLib stack.
         target_include_directories(${TARGET} PRIVATE ${PRISM_LINUX_WEBVIEW_DEPS_INCLUDE_DIRS})
         target_compile_options(${TARGET} PRIVATE ${PRISM_LINUX_WEBVIEW_DEPS_CFLAGS_OTHER})
+
+        # In plugin hosts, JUCE's Linux WebBrowserComponent must exec a helper
+        # process for WebKitGTK. Without this, JUCE falls back to running WebKit
+        # directly after fork(), which is unsafe in multi-threaded hosts and has
+        # crashed during pluginval/DAW editor creation.
+        juce_link_with_embedded_linux_subprocess(${TARGET})
     endif()
 endfunction()
 
