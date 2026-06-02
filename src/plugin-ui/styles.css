@@ -26,6 +26,11 @@ body {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  overflow: hidden;
+}
+
+.spectrum-app.has-settings {
+  overflow-y: auto;
 }
 
 /* The scope fills everything above the (optional) bottom settings panel. */
@@ -33,6 +38,11 @@ body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.spectrum-app.has-settings .spectrum-app__viewport {
+  flex: 0 0 var(--spectrum-viewport-height, 100%);
+  height: var(--spectrum-viewport-height, 100%);
 }
 
 .spectrum-scope {
@@ -84,10 +94,9 @@ body {
   border-color: var(--control-border-active, rgba(56, 189, 248, 0.4));
 }
 
-/* Settings panel along the bottom (like the app). The editor window grows by exactly
-   this height when it opens, so the scope viewport above keeps its size. The fixed
-   basis MUST match PANEL_HEIGHT in ScopeApp.tsx (the grow delta), or the scope would
-   shift. Content taller than this scrolls. */
+/* Settings panel along the bottom. The editor asks the host to grow by this height,
+   but Windows DAWs may delay or constrain that resize, so the viewport locks to its
+   previous height and this panel overflows instead of shrinking the scope. */
 .spectrum-app__panel {
   flex: 0 0 280px;
   width: 100%;

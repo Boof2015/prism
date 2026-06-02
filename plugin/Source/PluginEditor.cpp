@@ -6,6 +6,7 @@
 #include "VectorscopeEngine.h"
 #include "SpectrogramEngine.h"
 #include "WaveformEngine.h"
+#include <cmath>
 #include <cstring>
 
 #if ! PRISM_USE_DEV_SERVER
@@ -19,7 +20,24 @@
 namespace
 {
     const juce::Identifier kRestoreSettingsEvent { "prismRestoreSettings" };
-    constexpr int kDrainCapacity = 16384;
+    constexpr int kDrainCapacity = 1 << 16;
+#if JUCE_WINDOWS
+    constexpr int kFallbackWindowsFrameRateHz = 60;
+    constexpr int kMaxWindowsFrameRateHz = 240;
+
+    int resolveWindowsFrameRateHz(const juce::Component& component)
+    {
+        const auto& displays = juce::Desktop::getInstance().getDisplays();
+        if (const auto* display = displays.getDisplayForRect(component.getScreenBounds()))
+        {
+            const auto frequency = display->verticalFrequencyHz;
+            if (frequency.has_value() && std::isfinite(*frequency) && *frequency > 0.0)
+                return juce::jlimit(30, kMaxWindowsFrameRateHz, (int) std::lround(*frequency));
+        }
+
+        return kFallbackWindowsFrameRateHz;
+    }
+#endif
 
     std::unique_ptr<ScopeEngine> makeEngine()
     {
@@ -128,9 +146,22 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     setResizeLimits(pref.minWidth, pref.minHeight, 4096, 4096);
     setSize(pref.defaultWidth, pref.defaultHeight);
 
-    // Drive frames at the display's refresh rate (adapts to 60/120/144 Hz).
     if (webView != nullptr)
+    {
+#if JUCE_WINDOWS
+        startTimerHz(resolveWindowsFrameRateHz(*this));
+#else
+        // Drive frames at the display's refresh rate (adapts to 60/120/144 Hz).
         vblank = juce::VBlankAttachment(this, [this] { renderFrame(); });
+#endif
+    }
+}
+
+PrismSpectrumEditor::~PrismSpectrumEditor()
+{
+#if JUCE_WINDOWS
+    stopTimer();
+#endif
 }
 
 void PrismSpectrumEditor::resized()
@@ -175,6 +206,13 @@ void PrismSpectrumEditor::showWebViewFallback()
     webViewFallback.setMinimumHorizontalScale(0.75f);
     addAndMakeVisible(webViewFallback);
 }
+
+#if JUCE_WINDOWS
+void PrismSpectrumEditor::timerCallback()
+{
+    renderFrame();
+}
+#endif
 
 void PrismSpectrumEditor::onSettingsPanel(juce::var payload)
 {

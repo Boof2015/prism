@@ -9,19 +9,25 @@
 /**
  * Hosts the React webview UI and bridges the reused Prism spectrum DSP to it.
  *
- * Driven by a VBlankAttachment (message thread, synced to the display's refresh
- * rate). Each vblank it drains stereo audio buffered by the processor, runs
- * Visualizer::Spectrum, and emits mid + side magnitudes to the webview as a
- * "spectrumFrame" event. Receives "prismConfig" (settings + fftSize/smoothing)
- * and "prismReady" events from the UI.
+ * Drains stereo audio buffered by the processor, feeds the selected scope engine,
+ * and emits frame payloads to the webview. macOS uses display vblank; Windows uses
+ * a steady message-thread timer because some DAW/WebView2 embeddings deliver
+ * vblank callbacks too slowly for data-driven scopes.
  */
 class PrismSpectrumEditor : public juce::AudioProcessorEditor
+#if JUCE_WINDOWS
+    , private juce::Timer
+#endif
 {
 public:
     explicit PrismSpectrumEditor(PrismSpectrumProcessor&);
-    ~PrismSpectrumEditor() override = default;
+    ~PrismSpectrumEditor() override;
 
     void resized() override;
+
+#if JUCE_WINDOWS
+    void timerCallback() override;
+#endif
 
     // Called by the webview event listeners (message thread).
     void onPrismConfig(juce::var payload);
@@ -64,9 +70,11 @@ private:
     std::unique_ptr<juce::WebBrowserComponent> webView;
     juce::Label webViewFallback;
 
-    // Declared last so it is destroyed first — no vblank callback can fire into
-    // a partially-destroyed editor.
+    // Declared last so it is destroyed first; no vblank callback can fire into a
+    // partially-destroyed editor. Windows uses juce::Timer instead.
+#if ! JUCE_WINDOWS
     juce::VBlankAttachment vblank;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PrismSpectrumEditor)
 };

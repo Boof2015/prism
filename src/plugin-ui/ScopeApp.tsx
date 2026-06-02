@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../types/scope'
 import type { ScopeSettings } from '../types/settings'
 import type { PrismResolvedTheme } from '../types/theme'
@@ -26,20 +26,38 @@ interface ScopeAppProps<K extends ScopeKind> {
 export default function ScopeApp<K extends ScopeKind>({ kind, renderScope }: ScopeAppProps<K>): JSX.Element {
   const { settings, resolvedTheme, handleUpdate } = useScopeHostSync(kind)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [lockedViewportHeight, setLockedViewportHeight] = useState<number | null>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     emitToHost('prismSettingsPanel', { height: settingsOpen ? PANEL_HEIGHT : 0 })
   }, [settingsOpen])
 
+  const toggleSettings = (): void => {
+    if (settingsOpen) {
+      setSettingsOpen(false)
+      setLockedViewportHeight(null)
+      return
+    }
+
+    const rect = viewportRef.current?.getBoundingClientRect()
+    setLockedViewportHeight(rect && rect.height > 0 ? Math.ceil(rect.height) : null)
+    setSettingsOpen(true)
+  }
+
+  const appStyle = lockedViewportHeight === null
+    ? undefined
+    : ({ '--spectrum-viewport-height': `${lockedViewportHeight}px` } as CSSProperties)
+
   return (
-    <div className="spectrum-app">
-      <div className="spectrum-app__viewport">
+    <div className={`spectrum-app ${settingsOpen ? 'has-settings' : ''}`.trim()} style={appStyle}>
+      <div ref={viewportRef} className="spectrum-app__viewport">
         {renderScope(settings, resolvedTheme)}
 
         <button
           type="button"
           className={`spectrum-app__gear ${settingsOpen ? 'is-active' : ''}`.trim()}
-          onClick={() => setSettingsOpen((open) => !open)}
+          onClick={toggleSettings}
           aria-label="Settings"
           title="Settings"
         >
