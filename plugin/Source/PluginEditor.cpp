@@ -39,6 +39,10 @@ namespace
     }
 #endif
 
+#if JUCE_LINUX
+    constexpr int kLinuxFrameRateHz = 30;
+#endif
+
     std::unique_ptr<ScopeEngine> makeEngine()
     {
 #if defined(PRISM_SCOPE_WAVEFORM) && PRISM_SCOPE_WAVEFORM
@@ -188,23 +192,14 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     setResizable(true, true);
     setResizeLimits(pref.minWidth, pref.minHeight, 4096, 4096);
     setSize(pref.defaultWidth, pref.defaultHeight);
-
-    if (webView != nullptr)
-    {
-#if JUCE_WINDOWS
-        startTimerHz(resolveWindowsFrameRateHz(*this));
-#else
-        // Drive frames at the display's refresh rate (adapts to 60/120/144 Hz).
-        vblank = juce::VBlankAttachment(this, [this] { renderFrame(); });
-#endif
-    }
 }
 
 PrismSpectrumEditor::~PrismSpectrumEditor()
 {
-#if JUCE_WINDOWS
+#if JUCE_WINDOWS || JUCE_LINUX
     stopTimer();
 #endif
+    webViewReady = false;
 }
 
 void PrismSpectrumEditor::resized()
@@ -259,12 +254,29 @@ void PrismSpectrumEditor::showWebViewFallback()
     addAndMakeVisible(webViewFallback);
 }
 
-#if JUCE_WINDOWS
+#if JUCE_WINDOWS || JUCE_LINUX
 void PrismSpectrumEditor::timerCallback()
 {
     renderFrame();
 }
 #endif
+
+void PrismSpectrumEditor::startFrameDriver()
+{
+    if (webView == nullptr || ! webViewReady || frameDriverStarted)
+        return;
+
+    frameDriverStarted = true;
+
+#if JUCE_WINDOWS
+    startTimerHz(resolveWindowsFrameRateHz(*this));
+#elif JUCE_LINUX
+    startTimerHz(kLinuxFrameRateHz);
+#else
+    // Drive frames at the display's refresh rate (adapts to 60/120/144 Hz).
+    vblank = juce::VBlankAttachment(this, [this] { renderFrame(); });
+#endif
+}
 
 void PrismSpectrumEditor::onSettingsPanel(juce::var payload)
 {
@@ -295,8 +307,10 @@ void PrismSpectrumEditor::onPrismConfig(juce::var payload)
 
 void PrismSpectrumEditor::onPrismReady()
 {
+    webViewReady = true;
     pushRestoreSettings();
     sendAppDefaults();
+    startFrameDriver();
 }
 
 void PrismSpectrumEditor::onScopeNativeConfig(juce::var payload)
@@ -379,7 +393,7 @@ void PrismSpectrumEditor::sendAppDefaults()
 
 void PrismSpectrumEditor::renderFrame()
 {
-    if (webView == nullptr)
+    if (webView == nullptr || ! webViewReady)
         return;
 
 #if JUCE_MAC

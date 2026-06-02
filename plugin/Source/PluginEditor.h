@@ -10,12 +10,12 @@
  * Hosts the React webview UI and bridges the reused Prism spectrum DSP to it.
  *
  * Drains stereo audio buffered by the processor, feeds the selected scope engine,
- * and emits frame payloads to the webview. macOS uses display vblank; Windows uses
- * a steady message-thread timer because some DAW/WebView2 embeddings deliver
- * vblank callbacks too slowly for data-driven scopes.
+ * and emits frame payloads to the webview after the UI reports readiness. macOS
+ * uses display vblank; Windows/Linux use steady message-thread timers to avoid
+ * fragile host/browser embedding behavior.
  */
 class PrismSpectrumEditor : public juce::AudioProcessorEditor
-#if JUCE_WINDOWS
+#if JUCE_WINDOWS || JUCE_LINUX
     , private juce::Timer
 #endif
 {
@@ -25,7 +25,7 @@ public:
 
     void resized() override;
 
-#if JUCE_WINDOWS
+#if JUCE_WINDOWS || JUCE_LINUX
     void timerCallback() override;
 #endif
 
@@ -52,6 +52,7 @@ public:
 private:
     void loadWebView();
     void showWebViewFallback();
+    void startFrameDriver();
     void renderFrame();
 
     PrismSpectrumProcessor& processorRef;
@@ -62,6 +63,8 @@ private:
 
     // Height (px) the editor is currently grown by for the open settings panel.
     int settingsPanelHeight = 0;
+    bool webViewReady = false;
+    bool frameDriverStarted = false;
 
     // One-time attempt to lift WKWebView's private 60fps cap (macOS).
     bool frameRateUncapped = false;
@@ -71,8 +74,8 @@ private:
     juce::Label webViewFallback;
 
     // Declared last so it is destroyed first; no vblank callback can fire into a
-    // partially-destroyed editor. Windows uses juce::Timer instead.
-#if ! JUCE_WINDOWS
+    // partially-destroyed editor. Windows/Linux use juce::Timer instead.
+#if ! JUCE_WINDOWS && ! JUCE_LINUX
     juce::VBlankAttachment vblank;
 #endif
 
