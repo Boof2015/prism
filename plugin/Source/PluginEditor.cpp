@@ -61,6 +61,19 @@ namespace
 #if PRISM_USE_DEV_SERVER
     const juce::String kDevServerUrl { "http://localhost:5174" };
 #else
+    const char* getWebResourceData(const juce::String& name, int& dataSize)
+    {
+        dataSize = 0;
+
+        for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+        {
+            if (name == juce::String(BinaryData::originalFilenames[i]))
+                return BinaryData::getNamedResource(BinaryData::namedResourceList[i], dataSize);
+        }
+
+        return nullptr;
+    }
+
     juce::String mimeForExtension(const juce::String& name)
     {
         if (name.endsWithIgnoreCase(".html"))  return "text/html";
@@ -80,17 +93,14 @@ namespace
                                  : url.fromLastOccurrenceOf("/", false, false);
         name = name.upToFirstOccurrenceOf("?", false, false);
 
-        for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+        int dataSize = 0;
+        if (const char* data = getWebResourceData(name, dataSize))
         {
-            if (name == juce::String(BinaryData::originalFilenames[i]))
-            {
-                int dataSize = 0;
-                const char* data = BinaryData::getNamedResource(BinaryData::namedResourceList[i], dataSize);
-                std::vector<std::byte> bytes ((size_t) dataSize);
-                std::memcpy (bytes.data(), data, (size_t) dataSize);
-                return juce::WebBrowserComponent::Resource { std::move (bytes), mimeForExtension (name) };
-            }
+            std::vector<std::byte> bytes ((size_t) dataSize);
+            std::memcpy (bytes.data(), data, (size_t) dataSize);
+            return juce::WebBrowserComponent::Resource { std::move (bytes), mimeForExtension (name) };
         }
+
         return std::nullopt;
     }
 
@@ -98,6 +108,32 @@ namespace
     {
         return juce::WebBrowserComponent::getResourceProviderRoot().trimCharactersAtEnd("/");
     }
+
+#if JUCE_LINUX
+    juce::File writeLinuxWebViewIndexFile()
+    {
+        int dataSize = 0;
+        const char* data = getWebResourceData("index.html", dataSize);
+
+        if (data == nullptr || dataSize <= 0)
+            return {};
+
+        const auto webViewDir =
+            juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                .getChildFile("prism")
+                .getChildFile("plugin-webview");
+
+        if (! webViewDir.createDirectory())
+            return {};
+
+        auto indexFile = webViewDir.getChildFile("index.html");
+
+        if (! indexFile.replaceWithData(data, (size_t) dataSize))
+            return {};
+
+        return indexFile;
+    }
+#endif
 #endif
 
     juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor, const char* scopeId)
@@ -197,6 +233,15 @@ void PrismSpectrumEditor::loadWebView()
 #if PRISM_USE_DEV_SERVER
     webView->goToURL(kDevServerUrl);
 #else
+ #if JUCE_LINUX
+    const auto indexFile = writeLinuxWebViewIndexFile();
+
+    if (indexFile.existsAsFile())
+    {
+        webView->goToURL(juce::URL(indexFile).toString(false));
+        return;
+    }
+ #endif
     webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
 #endif
 }
