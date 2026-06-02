@@ -44,6 +44,8 @@ public:
     void sendAppDefaults();
 
 private:
+    void loadWebView();
+    void showWebViewFallback();
     void renderFrame();
 
     PrismSpectrumProcessor& processorRef;
@@ -59,7 +61,8 @@ private:
     bool frameRateUncapped = false;
     int uncapAttempts = 0;
 
-    juce::WebBrowserComponent webView;
+    std::unique_ptr<juce::WebBrowserComponent> webView;
+    juce::Label webViewFallback;
 
     // Declared last so it is destroyed first — no vblank callback can fire into
     // a partially-destroyed editor.

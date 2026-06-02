@@ -87,12 +87,15 @@ namespace
             .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
             .withEventListener("prismSettingsPanel", [&editor](juce::var v) { editor.onSettingsPanel(std::move(v)); });
 
+#if JUCE_WINDOWS
+        options = options.withBackend(juce::WebBrowserComponent::Options::Backend::webview2);
+
         // WebView2's default user-data folder is created next to the host executable.
         // For plugins installed under Program Files\Common Files\VST3\..., that path
-        // is read-only to the (non-admin) DAW process → WebView2 silently fails to
-        // initialise → blank webview → "navigation to the webpage was canceled".
+        // is read-only to the (non-admin) DAW process; WebView2 may fail to
+        // initialise, leaving a blank webview or canceled navigation page.
         // Point it at a writable per-user folder instead (JUCE's docs flag this
-        // explicitly for plugin projects). Ignored on non-Windows builds.
+        // explicitly for plugin projects).
         const auto webView2DataDir =
             juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
                 .getChildFile("prism")
@@ -100,6 +103,7 @@ namespace
         webView2DataDir.createDirectory();
         options = options.withWinWebView2Options(
             juce::WebBrowserComponent::Options::WinWebView2{}.withUserDataFolder(webView2DataDir));
+#endif
 
 #if ! PRISM_USE_DEV_SERVER
         options = options.withResourceProvider([](const auto& url) { return provideResource(url); });
@@ -111,19 +115,12 @@ namespace
 PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     : juce::AudioProcessorEditor(&p),
       processorRef(p),
-      engine(makeEngine()),
-      webView(makeWebOptions(*this, engine->scopeId()))
+      engine(makeEngine())
 {
     drainLeft.assign((size_t) kDrainCapacity, 0.0f);
     drainRight.assign((size_t) kDrainCapacity, 0.0f);
 
-    addAndMakeVisible(webView);
-
-#if PRISM_USE_DEV_SERVER
-    webView.goToURL(kDevServerUrl);
-#else
-    webView.goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
-#endif
+    loadWebView();
 
     // Per-scope sizing: open at the scope's preferred default, with a per-scope min.
     const auto pref = engine->preferredSize();
@@ -132,12 +129,51 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     setSize(pref.defaultWidth, pref.defaultHeight);
 
     // Drive frames at the display's refresh rate (adapts to 60/120/144 Hz).
-    vblank = juce::VBlankAttachment(this, [this] { renderFrame(); });
+    if (webView != nullptr)
+        vblank = juce::VBlankAttachment(this, [this] { renderFrame(); });
 }
 
 void PrismSpectrumEditor::resized()
 {
-    webView.setBounds(getLocalBounds());
+    if (webView != nullptr)
+        webView->setBounds(getLocalBounds());
+
+    webViewFallback.setBounds(getLocalBounds());
+}
+
+void PrismSpectrumEditor::loadWebView()
+{
+    auto options = makeWebOptions(*this, engine->scopeId());
+
+#if JUCE_WINDOWS
+    if (! juce::WebBrowserComponent::areOptionsSupported(options))
+    {
+        showWebViewFallback();
+        return;
+    }
+#endif
+
+    webView = std::make_unique<juce::WebBrowserComponent>(options);
+    addAndMakeVisible(*webView);
+
+#if PRISM_USE_DEV_SERVER
+    webView->goToURL(kDevServerUrl);
+#else
+    webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
+#endif
+}
+
+void PrismSpectrumEditor::showWebViewFallback()
+{
+    webViewFallback.setText(
+        "Prism needs the Microsoft Edge WebView2 Runtime to show this plugin on Windows.\n"
+        "Install the Evergreen WebView2 Runtime from Microsoft, then reopen the plugin.",
+        juce::dontSendNotification);
+    webViewFallback.setJustificationType(juce::Justification::centred);
+    webViewFallback.setColour(juce::Label::backgroundColourId, juce::Colour(0xff111216));
+    webViewFallback.setColour(juce::Label::textColourId, juce::Colour(0xfff4f6f8));
+    webViewFallback.setMinimumHorizontalScale(0.75f);
+    addAndMakeVisible(webViewFallback);
 }
 
 void PrismSpectrumEditor::onSettingsPanel(juce::var payload)
@@ -180,13 +216,19 @@ void PrismSpectrumEditor::onScopeNativeConfig(juce::var payload)
 
 void PrismSpectrumEditor::pushRestoreSettings()
 {
+    if (webView == nullptr)
+        return;
+
     auto* obj = new juce::DynamicObject();
     obj->setProperty("json", processorRef.getSettingsJson());
-    webView.emitEventIfBrowserIsVisible(kRestoreSettingsEvent, juce::var(obj));
+    webView->emitEventIfBrowserIsVisible(kRestoreSettingsEvent, juce::var(obj));
 }
 
 void PrismSpectrumEditor::sendAppDefaults()
 {
+    if (webView == nullptr)
+        return;
+
     // Resolve Prism's app-data dir to match Electron's userData per platform.
     // macOS: userApplicationDataDirectory == ~/Library, so the Electron path is
     //   ~/Library/Application Support/prism (the extra subfolder only exists on mac).
@@ -242,11 +284,14 @@ void PrismSpectrumEditor::sendAppDefaults()
     payload->setProperty("themeId", themeId);
     payload->setProperty("themeFile", themeFile);
     payload->setProperty("profileJson", profileJson);
-    webView.emitEventIfBrowserIsVisible(juce::Identifier("prismAppDefaults"), juce::var(payload));
+    webView->emitEventIfBrowserIsVisible(juce::Identifier("prismAppDefaults"), juce::var(payload));
 }
 
 void PrismSpectrumEditor::renderFrame()
 {
+    if (webView == nullptr)
+        return;
+
 #if JUCE_MAC
     if (! frameRateUncapped && uncapAttempts < 300)
     {
@@ -266,5 +311,5 @@ void PrismSpectrumEditor::renderFrame()
     const int drained = processorRef.drainStereo(drainLeft.data(), drainRight.data(), (int) drainLeft.size());
     engine->process(drainLeft.data(), drainRight.data(), drained);
 
-    webView.emitEventIfBrowserIsVisible(engine->frameEventId(), engine->buildFrame(sampleRate));
+    webView->emitEventIfBrowserIsVisible(engine->frameEventId(), engine->buildFrame(sampleRate));
 }
