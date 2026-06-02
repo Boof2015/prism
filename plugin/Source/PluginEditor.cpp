@@ -93,6 +93,11 @@ namespace
         }
         return std::nullopt;
     }
+
+    juce::String getResourceProviderOrigin()
+    {
+        return juce::WebBrowserComponent::getResourceProviderRoot().trimCharactersAtEnd("/");
+    }
 #endif
 
     juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor, const char* scopeId)
@@ -124,7 +129,9 @@ namespace
 #endif
 
 #if ! PRISM_USE_DEV_SERVER
-        options = options.withResourceProvider([](const auto& url) { return provideResource(url); });
+        options = options.withResourceProvider(
+            [](const auto& url) { return provideResource(url); },
+            getResourceProviderOrigin());
 #endif
         return options;
     }
