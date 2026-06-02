@@ -4,8 +4,8 @@ JUCE 8 plugins (VST3 / AU / Standalone) that render Prism's scopes inside a DAW 
 one plugin per scope: **spectrum, oscilloscope, vectorscope, spectrogram, VU meter,
 loudness meter, waveform**. They **reuse Prism's existing C++ DSP** (`native/src/*.cpp`)
 and the **existing React canvas UI** (`src/plugin-ui`, importing the unchanged
-visualizers from `src/renderer/visualizers/`). Built for macOS and Windows; Linux
-untested but should follow the same recipe.
+visualizers from `src/renderer/visualizers/`). VST3 is built for macOS, Windows,
+and Linux; AU is macOS-only.
 
 ## How it fits together
 
@@ -78,6 +78,39 @@ user-local VST3 folder (`%LOCALAPPDATA%\Programs\Common\VST3\`) by hand — most
 DAWs scan both.
 
 Dev-server mode works the same as macOS: `-DPRISM_DEV_SERVER=ON` + `npm run plugin-ui:dev`.
+
+## Build & run (Linux)
+
+Prereqs: CMake >= 3.22, Ninja, GCC/Clang, Node.js, and JUCE's Linux GUI/WebView
+dependencies. On Ubuntu 24.04+:
+
+```sh
+sudo apt-get install build-essential cmake ninja-build pkg-config \
+  libasound2-dev libjack-jackd2-dev ladspa-sdk libcurl4-openssl-dev \
+  libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev \
+  libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev \
+  libwebkit2gtk-4.1-dev libglu1-mesa-dev mesa-common-dev
+```
+
+```sh
+npm install
+npm run plugin-ui:build
+cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DPRISM_PLUGIN_FORMATS=VST3
+cmake --build plugin/build --target PrismInstallerPlugins --parallel
+```
+
+Built bundles land under `plugin/build/Prism*_artefacts/Release/VST3/`. Copy the
+seven `Prism *.vst3` directories to one of the standard Linux VST3 scan paths:
+
+- User-local: `$HOME/.vst3`
+- System-wide: `/usr/lib/vst3`
+- System-wide local: `/usr/local/lib/vst3`
+
+The Linux `.deb` and `.rpm` release packages install Prism's VST3 bundles to
+`/usr/lib/vst3` and remove only those seven bundles on package removal. The Linux
+`tar.gz` release includes `resources/plugins/install-vst3.sh`, which installs to
+`$HOME/.vst3` by default or `/usr/lib/vst3` with `--system`. The AppImage is
+portable app-only and does not install DAW plugins.
 
 ## Notes
 

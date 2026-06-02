@@ -59,7 +59,7 @@ Prebuilt binaries for Windows, macOS, and Linux are available on the [Releases](
 |----------|-----------|
 | macOS | Xcode Command Line Tools |
 | Windows | Visual Studio Build Tools |
-| Linux | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev` |
+| Linux | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev`, `libwebkit2gtk-4.1-dev` |
 
 ```bash
 git clone https://github.com/Boof2015/prism.git
@@ -75,8 +75,14 @@ npm run build            # Build application assets
 npm run dist             # Package for current platform
 npm run dist:mac         # macOS (DMG + ZIP)
 npm run dist:win         # Windows (NSIS + Portable)
-npm run dist:linux       # Linux (AppImage + DEB)
+npm run dist:linux       # Linux (AppImage + DEB + RPM + tar.gz)
 ```
+
+Linux `.deb` and `.rpm` releases install the seven Prism VST3 plugins to
+`/usr/lib/vst3`. The Linux `tar.gz` release includes a `resources/plugins/install-vst3.sh`
+helper that installs them to `$HOME/.vst3` by default. The AppImage is app-only;
+it does not install DAW plugins. DAWs commonly scan `$HOME/.vst3`, `/usr/lib/vst3`,
+and `/usr/local/lib/vst3`.
 
 ## Astra Integration
 

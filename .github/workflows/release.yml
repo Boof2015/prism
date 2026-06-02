@@ -25,7 +25,7 @@ jobs:
           - os: macos-latest
             dist_cmd: dist:mac
           - os: ubuntu-latest
-            dist_cmd: dist:linux
+            dist_cmd: dist:linux:packages
           # Pinned to windows-2022 because windows-latest now ships VS 2026
           # (internal version 18), which the @electron/node-gyp version in our
           # lockfile rejects as "unsupported". 2022 has VS 2022 only, no ambiguity.
@@ -54,14 +54,12 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache JUCE
-        if: runner.os != 'Linux'
         uses: actions/cache@v4
         with:
           path: .ci-cache/juce/JUCE-${{ env.PRISM_JUCE_VERSION }}
           key: ${{ runner.os }}-juce-${{ env.PRISM_JUCE_VERSION }}-v1
 
       - name: Prepare JUCE checkout
-        if: runner.os != 'Linux'
         shell: bash
         run: |
           juce_dir=".ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}"
@@ -80,7 +78,29 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpulse-dev
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libpulse-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            ladspa-sdk \
+            libcurl4-openssl-dev \
+            libfreetype-dev \
+            libfontconfig1-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libwebkit2gtk-4.1-dev \
+            libglu1-mesa-dev \
+            mesa-common-dev \
+            rpm
 
       - name: Build native DSP module
         run: npm run rebuild:native
@@ -94,11 +114,25 @@ jobs:
           fi
           echo "Native module built successfully: $(ls -lh native/build/Release/visualizer_dsp.node)"
 
-      # --- JUCE plugins (macOS + Windows). Linux defers; we still create the
-      # staging dir so electron-builder's extraResources entry doesn't choke. ---
+      # Linux AppImage is app-only. Build it before staging DAW plugins so the
+      # portable artifact does not carry installable VST3 resources.
+      - name: Prepare empty Linux plugin resources for AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -rf plugin/dist-installer
+          mkdir -p plugin/dist-installer
+
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        run: npm run dist:linux:appimage
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # --- JUCE plugins. These are staged into installer resources after the
+      # app-only AppImage has already been built on Linux. ---
 
       - name: Build plugin webview bundle
-        if: runner.os != 'Linux'
         run: npm run plugin-ui:build
 
       - name: Configure JUCE plugins (macOS)
@@ -111,6 +145,15 @@ jobs:
             -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Configure JUCE plugins (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -B plugin/build -S plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
+            -DPRISM_PLUGIN_FORMATS=VST3 \
+            -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF
 
       # JUCE's NEEDS_WEBVIEW2 expects the Microsoft.Web.WebView2 NuGet package
       # to already be installed locally; it doesn't fetch it itself. Install it
@@ -148,6 +191,10 @@ jobs:
         if: runner.os == 'macOS'
         run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
 
+      - name: Build JUCE plugins (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
       - name: Build JUCE plugins (Windows)
         if: runner.os == 'Windows'
         shell: cmd
@@ -165,10 +212,6 @@ jobs:
         run: |
           rm -rf plugin/dist-installer
           mkdir -p plugin/dist-installer
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            echo "Linux: skipping plugin staging (no DAW-plugin install path yet)."
-            exit 0
-          fi
           mkdir -p plugin/dist-installer/VST3
           [ "$RUNNER_OS" = "macOS" ] && mkdir -p plugin/dist-installer/AU
           for art in PrismSpectrum PrismOscilloscope PrismVUMeter PrismLUFSMeter PrismVectorscope PrismSpectrogram PrismWaveform; do
@@ -186,6 +229,16 @@ jobs:
             echo "ERROR: expected 7 VST3 plugins, found $vst3_count"
             exit 1
           fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            for vst3 in plugin/dist-installer/VST3/*.vst3; do
+              if [ ! -d "$vst3/Contents/x86_64-linux" ]; then
+                echo "ERROR: Linux VST3 bundle is missing Contents/x86_64-linux: $vst3"
+                exit 1
+              fi
+            done
+            cp resources/installer/linux/install-vst3.sh plugin/dist-installer/install-vst3.sh
+            chmod +x plugin/dist-installer/install-vst3.sh
+          fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             echo "--- staged AU ---"
             ls -la plugin/dist-installer/AU
@@ -197,7 +250,17 @@ jobs:
           fi
 
       - name: Build distributable
+        if: runner.os != 'Linux'
         run: npm run ${{ matrix.dist_cmd }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Build Linux packages with VST3 plugins
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -rf dist/linux-unpacked
+          npm run ${{ matrix.dist_cmd }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
@@ -211,5 +274,7 @@ jobs:
             dist/*.zip
             dist/*.AppImage
             dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
           if-no-files-found: error
           retention-days: 30

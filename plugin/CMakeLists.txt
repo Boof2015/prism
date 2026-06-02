@@ -34,8 +34,14 @@ set(PRISM_NATIVE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../native/src)
 option(PRISM_DEV_SERVER "Load the webview UI from the Vite dev server instead of the embedded bundle" OFF)
 
 # Build controls. Defaults preserve the full local build; CI narrows these to
-# the formats that are actually packaged.
-set(PRISM_PLUGIN_FORMATS "AU;VST3;Standalone" CACHE STRING "JUCE plugin formats to build")
+# the formats that are actually packaged. AU is macOS-only, so Linux/Windows
+# default to the portable VST3 + Standalone set.
+if(APPLE)
+    set(PRISM_DEFAULT_PLUGIN_FORMATS "AU;VST3;Standalone")
+else()
+    set(PRISM_DEFAULT_PLUGIN_FORMATS "VST3;Standalone")
+endif()
+set(PRISM_PLUGIN_FORMATS "${PRISM_DEFAULT_PLUGIN_FORMATS}" CACHE STRING "JUCE plugin formats to build")
 option(PRISM_COPY_PLUGIN_AFTER_BUILD "Copy built plugins into user plugin folders after build" ON)
 
 # Embed the built webview bundle once; every scope plugin shares it (the C++ tells

@@ -31,7 +31,9 @@
     "dist": "npm run build && electron-builder --publish never",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "dist:win": "npm run build && electron-builder --win --publish never",
-    "dist:linux": "npm run build && electron-builder --linux --publish never"
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm tar.gz --publish never",
+    "dist:linux:appimage": "npm run build && electron-builder --linux AppImage --publish never",
+    "dist:linux:packages": "electron-builder --linux deb rpm tar.gz --publish never"
   },
   "repository": {
     "type": "git",
@@ -124,9 +126,41 @@
       "include": "resources/installer/windows-vst3.nsh"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": ["AppImage", "deb", "rpm", "tar.gz"],
       "icon": "resources/icon.png",
       "category": "Audio"
+    },
+    "deb": {
+      "afterInstall": "resources/installer/linux/install-vst3-from-package.sh",
+      "afterRemove": "resources/installer/linux/remove-vst3-from-system.sh",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libwebkit2gtk-4.1-0"
+      ]
+    },
+    "rpm": {
+      "afterInstall": "resources/installer/linux/install-vst3-from-package.sh",
+      "afterRemove": "resources/installer/linux/remove-vst3-from-system.sh",
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libuuid",
+        "libsecret",
+        "webkit2gtk4.1"
+      ]
     }
   }
 }
