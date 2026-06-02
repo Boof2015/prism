@@ -118,6 +118,9 @@
       "icon": "resources/icon.ico"
     },
     "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
       "include": "resources/installer/windows-vst3.nsh"
     },
     "linux": {
