@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
-      PRISM_JUCE_VERSION: 8.0.13
+      PRISM_JUCE_VERSION: 8.0.4
       PRISM_WEBVIEW2_VERSION: 1.0.1901.177
       SCCACHE_GHA_ENABLED: 'true'
       SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
