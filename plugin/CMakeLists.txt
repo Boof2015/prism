@@ -47,6 +47,7 @@ option(PRISM_COPY_PLUGIN_AFTER_BUILD "Copy built plugins into user plugin folder
 set(PRISM_LINUX_UI_MODE "webview" CACHE STRING "Linux-only UI diagnostic mode: webview, web_smoke, native_smoke, or floating_webview")
 set_property(CACHE PRISM_LINUX_UI_MODE PROPERTY STRINGS webview web_smoke native_smoke floating_webview)
 set(PRISM_VALID_LINUX_UI_MODES webview web_smoke native_smoke floating_webview)
+option(PRISM_LINUX_UI_DIAGNOSTICS "Write Linux VST UI diagnostic logs" OFF)
 
 if(UNIX AND NOT APPLE)
     list(FIND PRISM_VALID_LINUX_UI_MODES "${PRISM_LINUX_UI_MODE}" PRISM_LINUX_UI_MODE_INDEX)
@@ -132,6 +133,7 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         ${PRISM_EMBED_WEBUI_DEFINITION}
+        PRISM_LINUX_UI_DIAGNOSTICS=$<BOOL:${PRISM_LINUX_UI_DIAGNOSTICS}>
         ${PRISM_LINUX_UI_MODE_DEFINITIONS})
     if(WIN32)
         # NEEDS_WEBVIEW2 links the WebView2 SDK but doesn't turn on the JUCE compile
