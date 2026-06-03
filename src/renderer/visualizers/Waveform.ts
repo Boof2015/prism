@@ -370,9 +370,9 @@ export class Waveform {
     return [lineColor.r, lineColor.g, lineColor.b]
   }
 
-  private shiftWaterfall(): void {
+  private shiftWaterfall(columns = 1): void {
     this.waterfallCtx.globalCompositeOperation = 'copy'
-    this.waterfallCtx.drawImage(this.waterfallCanvas, -1, 0)
+    this.waterfallCtx.drawImage(this.waterfallCanvas, -columns, 0)
     this.waterfallCtx.globalCompositeOperation = 'source-over'
   }
 
@@ -383,6 +383,7 @@ export class Waveform {
     laneTop: number,
     laneHeight: number,
     color: [number, number, number],
+    x: number = width - 1,
   ): void {
     const scaledMin = Math.max(-1, Math.min(1, min))
     const scaledMax = Math.max(-1, Math.min(1, max))
@@ -397,12 +398,12 @@ export class Waveform {
     const [r, g, b] = color
 
     this.waterfallCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${fillAlpha})`
-    this.waterfallCtx.fillRect(width - 1, yTop, 1, lineHeight)
+    this.waterfallCtx.fillRect(x, yTop, 1, lineHeight)
 
     this.waterfallCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${edgeAlpha})`
-    this.waterfallCtx.fillRect(width - 1, yTop, 1, 1)
+    this.waterfallCtx.fillRect(x, yTop, 1, 1)
     if (lineHeight > 1) {
-      this.waterfallCtx.fillRect(width - 1, yBottom - 1, 1, 1)
+      this.waterfallCtx.fillRect(x, yBottom - 1, 1, 1)
     }
   }
 
@@ -495,7 +496,7 @@ export class Waveform {
   }
 
   private processMonoChunk(chunk: Float32Array, width: number, height: number): void {
-    if (this.useNativeMultiband()) {
+    if (this.useNativeAnalyzer()) {
       if (this.processNativeMonoChunk(chunk, width, height)) {
         return
       }
@@ -540,7 +541,7 @@ export class Waveform {
     const leftSamples = chunk.left.length === length ? chunk.left : chunk.left.subarray(0, length)
     const rightSamples = chunk.right.length === length ? chunk.right : chunk.right.subarray(0, length)
 
-    if (this.useNativeMultiband()) {
+    if (this.useNativeAnalyzer()) {
       if (this.processNativeStereoChunk(leftSamples, rightSamples, width, height)) {
         return
       }
@@ -590,8 +591,13 @@ export class Waveform {
     }
   }
 
-  private useNativeMultiband(): boolean {
-    return this.options.multiband && Boolean(this.nativeAnalyzer) && this.nativeAnalyzer?.isAvailable?.() !== false
+  private useNativeAnalyzer(): boolean {
+    // The native analyzer computes per-column min/max (and band RMS) identically to
+    // the JS sample loop, so prefer it whenever available — for plain mode it just
+    // colors columns with lineColor. The JS path below remains the fallback when no
+    // native analyzer is present (and is what feeds raw samples in the Electron app
+    // when the addon is unavailable).
+    return Boolean(this.nativeAnalyzer) && this.nativeAnalyzer?.isAvailable?.() !== false
   }
 
   private processNativeMonoChunk(chunk: Float32Array, width: number, height: number): boolean {
@@ -602,11 +608,17 @@ export class Waveform {
 
     const stride = 5
     const columnCount = Math.floor(summaries.length / stride)
+    if (columnCount <= 0) return true
+
+    // Scroll once for the whole batch, then paint the new columns — far cheaper than
+    // a full-canvas self-blit per column (which dominates cost at high scroll speeds).
+    this.shiftWaterfall(Math.min(columnCount, width))
     for (let column = 0; column < columnCount; column += 1) {
+      const x = width - columnCount + column
+      if (x < 0) continue
       const offset = column * stride
       const color = this.resolveNativeColumnColor(summaries[offset + 2], summaries[offset + 3], summaries[offset + 4])
-      this.shiftWaterfall()
-      this.paintColumn(summaries[offset], summaries[offset + 1], width, 0, height, color)
+      this.paintColumn(summaries[offset], summaries[offset + 1], width, 0, height, color, x)
     }
     return true
   }
@@ -620,13 +632,17 @@ export class Waveform {
     const stride = 10
     const laneHeight = height / 2
     const columnCount = Math.floor(summaries.length / stride)
+    if (columnCount <= 0) return true
+
+    this.shiftWaterfall(Math.min(columnCount, width))
     for (let column = 0; column < columnCount; column += 1) {
+      const x = width - columnCount + column
+      if (x < 0) continue
       const offset = column * stride
       const leftColor = this.resolveNativeColumnColor(summaries[offset + 2], summaries[offset + 3], summaries[offset + 4])
       const rightColor = this.resolveNativeColumnColor(summaries[offset + 7], summaries[offset + 8], summaries[offset + 9])
-      this.shiftWaterfall()
-      this.paintColumn(summaries[offset], summaries[offset + 1], width, 0, laneHeight, leftColor)
-      this.paintColumn(summaries[offset + 5], summaries[offset + 6], width, laneHeight, laneHeight, rightColor)
+      this.paintColumn(summaries[offset], summaries[offset + 1], width, 0, laneHeight, leftColor, x)
+      this.paintColumn(summaries[offset + 5], summaries[offset + 6], width, laneHeight, laneHeight, rightColor, x)
     }
     return true
   }

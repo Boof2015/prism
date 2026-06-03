@@ -12,6 +12,12 @@ jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      PRISM_JUCE_VERSION: 8.0.4
+      PRISM_WEBVIEW2_VERSION: 1.0.1901.177
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -19,8 +25,11 @@ jobs:
           - os: macos-latest
             dist_cmd: dist:mac
           - os: ubuntu-latest
-            dist_cmd: dist:linux
-          - os: windows-latest
+            dist_cmd: dist:linux:packages
+          # Pinned to windows-2022 because windows-latest now ships VS 2026
+          # (internal version 18), which the @electron/node-gyp version in our
+          # lockfile rejects as "unsupported". 2022 has VS 2022 only, no ambiguity.
+          - os: windows-2022
             dist_cmd: dist:win
 
     steps:
@@ -40,14 +49,59 @@ jobs:
             ~/.cache/electron-builder
           key: ${{ runner.os }}-electron-cache
 
+      - name: Setup sccache
+        if: runner.os != 'Linux'
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache JUCE
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/juce/JUCE-${{ env.PRISM_JUCE_VERSION }}
+          key: ${{ runner.os }}-juce-${{ env.PRISM_JUCE_VERSION }}-v1
+
+      - name: Prepare JUCE checkout
+        shell: bash
+        run: |
+          juce_dir=".ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}"
+          if [ ! -f "$juce_dir/CMakeLists.txt" ]; then
+            rm -rf "$juce_dir"
+            mkdir -p "$(dirname "$juce_dir")"
+            git clone --depth 1 --branch "$PRISM_JUCE_VERSION" https://github.com/juce-framework/JUCE.git "$juce_dir"
+          fi
+
       - name: Install dependencies
+        env:
+          PRISM_SKIP_NATIVE_POSTINSTALL: '1'
         run: npm ci
 
       - name: Install Linux native build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpulse-dev
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libpulse-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            ladspa-sdk \
+            libcurl4-openssl-dev \
+            libfreetype-dev \
+            libfontconfig1-dev \
+            libgtk-3-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libwebkit2gtk-4.1-dev \
+            libglu1-mesa-dev \
+            mesa-common-dev \
+            rpm
 
       - name: Build native DSP module
         run: npm run rebuild:native
@@ -61,8 +115,153 @@ jobs:
           fi
           echo "Native module built successfully: $(ls -lh native/build/Release/visualizer_dsp.node)"
 
+      # Linux AppImage is app-only. Build it before staging DAW plugins so the
+      # portable artifact does not carry installable VST3 resources.
+      - name: Prepare empty Linux plugin resources for AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -rf plugin/dist-installer
+          mkdir -p plugin/dist-installer
+
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        run: npm run dist:linux:appimage
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # --- JUCE plugins. These are staged into installer resources after the
+      # app-only AppImage has already been built on Linux. ---
+
+      - name: Build plugin webview bundle
+        run: npm run plugin-ui:build
+
+      - name: Configure JUCE plugins (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -B plugin/build -S plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
+            -DPRISM_PLUGIN_FORMATS="AU;VST3" \
+            -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Configure JUCE plugins (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -B plugin/build -S plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
+            -DPRISM_PLUGIN_FORMATS=VST3 \
+            -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      # JUCE's NEEDS_WEBVIEW2 expects the Microsoft.Web.WebView2 NuGet package
+      # to already be installed locally; it doesn't fetch it itself. Install it
+      # and point CMake at the resulting folder via JUCE_WEBVIEW2_PACKAGE_LOCATION.
+      - name: Cache WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/webview2
+          key: ${{ runner.os }}-webview2-${{ env.PRISM_WEBVIEW2_VERSION }}-v1
+
+      - name: Install WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sdkRoot = "$env:RUNNER_TEMP\webview2"
+          $packageRoot = Join-Path $sdkRoot "Microsoft.Web.WebView2"
+          $webViewHeader = Join-Path $packageRoot "build\native\include\WebView2.h"
+          if (-not (Test-Path $webViewHeader)) {
+            Remove-Item -Recurse -Force $sdkRoot -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $sdkRoot | Out-Null
+            nuget install Microsoft.Web.WebView2 -Version $env:PRISM_WEBVIEW2_VERSION -OutputDirectory $sdkRoot -ExcludeVersion
+          }
+          "JUCE_WEBVIEW2_PACKAGE_LOCATION=$sdkRoot" >> $env:GITHUB_ENV
+
+      - name: Configure JUCE plugins (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="%GITHUB_WORKSPACE%\.ci-cache\juce\JUCE-%PRISM_JUCE_VERSION%" -DPRISM_PLUGIN_FORMATS=VST3 -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF -DJUCE_WEBVIEW2_PACKAGE_LOCATION="%JUCE_WEBVIEW2_PACKAGE_LOCATION%" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build JUCE plugins (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
+      - name: Build JUCE plugins (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
+      - name: Build JUCE plugins (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build plugin/build --target PrismInstallerPlugins --config Release --parallel 4
+
+      - name: Show sccache stats
+        if: runner.os != 'Linux'
+        run: sccache --show-stats
+
+      - name: Stage plugins for installer
+        shell: bash
+        run: |
+          rm -rf plugin/dist-installer
+          mkdir -p plugin/dist-installer
+          mkdir -p plugin/dist-installer/VST3
+          [ "$RUNNER_OS" = "macOS" ] && mkdir -p plugin/dist-installer/AU
+          for art in PrismSpectrum PrismOscilloscope PrismVUMeter PrismLUFSMeter PrismVectorscope PrismSpectrogram PrismWaveform; do
+            vst3_dir="plugin/build/${art}_artefacts/Release/VST3"
+            [ -d "$vst3_dir" ] && find "$vst3_dir" -maxdepth 1 -name "*.vst3" -exec cp -R {} plugin/dist-installer/VST3/ \;
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              au_dir="plugin/build/${art}_artefacts/Release/AU"
+              [ -d "$au_dir" ] && find "$au_dir" -maxdepth 1 -name "*.component" -exec cp -R {} plugin/dist-installer/AU/ \;
+            fi
+          done
+          echo "--- staged VST3 ---"
+          ls -la plugin/dist-installer/VST3
+          vst3_count="$(find plugin/dist-installer/VST3 -maxdepth 1 -name "*.vst3" | wc -l | tr -d ' ')"
+          if [ "$vst3_count" -ne 7 ]; then
+            echo "ERROR: expected 7 VST3 plugins, found $vst3_count"
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            for vst3 in plugin/dist-installer/VST3/*.vst3; do
+              if [ ! -d "$vst3/Contents/x86_64-linux" ]; then
+                echo "ERROR: Linux VST3 bundle is missing Contents/x86_64-linux: $vst3"
+                exit 1
+              fi
+            done
+            cp resources/installer/linux/install-vst3.sh plugin/dist-installer/install-vst3.sh
+            chmod +x plugin/dist-installer/install-vst3.sh
+          fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "--- staged AU ---"
+            ls -la plugin/dist-installer/AU
+            au_count="$(find plugin/dist-installer/AU -maxdepth 1 -name "*.component" | wc -l | tr -d ' ')"
+            if [ "$au_count" -ne 7 ]; then
+              echo "ERROR: expected 7 AU plugins, found $au_count"
+              exit 1
+            fi
+          fi
+
       - name: Build distributable
+        if: runner.os != 'Linux'
         run: npm run ${{ matrix.dist_cmd }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Build Linux packages with VST3 plugins
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rm -rf dist/linux-unpacked
+          npm run ${{ matrix.dist_cmd }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
@@ -72,9 +271,11 @@ jobs:
           name: prism-${{ runner.os }}${{ inputs.version_tag && format('-{0}', inputs.version_tag) || '' }}
           path: |
             dist/*.exe
-            dist/*.dmg
+            dist/*.pkg
             dist/*.zip
             dist/*.AppImage
             dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
           if-no-files-found: error
           retention-days: 30

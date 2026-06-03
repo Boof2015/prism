@@ -6,6 +6,11 @@ out/
 dist/
 native/build/
 
+# JUCE plugin build + installer staging
+plugin/build/
+plugin/webview-dist/
+plugin/dist-installer/
+
 # Electron
 *.log
 

@@ -1,0 +1,32 @@
+#!/bin/bash
+# Postinstall: after the macOS Installer drops Prism.app into /Applications, copy
+# the bundled VST3 / AU plugins out of the app's Resources into the system
+# Audio Plug-Ins folders so DAWs find them.
+#
+# Standard pkg postinstall args:
+#   $1 = full path to the installer package
+#   $2 = full path of the installed destination (e.g. /Applications)
+#   $3 = mountpoint of the target volume (typically /)
+#   $4 = root directory of the system being installed onto
+#
+# Runs as root, so writes to /Library/Audio/Plug-Ins/* succeed.
+
+set -eu
+
+APP_PATH="${2:-/Applications}/Prism.app"
+[ -d "$APP_PATH" ] || APP_PATH="/Applications/Prism.app"
+
+PLUGINS_SRC="$APP_PATH/Contents/Resources/plugins"
+VST3_DEST="/Library/Audio/Plug-Ins/VST3"
+AU_DEST="/Library/Audio/Plug-Ins/Components"
+
+mkdir -p "$VST3_DEST" "$AU_DEST"
+
+if [ -d "$PLUGINS_SRC/VST3" ]; then
+  cp -R "$PLUGINS_SRC/VST3/"*.vst3 "$VST3_DEST/" 2>/dev/null || true
+fi
+if [ -d "$PLUGINS_SRC/AU" ]; then
+  cp -R "$PLUGINS_SRC/AU/"*.component "$AU_DEST/" 2>/dev/null || true
+fi
+
+exit 0
