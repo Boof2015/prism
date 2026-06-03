@@ -44,9 +44,42 @@ endif()
 set(PRISM_PLUGIN_FORMATS "${PRISM_DEFAULT_PLUGIN_FORMATS}" CACHE STRING "JUCE plugin formats to build")
 option(PRISM_COPY_PLUGIN_AFTER_BUILD "Copy built plugins into user plugin folders after build" ON)
 
+set(PRISM_LINUX_UI_MODE "webview" CACHE STRING "Linux-only UI diagnostic mode: webview, web_smoke, native_smoke, or floating_webview")
+set_property(CACHE PRISM_LINUX_UI_MODE PROPERTY STRINGS webview web_smoke native_smoke floating_webview)
+set(PRISM_VALID_LINUX_UI_MODES webview web_smoke native_smoke floating_webview)
+
+if(UNIX AND NOT APPLE)
+    list(FIND PRISM_VALID_LINUX_UI_MODES "${PRISM_LINUX_UI_MODE}" PRISM_LINUX_UI_MODE_INDEX)
+    if(PRISM_LINUX_UI_MODE_INDEX EQUAL -1)
+        message(FATAL_ERROR "Invalid PRISM_LINUX_UI_MODE='${PRISM_LINUX_UI_MODE}'. Expected one of: ${PRISM_VALID_LINUX_UI_MODES}")
+    endif()
+else()
+    if(NOT PRISM_LINUX_UI_MODE STREQUAL "webview")
+        message(FATAL_ERROR "PRISM_LINUX_UI_MODE is Linux-only; macOS/Windows builds must use 'webview'.")
+    endif()
+endif()
+
+set(PRISM_NEEDS_WEBUI OFF)
+if(NOT PRISM_DEV_SERVER)
+    if(NOT UNIX OR APPLE OR PRISM_LINUX_UI_MODE STREQUAL "webview" OR PRISM_LINUX_UI_MODE STREQUAL "floating_webview")
+        set(PRISM_NEEDS_WEBUI ON)
+    endif()
+endif()
+
+if(PRISM_NEEDS_WEBUI)
+    set(PRISM_EMBED_WEBUI_DEFINITION PRISM_EMBED_WEBUI=1)
+else()
+    set(PRISM_EMBED_WEBUI_DEFINITION PRISM_EMBED_WEBUI=0)
+endif()
+
+string(TOUPPER "${PRISM_LINUX_UI_MODE}" PRISM_LINUX_UI_MODE_UPPER)
+set(PRISM_LINUX_UI_MODE_DEFINITIONS
+    PRISM_LINUX_UI_MODE_NAME="${PRISM_LINUX_UI_MODE}"
+    PRISM_LINUX_UI_MODE_${PRISM_LINUX_UI_MODE_UPPER}=1)
+
 # Embed the built webview bundle once; every scope plugin shares it (the C++ tells
 # the UI which scope to mount via initialisation data).
-if(NOT PRISM_DEV_SERVER)
+if(PRISM_NEEDS_WEBUI)
     set(PRISM_WEBUI_DIST ${CMAKE_CURRENT_SOURCE_DIR}/webview-dist)
     file(GLOB_RECURSE PRISM_WEBUI_FILES "${PRISM_WEBUI_DIST}/*")
     if(NOT PRISM_WEBUI_FILES)
@@ -97,7 +130,9 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
     target_compile_definitions(${TARGET} PRIVATE
         JUCE_WEB_BROWSER=1            # enables WebBrowserComponent (WKWebView on macOS)
         JUCE_USE_CURL=0
-        JUCE_VST3_CAN_REPLACE_VST2=0)
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        ${PRISM_EMBED_WEBUI_DEFINITION}
+        ${PRISM_LINUX_UI_MODE_DEFINITIONS})
     if(WIN32)
         # NEEDS_WEBVIEW2 links the WebView2 SDK but doesn't turn on the JUCE compile
         # paths that gate withResourceProvider. JUCE_USE_WIN_WEBVIEW2=1 enables the
@@ -121,8 +156,11 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
     if(PRISM_DEV_SERVER)
         target_compile_definitions(${TARGET} PRIVATE PRISM_USE_DEV_SERVER=1)
     else()
-        target_link_libraries(${TARGET} PRIVATE PrismWebUI)
         target_compile_definitions(${TARGET} PRIVATE PRISM_USE_DEV_SERVER=0)
+    endif()
+
+    if(PRISM_NEEDS_WEBUI)
+        target_link_libraries(${TARGET} PRIVATE PrismWebUI)
     endif()
 
     target_link_libraries(${TARGET} PRIVATE

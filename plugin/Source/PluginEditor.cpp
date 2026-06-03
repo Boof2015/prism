@@ -7,9 +7,18 @@
 #include "SpectrogramEngine.h"
 #include "WaveformEngine.h"
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
-#if ! PRISM_USE_DEV_SERVER
+#ifndef PRISM_EMBED_WEBUI
+ #define PRISM_EMBED_WEBUI 0
+#endif
+
+#ifndef PRISM_LINUX_UI_MODE_NAME
+ #define PRISM_LINUX_UI_MODE_NAME "webview"
+#endif
+
+#if PRISM_EMBED_WEBUI
  #include "BinaryData.h"
 #endif
 
@@ -41,6 +50,77 @@ namespace
 
 #if JUCE_LINUX
     constexpr int kLinuxFrameRateHz = 20;
+
+    juce::String envValue(const char* name)
+    {
+        if (const auto* value = std::getenv(name); value != nullptr && value[0] != '\0')
+            return value;
+
+        return "<unset>";
+    }
+
+    juce::File linuxDiagnosticLogFile()
+    {
+        juce::File baseDir;
+
+        if (const auto* xdgState = std::getenv("XDG_STATE_HOME"); xdgState != nullptr && xdgState[0] != '\0')
+            baseDir = juce::File(juce::String(xdgState));
+        else if (const auto* home = std::getenv("HOME"); home != nullptr && home[0] != '\0')
+            baseDir = juce::File(juce::String(home)).getChildFile(".local").getChildFile("state");
+        else
+            baseDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+
+        return baseDir.getChildFile("prism").getChildFile("plugin-ui-diagnostics.log");
+    }
+
+    void logLinuxDiagnostic(const juce::String& message)
+    {
+        const auto file = linuxDiagnosticLogFile();
+        file.getParentDirectory().createDirectory();
+        file.appendText(juce::Time::getCurrentTime().toISO8601(true) + " " + message + "\n",
+                        false,
+                        false,
+                        "\n");
+    }
+
+    juce::String wrapperTypeName()
+    {
+        switch (juce::PluginHostType::getPluginLoadedAs())
+        {
+            case juce::AudioProcessor::wrapperType_VST3:       return "VST3";
+            case juce::AudioProcessor::wrapperType_VST:        return "VST2";
+            case juce::AudioProcessor::wrapperType_Standalone: return "Standalone";
+            case juce::AudioProcessor::wrapperType_AudioUnit:  return "AudioUnit";
+            case juce::AudioProcessor::wrapperType_AudioUnitv3:return "AudioUnitv3";
+            case juce::AudioProcessor::wrapperType_AAX:        return "AAX";
+            case juce::AudioProcessor::wrapperType_LV2:        return "LV2";
+            case juce::AudioProcessor::wrapperType_Unity:      return "Unity";
+            default:                                           return "Undefined";
+        }
+    }
+
+    juce::String linuxHostDisplayContext()
+    {
+        const juce::PluginHostType host;
+        juce::String context;
+        context << "mode=" << PRISM_LINUX_UI_MODE_NAME
+                << " host=\"" << host.getHostDescription() << "\""
+                << " wrapper=" << wrapperTypeName()
+                << " display=" << envValue("DISPLAY")
+                << " waylandDisplay=" << envValue("WAYLAND_DISPLAY")
+                << " sessionType=" << envValue("XDG_SESSION_TYPE")
+                << " gdkBackend=" << envValue("GDK_BACKEND")
+                << " desktop=" << envValue("XDG_CURRENT_DESKTOP");
+        return context;
+    }
+
+    juce::String describeBounds(const juce::Rectangle<int>& bounds)
+    {
+        juce::String text;
+        text << bounds.getX() << "," << bounds.getY()
+             << " " << bounds.getWidth() << "x" << bounds.getHeight();
+        return text;
+    }
 #endif
 
     std::unique_ptr<ScopeEngine> makeEngine()
@@ -64,7 +144,7 @@ namespace
 
 #if PRISM_USE_DEV_SERVER
     const juce::String kDevServerUrl { "http://localhost:5174" };
-#else
+#elif PRISM_EMBED_WEBUI
     const char* getWebResourceData(const juce::String& name, int& dataSize)
     {
         dataSize = 0;
@@ -140,6 +220,47 @@ namespace
 #endif
 #endif
 
+#if JUCE_LINUX
+    juce::String makeWebSmokeUrl()
+    {
+        const juce::String html =
+            "<!doctype html><html><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<style>html,body{width:100%;height:100%;margin:0;background:#000;color:rgba(255,255,255,.82);"
+            "font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}body{display:grid;place-items:center;}"
+            "#status{padding:20px;text-align:center;white-space:pre-wrap;}</style></head>"
+            "<body><div id=\"status\">Prism WebView smoke test\\nWaiting for JUCE bridge...</div>"
+            "<script>"
+            "function ready(){var s=document.getElementById('status');"
+            "try{if(window.__JUCE__&&window.__JUCE__.backend){window.__JUCE__.backend.emitEvent('prismReady',{});"
+            "if(s)s.textContent='Prism WebView smoke test\\nJUCE bridge emitted prismReady';return;}}"
+            "catch(e){if(s)s.textContent='Prism WebView smoke test\\n'+String(e&&e.message||e);return;}"
+            "setTimeout(ready,50);}ready();"
+            "</script></body></html>";
+
+        return "data:text/html;charset=utf-8," + juce::URL::addEscapeChars(html, false);
+    }
+
+    class FloatingWebViewWindow final : public juce::DocumentWindow
+    {
+    public:
+        FloatingWebViewWindow()
+            : juce::DocumentWindow("Prism WebView diagnostic",
+                                   juce::Colours::black,
+                                   juce::DocumentWindow::closeButton)
+        {
+            setUsingNativeTitleBar(true);
+            setResizable(true, true);
+        }
+
+        void closeButtonPressed() override
+        {
+            logLinuxDiagnostic("floating_webview closeButtonPressed");
+            setVisible(false);
+        }
+    };
+#endif
+
     juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor, const char* scopeId)
     {
         auto options = juce::WebBrowserComponent::Options{}
@@ -168,7 +289,7 @@ namespace
             juce::WebBrowserComponent::Options::WinWebView2{}.withUserDataFolder(webView2DataDir));
 #endif
 
-#if ! PRISM_USE_DEV_SERVER
+#if PRISM_EMBED_WEBUI
         options = options.withResourceProvider(
             [](const auto& url) { return provideResource(url); },
             getResourceProviderOrigin());
@@ -185,7 +306,13 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
     drainLeft.assign((size_t) kDrainCapacity, 0.0f);
     drainRight.assign((size_t) kDrainCapacity, 0.0f);
 
-    loadWebView();
+#if JUCE_LINUX
+    logLinuxDiagnostic("editor constructed scope=" + juce::String(engine->scopeId())
+                       + " " + linuxHostDisplayContext()
+                       + " logFile=" + linuxDiagnosticLogFile().getFullPathName());
+#endif
+
+    loadUi();
 
     // Per-scope sizing: open at the scope's preferred default, with a per-scope min.
     const auto pref = engine->preferredSize();
@@ -199,18 +326,49 @@ PrismSpectrumEditor::~PrismSpectrumEditor()
 #if JUCE_WINDOWS || JUCE_LINUX
     stopTimer();
 #endif
+#if JUCE_LINUX
+    logLinuxDiagnostic("editor destructed scope=" + juce::String(engine->scopeId())
+                       + " mode=" + juce::String(PRISM_LINUX_UI_MODE_NAME));
+    floatingWebViewWindow.reset();
+#endif
     webViewReady = false;
 }
 
 void PrismSpectrumEditor::resized()
 {
-    if (webView != nullptr)
+    if (webView != nullptr && webView->getParentComponent() == this)
         webView->setBounds(getLocalBounds());
 
     webViewFallback.setBounds(getLocalBounds());
+
+#if JUCE_LINUX
+    logLinuxDiagnostic("editor resized local=" + describeBounds(getLocalBounds())
+                       + " screen=" + describeBounds(getScreenBounds())
+                       + " mode=" + juce::String(PRISM_LINUX_UI_MODE_NAME));
+#endif
 }
 
-void PrismSpectrumEditor::loadWebView()
+void PrismSpectrumEditor::loadUi()
+{
+#if JUCE_LINUX
+    logLinuxDiagnostic("loadUi " + linuxHostDisplayContext());
+
+   #if defined(PRISM_LINUX_UI_MODE_NATIVE_SMOKE) && PRISM_LINUX_UI_MODE_NATIVE_SMOKE
+    loadNativeSmoke();
+    return;
+   #elif defined(PRISM_LINUX_UI_MODE_WEB_SMOKE) && PRISM_LINUX_UI_MODE_WEB_SMOKE
+    loadWebSmoke();
+    return;
+   #elif defined(PRISM_LINUX_UI_MODE_FLOATING_WEBVIEW) && PRISM_LINUX_UI_MODE_FLOATING_WEBVIEW
+    loadFloatingWebView();
+    return;
+   #endif
+#endif
+
+    loadEmbeddedWebView();
+}
+
+bool PrismSpectrumEditor::createWebView()
 {
     auto options = makeWebOptions(*this, engine->scopeId());
 
@@ -218,28 +376,117 @@ void PrismSpectrumEditor::loadWebView()
     if (! juce::WebBrowserComponent::areOptionsSupported(options))
     {
         showWebViewFallback();
-        return;
+        return false;
     }
 #endif
 
+#if JUCE_LINUX
+    logLinuxDiagnostic("creating WebBrowserComponent mode=" + juce::String(PRISM_LINUX_UI_MODE_NAME));
+#endif
+
     webView = std::make_unique<juce::WebBrowserComponent>(options);
+    return true;
+}
+
+void PrismSpectrumEditor::loadEmbeddedWebView()
+{
+    if (! createWebView())
+        return;
+
     addAndMakeVisible(*webView);
 
 #if PRISM_USE_DEV_SERVER
+   #if JUCE_LINUX
+    logLinuxDiagnostic("navigating embedded WebView url=" + kDevServerUrl);
+   #endif
     webView->goToURL(kDevServerUrl);
-#else
- #if JUCE_LINUX
+#elif PRISM_EMBED_WEBUI
+   #if JUCE_LINUX
     const auto indexFile = writeLinuxWebViewIndexFile();
 
     if (indexFile.existsAsFile())
     {
-        webView->goToURL(juce::URL(indexFile).toString(false));
+        const auto url = juce::URL(indexFile).toString(false);
+        logLinuxDiagnostic("navigating embedded WebView url=" + url);
+        webView->goToURL(url);
         return;
     }
- #endif
+
+    logLinuxDiagnostic("navigating embedded WebView url=" + juce::WebBrowserComponent::getResourceProviderRoot());
+   #endif
     webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
 #endif
 }
+
+#if JUCE_LINUX
+void PrismSpectrumEditor::showLinuxDiagnosticPlaceholder(const juce::String& text)
+{
+    webViewFallback.setText(text, juce::dontSendNotification);
+    webViewFallback.setJustificationType(juce::Justification::centred);
+    webViewFallback.setColour(juce::Label::backgroundColourId, juce::Colours::black);
+    webViewFallback.setColour(juce::Label::textColourId, juce::Colour(0xffe5e7eb));
+    webViewFallback.setMinimumHorizontalScale(0.7f);
+    addAndMakeVisible(webViewFallback);
+}
+
+void PrismSpectrumEditor::loadNativeSmoke()
+{
+    logLinuxDiagnostic("native_smoke loaded");
+    webViewReady = true;
+    showLinuxDiagnosticPlaceholder("Prism native smoke test\n"
+                                   "Root JUCE editor rendered without WebView\n"
+                                   "Mode: native_smoke");
+}
+
+void PrismSpectrumEditor::loadWebSmoke()
+{
+    if (! createWebView())
+        return;
+
+    addAndMakeVisible(*webView);
+
+    const auto url = makeWebSmokeUrl();
+    logLinuxDiagnostic("navigating web_smoke WebView url=data:text/html;charset=utf-8,<inline smoke page>");
+    webView->goToURL(url);
+}
+
+void PrismSpectrumEditor::loadFloatingWebView()
+{
+    showLinuxDiagnosticPlaceholder("Prism floating WebView diagnostic\n"
+                                   "Embedded native placeholder is visible\n"
+                                   "The real Prism WebView should open in a separate window");
+
+    if (! createWebView())
+        return;
+
+    floatingWebViewWindow = std::make_unique<FloatingWebViewWindow>();
+    floatingWebViewWindow->setContentNonOwned(webView.get(), false);
+
+    const auto pref = engine->preferredSize();
+    floatingWebViewWindow->setSize(pref.defaultWidth, pref.defaultHeight);
+    floatingWebViewWindow->centreWithSize(pref.defaultWidth, pref.defaultHeight);
+    floatingWebViewWindow->setVisible(true);
+    floatingWebViewWindow->toFront(true);
+
+   #if PRISM_USE_DEV_SERVER
+    logLinuxDiagnostic("navigating floating WebView url=" + kDevServerUrl);
+    webView->goToURL(kDevServerUrl);
+   #elif PRISM_EMBED_WEBUI
+    const auto indexFile = writeLinuxWebViewIndexFile();
+
+    if (indexFile.existsAsFile())
+    {
+        const auto url = juce::URL(indexFile).toString(false);
+        logLinuxDiagnostic("navigating floating WebView url=" + url);
+        webView->goToURL(url);
+        return;
+    }
+
+    logLinuxDiagnostic("navigating floating WebView url=" + juce::WebBrowserComponent::getResourceProviderRoot());
+    webView->goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
+   #endif
+}
+#endif
 
 void PrismSpectrumEditor::showWebViewFallback()
 {
@@ -307,6 +554,10 @@ void PrismSpectrumEditor::onPrismConfig(juce::var payload)
 
 void PrismSpectrumEditor::onPrismReady()
 {
+#if JUCE_LINUX
+    logLinuxDiagnostic("prismReady received mode=" + juce::String(PRISM_LINUX_UI_MODE_NAME)
+                       + " scope=" + juce::String(engine->scopeId()));
+#endif
     webViewReady = true;
     pushRestoreSettings();
     sendAppDefaults();

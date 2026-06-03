@@ -50,10 +50,19 @@ public:
     void sendAppDefaults();
 
 private:
-    void loadWebView();
+    void loadUi();
+    bool createWebView();
+    void loadEmbeddedWebView();
     void showWebViewFallback();
     void startFrameDriver();
     void renderFrame();
+
+#if JUCE_LINUX
+    void loadNativeSmoke();
+    void loadWebSmoke();
+    void loadFloatingWebView();
+    void showLinuxDiagnosticPlaceholder(const juce::String& text);
+#endif
 
     PrismSpectrumProcessor& processorRef;
 
@@ -71,6 +80,9 @@ private:
     int uncapAttempts = 0;
 
     std::unique_ptr<juce::WebBrowserComponent> webView;
+#if JUCE_LINUX
+    std::unique_ptr<juce::DocumentWindow> floatingWebViewWindow;
+#endif
     juce::Label webViewFallback;
 
     // Declared last so it is destroyed first; no vblank callback can fire into a
