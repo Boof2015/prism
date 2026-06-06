@@ -1,12 +1,16 @@
-# Prism
+<div align="center">
 
-A free, open-source audio visualizer and meter rack for your desktop.
+<img src="assets/prism-badge.png" alt="Prism" width="440">
+
+A free, open-source audio visualizer and meter rack for your desktop and your DAW.
 
 ![code size](https://img.shields.io/github/languages/code-size/Boof2015/prism)
 ![GitHub Release](https://img.shields.io/github/v/release/Boof2015/prism?include_prereleases)
 ![GitHub License](https://img.shields.io/github/license/Boof2015/prism)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Boof2015/prism/main.yml)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/boof2015/prism/total)
+
+</div>
 
 Prism taps into your system audio and runs it through a rack of real-time scopes and meters. It grew out of the visualization engine in [Astra](https://github.com/Boof2015/astra), rebuilt as a standalone tool. Whether you're mixing a track, tuning a room, or just like watching your music, Prism gives you a window into what you're hearing.
 
@@ -25,6 +29,17 @@ Seven visualizers driven by a native C++ analysis engine:
 ![Prism scopes](assets/prism-demo-12fps.gif)
 
 Every scope is independently configurable. Drag and resize them into whatever layout makes sense, pop any scope out into its own window, and pin windows on top so they stay visible while you work.
+
+## DAW Plugins
+
+Every Prism scope also ships as a DAW plugin. Drop a **Spectrum**, **Oscilloscope**, **Vectorscope**, **Spectrogram**, **VU Meter**, **Loudness Meter**, or **Waveform** onto any track and it analyzes that track's audio in real time, the same analysis engine and the same interface as the desktop app.
+
+- **VST3** on Windows, macOS, and Linux, plus **AU** on macOS.
+- Each instance is fully configurable, and its settings save with your project.
+- Plugins follow your active Prism theme and profile, so they match the desktop app out of the box.
+- Audio passes through untouched. No DSP runs on the realtime audio thread.
+
+Tested in Ableton Live, FL Studio, and Reaper. The plugins install alongside the desktop app, so there's no separate download.
 
 ## Audio Capture
 
@@ -83,6 +98,9 @@ Linux `.deb` and `.rpm` releases install the seven Prism VST3 plugins to
 helper that installs them to `$HOME/.vst3` by default. The AppImage is app-only;
 it does not install DAW plugins. DAWs commonly scan `$HOME/.vst3`, `/usr/lib/vst3`,
 and `/usr/local/lib/vst3`.
+
+The DAW plugins build with CMake from the [`plugin/`](plugin/) directory. See
+[`plugin/README.md`](plugin/README.md) for the per-platform build and install steps.
 
 ## Astra Integration
 
