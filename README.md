@@ -8,7 +8,7 @@ A free, open-source audio visualizer and meter rack for your desktop and your DA
 ![GitHub Release](https://img.shields.io/github/v/release/Boof2015/prism?include_prereleases)
 ![GitHub License](https://img.shields.io/github/license/Boof2015/prism)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Boof2015/prism/main.yml)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/boof2015/prism/total)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Boof2015/prism/total)
 
 </div>
 
