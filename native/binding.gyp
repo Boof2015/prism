@@ -15,6 +15,7 @@
         "src/waveform.cpp",
         "src/vumeter.cpp",
         "src/lufsmeter.cpp",
+        "src/window_chrome.cpp",
         "src/dsp_utils.cpp"
       ],
       "include_dirs": [
@@ -55,7 +56,8 @@
             "ole32.lib",
             "avrt.lib",
             "runtimeobject.lib",
-            "uuid.lib"
+            "uuid.lib",
+            "dwmapi.lib"
           ],
           "msvs_settings": {
             "VCCLCompilerTool": {

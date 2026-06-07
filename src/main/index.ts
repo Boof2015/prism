@@ -33,6 +33,7 @@ import {
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
 import { loadNativeWindowsMediaApi } from './nativeWindowsMedia'
+import { loadNativeWindowChromeApi } from './nativeWindowChrome'
 import { NowPlayingManager } from './services/nowPlayingManager'
 import { AstraIntegrationService } from './services/astraIntegration'
 import { MacSpotifyProvider } from './services/macSpotifyProvider'
@@ -41,6 +42,7 @@ import { checkForUpdates, resolveSafeReleaseUrl } from './services/updates'
 import { FileBackedThemeLibrary } from './themeLibrary'
 import { FileBackedWindowStateStore } from './windowStateStore'
 import type { NativeWindowsMediaAPI } from '../types/nativeWindowsMedia'
+import type { NativeWindowChromeAPI } from '../types/nativeWindowChrome'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
@@ -74,6 +76,7 @@ let nowPlayingManager: NowPlayingManager | null = null
 let windowStateStore: FileBackedWindowStateStore | null = null
 let secretVault: SecretVault | null = null
 let nativeWindowsMediaApi: NativeWindowsMediaAPI | null | undefined
+let nativeWindowChromeApi: NativeWindowChromeAPI | null | undefined
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -348,6 +351,35 @@ function getNativeWindowsMediaApi(): NativeWindowsMediaAPI | null {
 
   nativeWindowsMediaApi = loadNativeWindowsMediaApi()
   return nativeWindowsMediaApi
+}
+
+function getNativeWindowChromeApi(): NativeWindowChromeAPI | null {
+  if (nativeWindowChromeApi !== undefined) {
+    return nativeWindowChromeApi
+  }
+
+  nativeWindowChromeApi = loadNativeWindowChromeApi()
+  return nativeWindowChromeApi
+}
+
+// Strips the visible native frame/shadow from a frameless WS_THICKFRAME window so
+// it looks flat again, while keeping native Aero Snap and edge resize. Windows-only;
+// a no-op on macOS/Linux.
+function applyFlatFramelessChrome(window: BrowserWindow): void {
+  if (process.platform !== 'win32') {
+    return
+  }
+
+  const api = getNativeWindowChromeApi()
+  if (!api) {
+    return
+  }
+
+  try {
+    api.applyFlatFrame(window.getNativeWindowHandle())
+  } catch {
+    // Frame styling is purely cosmetic; never block window creation on it.
+  }
 }
 
 function getNowPlayingManager(): NowPlayingManager {
@@ -1009,6 +1041,7 @@ function createMainWindow(): void {
       backgroundThrottling: false,
     },
   })
+  applyFlatFramelessChrome(mainWindow)
   syncMainWindowLogicalBounds(mainWindow)
 
   mainWindow.on('close', (event) => {
@@ -1218,6 +1251,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   }
 
   const popoutWindow = new BrowserWindow(options)
+  applyFlatFramelessChrome(popoutWindow)
   setSettingsHeightForWindow(popoutWindow, 0)
   scopePopoutWindows.set(kind, popoutWindow)
 
@@ -1385,6 +1419,7 @@ function createNowPlayingConfigWindow(): BrowserWindow {
   }
 
   nowPlayingConfigWindow = new BrowserWindow(options)
+  applyFlatFramelessChrome(nowPlayingConfigWindow)
 
   const configWindow = nowPlayingConfigWindow
 

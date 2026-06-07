@@ -12,6 +12,7 @@
 #include "waveform.h"
 #include "vumeter.h"
 #include "lufsmeter.h"
+#include "window_chrome.h"
 
 // Global instances
 static Visualizer::Oscilloscope oscilloscope;
@@ -741,6 +742,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     RegisterMacOSCapture(env, exports);
     RegisterWindowsCapture(env, exports);
     RegisterLinuxCapture(env, exports);
+    RegisterWindowChrome(env, exports);
 
     return exports;
 }
