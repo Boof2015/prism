@@ -35,6 +35,7 @@ import type { DialogOptions, DialogResult } from '../types/dialog'
 import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
+import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
 
 declare global {
   interface Window {
@@ -55,6 +56,8 @@ declare global {
       repositionWindow: (position: 'top' | 'bottom') => void
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
+      getWindowBackground: () => Promise<WindowBackgroundSnapshot>
+      setWindowBackground: (state: WindowBackgroundState) => Promise<WindowBackgroundSnapshot>
       isCursorInsideWindow: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
       getNowPlayingState: () => Promise<NowPlayingState>
@@ -102,6 +105,7 @@ declare global {
       requestScopePopIn: (kind: ScopeKind) => void
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
+      onWindowBackgroundChanged: (callback: (snapshot: WindowBackgroundSnapshot) => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
       onNowPlayingStateChanged: (callback: (state: NowPlayingState) => void) => () => void
       onMainCloseRequested: (callback: () => void) => () => void

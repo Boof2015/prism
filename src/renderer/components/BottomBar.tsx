@@ -5,10 +5,13 @@ import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useUiStore } from '../stores/uiStore'
+import { useWindowBackgroundStore } from '../stores/windowBackgroundStore'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { SCOPE_KINDS } from '../../types/scope'
+import type { WindowBackgroundMode, WindowBackgroundState } from '../../types/windowState'
 import ThemedSelect from './ThemedSelect'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -37,6 +40,22 @@ const FRAME_TARGET_LABELS: Record<VisualizerFrameTarget, string> = {
 }
 
 const DEFAULT_INPUT_DEVICE_ID = '__default_input__'
+
+const WINDOW_BACKGROUND_MODES: readonly WindowBackgroundMode[] = ['solid', 'blurred', 'clear']
+
+const WINDOW_BACKGROUND_MODE_LABELS: Record<WindowBackgroundMode, string> = {
+  solid: 'Solid',
+  blurred: 'Blurred',
+  clear: 'Clear',
+}
+
+const WINDOW_BACKGROUND_MODE_TITLES: Record<WindowBackgroundMode, string> = {
+  solid: 'Opaque themed background',
+  blurred: 'Desktop shows through, blurred',
+  clear: 'Desktop shows through, crisp',
+}
+
+const WINDOW_BACKGROUND_SET_THROTTLE_MS = 60
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message
@@ -102,6 +121,32 @@ export function resolveThemeCreditDetails(theme: ThemeCreditSource): {
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [isRefreshingThemes, setIsRefreshingThemes] = useState(false)
+  const windowBackground = useWindowBackgroundStore((s) => s.stored)
+  const previewWindowBackground = useWindowBackgroundStore((s) => s.previewBackground)
+  const setWindowBackground = useWindowBackgroundStore((s) => s.setBackground)
+  const supportsBlurredBackground = getRendererWindowCapabilities().supportsBlurredBackground
+  const pendingWindowBackgroundRef = useRef<WindowBackgroundState | null>(null)
+  const windowBackgroundFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const queueWindowBackgroundSave = (next: WindowBackgroundState): void => {
+    previewWindowBackground(next)
+    pendingWindowBackgroundRef.current = next
+    if (windowBackgroundFlushTimerRef.current) return
+
+    windowBackgroundFlushTimerRef.current = setTimeout(() => {
+      windowBackgroundFlushTimerRef.current = null
+      const pending = pendingWindowBackgroundRef.current
+      pendingWindowBackgroundRef.current = null
+      if (pending) {
+        void setWindowBackground(pending)
+      }
+    }, WINDOW_BACKGROUND_SET_THROTTLE_MS)
+  }
+
+  const handleWindowBackgroundMode = (mode: WindowBackgroundMode): void => {
+    if (mode === windowBackground.mode) return
+    void setWindowBackground({ ...windowBackground, mode })
+  }
 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -435,6 +480,62 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 >
                   Folder
                 </button>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--window">
+            <div className="bottom-bar__section-header">
+              <div className="bottom-bar__section-title">Window</div>
+              {windowBackground.mode !== 'solid' ? (
+                <span className="bottom-bar__window-note">
+                  Window snapping is disabled in this mode
+                </span>
+              ) : null}
+            </div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--window">
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
+                  {WINDOW_BACKGROUND_MODES.map((mode) => {
+                    const unsupported = mode === 'blurred' && !supportsBlurredBackground
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`settings-chip ${windowBackground.mode === mode ? 'is-active' : ''}`.trim()}
+                        onClick={() => handleWindowBackgroundMode(mode)}
+                        disabled={unsupported}
+                        title={unsupported
+                          ? 'Blurred background requires Windows 11'
+                          : WINDOW_BACKGROUND_MODE_TITLES[mode]}
+                      >
+                        {WINDOW_BACKGROUND_MODE_LABELS[mode]}
+                      </button>
+                    )
+                  })}
+                </div>
+                <span className="bottom-bar__trim-value">
+                  {windowBackground.transparency}%
+                </span>
+                <input
+                  className="settings-control__range bottom-bar__trim-slider"
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={windowBackground.transparency}
+                  disabled={windowBackground.mode === 'solid'}
+                  style={{ '--range-percent': `${windowBackground.transparency}%` } as CSSProperties}
+                  onChange={(event) => {
+                    queueWindowBackgroundSave({
+                      ...windowBackground,
+                      transparency: Number(event.target.value),
+                    })
+                  }}
+                  title="How much of the desktop shows through"
+                />
               </div>
             </div>
           </section>

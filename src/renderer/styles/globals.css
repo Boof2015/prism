@@ -76,6 +76,40 @@ body,
   -webkit-font-smoothing: antialiased;
 }
 
+/* Window background customization: in blurred/clear modes the OS desktop shows
+   through wherever the app paints with alpha. --window-bg-alpha (0..1) controls
+   how opaque the themed background stays; visualizer content remains crisp.
+   The tint lives on stable DOM layers (scope strips, panels) — never on the
+   constantly-repainting canvases — so it cannot shimmer against the backdrop. */
+html[data-window-bg='blurred'],
+html[data-window-bg='clear'],
+html[data-window-bg='blurred'] body,
+html[data-window-bg='clear'] body,
+html[data-window-bg='blurred'] #root,
+html[data-window-bg='clear'] #root {
+  background: transparent;
+}
+
+html[data-window-bg='blurred'] .scope-strip,
+html[data-window-bg='clear'] .scope-strip,
+html[data-window-bg='blurred'] .scope-popout,
+html[data-window-bg='clear'] .scope-popout {
+  background-color: color-mix(
+    in srgb,
+    var(--scope-bg) calc(var(--window-bg-alpha, 1) * 100%),
+    transparent
+  );
+}
+
+html[data-window-bg='blurred'] .prism-settings-region,
+html[data-window-bg='clear'] .prism-settings-region {
+  background: color-mix(
+    in srgb,
+    var(--bg-primary) calc(var(--window-bg-alpha, 1) * 100%),
+    transparent
+  );
+}
+
 button,
 input,
 select {
@@ -1804,6 +1838,10 @@ button.toolbar__version:hover {
   min-width: 420px;
 }
 
+.bottom-bar__section--window {
+  min-width: 380px;
+}
+
 .bottom-bar__section--source {
   min-width: 360px;
 }
@@ -1887,6 +1925,18 @@ button.toolbar__version:hover {
 
 .bottom-bar__theme-separator {
   margin: 0 4px;
+}
+
+.bottom-bar__window-note {
+  min-width: 0;
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
 }
 
 .bottom-bar__theme-credit--link {

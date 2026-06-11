@@ -5,12 +5,14 @@ import SettingsPanel from './components/SettingsPanel'
 import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import AppBanner from './components/AppBanner'
+import WindowResizeOverlay from './components/WindowResizeOverlay'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
 import { startAudioDeviceWatcher, useAudioStore } from './stores/audioStore'
 import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
+import { useWindowBackgroundStore } from './stores/windowBackgroundStore'
 import { useUpdateStore } from './stores/updateStore'
 import { getRendererWindowCapabilities } from './windowCapabilities'
 
@@ -38,6 +40,8 @@ export default function App(): JSX.Element {
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const showBanner = useUiStore((s) => s.showBanner)
+  const initializeWindowBackground = useWindowBackgroundStore((s) => s.initialize)
+  const windowBackgroundMode = useWindowBackgroundStore((s) => s.effective.mode)
   const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
 
   const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
@@ -58,6 +62,10 @@ export default function App(): JSX.Element {
   useEffect(() => {
     void useUpdateStore.getState().checkForUpdates()
   }, [])
+
+  useEffect(() => {
+    void initializeWindowBackground()
+  }, [initializeWindowBackground])
 
   useEffect(() => {
     let isDisposed = false
@@ -305,6 +313,7 @@ export default function App(): JSX.Element {
         <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
       </div>
 
+      {windowBackgroundMode !== 'solid' && <WindowResizeOverlay />}
     </div>
   )
 }

@@ -3130,6 +3130,7 @@ test('resolveWindowCapabilities detects native Wayland sessions on Linux', () =>
       useNativeDragRegions: true,
       supportsProgrammaticReposition: false,
       supportsGeometryPersistence: false,
+      supportsBlurredBackground: false,
     },
   )
 })
@@ -3150,6 +3151,7 @@ test('resolveWindowCapabilities respects --ozone-platform=x11 in a Wayland sessi
       useNativeDragRegions: false,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: false,
     },
   )
 })
@@ -3169,6 +3171,7 @@ test('resolveWindowCapabilities detects X11 sessions on Linux', () => {
       useNativeDragRegions: false,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: false,
     },
   )
 })
@@ -3185,6 +3188,7 @@ test('resolveWindowCapabilities uses native drag regions on macOS while preservi
       useNativeDragRegions: true,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: true,
     },
   )
 })
@@ -3201,8 +3205,24 @@ test('resolveWindowCapabilities uses native drag regions on Windows while preser
       useNativeDragRegions: true,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: false,
     },
   )
+})
+
+test('resolveWindowCapabilities gates blurred backgrounds on the Windows 11 22H2 build', () => {
+  const resolveForBuild = (osVersion?: string) => resolveWindowCapabilities({
+    platform: 'win32',
+    argv: [],
+    env: {},
+    osVersion,
+  }).supportsBlurredBackground
+
+  assert.equal(resolveForBuild('10.0.22621'), true)
+  assert.equal(resolveForBuild('10.0.26200'), true)
+  assert.equal(resolveForBuild('10.0.19045'), false)
+  assert.equal(resolveForBuild(undefined), false)
+  assert.equal(resolveForBuild('not-a-version'), false)
 })
 
 test('Wayland window controls use native drag regions and omit unsupported reposition/geometry paths', async () => {
@@ -3228,14 +3248,17 @@ test('main and detached windows keep frameless Prism chrome while enabling snap-
   const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
   const nowPlayingSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'NowPlayingConfigWindow.tsx'), 'utf8')
 
-  assert.match(mainSource, /function getSnapCapableFramelessWindowOptions\(\): Pick<[\s\S]*?return \{[\s\S]*?frame: false,[\s\S]*?roundedCorners: false,[\s\S]*?hasShadow: false,[\s\S]*?thickFrame: true,[\s\S]*?resizable: true,[\s\S]*?maximizable: true,[\s\S]*?fullscreenable: true,[\s\S]*?skipTaskbar: false,[\s\S]*?\}/)
-  assert.match(mainSource, /function createMainWindow\(\): void \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
-  assert.match(mainSource, /function createScopePopoutWindow\(kind: ScopeKind, rawBounds\?: WindowBounds\): BrowserWindow \| null \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
-  assert.match(mainSource, /function createNowPlayingConfigWindow\(\): BrowserWindow \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
+  assert.match(mainSource, /function getFramelessWindowOptions\([\s\S]*?return \{[\s\S]*?frame: false,[\s\S]*?transparent: background\.mode === 'clear' \|\| transparentOnWindows,[\s\S]*?roundedCorners: false,[\s\S]*?hasShadow: false,[\s\S]*?thickFrame: background\.mode === 'solid',[\s\S]*?backgroundMaterial: 'none'[\s\S]*?resizable: true,[\s\S]*?maximizable: true,[\s\S]*?fullscreenable: true,[\s\S]*?skipTaskbar: false,[\s\S]*?\}/)
+  assert.match(mainSource, /function createMainWindow\(restoreBounds\?: WindowBounds\): void \{[\s\S]*?\.\.\.getFramelessWindowOptions\(background\),/)
+  assert.match(mainSource, /function createScopePopoutWindow\(kind: ScopeKind, rawBounds\?: WindowBounds\): BrowserWindow \| null \{[\s\S]*?\.\.\.getFramelessWindowOptions\(background\),/)
+  assert.match(mainSource, /function createNowPlayingConfigWindow\(\): BrowserWindow \{[\s\S]*?\.\.\.getFramelessWindowOptions\(\),/)
   assert.match(popoutSource, /useWindowManagerDragRegions = getRendererWindowCapabilities\(\)\.useNativeDragRegions/)
   assert.match(nowPlayingSource, /useWindowManagerDragRegions = getRendererWindowCapabilities\(\)\.useNativeDragRegions/)
-  assert.doesNotMatch(appSource, /WindowResizeOverlay/)
-  assert.doesNotMatch(popoutSource, /WindowResizeOverlay/)
+  // Blurred and clear windows drop the native thick frame on Windows, so the
+  // JS resize overlay mounts for both; the now-playing config window always
+  // keeps native semantics.
+  assert.match(appSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
+  assert.match(popoutSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
   assert.doesNotMatch(nowPlayingSource, /WindowResizeOverlay/)
 })
 

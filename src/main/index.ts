@@ -40,7 +40,9 @@ import { MacSpotifyProvider } from './services/macSpotifyProvider'
 import { SecretVault } from './services/secretVault'
 import { checkForUpdates, resolveSafeReleaseUrl } from './services/updates'
 import { FileBackedThemeLibrary } from './themeLibrary'
+import { normalizeWindowBackgroundState } from '../shared/windowState'
 import { FileBackedWindowStateStore } from './windowStateStore'
+import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
 import type { NativeWindowsMediaAPI } from '../types/nativeWindowsMedia'
 import type { NativeWindowChromeAPI } from '../types/nativeWindowChrome'
 
@@ -59,6 +61,7 @@ let allowMainWindowClose = false
 let mainWindowClosePending = false
 let suppressMainWindowSyncUntil = 0
 let mainWindowLogicalBounds: WindowBounds | null = null
+let windowRecreationPending = false
 
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
@@ -107,6 +110,7 @@ const runtimeWindowCapabilities = resolveWindowCapabilities({
   platform: process.platform,
   argv: process.argv,
   env: process.env,
+  osVersion: process.getSystemVersion(),
 })
 
 interface ResolvedBuildMetadata {
@@ -379,6 +383,27 @@ function applyFlatFramelessChrome(window: BrowserWindow): void {
     api.applyFlatFrame(window.getNativeWindowHandle())
   } catch {
     // Frame styling is purely cosmetic; never block window creation on it.
+  }
+}
+
+// Accent-policy acrylic for blurred windows. The DWM system backdrop
+// (backgroundMaterial: 'acrylic') is unusable here: it greys out whenever the
+// window loses focus and fights the flat frameless chrome. The accent blur
+// stays active unfocused and renders on borderless transparent windows.
+function applyAcrylicBlurBehind(window: BrowserWindow): void {
+  if (process.platform !== 'win32') {
+    return
+  }
+
+  const api = getNativeWindowChromeApi()
+  if (!api || typeof api.setAcrylicBlurBehind !== 'function') {
+    return
+  }
+
+  try {
+    api.setAcrylicBlurBehind(window.getNativeWindowHandle(), true)
+  } catch {
+    // Blur is purely cosmetic; the window still works as a clear window.
   }
 }
 
@@ -795,20 +820,49 @@ function isCursorInsideWindow(window: BrowserWindow): boolean {
     && cursor.y < bounds.y + bounds.height
 }
 
-function getSnapCapableFramelessWindowOptions(): Pick<
-  BrowserWindowConstructorOptions,
-  'frame' | 'transparent' | 'backgroundColor' | 'roundedCorners' | 'hasShadow' | 'thickFrame' | 'backgroundMaterial' | 'resizable' | 'maximizable' | 'fullscreenable' | 'minimizable' | 'skipTaskbar'
-> {
+const SOLID_WINDOW_BACKGROUND: WindowBackgroundState = { mode: 'solid', transparency: 0 }
+
+function getEffectiveWindowBackground(): WindowBackgroundState {
+  const stored = getWindowStateStore().getWindowBackground()
+  if (stored.mode === 'blurred' && !runtimeWindowCapabilities.supportsBlurredBackground) {
+    return { ...stored, mode: 'solid' }
+  }
+  return stored
+}
+
+function getWindowBackgroundSnapshot(): WindowBackgroundSnapshot {
+  return {
+    stored: getWindowStateStore().getWindowBackground(),
+    effective: getEffectiveWindowBackground(),
+  }
+}
+
+// Solid windows keep WS_THICKFRAME, so native Aero Snap and edge resize stay
+// intact. On Windows, blurred and clear windows must be created `transparent`
+// (blurred composites accent-policy acrylic behind the alpha pixels), which is
+// mutually exclusive with the thick frame — those windows fall back to the JS
+// move/resize controllers. On macOS, blurred uses vibrancy and keeps the
+// native frame semantics.
+function getFramelessWindowOptions(
+  background: WindowBackgroundState = SOLID_WINDOW_BACKGROUND,
+): BrowserWindowConstructorOptions {
+  const transparentOnWindows = process.platform === 'win32' && background.mode !== 'solid'
   return {
     frame: false,
-    transparent: false,
-    backgroundColor: '#000000',
+    transparent: background.mode === 'clear' || transparentOnWindows,
+    backgroundColor: background.mode === 'solid' ? '#000000' : '#00000000',
     roundedCorners: false,
     hasShadow: false,
     ...(process.platform === 'win32'
       ? {
-          thickFrame: true,
-          backgroundMaterial: 'none',
+          thickFrame: background.mode === 'solid',
+          backgroundMaterial: 'none' as const,
+        }
+      : {}),
+    ...(process.platform === 'darwin' && background.mode === 'blurred'
+      ? {
+          vibrancy: 'under-window' as const,
+          visualEffectState: 'active' as const,
         }
       : {}),
     resizable: true,
@@ -817,6 +871,65 @@ function getSnapCapableFramelessWindowOptions(): Pick<
     minimizable: true,
     skipTaskbar: false,
   }
+}
+
+function getBackgroundCapableWindows(): BrowserWindow[] {
+  const windows: BrowserWindow[] = []
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    windows.push(mainWindow)
+  }
+  for (const window of scopePopoutWindows.values()) {
+    if (!window.isDestroyed()) {
+      windows.push(window)
+    }
+  }
+  return windows
+}
+
+function broadcastWindowBackgroundChanged(snapshot: WindowBackgroundSnapshot): void {
+  for (const window of getBackgroundCapableWindows()) {
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send('window:background-changed', snapshot)
+    }
+  }
+}
+
+function getWindowBackgroundQuery(background: WindowBackgroundState): Record<string, string> {
+  return {
+    bg: background.mode,
+    bgt: String(background.transparency),
+  }
+}
+
+// Every mode switch recreates the main window: `transparent` (clear) is a
+// creation-time flag, and the flat-chrome DWM tweaks applied to solid windows
+// (DWMWA_NCRENDERING_POLICY disabled) are sticky on the HWND and fight the
+// acrylic backdrop — DWM flickers between composited states, worst at screen
+// edges. A fresh window gets exactly the right chrome for its mode. Popouts
+// are destroyed alongside it and re-opened by the fresh renderer from
+// persisted profile state.
+function recreateWindowsForBackgroundChange(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow()
+    return
+  }
+
+  const restoreBounds = toLogicalBounds(mainWindow)
+  const wasMaximized = mainWindow.isMaximized()
+
+  windowRecreationPending = true
+  allowMainWindowClose = true
+  mainWindow.once('closed', () => {
+    try {
+      createMainWindow(restoreBounds)
+      if (wasMaximized) {
+        mainWindow?.maximize()
+      }
+    } finally {
+      windowRecreationPending = false
+    }
+  })
+  mainWindow.close()
 }
 
 function normalizeProfileMenuRequest(raw: unknown): ProfileMenuRequest | null {
@@ -1022,10 +1135,16 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
   })
 }
 
-function createMainWindow(): void {
+function createMainWindow(restoreBounds?: WindowBounds): void {
+  const background = getEffectiveWindowBackground()
+  const initialBounds = restoreBounds
+    ? clampRestoredWindowBounds(restoreBounds, getDisplayWorkAreas(), RESTORED_WINDOW_VISIBLE_MARGIN)
+    : null
+
   mainWindow = new BrowserWindow({
     ...WINDOW_DEFAULTS,
-    ...getSnapCapableFramelessWindowOptions(),
+    ...(initialBounds ?? {}),
+    ...getFramelessWindowOptions(background),
     alwaysOnTop: getWindowStateStore().getMainAlwaysOnTop(),
     autoHideMenuBar: true,
     resizable: true,
@@ -1041,7 +1160,11 @@ function createMainWindow(): void {
       backgroundThrottling: false,
     },
   })
-  applyFlatFramelessChrome(mainWindow)
+  if (background.mode === 'solid') {
+    applyFlatFramelessChrome(mainWindow)
+  } else if (background.mode === 'blurred') {
+    applyAcrylicBlurBehind(mainWindow)
+  }
   syncMainWindowLogicalBounds(mainWindow)
 
   mainWindow.on('close', (event) => {
@@ -1106,7 +1229,7 @@ function createMainWindow(): void {
     raiseMainWindowAboveNormalPopouts()
   })
 
-  loadRendererTarget(mainWindow, { window: 'main' })
+  loadRendererTarget(mainWindow, { window: 'main', ...getWindowBackgroundQuery(background) })
 }
 
 function sendScopePopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
@@ -1225,12 +1348,13 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     : normalizedBounds
   suppressNextPopoutBoundsEvents.add(kind)
 
+  const background = getEffectiveWindowBackground()
   const options: BrowserWindowConstructorOptions = {
     width: bounds.width,
     height: bounds.height,
     minWidth: POPOUT_DEFAULTS.minWidth,
     minHeight: POPOUT_DEFAULTS.minHeight,
-    ...getSnapCapableFramelessWindowOptions(),
+    ...getFramelessWindowOptions(background),
     autoHideMenuBar: true,
     title: `Prism ${SCOPE_LABELS[kind]}`,
     alwaysOnTop: getWindowStateStore().getPopoutAlwaysOnTop(kind),
@@ -1251,7 +1375,11 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   }
 
   const popoutWindow = new BrowserWindow(options)
-  applyFlatFramelessChrome(popoutWindow)
+  if (background.mode === 'solid') {
+    applyFlatFramelessChrome(popoutWindow)
+  } else if (background.mode === 'blurred') {
+    applyAcrylicBlurBehind(popoutWindow)
+  }
   setSettingsHeightForWindow(popoutWindow, 0)
   scopePopoutWindows.set(kind, popoutWindow)
 
@@ -1290,7 +1418,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   popoutWindow.on('move', () => emitPopoutBoundsChanged(kind, popoutWindow))
   popoutWindow.on('resize', () => emitPopoutBoundsChanged(kind, popoutWindow))
 
-  loadRendererTarget(popoutWindow, { window: 'scope-popout', scope: kind })
+  loadRendererTarget(popoutWindow, { window: 'scope-popout', scope: kind, ...getWindowBackgroundQuery(background) })
   return popoutWindow
 }
 
@@ -1399,7 +1527,8 @@ function createNowPlayingConfigWindow(): BrowserWindow {
     height: bounds.height,
     minWidth: NOW_PLAYING_CONFIG_DEFAULTS.minWidth,
     minHeight: NOW_PLAYING_CONFIG_DEFAULTS.minHeight,
-    ...getSnapCapableFramelessWindowOptions(),
+    // The config window is a form UI; it always keeps a solid background.
+    ...getFramelessWindowOptions(),
     autoHideMenuBar: true,
     title: 'Prism Now Playing',
     show: false,
@@ -1587,6 +1716,26 @@ function setupIPC(): void {
 
   ipcMain.handle('window:is-always-on-top', (event) => {
     return getWindowFromSender(event.sender)?.isAlwaysOnTop() ?? false
+  })
+
+  ipcMain.handle('window:get-background', () => {
+    return getWindowBackgroundSnapshot()
+  })
+
+  ipcMain.handle('window:set-background', async (_event, raw: unknown) => {
+    const next = normalizeWindowBackgroundState(raw)
+    const previousEffective = getEffectiveWindowBackground()
+    await getWindowStateStore().setWindowBackground(next)
+    const nextEffective = getEffectiveWindowBackground()
+
+    if (previousEffective.mode !== nextEffective.mode) {
+      recreateWindowsForBackgroundChange()
+    } else {
+      // Transparency-only changes are pure CSS in the renderers.
+      broadcastWindowBackgroundChanged(getWindowBackgroundSnapshot())
+    }
+
+    return getWindowBackgroundSnapshot()
   })
 
   ipcMain.handle('window:is-cursor-inside', (event) => {
@@ -1987,6 +2136,10 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on('window-all-closed', () => {
+  if (windowRecreationPending) {
+    return
+  }
+
   void nowPlayingManager?.dispose()
   app.quit()
 })

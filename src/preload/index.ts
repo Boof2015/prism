@@ -32,6 +32,7 @@ import type { DialogOptions, DialogResult } from '../types/dialog'
 import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
+import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import { getCaptureBackendSupport } from './captureSupport'
@@ -41,6 +42,7 @@ const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
   platform: process.platform,
   argv: process.argv,
   env: process.env,
+  osVersion: process.getSystemVersion(),
 })
 
 // Expose Electron API to renderer
@@ -59,6 +61,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
+  getWindowBackground: () => ipcRenderer.invoke('window:get-background') as Promise<WindowBackgroundSnapshot>,
+  setWindowBackground: (state: WindowBackgroundState) => ipcRenderer.invoke('window:set-background', state) as Promise<WindowBackgroundSnapshot>,
   isCursorInsideWindow: () => ipcRenderer.invoke('window:is-cursor-inside') as Promise<boolean>,
   getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
   getNowPlayingState: () => ipcRenderer.invoke('now-playing:get-state') as Promise<NowPlayingState>,
@@ -119,6 +123,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, isOnTop: boolean): void => callback(isOnTop)
     ipcRenderer.on('window:always-on-top-changed', handler)
     return () => ipcRenderer.removeListener('window:always-on-top-changed', handler)
+  },
+  onWindowBackgroundChanged: (callback: (snapshot: WindowBackgroundSnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: WindowBackgroundSnapshot): void => callback(snapshot)
+    ipcRenderer.on('window:background-changed', handler)
+    return () => ipcRenderer.removeListener('window:background-changed', handler)
   },
   onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, bounds: WindowBounds): void => callback(bounds)

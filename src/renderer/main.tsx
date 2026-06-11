@@ -10,6 +10,7 @@ import '@fontsource/inter/500.css'
 import '@fontsource/inter/600.css'
 import '@fontsource/jetbrains-mono/400.css'
 import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
+import { bootstrapWindowBackgroundFromQuery } from './windowBackground'
 
 function isScopeKind(value: string | null): value is ScopeKind {
   return value !== null && SCOPE_KINDS.includes(value as ScopeKind)
@@ -19,6 +20,10 @@ const params = new URLSearchParams(window.location.search)
 const windowMode = params.get('mode')
 const windowRole = params.get('window')
 const scopeKind = params.get('scope')
+
+if (windowMode !== 'dialog' && windowRole !== 'now-playing-config') {
+  bootstrapWindowBackgroundFromQuery()
+}
 
 let root: React.ReactElement
 if (windowMode === 'dialog') {

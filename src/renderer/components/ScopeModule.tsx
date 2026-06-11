@@ -15,6 +15,7 @@ import type {
 import type { SpectrumPeakInfo } from '../../types/spectrum'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useWindowBackgroundAlpha } from '../stores/windowBackgroundStore'
 import AstraScopeModule from './AstraScopeModule'
 import { SpectrumAnalyzer, type SpectrumAnalyzerDataSource } from '../visualizers/SpectrumAnalyzer'
 import { Oscilloscope, type OscilloscopeDataSource } from '../visualizers/Oscilloscope'
@@ -315,6 +316,27 @@ export function scopeSettingsToOptions(
   }
 }
 
+// In blurred/clear window modes the see-through tint lives in CSS (a stable
+// compositor layer on .scope-strip); the canvas paints no background at all so
+// per-frame redraws never race the OS backdrop. Traces stay fully opaque.
+export function applyWindowBackgroundAlphaToOptions(
+  options: Record<string, unknown>,
+  windowBgAlpha: number,
+): Record<string, unknown> {
+  if (
+    windowBgAlpha >= 1
+    || typeof options.backgroundColor !== 'string'
+    || options.backgroundColor === 'transparent'
+  ) {
+    return options
+  }
+
+  return {
+    ...options,
+    backgroundColor: 'transparent',
+  }
+}
+
 function createVisualizer(
   scopeKind: ScopeKind,
   canvas: HTMLCanvasElement,
@@ -324,8 +346,15 @@ function createVisualizer(
   dataSource?: ScopeModuleProps['dataSource'],
   onSpectrumPeakInfo?: (peakInfo: SpectrumPeakInfo | null) => void,
   captureSpectrumPeakInfo = false,
+  windowBgAlpha = 1,
 ): Visualizer | null {
-  const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, theme), frameScheduler }
+  const opts = {
+    ...applyWindowBackgroundAlphaToOptions(
+      scopeSettingsToOptions(scopeKind, mySettings, theme),
+      windowBgAlpha,
+    ),
+    frameScheduler,
+  }
   switch (scopeKind) {
     case 'spectrum':
       return new SpectrumAnalyzer(canvas, {
@@ -392,6 +421,7 @@ export default function ScopeModule({
 
   const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
   const activeTheme = useThemeStore((s) => s.activeTheme)
+  const windowBgAlpha = useWindowBackgroundAlpha()
   const mySettings = settings ?? storeSettings
   const myTheme = theme ?? getScopeTheme(activeTheme, scopeKind)
   const spectrumPeakMode = scopeKind === 'spectrum'
@@ -469,6 +499,7 @@ export default function ScopeModule({
       dataSource,
       handleSpectrumPeakInfo,
       captureSpectrumPeakInfo,
+      windowBgAlpha,
     )
     if (!viz) return
 
@@ -485,12 +516,15 @@ export default function ScopeModule({
       initializedRef.current = false
       setSpectrumPeakInfo(null)
     }
-  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, myTheme, mySettings, scopeKind])
+  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, myTheme, mySettings, scopeKind, windowBgAlpha])
 
   useEffect(() => {
     if (!visualizerRef.current || !initializedRef.current) return
     const opts = {
-      ...scopeSettingsToOptions(scopeKind, mySettings, myTheme),
+      ...applyWindowBackgroundAlphaToOptions(
+        scopeSettingsToOptions(scopeKind, mySettings, myTheme),
+        windowBgAlpha,
+      ),
       frameScheduler,
       ...(scopeKind === 'spectrum'
         ? {
@@ -501,7 +535,7 @@ export default function ScopeModule({
       ...(dataSource ? { dataSource } : {}),
     }
     visualizerRef.current.setOptions(opts)
-  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind])
+  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind, windowBgAlpha])
 
   useEffect(() => {
     const container = containerRef.current

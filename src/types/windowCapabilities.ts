@@ -5,4 +5,5 @@ export interface WindowCapabilities {
   useNativeDragRegions: boolean
   supportsProgrammaticReposition: boolean
   supportsGeometryPersistence: boolean
+  supportsBlurredBackground: boolean
 }

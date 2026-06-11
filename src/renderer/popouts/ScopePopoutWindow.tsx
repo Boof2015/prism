@@ -5,8 +5,10 @@ import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings
 import { applyResolvedThemeToDocument, createDefaultTheme, resolveTheme } from '../../shared/themeState'
 import ScopeModule from '../components/ScopeModule'
 import ScopeSettingsSection from '../components/ScopeSettingsSection'
+import WindowResizeOverlay from '../components/WindowResizeOverlay'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useUiStore } from '../stores/uiStore'
+import { useWindowBackgroundStore } from '../stores/windowBackgroundStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
@@ -68,11 +70,18 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
   const useWindowManagerDragRegions = getRendererWindowCapabilities().useNativeDragRegions
 
+  const initializeWindowBackground = useWindowBackgroundStore((s) => s.initialize)
+  const windowBackgroundMode = useWindowBackgroundStore((s) => s.effective.mode)
+
   useEffect(() => {
     void window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
     const unsubscribe = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    void initializeWindowBackground()
+  }, [initializeWindowBackground])
 
   useEffect(() => {
     frameScheduler.setFrameTarget(frameTarget)
@@ -304,6 +313,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
           </div>
         </div>
       )}
+
+      {windowBackgroundMode !== 'solid' && <WindowResizeOverlay />}
     </div>
   )
 }

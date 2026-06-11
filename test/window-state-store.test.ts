@@ -132,6 +132,44 @@ test('turning a popout pin back off clears its saved local state without affecti
   }
 })
 
+test('window background defaults to solid and persists mode plus transparency', async () => {
+  const harness = await createHarness()
+
+  try {
+    await harness.store.initialize()
+    assert.deepEqual(harness.store.getWindowBackground(), { mode: 'solid', transparency: 50 })
+
+    await harness.store.setWindowBackground({ mode: 'blurred', transparency: 72 })
+
+    const reloaded = new FileBackedWindowStateStore(harness.localStatePath)
+    await reloaded.initialize()
+    assert.deepEqual(reloaded.getWindowBackground(), { mode: 'blurred', transparency: 72 })
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('invalid window background normalizes to solid mode and clamped transparency', async () => {
+  const harness = await createHarness()
+
+  try {
+    await mkdir(dirname(harness.localStatePath), { recursive: true })
+    await writeFile(harness.localStatePath, `${JSON.stringify({
+      format: WINDOW_LOCAL_STATE_FORMAT,
+      version: WINDOW_LOCAL_STATE_VERSION,
+      windowBackground: { mode: 'frosted', transparency: 240.7 },
+    }, null, 2)}\n`, 'utf8')
+
+    await harness.store.initialize()
+    assert.deepEqual(harness.store.getWindowBackground(), { mode: 'solid', transparency: 100 })
+
+    await harness.store.setWindowBackground({ mode: 'clear', transparency: -10 })
+    assert.deepEqual(harness.store.getWindowBackground(), { mode: 'clear', transparency: 0 })
+  } finally {
+    await harness.cleanup()
+  }
+})
+
 test('invalid saved window state normalizes to supported keys and boolean values', async () => {
   const harness = await createHarness()
 
