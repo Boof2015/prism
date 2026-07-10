@@ -1,5 +1,11 @@
 import type { WindowCapabilities, WindowDisplayServer } from '../types/windowCapabilities'
 
+export type MacWindowBlurMaterial = 'hud' | 'content'
+
+export function resolveMacWindowBlurMaterial(useDarkColors: boolean): MacWindowBlurMaterial {
+  return useDarkColors ? 'hud' : 'content'
+}
+
 interface WindowCapabilityResolutionOptions {
   platform: string
   argv?: readonly string[]

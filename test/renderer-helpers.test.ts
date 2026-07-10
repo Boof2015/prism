@@ -28,7 +28,10 @@ import {
 import {
   createDefaultProfile,
 } from '../src/shared/profileState'
-import { resolveWindowCapabilities } from '../src/shared/windowCapabilities'
+import {
+  resolveMacWindowBlurMaterial,
+  resolveWindowCapabilities,
+} from '../src/shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
   clampRestoredWindowBounds,
@@ -3225,6 +3228,11 @@ test('resolveWindowCapabilities gates blurred backgrounds on the Windows 11 22H2
   assert.equal(resolveForBuild('not-a-version'), false)
 })
 
+test('resolveMacWindowBlurMaterial selects neutral theme-aware macOS materials', () => {
+  assert.equal(resolveMacWindowBlurMaterial(true), 'hud')
+  assert.equal(resolveMacWindowBlurMaterial(false), 'content')
+})
+
 test('Wayland window controls use native drag regions and omit unsupported reposition/geometry paths', async () => {
   const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
   const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
@@ -3249,6 +3257,9 @@ test('main and detached windows keep frameless Prism chrome while enabling snap-
   const nowPlayingSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'NowPlayingConfigWindow.tsx'), 'utf8')
 
   assert.match(mainSource, /function getFramelessWindowOptions\([\s\S]*?return \{[\s\S]*?frame: false,[\s\S]*?transparent: background\.mode === 'clear' \|\| transparentOnWindows,[\s\S]*?roundedCorners: false,[\s\S]*?hasShadow: false,[\s\S]*?thickFrame: background\.mode === 'solid',[\s\S]*?backgroundMaterial: 'none'[\s\S]*?resizable: true,[\s\S]*?maximizable: true,[\s\S]*?fullscreenable: true,[\s\S]*?skipTaskbar: false,[\s\S]*?\}/)
+  assert.match(mainSource, /process\.platform === 'darwin' && background\.mode === 'blurred'[\s\S]*?vibrancy: resolveMacWindowBlurMaterial\(nativeTheme\.shouldUseDarkColors\),[\s\S]*?visualEffectState: 'active'/)
+  assert.match(mainSource, /function applyNativeThemeSnapshot\([\s\S]*?nativeTheme\.themeSource = resolveNativeThemeSource\(activeTheme\)[\s\S]*?refreshMacBlurVibrancy\(\)/)
+  assert.match(mainSource, /function refreshMacBlurVibrancy\(\): void \{[\s\S]*?process\.platform !== 'darwin'[\s\S]*?getEffectiveWindowBackground\(\)\.mode !== 'blurred'[\s\S]*?resolveMacWindowBlurMaterial\(nativeTheme\.shouldUseDarkColors\)[\s\S]*?getBackgroundCapableWindows\(\)[\s\S]*?window\.setVibrancy\(material\)/)
   assert.match(mainSource, /function createMainWindow\(restoreBounds\?: WindowBounds\): void \{[\s\S]*?\.\.\.getFramelessWindowOptions\(background\),/)
   assert.match(mainSource, /function createScopePopoutWindow\(kind: ScopeKind, rawBounds\?: WindowBounds\): BrowserWindow \| null \{[\s\S]*?\.\.\.getFramelessWindowOptions\(background\),/)
   assert.match(mainSource, /function createNowPlayingConfigWindow\(\): BrowserWindow \{[\s\S]*?\.\.\.getFramelessWindowOptions\(\),/)

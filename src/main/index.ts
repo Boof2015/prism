@@ -23,7 +23,10 @@ import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
 import type { DialogOptions, DialogResult } from '../types/dialog'
 import { normalizeProfile } from '../shared/profileState'
 import { resolveNativeThemeSource } from '../shared/themeState'
-import { resolveWindowCapabilities } from '../shared/windowCapabilities'
+import {
+  resolveMacWindowBlurMaterial,
+  resolveWindowCapabilities,
+} from '../shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
   clampRestoredWindowBounds,
@@ -495,6 +498,7 @@ function applyNativeThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
     ? snapshot.themes[snapshot.activeThemeId] ?? null
     : null
   nativeTheme.themeSource = resolveNativeThemeSource(activeTheme)
+  refreshMacBlurVibrancy()
 }
 
 async function syncNativeThemeAppearance(): Promise<void> {
@@ -841,8 +845,9 @@ function getWindowBackgroundSnapshot(): WindowBackgroundSnapshot {
 // intact. On Windows, blurred and clear windows must be created `transparent`
 // (blurred composites accent-policy acrylic behind the alpha pixels), which is
 // mutually exclusive with the thick frame — those windows fall back to the JS
-// move/resize controllers. On macOS, blurred uses vibrancy and keeps the
-// native frame semantics.
+// move/resize controllers. On macOS, blurred uses theme-aware native vibrancy
+// (HUD for dark themes, Content for light themes) and keeps the native frame
+// semantics.
 function getFramelessWindowOptions(
   background: WindowBackgroundState = SOLID_WINDOW_BACKGROUND,
 ): BrowserWindowConstructorOptions {
@@ -861,7 +866,7 @@ function getFramelessWindowOptions(
       : {}),
     ...(process.platform === 'darwin' && background.mode === 'blurred'
       ? {
-          vibrancy: 'under-window' as const,
+          vibrancy: resolveMacWindowBlurMaterial(nativeTheme.shouldUseDarkColors),
           visualEffectState: 'active' as const,
         }
       : {}),
@@ -884,6 +889,22 @@ function getBackgroundCapableWindows(): BrowserWindow[] {
     }
   }
   return windows
+}
+
+function refreshMacBlurVibrancy(): void {
+  if (process.platform !== 'darwin' || getEffectiveWindowBackground().mode !== 'blurred') {
+    return
+  }
+
+  const material = resolveMacWindowBlurMaterial(nativeTheme.shouldUseDarkColors)
+  for (const window of getBackgroundCapableWindows()) {
+    try {
+      window.setVibrancy(material)
+    } catch {
+      // A material refresh is cosmetic; keep the current backdrop if AppKit
+      // rejects a live update during a window transition.
+    }
+  }
 }
 
 function broadcastWindowBackgroundChanged(snapshot: WindowBackgroundSnapshot): void {
