@@ -10,6 +10,12 @@ export type ScopeKind =
 
 export type AudioScopeKind = Exclude<ScopeKind, 'nowPlaying'>
 
+export type TransformableScopeKind =
+  | 'spectrum'
+  | 'oscilloscope'
+  | 'spectrogram'
+  | 'waveform'
+
 export const SCOPE_KINDS: ScopeKind[] = [
   'spectrum',
   'oscilloscope',
@@ -30,6 +36,17 @@ export const AUDIO_SCOPE_KINDS: AudioScopeKind[] = [
   'lufsmeter',
   'waveform',
 ]
+
+export const TRANSFORMABLE_SCOPE_KINDS: TransformableScopeKind[] = [
+  'spectrum',
+  'oscilloscope',
+  'spectrogram',
+  'waveform',
+]
+
+export function isTransformableScopeKind(value: ScopeKind): value is TransformableScopeKind {
+  return TRANSFORMABLE_SCOPE_KINDS.includes(value as TransformableScopeKind)
+}
 
 export function isAudioScopeKind(value: unknown): value is AudioScopeKind {
   return typeof value === 'string' && AUDIO_SCOPE_KINDS.includes(value as AudioScopeKind)

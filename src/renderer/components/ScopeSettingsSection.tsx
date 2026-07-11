@@ -1,7 +1,8 @@
 import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
-import { SCOPE_LABELS } from '../../types/scope'
+import { SCOPE_LABELS, isTransformableScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import { SCOPE_DISPLAY_ROTATIONS, type ScopeDisplayRotation } from '../../types/scopeTransform'
 import {
   MAX_SPECTROGRAM_CONTRAST,
   MAX_SPECTROGRAM_TILT_DB_PER_OCTAVE,
@@ -62,6 +63,15 @@ function nowPlayingVisibleLabels(settings: ScopeSettings['nowPlaying']): string[
   return labels
 }
 
+function appendTransformSummary(
+  parts: string[],
+  settings: { rotation: ScopeDisplayRotation; mirrorHorizontal: boolean },
+): string {
+  if (settings.rotation !== 0) parts.push(`R${settings.rotation}°`)
+  if (settings.mirrorHorizontal) parts.push('Mirror')
+  return parts.join(' · ')
+}
+
 export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]): string {
   switch (kind) {
     case 'spectrum': {
@@ -76,12 +86,15 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       } else if (scopeSettings.peakInfoMode === 'following') {
         parts.push('Peak Follow')
       }
-      return parts.join(' · ')
+      return appendTransformSummary(parts, scopeSettings)
     }
     case 'oscilloscope': {
       const scopeSettings = settings as ScopeSettings['oscilloscope']
       const mode = scopeSettings.pitchLock ? 'Pitch Lock' : 'Free Run'
-      return scopeSettings.underfillEnabled ? `${mode} · Fill` : mode
+      return appendTransformSummary(
+        scopeSettings.underfillEnabled ? [mode, 'Fill'] : [mode],
+        scopeSettings,
+      )
     }
     case 'vectorscope': {
       const scopeSettings = settings as ScopeSettings['vectorscope']
@@ -91,7 +104,12 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     }
     case 'spectrogram': {
       const scopeSettings = settings as ScopeSettings['spectrogram']
-      return `${scopeSettings.orientation.toUpperCase()} · ${scopeSettings.scaleMode.toUpperCase()} · ${scopeSettings.clarityMode}`
+      return [
+        `${scopeSettings.rotation}°`,
+        scopeSettings.scaleMode.toUpperCase(),
+        scopeSettings.clarityMode,
+        ...(scopeSettings.mirrorHorizontal ? ['Mirror'] : []),
+      ].join(' · ')
     }
     case 'vumeter': {
       const scopeSettings = settings as ScopeSettings['vumeter']
@@ -112,7 +130,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       if (scopeSettings.multiband) {
         summary.push('RGB')
       }
-      return summary.join(' · ')
+      return appendTransformSummary(summary, scopeSettings)
     }
     case 'nowPlaying': {
       const visible = nowPlayingVisibleLabels(settings as ScopeSettings['nowPlaying'])
@@ -516,15 +534,6 @@ export default function ScopeSettingsSection({
               </SelectControl>
 
               <SelectControl
-                label="Orientation"
-                value={current.orientation}
-                onChange={(value) => onUpdate('spectrogram', { orientation: value as ScopeSettings['spectrogram']['orientation'] })}
-              >
-                <option value="horizontal">Horizontal</option>
-                <option value="vertical">Vertical</option>
-              </SelectControl>
-
-              <SelectControl
                 label="Clarity"
                 value={current.clarityMode}
                 onChange={(value) => onUpdate('spectrogram', { clarityMode: value as ScopeSettings['spectrogram']['clarityMode'] })}
@@ -719,6 +728,31 @@ export default function ScopeSettingsSection({
                 onClick={() => onUpdate('nowPlaying', { showControls: !current.showControls })}
               />
             </ToggleGroup>
+          )
+        })()}
+
+        {isTransformableScopeKind(kind) && (() => {
+          const current = settings as ScopeSettings[typeof kind]
+          return (
+            <>
+              <SelectControl
+                label="Rotate"
+                value={current.rotation}
+                onChange={(value) => onUpdate(kind, { rotation: Number(value) as ScopeDisplayRotation })}
+              >
+                {SCOPE_DISPLAY_ROTATIONS.map((rotation) => (
+                  <option key={rotation} value={rotation}>{rotation}°</option>
+                ))}
+              </SelectControl>
+
+              <ToggleGroup label="Transform">
+                <ToggleChip
+                  label="Mirror Horizontal"
+                  active={current.mirrorHorizontal}
+                  onClick={() => onUpdate(kind, { mirrorHorizontal: !current.mirrorHorizontal })}
+                />
+              </ToggleGroup>
+            </>
           )
         })()}
       </div>

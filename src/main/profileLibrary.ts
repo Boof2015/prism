@@ -351,7 +351,12 @@ export class FileBackedProfileLibrary {
       throw new Error(`Unsupported profile format in ${basename(filePath)}.`)
     }
 
-    if (candidate.version !== 1 && candidate.version !== 2 && candidate.version !== PROFILE_FILE_VERSION) {
+    if (
+      candidate.version !== 1
+      && candidate.version !== 2
+      && candidate.version !== 3
+      && candidate.version !== PROFILE_FILE_VERSION
+    ) {
       throw new Error(`Unsupported profile version in ${basename(filePath)}.`)
     }
 

@@ -52,6 +52,10 @@ import { resolveThemeCreditDetails, resolveThemeOptionLabel } from '../src/rende
 import { scopeSettingsToOptions } from '../src/renderer/components/ScopeModule'
 import { scopeSummary } from '../src/renderer/components/ScopeSettingsSection'
 import {
+  resolveScopeCanvasLayout,
+  transformNormalizedScopePoint,
+} from '../src/renderer/scopeCanvasTransform'
+import {
   applyInputGainToStereoSamples,
   inputGainDbToLinear,
 } from '../src/renderer/audio/inputGain'
@@ -200,6 +204,7 @@ function installFakeTimeouts(hidden = false): {
 
   globalWithWindow.window = {
     ...globalThis,
+    localStorage: (globalThis as GlobalWithStorage).localStorage,
     electronAPI: {
       platform: 'darwin',
       windowCapabilities: resolveWindowCapabilities({ platform: 'darwin' }),
@@ -345,9 +350,9 @@ function installFakeLocalStorage(): {
   const storage = new Map<string, string>()
   let setCount = 0
   const globalWithStorage = globalThis as GlobalWithStorage
-  const previousLocalStorage = globalWithStorage.localStorage
+  const previousLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalWithStorage, 'localStorage')
 
-  globalWithStorage.localStorage = {
+  const fakeLocalStorage = {
     getItem(key: string): string | null {
       return storage.get(key) ?? null
     },
@@ -368,6 +373,12 @@ function installFakeLocalStorage(): {
       return storage.size
     },
   } as Storage
+  Object.defineProperty(globalWithStorage, 'localStorage', {
+    configurable: true,
+    enumerable: true,
+    value: fakeLocalStorage,
+    writable: true,
+  })
 
   return {
     getSetCount: () => setCount,
@@ -378,12 +389,12 @@ function installFakeLocalStorage(): {
       storage.set(key, value)
     },
     restore(): void {
-      if (previousLocalStorage === undefined) {
+      if (!previousLocalStorageDescriptor) {
         delete globalWithStorage.localStorage
         return
       }
 
-      globalWithStorage.localStorage = previousLocalStorage
+      Object.defineProperty(globalWithStorage, 'localStorage', previousLocalStorageDescriptor)
     },
   }
 }
@@ -1218,10 +1229,16 @@ function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, valu
   try {
     const state = spectrogram as unknown as {
       ensureColumnBuffers: (height: number) => void
-      shiftAndPaintColumn: (values: Float32Array) => void
+      shiftAndPaintColumns: (
+        display: Float32Array,
+        heat: Float32Array,
+        columnCount: number,
+        rowCount: number,
+      ) => void
     }
     state.ensureColumnBuffers(values.length)
-    state.shiftAndPaintColumn(Float32Array.from(values))
+    const column = Float32Array.from(values)
+    state.shiftAndPaintColumns(column, column, 1, values.length)
     return recorder.imageDataWrites.at(-1)?.data ?? []
   } finally {
     spectrogram.dispose()
@@ -1254,10 +1271,16 @@ function renderSpectrogramShift(
   try {
     const state = spectrogram as unknown as {
       ensureColumnBuffers: (height: number) => void
-      shiftAndPaintColumn: (values: Float32Array) => void
+      shiftAndPaintColumns: (
+        display: Float32Array,
+        heat: Float32Array,
+        columnCount: number,
+        rowCount: number,
+      ) => void
     }
     state.ensureColumnBuffers(values.length)
-    state.shiftAndPaintColumn(Float32Array.from(values))
+    const column = Float32Array.from(values)
+    state.shiftAndPaintColumns(column, column, 1, values.length)
     return recorder
   } finally {
     spectrogram.dispose()
@@ -1558,6 +1581,45 @@ test('analyzer layout locks the loudness meter width', () => {
     columns,
     `minmax(0, 1fr) minmax(${LOCKED_LOUDNESS_METER_WIDTH_PX}px, ${LOCKED_LOUDNESS_METER_WIDTH_PX}px) minmax(0, 1fr)`,
   )
+})
+
+test('scope canvas layout swaps logical dimensions for quarter-turn rotations', () => {
+  const horizontal = resolveScopeCanvasLayout(640, 360, 2, 0)
+  assert.deepEqual(horizontal, {
+    viewportCssWidth: 640,
+    viewportCssHeight: 360,
+    cssWidth: 640,
+    cssHeight: 360,
+    pixelWidth: 1280,
+    pixelHeight: 720,
+    dpr: 2,
+  })
+
+  const vertical = resolveScopeCanvasLayout(640, 360, 2, 90)
+  assert.deepEqual(vertical, {
+    viewportCssWidth: 640,
+    viewportCssHeight: 360,
+    cssWidth: 360,
+    cssHeight: 640,
+    pixelWidth: 720,
+    pixelHeight: 1280,
+    dpr: 2,
+  })
+  assert.deepEqual(resolveScopeCanvasLayout(640, 360, 2, 270), vertical)
+})
+
+test('scope point transforms mirror the source axis before clockwise rotation', () => {
+  const point = { x: 0.2, y: 0.3 }
+
+  assert.deepEqual(transformNormalizedScopePoint(point, 0, false), { x: 0.2, y: 0.3 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 90, false), { x: 0.7, y: 0.2 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 180, false), { x: 0.8, y: 0.7 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 270, false), { x: 0.3, y: 0.8 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 0, true), { x: 0.8, y: 0.3 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 90, true), { x: 0.7, y: 0.8 })
+  const mirrored270 = transformNormalizedScopePoint(point, 270, true)
+  assert.equal(mirrored270.x, 0.3)
+  assertAlmostEqual(mirrored270.y, 0.2, 1e-12, 'mirrored 270-degree y coordinate')
 })
 
 test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer options', () => {
@@ -2631,7 +2693,7 @@ test('Vectorscope keeps the original linear projection behavior', () => {
 
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
-  profile.scopeSettings.spectrogram.orientation = 'vertical'
+  profile.scopeSettings.spectrogram.rotation = 90
   profile.scopeSettings.spectrogram.tiltDbPerOctave = 5.2
   profile.scopeSettings.lufsmeter.readout = 'shortTerm'
   profile.scopeSettings.vumeter.needleChannels = 'combined'
@@ -2647,7 +2709,7 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
 
   const spectrogram = scopeSettingsToOptions('spectrogram', profile.scopeSettings.spectrogram, theme.spectrogram)
   assert.equal(spectrogram.backgroundColor, 'rgb(6, 7, 8)')
-  assert.equal(spectrogram.orientation, 'vertical')
+  assert.equal(spectrogram.orientation, 'horizontal')
   assert.equal(spectrogram.tiltDbPerOctave, 5.2)
 
   const vumeter = scopeSettingsToOptions('vumeter', profile.scopeSettings.vumeter, theme.vumeter)
@@ -2788,13 +2850,18 @@ test('scopeSummary includes spectrum peak mode when enabled', () => {
   assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak Follow')
 })
 
-test('scopeSummary includes spectrogram orientation', () => {
+test('scopeSummary includes visual-scope rotation and mirroring', () => {
   const profile = createDefaultProfile('Default')
 
-  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), 'HORIZONTAL · LOG · sharper')
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '0° · LOG · sharper')
 
-  profile.scopeSettings.spectrogram.orientation = 'vertical'
-  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), 'VERTICAL · LOG · sharper')
+  profile.scopeSettings.spectrogram.rotation = 270
+  profile.scopeSettings.spectrogram.mirrorHorizontal = true
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '270° · LOG · sharper · Mirror')
+
+  profile.scopeSettings.spectrum.rotation = 90
+  profile.scopeSettings.spectrum.mirrorHorizontal = true
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · R90° · Mirror')
 })
 
 test('scopeSummary summarizes now playing field visibility', () => {
@@ -3521,6 +3588,58 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
     assert.deepEqual(state.savedProfileBaseline?.windowBounds, profile.windowBounds)
     assert.equal(state.hasUnsavedProfileChanges, true)
     assert.deepEqual(restoredBounds, [dirtyBounds])
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles migrates legacy spectrogram working state without discarding it', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+  profile.scopeSettings.spectrogram.rotation = 90
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => ({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: { [DEFAULT_PROFILE_ID]: profile },
+    }),
+    getWindowBounds: async () => null,
+  })
+
+  try {
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: { [DEFAULT_PROFILE_ID]: profile },
+    })
+    const rawStored = fakeStorage.getItem('prism:settings')
+    assert.ok(rawStored)
+    const stored = JSON.parse(rawStored) as Record<string, unknown>
+    const signature = JSON.parse(stored.profileBaselineSignature as string) as Record<string, unknown>
+    const signatureSettings = signature.scopeSettings as Record<string, Record<string, unknown>>
+    const workingSettings = stored.scopeSettings as Record<string, Record<string, unknown>>
+
+    delete signatureSettings.spectrogram.rotation
+    delete signatureSettings.spectrogram.mirrorHorizontal
+    signatureSettings.spectrogram.orientation = 'vertical'
+    delete workingSettings.spectrogram.rotation
+    delete workingSettings.spectrogram.mirrorHorizontal
+    workingSettings.spectrogram.orientation = 'horizontal'
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      ...stored,
+      profileBaselineSignature: JSON.stringify(signature),
+      scopeSettings: workingSettings,
+    }))
+    useSettingsStore.setState(previousSettingsState)
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.savedProfileBaseline?.scopeSettings.spectrogram.rotation, 90)
+    assert.equal(state.scopeSettings.spectrogram.rotation, 0)
+    assert.equal(state.scopeSettings.spectrogram.mirrorHorizontal, false)
+    assert.equal(state.hasUnsavedProfileChanges, true)
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()

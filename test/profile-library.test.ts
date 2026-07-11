@@ -51,7 +51,8 @@ function createProfile(name: string): Profile {
   profile.scopeSettings.spectrum.showSideLine = true
   profile.scopeSettings.spectrum.heatmapSmoothing = 0.67
   profile.scopeSettings.spectrogram.colorScheme = 'mono'
-  profile.scopeSettings.spectrogram.orientation = 'vertical'
+  profile.scopeSettings.spectrogram.rotation = 90
+  profile.scopeSettings.spectrogram.mirrorHorizontal = true
   return profile
 }
 
@@ -67,7 +68,9 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(JSON.stringify(file).includes('inputGainDb'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
   assert.equal(file.scopeSettings.spectrum.heatmapSmoothing, 0.67)
-  assert.equal(file.scopeSettings.spectrogram.orientation, 'vertical')
+  assert.equal(file.scopeSettings.spectrogram.rotation, 90)
+  assert.equal(file.scopeSettings.spectrogram.mirrorHorizontal, true)
+  assert.equal('orientation' in file.scopeSettings.spectrogram, false)
   assert.equal(file.scopeOrder.includes('nowPlaying'), false)
   assert.equal(file.hiddenScopes.includes('nowPlaying'), true)
   assert.equal(file.widthWeights.nowPlaying, 1)
@@ -78,7 +81,8 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrum.showSideLine, true)
   assert.equal(restored.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
-  assert.equal(restored.scopeSettings.spectrogram.orientation, 'vertical')
+  assert.equal(restored.scopeSettings.spectrogram.rotation, 90)
+  assert.equal(restored.scopeSettings.spectrogram.mirrorHorizontal, true)
   assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
 })
 
@@ -114,22 +118,48 @@ test('profile file waveform speed migration preserves legacy scroll feel', () =>
   assert.equal(legacyMissingSpeed.scopeSettings.waveform.scrollSpeed, 1)
 })
 
-test('mergeScopeSettings defaults missing or invalid spectrogram orientation to horizontal', () => {
+test('mergeScopeSettings migrates legacy spectrogram orientation and validates display transforms', () => {
   const vertical = mergeScopeSettings({
     spectrogram: {
       orientation: 'vertical',
     },
   })
-  const invalid = mergeScopeSettings({
+  const horizontal = mergeScopeSettings({
     spectrogram: {
-      orientation: 'diagonal',
+      orientation: 'horizontal',
     },
+  })
+  const explicit = mergeScopeSettings({
+    spectrogram: {
+      orientation: 'vertical',
+      rotation: 270,
+      mirrorHorizontal: true,
+    },
+    spectrum: {
+      rotation: 180,
+      mirrorHorizontal: true,
+    },
+  })
+  const invalid = mergeScopeSettings({
+    spectrogram: { rotation: 45, mirrorHorizontal: 'yes' },
+    oscilloscope: { rotation: -90, mirrorHorizontal: 1 },
+    waveform: { rotation: '90', mirrorHorizontal: null },
   })
   const missing = mergeScopeSettings({})
 
-  assert.equal(vertical.spectrogram.orientation, 'vertical')
-  assert.equal(invalid.spectrogram.orientation, 'horizontal')
-  assert.equal(missing.spectrogram.orientation, 'horizontal')
+  assert.equal(vertical.spectrogram.rotation, 90)
+  assert.equal(horizontal.spectrogram.rotation, 0)
+  assert.equal(explicit.spectrogram.rotation, 270)
+  assert.equal(explicit.spectrogram.mirrorHorizontal, true)
+  assert.equal(explicit.spectrum.rotation, 180)
+  assert.equal(explicit.spectrum.mirrorHorizontal, true)
+  assert.equal(invalid.spectrogram.rotation, 0)
+  assert.equal(invalid.spectrogram.mirrorHorizontal, false)
+  assert.equal(invalid.oscilloscope.rotation, 0)
+  assert.equal(invalid.waveform.rotation, 0)
+  assert.equal(missing.spectrogram.rotation, 0)
+  assert.equal(missing.spectrogram.mirrorHorizontal, false)
+  assert.equal('orientation' in vertical.spectrogram, false)
 })
 
 test('mergeScopeSettings defaults missing or invalid VU needle channel settings to stereo', () => {
@@ -356,6 +386,36 @@ test('legacy profile files with themeId import successfully and ignore embedded 
     assert.equal(importedProfile.hiddenScopes.includes('nowPlaying'), true)
     assert.equal(importedProfile.widthWeights.nowPlaying, 1)
     assert.equal(importedProfile.scopePopouts.nowPlaying.poppedOut, false)
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('version 3 profiles remain importable and migrate vertical spectrograms to 90 degrees', async () => {
+  const harness = await createHarness()
+
+  try {
+    const base = profileToFileData('profile_v3', createDefaultProfile('Version 3'))
+    const { rotation: _rotation, mirrorHorizontal: _mirrorHorizontal, ...legacySpectrogram } = base.scopeSettings.spectrogram
+    const legacyPath = join(harness.rootDir, 'version-3.prsm')
+    await writeFile(legacyPath, `${JSON.stringify({
+      ...base,
+      version: 3,
+      scopeSettings: {
+        ...base.scopeSettings,
+        spectrogram: {
+          ...legacySpectrogram,
+          orientation: 'vertical',
+        },
+      },
+    }, null, 2)}\n`, 'utf8')
+
+    const snapshot = await harness.library.importProfileFromPath(legacyPath)
+    const imported = snapshot.profiles.profile_v3
+    assert.ok(imported)
+    assert.equal(imported.scopeSettings.spectrogram.rotation, 90)
+    assert.equal(imported.scopeSettings.spectrogram.mirrorHorizontal, false)
+    assert.equal('orientation' in imported.scopeSettings.spectrogram, false)
   } finally {
     await harness.cleanup()
   }

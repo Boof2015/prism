@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
-import type { ScopeKind } from '../../types/scope'
+import { isTransformableScopeKind, type ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import type { ScopeDisplayRotation } from '../../types/scopeTransform'
 import type {
   PrismResolvedTheme,
   ResolvedAstraTheme,
@@ -25,6 +26,13 @@ import { VUMeter, type VUMeterDataSource } from '../visualizers/VUMeter'
 import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
 import type { FrameScheduler } from '../visualizers/frameScheduler'
+import {
+  getScopeCanvasTransformStyle,
+  isSameScopeCanvasLayout,
+  measureScopeCanvasLayout,
+  transformNormalizedScopePoint,
+  type ScopeCanvasLayout,
+} from '../scopeCanvasTransform'
 
 type ScopeModuleTheme =
   | ResolvedSpectrumTheme
@@ -57,14 +65,6 @@ interface Visualizer {
   dispose(): void
   resize(): void
   setOptions(options: Record<string, unknown>): void
-}
-
-interface CanvasResizeState {
-  cssWidth: number
-  cssHeight: number
-  pixelWidth: number
-  pixelHeight: number
-  dpr: number
 }
 
 const SPECTRUM_PEAK_OVERLAY_MARGIN_PX = 10
@@ -106,8 +106,10 @@ function formatSpectrumPeakFrequency(value: number): string {
 
 function resolveFollowingPeakOverlayStyle(
   peakInfo: SpectrumPeakInfo,
-  resizeState: CanvasResizeState | null,
+  resizeState: ScopeCanvasLayout | null,
   overlaySize: SizeMeasurement | null,
+  rotation: ScopeDisplayRotation,
+  mirrorHorizontal: boolean,
 ): CSSProperties {
   if (!resizeState) {
     return {
@@ -116,12 +118,17 @@ function resolveFollowingPeakOverlayStyle(
     }
   }
 
-  const width = resizeState.cssWidth
-  const height = resizeState.cssHeight
+  const width = resizeState.viewportCssWidth
+  const height = resizeState.viewportCssHeight
   const overlayWidth = overlaySize?.width ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_WIDTH_PX
   const overlayHeight = overlaySize?.height ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_HEIGHT_PX
-  const peakX = peakInfo.normalizedX * width
-  const peakY = peakInfo.normalizedY * height
+  const transformedPeak = transformNormalizedScopePoint(
+    { x: peakInfo.normalizedX, y: peakInfo.normalizedY },
+    rotation,
+    mirrorHorizontal,
+  )
+  const peakX = transformedPeak.x * width
+  const peakY = transformedPeak.y * height
   const maxLeft = Math.max(
     SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
     width - overlayWidth - SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
@@ -143,36 +150,6 @@ function resolveFollowingPeakOverlayStyle(
     left: `${clampNumber(left, SPECTRUM_PEAK_OVERLAY_MARGIN_PX, maxLeft)}px`,
     top: `${clampNumber(top, SPECTRUM_PEAK_OVERLAY_MARGIN_PX, maxTop)}px`,
   }
-}
-
-function measureCanvasResizeState(container: HTMLDivElement): CanvasResizeState {
-  const rect = container.getBoundingClientRect()
-  const cssWidth = Math.max(1, Math.floor(rect.width))
-  const cssHeight = Math.max(1, Math.floor(rect.height))
-  const dpr = window.devicePixelRatio || 1
-
-  return {
-    cssWidth,
-    cssHeight,
-    pixelWidth: Math.max(1, Math.floor(cssWidth * dpr)),
-    pixelHeight: Math.max(1, Math.floor(cssHeight * dpr)),
-    dpr,
-  }
-}
-
-function isSameCanvasResizeState(
-  left: CanvasResizeState | null,
-  right: CanvasResizeState | null,
-): boolean {
-  if (!left || !right) {
-    return false
-  }
-
-  return left.cssWidth === right.cssWidth
-    && left.cssHeight === right.cssHeight
-    && left.pixelWidth === right.pixelWidth
-    && left.pixelHeight === right.pixelHeight
-    && left.dpr === right.dpr
 }
 
 export function scopeSettingsToOptions(
@@ -253,7 +230,7 @@ export function scopeSettingsToOptions(
         contrast: s.contrast,
         clarityMode: s.clarityMode,
         scaleMode: s.scaleMode,
-        orientation: s.orientation,
+        orientation: 'horizontal',
         colorScheme: s.colorScheme,
       }
     }
@@ -411,8 +388,8 @@ export default function ScopeModule({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visualizerRef = useRef<Visualizer | null>(null)
   const initializedRef = useRef(false)
-  const pendingResizeRef = useRef<CanvasResizeState | null>(null)
-  const appliedResizeRef = useRef<CanvasResizeState | null>(null)
+  const pendingResizeRef = useRef<ScopeCanvasLayout | null>(null)
+  const appliedResizeRef = useRef<ScopeCanvasLayout | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const peakOverlayRef = useRef<HTMLDivElement | null>(null)
@@ -424,6 +401,12 @@ export default function ScopeModule({
   const windowBgAlpha = useWindowBackgroundAlpha()
   const mySettings = settings ?? storeSettings
   const myTheme = theme ?? getScopeTheme(activeTheme, scopeKind)
+  const rotation: ScopeDisplayRotation = isTransformableScopeKind(scopeKind)
+    ? (mySettings as ScopeSettings[typeof scopeKind]).rotation
+    : 0
+  const mirrorHorizontal = isTransformableScopeKind(scopeKind)
+    ? (mySettings as ScopeSettings[typeof scopeKind]).mirrorHorizontal
+    : false
   const spectrumPeakMode = scopeKind === 'spectrum'
     ? (mySettings as ScopeSettings['spectrum']).peakInfoMode
     : 'off'
@@ -516,7 +499,9 @@ export default function ScopeModule({
       initializedRef.current = false
       setSpectrumPeakInfo(null)
     }
-  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, myTheme, mySettings, scopeKind, windowBgAlpha])
+    // Settings and theme changes are applied live by the setOptions effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataSource, frameScheduler, handleSpectrumPeakInfo, scopeKind])
 
   useEffect(() => {
     if (!visualizerRef.current || !initializedRef.current) return
@@ -537,7 +522,7 @@ export default function ScopeModule({
     visualizerRef.current.setOptions(opts)
   }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind, windowBgAlpha])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = containerRef.current
     const canvas = canvasRef.current
     if (!container || !canvas) return
@@ -552,7 +537,7 @@ export default function ScopeModule({
     const applyResize = (): void => {
       resizeFrameRef.current = null
       const nextResize = pendingResizeRef.current
-      if (!nextResize || isSameCanvasResizeState(appliedResizeRef.current, nextResize)) {
+      if (!nextResize || isSameScopeCanvasLayout(appliedResizeRef.current, nextResize)) {
         return
       }
 
@@ -593,7 +578,7 @@ export default function ScopeModule({
     }
 
     const scheduleResize = (): void => {
-      pendingResizeRef.current = measureCanvasResizeState(container)
+      pendingResizeRef.current = measureScopeCanvasLayout(container, rotation)
       if (resizeFrameRef.current !== null) {
         return
       }
@@ -603,7 +588,7 @@ export default function ScopeModule({
       })
     }
 
-    pendingResizeRef.current = measureCanvasResizeState(container)
+    pendingResizeRef.current = measureScopeCanvasLayout(container, rotation)
     applyResize()
 
     const observer = new ResizeObserver(() => {
@@ -621,12 +606,18 @@ export default function ScopeModule({
       appliedResizeRef.current = null
       snapshotCanvasRef.current = null
     }
-  }, [])
+  }, [rotation])
 
   const spectrumPeakOverlayStyle = scopeKind === 'spectrum'
     && spectrumPeakMode === 'following'
     && spectrumPeakInfo
-    ? resolveFollowingPeakOverlayStyle(spectrumPeakInfo, appliedResizeRef.current, peakOverlaySize)
+    ? resolveFollowingPeakOverlayStyle(
+        spectrumPeakInfo,
+        appliedResizeRef.current,
+        peakOverlaySize,
+        rotation,
+        mirrorHorizontal,
+      )
     : undefined
 
   return (
@@ -643,11 +634,7 @@ export default function ScopeModule({
       <canvas
         ref={canvasRef}
         style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
+          ...getScopeCanvasTransformStyle(rotation, mirrorHorizontal),
         }}
       />
       {scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (

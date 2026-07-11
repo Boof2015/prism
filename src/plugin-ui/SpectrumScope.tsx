@@ -6,10 +6,11 @@ import type { SpectrumPeakInfo } from '../types/spectrum'
 import type { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import type { PluginWebViewDataSource } from './PluginWebViewDataSource'
 import { spectrumSettingsToOptions } from './spectrumOptions'
+import { getScopeCanvasTransformStyle } from '../renderer/scopeCanvasTransform'
+import { applyPluginScopeCanvasLayout } from './scopeCanvasLayout'
 import {
   formatSpectrumPeakDb,
   formatSpectrumPeakFrequency,
-  measureCanvasResizeState,
   resolveFollowingPeakOverlayStyle,
   type CanvasResizeState,
   type SizeMeasurement,
@@ -32,11 +33,14 @@ export default function SpectrumScope({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const analyzerRef = useRef<SpectrumAnalyzer | null>(null)
   const resizeStateRef = useRef<CanvasResizeState | null>(null)
+  const rotationRef = useRef(settings.rotation)
+  const applySizeRef = useRef<(() => void) | null>(null)
   const peakOverlayRef = useRef<HTMLDivElement | null>(null)
   const [peak, setPeak] = useState<SpectrumPeakInfo | null>(null)
   const [overlaySize, setOverlaySize] = useState<SizeMeasurement | null>(null)
 
   const peakMode = settings.peakInfoMode
+  rotationRef.current = settings.rotation
 
   // Create the analyzer once per data source / shim.
   useEffect(() => {
@@ -54,14 +58,13 @@ export default function SpectrumScope({
     analyzerRef.current = analyzer
 
     const applySize = (): void => {
-      const state = measureCanvasResizeState(container)
-      resizeStateRef.current = state
-      if (canvas.width !== state.pixelWidth || canvas.height !== state.pixelHeight) {
-        canvas.width = state.pixelWidth
-        canvas.height = state.pixelHeight
+      const { changed, layout } = applyPluginScopeCanvasLayout(container, canvas, rotationRef.current)
+      resizeStateRef.current = layout
+      if (changed) {
         analyzer.resize()
       }
     }
+    applySizeRef.current = applySize
 
     applySize()
     analyzer.start()
@@ -70,6 +73,7 @@ export default function SpectrumScope({
 
     return () => {
       observer.disconnect()
+      applySizeRef.current = null
       analyzer.dispose()
       analyzerRef.current = null
     }
@@ -86,6 +90,10 @@ export default function SpectrumScope({
       onPeakInfo: setPeak,
     })
   }, [settings, theme])
+
+  useLayoutEffect(() => {
+    applySizeRef.current?.()
+  }, [settings.rotation])
 
   // Measure the overlay so "following" placement can avoid the screen edges.
   useLayoutEffect(() => {
@@ -107,12 +115,22 @@ export default function SpectrumScope({
   const showPeak = peakMode !== 'off' && peak !== null
   const overlayStyle: CSSProperties | undefined =
     peakMode === 'following' && peak
-      ? resolveFollowingPeakOverlayStyle(peak, resizeStateRef.current, overlaySize)
+      ? resolveFollowingPeakOverlayStyle(
+          peak,
+          resizeStateRef.current,
+          overlaySize,
+          settings.rotation,
+          settings.mirrorHorizontal,
+        )
       : undefined
 
   return (
     <div ref={containerRef} className="spectrum-scope">
-      <canvas ref={canvasRef} className="spectrum-scope__canvas" />
+      <canvas
+        ref={canvasRef}
+        className="spectrum-scope__canvas"
+        style={getScopeCanvasTransformStyle(settings.rotation, settings.mirrorHorizontal)}
+      />
       {showPeak && peak && (
         <div
           ref={peakMode === 'following' ? peakOverlayRef : null}

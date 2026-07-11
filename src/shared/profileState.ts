@@ -9,19 +9,21 @@ import {
   type ProfileLocalMetadata,
   type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV3,
+  type PrismProfileFileV4,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 import { isLUFSMeterReadout } from '../types/lufsmeter'
 import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
-import {
-  clampSpectrogramTiltDbPerOctave,
-  isSpectrogramOrientation,
-} from '../types/spectrogram'
+import { clampSpectrogramTiltDbPerOctave } from '../types/spectrogram'
 import { isVUMeterNeedleChannels, sanitizeVUReferenceDbfs } from '../types/vumeter'
 import { clampWaveformScrollSpeed } from '../types/waveform'
+import {
+  normalizeScopeDisplayRotation,
+  normalizeScopeMirrorHorizontal,
+  type ScopeDisplayRotation,
+} from '../types/scopeTransform'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -56,6 +58,18 @@ function normalizeWaveformScrollSpeed(value: unknown, legacyProfileFileScale: bo
   }
 
   return clampWaveformScrollSpeed(value ?? DEFAULT_SCOPE_SETTINGS.waveform.scrollSpeed)
+}
+
+function normalizeDisplayTransform(
+  raw: { rotation?: unknown; mirrorHorizontal?: unknown },
+  legacyRotation?: ScopeDisplayRotation,
+): { rotation: ScopeDisplayRotation; mirrorHorizontal: boolean } {
+  return {
+    rotation: raw.rotation === undefined
+      ? (legacyRotation ?? 0)
+      : normalizeScopeDisplayRotation(raw.rotation),
+    mirrorHorizontal: normalizeScopeMirrorHorizontal(raw.mirrorHorizontal),
+  }
 }
 
 export function createDefaultScopePopouts(): ScopePopoutStateMap {
@@ -160,6 +174,12 @@ export function mergeScopeSettings(
   const rawSpectrogram: Partial<ScopeSettings['spectrogram']> = typeof parsed.spectrogram === 'object' && parsed.spectrogram !== null
     ? parsed.spectrogram
     : {}
+  const rawSpectrogramWithLegacy = rawSpectrogram as Partial<ScopeSettings['spectrogram']> & { orientation?: unknown }
+  const { orientation: legacySpectrogramOrientation, ...rawSpectrogramSettings } = rawSpectrogramWithLegacy
+  const legacySpectrogramRotation: ScopeDisplayRotation = legacySpectrogramOrientation === 'vertical' ? 90 : 0
+  const rawOscilloscope: Partial<ScopeSettings['oscilloscope']> = typeof parsed.oscilloscope === 'object' && parsed.oscilloscope !== null
+    ? parsed.oscilloscope
+    : {}
   const rawWaveform: Partial<ScopeSettings['waveform']> = typeof parsed.waveform === 'object' && parsed.waveform !== null
     ? parsed.waveform
     : {}
@@ -177,16 +197,19 @@ export function mergeScopeSettings(
     spectrum: {
       ...DEFAULT_SCOPE_SETTINGS.spectrum,
       ...rawSpectrum,
+      ...normalizeDisplayTransform(rawSpectrum),
       peakInfoMode: normalizeSpectrumPeakInfoMode(rawSpectrum.peakInfoMode),
     },
-    oscilloscope: { ...DEFAULT_SCOPE_SETTINGS.oscilloscope, ...(parsed.oscilloscope ?? {}) },
+    oscilloscope: {
+      ...DEFAULT_SCOPE_SETTINGS.oscilloscope,
+      ...rawOscilloscope,
+      ...normalizeDisplayTransform(rawOscilloscope),
+    },
     vectorscope: { ...DEFAULT_SCOPE_SETTINGS.vectorscope, ...(parsed.vectorscope ?? {}) },
     spectrogram: {
       ...DEFAULT_SCOPE_SETTINGS.spectrogram,
-      ...rawSpectrogram,
-      orientation: isSpectrogramOrientation(rawSpectrogram.orientation)
-        ? rawSpectrogram.orientation
-        : DEFAULT_SCOPE_SETTINGS.spectrogram.orientation,
+      ...rawSpectrogramSettings,
+      ...normalizeDisplayTransform(rawSpectrogram, legacySpectrogramRotation),
       tiltDbPerOctave: clampSpectrogramTiltDbPerOctave(
         rawSpectrogram.tiltDbPerOctave ?? DEFAULT_SCOPE_SETTINGS.spectrogram.tiltDbPerOctave
       ),
@@ -208,6 +231,7 @@ export function mergeScopeSettings(
     },
     waveform: {
       ...DEFAULT_SCOPE_SETTINGS.waveform,
+      ...normalizeDisplayTransform(rawWaveform),
       mode: rawWaveform.mode === 'stereo' || rawWaveform.mode === 'mono'
         ? rawWaveform.mode
         : DEFAULT_SCOPE_SETTINGS.waveform.mode,
@@ -288,7 +312,7 @@ export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-) : PrismProfileFileV3 {
+) : PrismProfileFileV4 {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<PrismProfileFile>
     : {}
@@ -314,7 +338,7 @@ export function normalizeProfileFile(
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV3 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV4 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {

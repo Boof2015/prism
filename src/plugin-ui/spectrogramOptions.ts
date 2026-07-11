@@ -20,7 +20,7 @@ export function spectrogramSettingsToOptions(
     contrast: settings.contrast,
     clarityMode: settings.clarityMode,
     scaleMode: settings.scaleMode,
-    orientation: settings.orientation,
+    orientation: 'horizontal',
     colorScheme: settings.colorScheme,
   }
 }

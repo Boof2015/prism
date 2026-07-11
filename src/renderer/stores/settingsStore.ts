@@ -137,6 +137,30 @@ function buildProfileBaselineSignature(profile: Profile | null): string | undefi
   })
 }
 
+function normalizePersistedProfileBaselineSignature(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const candidate = parsed as Record<string, unknown>
+    const normalizedPopouts = normalizeScopePopouts(candidate.scopePopouts)
+    const scopePopouts = SCOPE_KINDS.reduce((acc, kind) => {
+      acc[kind] = { poppedOut: normalizedPopouts[kind]?.poppedOut === true }
+      return acc
+    }, {} as Record<ScopeKind, { poppedOut: boolean }>)
+
+    return JSON.stringify({
+      name: typeof candidate.name === 'string' ? candidate.name : DEFAULT_PROFILE_NAME,
+      scopeOrder: normalizeScopeOrder(candidate.scopeOrder),
+      hiddenScopes: normalizeHiddenScopes(candidate.hiddenScopes),
+      widthWeights: normalizeWidthWeights(candidate.widthWeights),
+      scopeSettings: mergeScopeSettings(candidate.scopeSettings),
+      scopePopouts,
+    })
+  } catch {
+    return null
+  }
+}
+
 function restoreBaselineScopePopoutBounds(
   scopePopouts: ScopePopoutStateMap,
   baseline: Profile | null,
@@ -274,7 +298,9 @@ function canRestorePersistedWorkingState(
     return false
   }
 
-  return state.profileBaselineSignature === buildProfileBaselineSignature(activeProfile)
+  const activeSignature = buildProfileBaselineSignature(activeProfile)
+  return state.profileBaselineSignature === activeSignature
+    || normalizePersistedProfileBaselineSignature(state.profileBaselineSignature) === activeSignature
 }
 
 function loadLegacyProfileMigrationPayload(): LegacyProfileMigrationPayload | null {
