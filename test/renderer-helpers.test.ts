@@ -104,6 +104,9 @@ import {
 import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
+import { BridgeSpectrumAnalyzer } from '../src/plugin-ui/BridgeSpectrumAnalyzer'
+import { decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
+import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
 import { Waveform } from '../src/renderer/visualizers/Waveform'
@@ -795,6 +798,7 @@ interface FakeSpectrumNativeAnalyzer extends SpectrumNativeAnalyzer {
     fillMagnitudes: number
     fillRawMagnitudes: number
     fillSideMagnitudes: number
+    fillChannelMaxMagnitudes: number
     resets: number
   }
 }
@@ -861,11 +865,19 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
   let rawMagnitudes = new Float32Array(fftSize / 2)
   let magnitudes = new Float32Array(fftSize / 2)
   let sideMagnitudes = new Float32Array(fftSize / 2)
+  let leftMagnitudes = new Float32Array(fftSize / 2)
+  let rightMagnitudes = new Float32Array(fftSize / 2)
+  let channelMaxMagnitudes = new Float32Array(fftSize / 2)
+  let leftHistory = new Float32Array(fftSize)
+  let rightHistory = new Float32Array(fftSize)
   let re = new Float32Array(fftSize)
   let im = new Float32Array(fftSize)
   rawMagnitudes.fill(-100)
   magnitudes.fill(-100)
   sideMagnitudes.fill(-100)
+  leftMagnitudes.fill(-100)
+  rightMagnitudes.fill(-100)
+  channelMaxMagnitudes.fill(-100)
 
   const calls: FakeSpectrumNativeAnalyzer['calls'] = {
     monoPushes: [],
@@ -873,6 +885,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     fillMagnitudes: 0,
     fillRawMagnitudes: 0,
     fillSideMagnitudes: 0,
+    fillChannelMaxMagnitudes: 0,
     resets: 0,
   }
 
@@ -884,11 +897,19 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     rawMagnitudes = new Float32Array(fftSize / 2)
     magnitudes = new Float32Array(fftSize / 2)
     sideMagnitudes = new Float32Array(fftSize / 2)
+    leftMagnitudes = new Float32Array(fftSize / 2)
+    rightMagnitudes = new Float32Array(fftSize / 2)
+    channelMaxMagnitudes = new Float32Array(fftSize / 2)
+    leftHistory = new Float32Array(fftSize)
+    rightHistory = new Float32Array(fftSize)
     re = new Float32Array(fftSize)
     im = new Float32Array(fftSize)
     rawMagnitudes.fill(-100)
     magnitudes.fill(-100)
     sideMagnitudes.fill(-100)
+    leftMagnitudes.fill(-100)
+    rightMagnitudes.fill(-100)
+    channelMaxMagnitudes.fill(-100)
   }
 
   const updateMagnitudes = (source: Float32Array, output: Float32Array, rawOutput: Float32Array | null): void => {
@@ -902,8 +923,8 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     const scale = 2 / fftSize
     for (let index = 0; index < output.length; index += 1) {
       const magnitude = Math.hypot(re[index], im[index]) * scale
-      let db = 20 * Math.log10(Math.max(magnitude, 1e-10))
-      db += 6
+      const coherentGain = fftSize <= 1 ? 1 : (fftSize - 1) / (2 * fftSize)
+      let db = 20 * Math.log10(Math.max(magnitude, 1e-10)) - 20 * Math.log10(coherentGain)
       db = Math.min(12, Math.max(-120, db))
       if (rawOutput) {
         rawOutput[index] = db
@@ -960,6 +981,20 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     return count
   }
 
+  const updateAllMagnitudes = (): void => {
+    updateMagnitudes(history, magnitudes, rawMagnitudes)
+    updateMagnitudes(sideHistory, sideMagnitudes, null)
+    for (let index = 0; index < fftSize; index += 1) {
+      leftHistory[index] = history[index] + sideHistory[index]
+      rightHistory[index] = history[index] - sideHistory[index]
+    }
+    updateMagnitudes(leftHistory, leftMagnitudes, null)
+    updateMagnitudes(rightHistory, rightMagnitudes, null)
+    for (let index = 0; index < channelMaxMagnitudes.length; index += 1) {
+      channelMaxMagnitudes[index] = Math.max(leftMagnitudes[index], rightMagnitudes[index])
+    }
+  }
+
   const analyzer: FakeSpectrumNativeAnalyzer = {
     calls,
     isAvailable: () => true,
@@ -978,8 +1013,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     pushSamples: (audioData) => {
       calls.monoPushes.push(new Float32Array(audioData))
       pushMonoHistory(audioData)
-      updateMagnitudes(history, magnitudes, rawMagnitudes)
-      updateMagnitudes(sideHistory, sideMagnitudes, null)
+      updateAllMagnitudes()
     },
     pushStereoSamples: (leftChannel, rightChannel) => {
       calls.stereoPushes.push({
@@ -987,8 +1021,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
         right: new Float32Array(rightChannel),
       })
       pushStereoHistory(leftChannel, rightChannel)
-      updateMagnitudes(history, magnitudes, rawMagnitudes)
-      updateMagnitudes(sideHistory, sideMagnitudes, null)
+      updateAllMagnitudes()
     },
     fillRawMagnitudes: (output) => {
       calls.fillRawMagnitudes += 1
@@ -1002,9 +1035,14 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
       calls.fillSideMagnitudes += 1
       return copyInto(sideMagnitudes, output)
     },
+    fillChannelMaxMagnitudes: (output) => {
+      calls.fillChannelMaxMagnitudes += 1
+      return copyInto(channelMaxMagnitudes, output)
+    },
     getRawMagnitudes: () => rawMagnitudes,
     getMagnitudes: () => magnitudes,
     getSideMagnitudes: () => sideMagnitudes,
+    getChannelMaxMagnitudes: () => channelMaxMagnitudes,
     process: (audioData) => {
       analyzer.pushSamples(audioData)
       return magnitudes
@@ -1017,6 +1055,9 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
       rawMagnitudes.fill(-100)
       magnitudes.fill(-100)
       sideMagnitudes.fill(-100)
+      leftMagnitudes.fill(-100)
+      rightMagnitudes.fill(-100)
+      channelMaxMagnitudes.fill(-100)
       bufferedSamples = 0
     },
   }
@@ -2204,7 +2245,7 @@ test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () =>
     assert.ok(peakInfo, 'expected peak info to be reported')
     assert.ok(peakInfo.frequencyHz > 437 && peakInfo.frequencyHz < 443, `expected peak frequency near 440 Hz, got ${peakInfo.frequencyHz}`)
     assert.match(peakInfo.key, /^A4 [+-]?\d+c$/)
-    assert.ok(peakInfo.db > -20, `expected an audible peak dB, got ${peakInfo.db}`)
+    assert.ok(peakInfo.dbfs > -20, `expected an audible peak dBFS, got ${peakInfo.dbfs}`)
     assert.ok(peakInfo.normalizedX >= 0 && peakInfo.normalizedX <= 1, 'peak x should be normalized')
     assert.ok(peakInfo.normalizedY >= 0 && peakInfo.normalizedY <= 1, 'peak y should be normalized')
 
@@ -2233,6 +2274,233 @@ test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () =>
     analyzer.dispose()
     dom.restore()
   }
+})
+
+test('SpectrumAnalyzer reports louder-channel dBFS without applying visual tilt', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const fftSize = 4096
+  const frequencyHz = 21 * sampleRate / fftSize
+  const frame = createCompositeStereoChunk([
+    { frequencyHz, amplitude: 0.2 },
+  ], sampleRate, fftSize)
+
+  const renderWithTilt = (tiltDbPerOctave: number): {
+    peak: SpectrumPeakInfo
+    visibleDb: number
+  } => {
+    let peakInfo: SpectrumPeakInfo | null = null
+    const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+      showSideLine: true,
+      showGrid: false,
+      fillGradient: false,
+      smoothing: 0,
+      tiltDbPerOctave,
+      fftSize,
+      dataSource: {
+        getPendingSpectrumSamples: () => [],
+        getPendingSpectrumStereoSamples: () => [frame],
+        getSampleRate: () => sampleRate,
+        isPlaying: () => true,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
+      capturePeakInfo: true,
+      onPeakInfo: (nextPeakInfo) => {
+        peakInfo = nextPeakInfo
+      },
+    })
+
+    try {
+      const state = analyzer as unknown as {
+        drawFrame: () => void
+        primaryPointDb: Float32Array
+        primaryPointFrequency: Float32Array
+      }
+      state.drawFrame()
+      assert.ok(peakInfo)
+      let closestIndex = 0
+      for (let index = 1; index < state.primaryPointFrequency.length; index += 1) {
+        if (
+          Math.abs(state.primaryPointFrequency[index] - peakInfo.frequencyHz)
+          < Math.abs(state.primaryPointFrequency[closestIndex] - peakInfo.frequencyHz)
+        ) {
+          closestIndex = index
+        }
+      }
+      return { peak: peakInfo, visibleDb: state.primaryPointDb[closestIndex] }
+    } finally {
+      analyzer.dispose()
+    }
+  }
+
+  try {
+    const flat = renderWithTilt(0)
+    const tilted = renderWithTilt(6)
+    assertAlmostEqual(flat.peak.dbfs, 20 * Math.log10(0.2), 0.3, 'flat dBFS')
+    assertAlmostEqual(tilted.peak.dbfs, flat.peak.dbfs, 1e-5, 'tilt-independent dBFS')
+    assertAlmostEqual(tilted.peak.frequencyHz, flat.peak.frequencyHz, 0.1, 'visible peak frequency')
+    assertAlmostEqual(
+      tilted.visibleDb - flat.visibleDb,
+      6 * Math.log2(frequencyHz / 1000),
+      0.6,
+      'visual curve tilt',
+    )
+  } finally {
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer keeps a left-only Mid curve while reporting the left channel near 0 dBFS', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const fftSize = 4096
+  const frequencyHz = 85 * sampleRate / fftSize
+  const left = createCompositeStereoChunk([{ frequencyHz, amplitude: 1 }], sampleRate, fftSize).left
+  const right = new Float32Array(fftSize)
+  let peakInfo: SpectrumPeakInfo | null = null
+  let stereoDrains = 0
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: false,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    fftSize,
+    dataSource: {
+      getPendingSpectrumSamples: () => assert.fail('peak capture must preserve stereo channel data'),
+      getPendingSpectrumStereoSamples: () => {
+        stereoDrains += 1
+        return [{ left, right }]
+      },
+      getSampleRate: () => sampleRate,
+      isPlaying: () => true,
+      subscribeToSessionChanges: () => () => {},
+    },
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      peakInfo = nextPeakInfo
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      drawFrame: () => void
+      primaryPointDb: Float32Array
+      primaryPointFrequency: Float32Array
+    }
+    state.drawFrame()
+    assert.ok(peakInfo)
+    assert.equal(stereoDrains, 1)
+    assertAlmostEqual(peakInfo.dbfs, 0, 0.3, 'left-channel dBFS')
+
+    let closestIndex = 0
+    for (let index = 1; index < state.primaryPointFrequency.length; index += 1) {
+      if (
+        Math.abs(state.primaryPointFrequency[index] - peakInfo.frequencyHz)
+        < Math.abs(state.primaryPointFrequency[closestIndex] - peakInfo.frequencyHz)
+      ) {
+        closestIndex = index
+      }
+    }
+    assertAlmostEqual(state.primaryPointDb[closestIndex], -6.0206, 0.3, 'left-only Mid curve')
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer tilt can change the visible peak while each readout stays un-tilted', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const fftSize = 4096
+
+  const captureWithTilt = (tiltDbPerOctave: number): SpectrumPeakInfo => {
+    const frame = createCompositeStereoChunk([
+      { frequencyHz: 250, amplitude: 0.3 },
+      { frequencyHz: 4000, amplitude: 0.15 },
+    ], sampleRate, fftSize)
+    let peakInfo: SpectrumPeakInfo | null = null
+    const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+      showSideLine: true,
+      showGrid: false,
+      fillGradient: false,
+      smoothing: 0,
+      tiltDbPerOctave,
+      fftSize,
+      dataSource: {
+        getPendingSpectrumSamples: () => [],
+        getPendingSpectrumStereoSamples: () => [frame],
+        getSampleRate: () => sampleRate,
+        isPlaying: () => true,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
+      capturePeakInfo: true,
+      onPeakInfo: (nextPeakInfo) => {
+        peakInfo = nextPeakInfo
+      },
+    })
+    try {
+      ;(analyzer as unknown as { drawFrame: () => void }).drawFrame()
+      assert.ok(peakInfo)
+      return peakInfo
+    } finally {
+      analyzer.dispose()
+    }
+  }
+
+  try {
+    const flat = captureWithTilt(0)
+    const tilted = captureWithTilt(6)
+    assert.ok(flat.frequencyHz > 240 && flat.frequencyHz < 260)
+    assert.ok(tilted.frequencyHz > 3900 && tilted.frequencyHz < 4100)
+    assertAlmostEqual(flat.dbfs, 20 * Math.log10(0.3), 0.3, 'low peak dBFS')
+    assertAlmostEqual(tilted.dbfs, 20 * Math.log10(0.15), 0.3, 'high peak dBFS')
+  } finally {
+    dom.restore()
+  }
+})
+
+test('spectrum plugin bridge carries channel-max data and falls back for legacy frames', () => {
+  const encode = (values: Float32Array): string => Buffer.from(
+    values.buffer,
+    values.byteOffset,
+    values.byteLength,
+  ).toString('base64')
+  const magnitudes = Float32Array.from([-30, -20, -10])
+  const side = Float32Array.from([-50, -40, -30])
+  const channelMax = Float32Array.from([-24, -14, -4])
+
+  const decoded = decodeSpectrumFrame({
+    sampleRate: 96000,
+    magnitudes: encode(magnitudes),
+    side: encode(side),
+    channelMax: encode(channelMax),
+  })
+  assert.ok(decoded)
+  assert.equal(decoded.sampleRate, 96000)
+  assert.deepEqual(Array.from(decoded.channelMax), Array.from(channelMax))
+
+  const legacy = decodeSpectrumFrame({ magnitudes: encode(magnitudes) })
+  assert.ok(legacy)
+  assert.deepEqual(Array.from(legacy.channelMax), Array.from(magnitudes))
+
+  const analyzer = new BridgeSpectrumAnalyzer(6)
+  analyzer.setMagnitudes(magnitudes, side, channelMax)
+  const output = new Float32Array(3)
+  assert.equal(analyzer.fillChannelMaxMagnitudes(output), 3)
+  assert.deepEqual(Array.from(output), Array.from(channelMax))
+
+  analyzer.setMagnitudes(magnitudes, side)
+  assert.deepEqual(Array.from(analyzer.getChannelMaxMagnitudes()), Array.from(magnitudes))
+  analyzer.setFFTSize(8)
+  assert.deepEqual(Array.from(analyzer.getChannelMaxMagnitudes()), [-100, -100, -100, -100])
+  analyzer.reset()
+  assert.deepEqual(Array.from(analyzer.getChannelMaxMagnitudes()), [-100, -100, -100, -100])
+  assert.equal(formatSpectrumPeakDbfs(-6.0206), '-6.02dBFS')
+  assert.equal(formatSpectrumPeakDbfs(0), '+0.00dBFS')
 })
 
 test('SpectrumAnalyzer smooths peak selection without smoothing the reported position', () => {

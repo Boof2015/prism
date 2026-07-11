@@ -9,7 +9,7 @@ import { spectrumSettingsToOptions } from './spectrumOptions'
 import { getScopeCanvasTransformStyle } from '../renderer/scopeCanvasTransform'
 import { applyPluginScopeCanvasLayout } from './scopeCanvasLayout'
 import {
-  formatSpectrumPeakDb,
+  formatSpectrumPeakDbfs,
   formatSpectrumPeakFrequency,
   resolveFollowingPeakOverlayStyle,
   type CanvasResizeState,
@@ -137,7 +137,7 @@ export default function SpectrumScope({
           className={['scope-module__peak-info', peakMode === 'following' ? 'is-following' : 'is-corner'].join(' ')}
           style={overlayStyle}
         >
-          <span className="scope-module__peak-info-value">{formatSpectrumPeakDb(peak.db)}</span>
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakDbfs(peak.dbfs)}</span>
           <span className="scope-module__peak-info-separator">/</span>
           <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(peak.frequencyHz)}</span>
           <span className="scope-module__peak-info-separator">/</span>

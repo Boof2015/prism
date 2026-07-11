@@ -28,11 +28,11 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-export function formatSpectrumPeakDb(value: number): string {
+export function formatSpectrumPeakDbfs(value: number): string {
   if (!Number.isFinite(value)) {
     return '--'
   }
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dB`
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dBFS`
 }
 
 export function formatSpectrumPeakFrequency(value: number): string {

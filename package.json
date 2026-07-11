@@ -21,6 +21,7 @@
     "test:secret-vault": "node scripts/run-secret-vault-tests.mjs",
     "test:window-state": "node scripts/run-window-state-tests.mjs",
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
+    "test:spectrum-native": "node --test test/spectrum-native.test.mjs",
     "test:build-metadata": "node scripts/run-build-metadata-tests.mjs",
     "test:updates": "node scripts/run-update-tests.mjs",
     "plugin-ui:dev": "vite --config vite.plugin-ui.config.ts",

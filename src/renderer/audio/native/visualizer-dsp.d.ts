@@ -108,9 +108,11 @@ export interface SpectrumModule {
   fillRawMagnitudes(output: Float32Array): number;
   fillMagnitudes(output: Float32Array): number;
   fillSideMagnitudes(output: Float32Array): number;
+  fillChannelMaxMagnitudes(output: Float32Array): number;
   getRawMagnitudes(): Float32Array;
   getMagnitudes(): Float32Array;
   getSideMagnitudes(): Float32Array;
+  getChannelMaxMagnitudes(): Float32Array;
   process(audioData: Float32Array): Float32Array;
   binToFrequency(bin: number): number;
   reset(): void;

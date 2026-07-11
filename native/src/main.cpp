@@ -212,6 +212,14 @@ Napi::Value SpectrumGetSideMagnitudes(const Napi::CallbackInfo& info) {
     return result;
 }
 
+Napi::Value SpectrumGetChannelMaxMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const auto& magnitudes = spectrum.getChannelMaxMagnitudes();
+    Napi::Float32Array result = Napi::Float32Array::New(env, magnitudes.size());
+    memcpy(result.Data(), magnitudes.data(), magnitudes.size() * sizeof(float));
+    return result;
+}
+
 Napi::Value SpectrumFillRawMagnitudes(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsTypedArray()) {
@@ -253,6 +261,22 @@ Napi::Value SpectrumFillSideMagnitudes(const Napi::CallbackInfo& info) {
 
     Napi::Float32Array output = info[0].As<Napi::Float32Array>();
     const auto& magnitudes = spectrum.getSideMagnitudes();
+    const size_t count = std::min(output.ElementLength(), magnitudes.size());
+    if (count > 0) {
+        memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
+    }
+    return Napi::Number::New(env, static_cast<double>(count));
+}
+
+Napi::Value SpectrumFillChannelMaxMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected output Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array output = info[0].As<Napi::Float32Array>();
+    const auto& magnitudes = spectrum.getChannelMaxMagnitudes();
     const size_t count = std::min(output.ElementLength(), magnitudes.size());
     if (count > 0) {
         memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
@@ -686,9 +710,11 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("fillRawMagnitudes", Napi::Function::New(env, SpectrumFillRawMagnitudes));
     specExports.Set("fillMagnitudes", Napi::Function::New(env, SpectrumFillMagnitudes));
     specExports.Set("fillSideMagnitudes", Napi::Function::New(env, SpectrumFillSideMagnitudes));
+    specExports.Set("fillChannelMaxMagnitudes", Napi::Function::New(env, SpectrumFillChannelMaxMagnitudes));
     specExports.Set("getRawMagnitudes", Napi::Function::New(env, SpectrumGetRawMagnitudes));
     specExports.Set("getMagnitudes", Napi::Function::New(env, SpectrumGetMagnitudes));
     specExports.Set("getSideMagnitudes", Napi::Function::New(env, SpectrumGetSideMagnitudes));
+    specExports.Set("getChannelMaxMagnitudes", Napi::Function::New(env, SpectrumGetChannelMaxMagnitudes));
     specExports.Set("process", Napi::Function::New(env, SpectrumProcess));
     specExports.Set("binToFrequency", Napi::Function::New(env, SpectrumBinToFrequency));
     specExports.Set("reset", Napi::Function::New(env, SpectrumReset));

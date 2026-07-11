@@ -84,12 +84,12 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-function formatSpectrumPeakDb(value: number): string {
+function formatSpectrumPeakDbfs(value: number): string {
   if (!Number.isFinite(value)) {
     return '--'
   }
 
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dB`
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dBFS`
 }
 
 function formatSpectrumPeakFrequency(value: number): string {
@@ -646,7 +646,7 @@ export default function ScopeModule({
           ].join(' ')}
           style={spectrumPeakOverlayStyle}
         >
-          <span className="scope-module__peak-info-value">{formatSpectrumPeakDb(spectrumPeakInfo.db)}</span>
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakDbfs(spectrumPeakInfo.dbfs)}</span>
           <span className="scope-module__peak-info-separator">/</span>
           <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(spectrumPeakInfo.frequencyHz)}</span>
           <span className="scope-module__peak-info-separator">/</span>

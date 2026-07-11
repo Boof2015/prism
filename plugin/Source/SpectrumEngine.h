@@ -39,6 +39,7 @@ public:
         obj->setProperty("sampleRate", sampleRate);
         obj->setProperty("magnitudes", toBase64(spectrum.getMagnitudes()));
         obj->setProperty("side", toBase64(spectrum.getSideMagnitudes()));
+        obj->setProperty("channelMax", toBase64(spectrum.getChannelMaxMagnitudes()));
         return juce::var(obj);
     }
 

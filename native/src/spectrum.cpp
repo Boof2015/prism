@@ -15,12 +15,16 @@ Spectrum::Spectrum(size_t fftSize)
     historyBuffer_.resize(fftSize, 0.0f);
     sideHistoryBuffer_.resize(fftSize, 0.0f);
     windowedInput_.resize(fftSize);
-    magnitudes_.resize(fftSize / 2);
+    midSpectrum_.resize(fftSize);
+    sideSpectrum_.resize(fftSize);
     rawMagnitudes_.resize(fftSize / 2, -100.0f);
     // Initialize to silence (-100.0f dB)
     smoothedMagnitudes_.resize(fftSize / 2, -100.0f);
     sideRawMagnitudes_.resize(fftSize / 2, -100.0f);
     sideSmoothedMagnitudes_.resize(fftSize / 2, -100.0f);
+    leftSmoothedMagnitudes_.resize(fftSize / 2, -100.0f);
+    rightSmoothedMagnitudes_.resize(fftSize / 2, -100.0f);
+    channelMaxMagnitudes_.resize(fftSize / 2, -100.0f);
 }
 
 void Spectrum::setFFTSize(size_t size) {
@@ -30,12 +34,16 @@ void Spectrum::setFFTSize(size_t size) {
         historyBuffer_.assign(size, 0.0f);
         sideHistoryBuffer_.assign(size, 0.0f);
         windowedInput_.resize(size);
-        magnitudes_.resize(size / 2);
+        midSpectrum_.resize(size);
+        sideSpectrum_.resize(size);
         rawMagnitudes_.assign(size / 2, -100.0f);
         // Initialize to silence (-100.0f dB)
         smoothedMagnitudes_.assign(size / 2, -100.0f);
         sideRawMagnitudes_.assign(size / 2, -100.0f);
         sideSmoothedMagnitudes_.assign(size / 2, -100.0f);
+        leftSmoothedMagnitudes_.assign(size / 2, -100.0f);
+        rightSmoothedMagnitudes_.assign(size / 2, -100.0f);
+        channelMaxMagnitudes_.assign(size / 2, -100.0f);
         bufferedSamples_ = 0;
     }
 }
@@ -94,69 +102,52 @@ void Spectrum::pushZeroHistory(std::vector<float>& history, size_t length) {
     std::fill(history.begin() + keep, history.end(), 0.0f);
 }
 
-void Spectrum::updateMagnitudesForHistory(
-    const std::vector<float>& history,
-    std::vector<float>& rawMagnitudes,
-    std::vector<float>& smoothedMagnitudes
-) {
-    if (history.empty() || magnitudes_.empty()) {
-        return;
+float Spectrum::magnitudeToDb(float magnitude, float correctionDb) const {
+    const float db = 20.0f * log10f(std::max(magnitude, 1e-10f)) + correctionDb;
+    return std::clamp(db, -120.0f, 12.0f);
+}
+
+void Spectrum::updateSmoothedMagnitude(float db, float& smoothedMagnitude) {
+    if (bufferedSamples_ < fftSize_) {
+        smoothedMagnitude = db;
+    } else {
+        smoothedMagnitude = smoothing_ * smoothedMagnitude + (1.0f - smoothing_) * db;
     }
-
-    // Always analyze a full FFT frame from the rolling buffer.
-    applyWindow(history.data(), windowedInput_.data(), fftSize_);
-
-    // Perform FFT
-    fft_->forward(windowedInput_.data(), magnitudes_.data());
-
-    // Convert to dB and apply smoothing
-    for (size_t i = 0; i < magnitudes_.size(); i++) {
-        float mag = magnitudes_[i];
-
-        // Convert to dB
-        // Add epsilon to avoid log(0)
-        float db = 20.0f * log10f(std::max(mag, 1e-10f));
-
-        // Compensate Hann window coherent gain (about -6 dB).
-        db += 6.0f;
-
-        // Clamp to a stable display range.
-        db = std::clamp(db, -120.0f, 12.0f);
-        rawMagnitudes[i] = db;
-
-        if (bufferedSamples_ < fftSize_) {
-            smoothedMagnitudes[i] = db;
-            continue;
-        }
-
-        // Apply temporal smoothing only (no bin-to-bin averaging).
-        smoothedMagnitudes[i] = smoothing_ * smoothedMagnitudes[i] + (1.0f - smoothing_) * db;
-
-        // Safety check
-        if (!std::isfinite(smoothedMagnitudes[i])) {
-            smoothedMagnitudes[i] = -100.0f;
-        }
+    if (!std::isfinite(smoothedMagnitude)) {
+        smoothedMagnitude = -100.0f;
     }
 }
 
 void Spectrum::updateMagnitudes() {
-    updateMagnitudesForHistory(historyBuffer_, rawMagnitudes_, smoothedMagnitudes_);
-    updateMagnitudesForHistory(sideHistoryBuffer_, sideRawMagnitudes_, sideSmoothedMagnitudes_);
-}
+    if (historyBuffer_.empty() || rawMagnitudes_.empty()) {
+        return;
+    }
 
-void Spectrum::updateSilentSideMagnitudes() {
-    const float silentDb = -120.0f;
-    for (size_t i = 0; i < sideSmoothedMagnitudes_.size(); i++) {
-        sideRawMagnitudes_[i] = silentDb;
-        if (bufferedSamples_ < fftSize_) {
-            sideSmoothedMagnitudes_[i] = silentDb;
-            continue;
-        }
+    applyWindow(historyBuffer_.data(), windowedInput_.data(), fftSize_);
+    fft_->forward(windowedInput_.data(), midSpectrum_.data());
+    applyWindow(sideHistoryBuffer_.data(), windowedInput_.data(), fftSize_);
+    fft_->forward(windowedInput_.data(), sideSpectrum_.data());
 
-        sideSmoothedMagnitudes_[i] = smoothing_ * sideSmoothedMagnitudes_[i] + (1.0f - smoothing_) * silentDb;
-        if (!std::isfinite(sideSmoothedMagnitudes_[i])) {
-            sideSmoothedMagnitudes_[i] = -100.0f;
-        }
+    const float scale = 2.0f / static_cast<float>(fftSize_);
+    const float coherentGain = fftSize_ > 1
+        ? static_cast<float>(fftSize_ - 1) / (2.0f * static_cast<float>(fftSize_))
+        : 1.0f;
+    const float correctionDb = -20.0f * log10f(coherentGain);
+    for (size_t i = 0; i < rawMagnitudes_.size(); i++) {
+        const std::complex<float> mid = midSpectrum_[i];
+        const std::complex<float> side = sideSpectrum_[i];
+        const float midDb = magnitudeToDb(std::abs(mid) * scale, correctionDb);
+        const float sideDb = magnitudeToDb(std::abs(side) * scale, correctionDb);
+        const float leftDb = magnitudeToDb(std::abs(mid + side) * scale, correctionDb);
+        const float rightDb = magnitudeToDb(std::abs(mid - side) * scale, correctionDb);
+
+        rawMagnitudes_[i] = midDb;
+        sideRawMagnitudes_[i] = sideDb;
+        updateSmoothedMagnitude(midDb, smoothedMagnitudes_[i]);
+        updateSmoothedMagnitude(sideDb, sideSmoothedMagnitudes_[i]);
+        updateSmoothedMagnitude(leftDb, leftSmoothedMagnitudes_[i]);
+        updateSmoothedMagnitude(rightDb, rightSmoothedMagnitudes_[i]);
+        channelMaxMagnitudes_[i] = std::max(leftSmoothedMagnitudes_[i], rightSmoothedMagnitudes_[i]);
     }
 }
 
@@ -165,8 +156,7 @@ void Spectrum::pushSamples(const float* input, size_t length) {
         pushHistory(historyBuffer_, input, length);
         pushZeroHistory(sideHistoryBuffer_, length);
         bufferedSamples_ = length >= fftSize_ ? fftSize_ : std::min(fftSize_, bufferedSamples_ + length);
-        updateMagnitudesForHistory(historyBuffer_, rawMagnitudes_, smoothedMagnitudes_);
-        updateSilentSideMagnitudes();
+        updateMagnitudes();
         return;
     }
     updateMagnitudes();
@@ -215,6 +205,9 @@ void Spectrum::reset() {
     std::fill(smoothedMagnitudes_.begin(), smoothedMagnitudes_.end(), -100.0f);
     std::fill(sideRawMagnitudes_.begin(), sideRawMagnitudes_.end(), -100.0f);
     std::fill(sideSmoothedMagnitudes_.begin(), sideSmoothedMagnitudes_.end(), -100.0f);
+    std::fill(leftSmoothedMagnitudes_.begin(), leftSmoothedMagnitudes_.end(), -100.0f);
+    std::fill(rightSmoothedMagnitudes_.begin(), rightSmoothedMagnitudes_.end(), -100.0f);
+    std::fill(channelMaxMagnitudes_.begin(), channelMaxMagnitudes_.end(), -100.0f);
     bufferedSamples_ = 0;
 }
 

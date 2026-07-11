@@ -230,6 +230,7 @@ export class SpectrumAnalyzer {
   private nativeMagnitudeBuffer = new Float32Array(0)
   private nativeRawMagnitudeBuffer = new Float32Array(0)
   private nativeSideMagnitudeBuffer = new Float32Array(0)
+  private nativeChannelMaxMagnitudeBuffer = new Float32Array(0)
   private heatmapMagnitudeBuffer = new Float32Array(0)
   private nativeBufferedSamples = 0
   private nativeHasSpectrumData = false
@@ -242,6 +243,7 @@ export class SpectrumAnalyzer {
   private secondaryPointX = new Float32Array(0)
   private secondaryPointY = new Float32Array(0)
   private primaryPointDb = new Float32Array(0)
+  private primaryPointDbfs = new Float32Array(0)
   private primaryPointFrequency = new Float32Array(0)
   private lastSelectedPeakInfo: SpectrumPeakInfo | null = null
 
@@ -316,6 +318,9 @@ export class SpectrumAnalyzer {
     if (this.nativeSideMagnitudeBuffer.length !== length) {
       this.nativeSideMagnitudeBuffer = new Float32Array(length)
     }
+    if (this.nativeChannelMaxMagnitudeBuffer.length !== length) {
+      this.nativeChannelMaxMagnitudeBuffer = new Float32Array(length)
+    }
     if (this.heatmapMagnitudeBuffer.length !== length) {
       this.heatmapMagnitudeBuffer = new Float32Array(length)
     }
@@ -326,6 +331,7 @@ export class SpectrumAnalyzer {
     this.nativeMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.nativeRawMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.nativeSideMagnitudeBuffer.fill(FFT_SILENCE_DB)
+    this.nativeChannelMaxMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.heatmapMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.nativeBufferedSamples = 0
     this.nativeHasSpectrumData = false
@@ -379,6 +385,7 @@ export class SpectrumAnalyzer {
       || optionUpdates.smoothing !== undefined
       || optionUpdates.heatmapSmoothing !== undefined
       || optionUpdates.showSideLine !== undefined
+      || optionUpdates.capturePeakInfo !== undefined
     )
 
     this.options = nextOptions
@@ -446,6 +453,21 @@ export class SpectrumAnalyzer {
     const i1 = Math.min(i0 + 1, data.length - 1)
     const t = index - i0
     return this.lerp(data[i0], data[i1], t)
+  }
+
+  private getQuadraticInterpolatedValue(data: Float32Array, index: number): number {
+    const center = Math.round(index)
+    if (center <= 0 || center >= data.length - 1) {
+      return this.getInterpolatedValue(data, index)
+    }
+
+    const offset = index - center
+    const previous = data[center - 1]
+    const current = data[center]
+    const next = data[center + 1]
+    return current + 0.5 * offset * (
+      next - previous + offset * (previous - (2 * current) + next)
+    )
   }
 
   private frequencyAtPosition(t: number, minFrequency: number, maxFrequency: number): number {
@@ -522,6 +544,7 @@ export class SpectrumAnalyzer {
       this.secondaryPointX = new Float32Array(pointCount)
       this.secondaryPointY = new Float32Array(pointCount)
       this.primaryPointDb = new Float32Array(pointCount)
+      this.primaryPointDbfs = new Float32Array(pointCount)
       this.primaryPointFrequency = new Float32Array(pointCount)
     }
   }
@@ -668,6 +691,7 @@ export class SpectrumAnalyzer {
     yOut: Float32Array,
     heatmapIntensityOut: Float32Array | null,
     capturePeakInfo = false,
+    peakDbfsData: Float32Array | null = null,
   ): SpectrumPointFillResult {
     const bufferLength = Math.min(dataLength, frequencyData.length)
     if (bufferLength <= 0) {
@@ -706,8 +730,16 @@ export class SpectrumAnalyzer {
       }
 
       if (capturePeakInfo) {
+        const peakFrequencyHz = resolvedPeak?.frequencyHz ?? centerFrequency
         this.primaryPointDb[index] = db
-        this.primaryPointFrequency[index] = resolvedPeak?.frequencyHz ?? centerFrequency
+        this.primaryPointFrequency[index] = peakFrequencyHz
+        const peakDbfsBin = Math.min(
+          Math.max(0, peakFrequencyHz / binWidth),
+          Math.max(0, (peakDbfsData?.length ?? 1) - 1),
+        )
+        this.primaryPointDbfs[index] = peakDbfsData && peakDbfsData.length > 0
+          ? this.getQuadraticInterpolatedValue(peakDbfsData, peakDbfsBin)
+          : rawDb
       }
     }
 
@@ -724,14 +756,15 @@ export class SpectrumAnalyzer {
       || index >= this.primaryPointFrequency.length
       || index >= this.primaryPointX.length
       || index >= this.primaryPointY.length
+      || index >= this.primaryPointDbfs.length
     ) {
       return null
     }
 
     const frequencyHz = this.primaryPointFrequency[index]
-    const db = this.primaryPointDb[index]
+    const dbfs = this.primaryPointDbfs[index]
     return {
-      db,
+      dbfs,
       frequencyHz,
       normalizedX: this.primaryPointX[index] / Math.max(1, this.canvas.width),
       normalizedY: this.primaryPointY[index] / Math.max(1, height),
@@ -990,6 +1023,7 @@ export class SpectrumAnalyzer {
     let primaryDataLength = 0
     let heatmapDataLength = 0
     let secondaryDataLength = 0
+    let channelMaxDataLength = 0
 
     if (!this.isNativeAvailable()) {
       this.clearPendingSpectrumQueues()
@@ -999,13 +1033,14 @@ export class SpectrumAnalyzer {
       return
     }
 
-    const receivedNativeSamples = options.showSideLine
+    const receivedNativeSamples = options.showSideLine || options.capturePeakInfo
       ? this.pushPendingSpectrumStereoChunks(this.dataSource.getPendingSpectrumStereoSamples())
       : this.pushPendingSpectrumChunks(this.dataSource.getPendingSpectrumSamples())
 
     this.ensureMagnitudeBufferSize()
     primaryData = this.nativeMagnitudeBuffer
     primaryDataLength = this.nativeAnalyzer?.fillMagnitudes(this.nativeMagnitudeBuffer) ?? 0
+    channelMaxDataLength = this.nativeAnalyzer?.fillChannelMaxMagnitudes(this.nativeChannelMaxMagnitudeBuffer) ?? 0
 
     if (receivedNativeSamples > 0 || !this.nativeHasSpectrumData) {
       heatmapDataLength = this.nativeAnalyzer?.fillRawMagnitudes(this.nativeRawMagnitudeBuffer) ?? 0
@@ -1051,6 +1086,7 @@ export class SpectrumAnalyzer {
       this.primaryPointY,
       null,
       options.capturePeakInfo,
+      channelMaxDataLength > 0 ? this.nativeChannelMaxMagnitudeBuffer : primaryData,
     )
     const heatmapRender = heatmapData && heatmapDataLength > 0
       ? this.fillSpectrumPoints(
