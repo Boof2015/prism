@@ -36,6 +36,9 @@ public:
     // Scope-specific native config (e.g. the spectrogram's canvas-derived rowCount).
     void onScopeNativeConfig(juce::var payload);
 
+    // Momentary crosshair state; Spectrum uses it for temporary DSP smoothing.
+    void onScopeMeasurement(juce::var payload);
+
     // The UI's settings panel opened/closed along the bottom. Grow/shrink the editor
     // height by exactly the panel height so the scope area is unchanged (the window
     // accommodates the panel, like the app). 0 = closed.

@@ -31,6 +31,11 @@ import {
   HEAT_MID_DB,
   normalizeHeatDb,
 } from './heatScale'
+import {
+  resolveSpectrogramMeasurement,
+  type ScopeMeasurement,
+} from '../scopeMeasurement'
+import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 
 export interface SpectrogramDataSource extends VisualizerSessionSource {
   getPendingSpectrogramSamples: () => Float32Array[]
@@ -329,6 +334,18 @@ export class Spectrogram {
 
   resize(): void {
     this.invalidate()
+  }
+
+  getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
+    return resolveSpectrogramMeasurement(point, {
+      sampleRate: Math.max(1, this.dataSource.getSampleRate()),
+      minFrequency: this.options.minFrequency,
+      maxFrequency: this.options.maxFrequency,
+      scaleMode: this.options.scaleMode,
+      fftSize: this.options.fftSize,
+      scrollSpeed: this.options.scrollSpeed,
+      canvasPixelWidth: this.canvas.width,
+    })
   }
 
   private getFrequencyPixelCount(width: number, height: number): number {

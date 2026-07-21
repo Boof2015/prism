@@ -277,6 +277,7 @@ namespace
             .withEventListener("prismConfig", [&editor](juce::var v) { editor.onPrismConfig(std::move(v)); })
             .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); })
             .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
+            .withEventListener("prismScopeMeasurement", [&editor](juce::var v) { editor.onScopeMeasurement(std::move(v)); })
             .withEventListener("prismSettingsPanel", [&editor](juce::var v) { editor.onSettingsPanel(std::move(v)); });
 
 #if JUCE_WINDOWS
@@ -603,6 +604,11 @@ void PrismSpectrumEditor::onPrismReady()
 void PrismSpectrumEditor::onScopeNativeConfig(juce::var payload)
 {
     engine->configureNative(payload);
+}
+
+void PrismSpectrumEditor::onScopeMeasurement(juce::var payload)
+{
+    engine->setMeasurementActive((bool) payload.getProperty("active", false));
 }
 
 void PrismSpectrumEditor::pushRestoreSettings()

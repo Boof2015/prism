@@ -9,6 +9,11 @@ import { spectrumSettingsToOptions } from './spectrumOptions'
 import { getScopeCanvasTransformStyle } from '../renderer/scopeCanvasTransform'
 import { applyPluginScopeCanvasLayout } from './scopeCanvasLayout'
 import {
+  ScopeMeasurementOverlay,
+  useScopeMeasurement,
+} from '../renderer/components/ScopeMeasurementOverlay'
+import { emitToHost } from './juceBridge'
+import {
   formatSpectrumPeakDbfs,
   formatSpectrumPeakFrequency,
   resolveFollowingPeakOverlayStyle,
@@ -41,6 +46,16 @@ export default function SpectrumScope({
 
   const peakMode = settings.peakInfoMode
   rotationRef.current = settings.rotation
+  const measurementController = useScopeMeasurement({
+    containerRef,
+    enabled: true,
+    rotation: settings.rotation,
+    mirrorHorizontal: settings.mirrorHorizontal,
+    getSource: () => analyzerRef.current,
+    onActiveChange: (active) => {
+      emitToHost('prismScopeMeasurement', { active })
+    },
+  })
 
   // Create the analyzer once per data source / shim.
   useEffect(() => {
@@ -125,13 +140,21 @@ export default function SpectrumScope({
       : undefined
 
   return (
-    <div ref={containerRef} className="spectrum-scope">
+    <div
+      ref={containerRef}
+      className={`spectrum-scope scope-measurement-surface ${measurementController.active ? 'is-measuring' : ''}`.trim()}
+      {...measurementController.pointerBindings}
+    >
       <canvas
         ref={canvasRef}
         className="spectrum-scope__canvas"
         style={getScopeCanvasTransformStyle(settings.rotation, settings.mirrorHorizontal)}
       />
-      {showPeak && peak && (
+      <ScopeMeasurementOverlay
+        containerRef={containerRef}
+        measurement={measurementController.measurement}
+      />
+      {!measurementController.active && showPeak && peak && (
         <div
           ref={peakMode === 'following' ? peakOverlayRef : null}
           className={['scope-module__peak-info', peakMode === 'following' ? 'is-following' : 'is-corner'].join(' ')}

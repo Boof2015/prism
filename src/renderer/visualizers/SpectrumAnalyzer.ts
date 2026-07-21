@@ -18,6 +18,12 @@ import {
   HEAT_MID_DB,
   normalizeHeatDb,
 } from './heatScale'
+import {
+  SPECTRUM_MEASUREMENT_SMOOTHING,
+  resolveSpectrumMeasurement,
+  type ScopeMeasurement,
+} from '../scopeMeasurement'
+import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 
 type SpectrumStereoChunk = {
   left: Float32Array
@@ -246,6 +252,7 @@ export class SpectrumAnalyzer {
   private primaryPointDbfs = new Float32Array(0)
   private primaryPointFrequency = new Float32Array(0)
   private lastSelectedPeakInfo: SpectrumPeakInfo | null = null
+  private measurementActive = false
 
   constructor(canvas: HTMLCanvasElement, options: SpectrumAnalyzerOptions = {}) {
     this.canvas = canvas
@@ -357,7 +364,29 @@ export class SpectrumAnalyzer {
   private getNativeSmoothing(): number {
     const base = clampSmoothing(this.options.smoothing)
     const fftRatio = Math.max(0.5, this.options.fftSize / 2048)
-    return clampSmoothing(Math.pow(base, fftRatio))
+    const configured = clampSmoothing(Math.pow(base, fftRatio))
+    return this.measurementActive
+      ? Math.max(configured, SPECTRUM_MEASUREMENT_SMOOTHING)
+      : configured
+  }
+
+  getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
+    return resolveSpectrumMeasurement(point, {
+      sampleRate: this.sampleRate,
+      minFrequency: this.options.minFrequency,
+      maxFrequency: this.options.maxFrequency,
+      minDecibels: this.options.minDecibels,
+      maxDecibels: this.options.maxDecibels,
+      scaleType: this.options.scaleType,
+    })
+  }
+
+  setMeasurementActive(active: boolean): void {
+    if (this.measurementActive === active) return
+    this.measurementActive = active
+    if (this.isNativeAvailable()) {
+      this.nativeAnalyzer?.setSmoothing(this.getNativeSmoothing())
+    }
   }
 
   private resetState(): void {
@@ -1251,6 +1280,7 @@ export class SpectrumAnalyzer {
     }
     this.resetAnalyzerBuffers()
     this.lastSampleRate = 0
+    this.measurementActive = false
     this.emitPeakInfo(null)
   }
 }

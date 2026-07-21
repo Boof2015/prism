@@ -107,3 +107,37 @@ export function transformNormalizedScopePoint(
       return { x, y }
   }
 }
+
+export function inverseTransformNormalizedScopePoint(
+  point: NormalizedScopePoint,
+  rotation: ScopeDisplayRotation,
+  mirrorHorizontal: boolean,
+): NormalizedScopePoint {
+  let mirroredX: number
+  let y: number
+
+  switch (rotation) {
+    case 90:
+      mirroredX = point.y
+      y = 1 - point.x
+      break
+    case 180:
+      mirroredX = 1 - point.x
+      y = 1 - point.y
+      break
+    case 270:
+      mirroredX = 1 - point.y
+      y = point.x
+      break
+    case 0:
+    default:
+      mirroredX = point.x
+      y = point.y
+      break
+  }
+
+  return {
+    x: mirrorHorizontal ? 1 - mirroredX : mirroredX,
+    y,
+  }
+}

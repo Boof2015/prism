@@ -8,6 +8,10 @@ import { waveformSettingsToOptions } from './waveformOptions'
 import { resolveScrollingCanvasSize } from './scrollingCanvas'
 import { getScopeCanvasTransformStyle } from '../renderer/scopeCanvasTransform'
 import { applyPluginScopeCanvasLayout } from './scopeCanvasLayout'
+import {
+  ScopeMeasurementOverlay,
+  useScopeMeasurement,
+} from '../renderer/components/ScopeMeasurementOverlay'
 
 interface WaveformScopeProps {
   dataSource: PluginWebViewDataSource
@@ -28,6 +32,13 @@ export default function WaveformScope({
   const rotationRef = useRef(settings.rotation)
   const applySizeRef = useRef<(() => void) | null>(null)
   rotationRef.current = settings.rotation
+  const measurementController = useScopeMeasurement({
+    containerRef,
+    enabled: true,
+    rotation: settings.rotation,
+    mirrorHorizontal: settings.mirrorHorizontal,
+    getSource: () => vizRef.current,
+  })
 
   useEffect(() => {
     const container = containerRef.current
@@ -78,11 +89,19 @@ export default function WaveformScope({
   }, [settings.rotation])
 
   return (
-    <div ref={containerRef} className="spectrum-scope">
+    <div
+      ref={containerRef}
+      className={`spectrum-scope scope-measurement-surface ${measurementController.active ? 'is-measuring' : ''}`.trim()}
+      {...measurementController.pointerBindings}
+    >
       <canvas
         ref={canvasRef}
         className="spectrum-scope__canvas"
         style={getScopeCanvasTransformStyle(settings.rotation, settings.mirrorHorizontal)}
+      />
+      <ScopeMeasurementOverlay
+        containerRef={containerRef}
+        measurement={measurementController.measurement}
       />
     </div>
   )

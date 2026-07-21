@@ -27,6 +27,11 @@ import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
 import type { FrameScheduler } from '../visualizers/frameScheduler'
 import {
+  ScopeMeasurementOverlay,
+  useScopeMeasurement,
+} from './ScopeMeasurementOverlay'
+import type { ScopeMeasurementSource } from '../scopeMeasurement'
+import {
   getScopeCanvasTransformStyle,
   isSameScopeCanvasLayout,
   measureScopeCanvasLayout,
@@ -65,6 +70,8 @@ interface Visualizer {
   dispose(): void
   resize(): void
   setOptions(options: Record<string, unknown>): void
+  getMeasurementAt?: ScopeMeasurementSource['getMeasurementAt']
+  setMeasurementActive?: ScopeMeasurementSource['setMeasurementActive']
 }
 
 const SPECTRUM_PEAK_OVERLAY_MARGIN_PX = 10
@@ -414,6 +421,22 @@ export default function ScopeModule({
   const handleSpectrumPeakInfo = useCallback((nextPeakInfo: SpectrumPeakInfo | null): void => {
     setSpectrumPeakInfo(nextPeakInfo)
   }, [])
+  const measurementEnabled = scopeKind === 'spectrum'
+    || scopeKind === 'spectrogram'
+    || scopeKind === 'oscilloscope'
+    || scopeKind === 'waveform'
+  const measurementController = useScopeMeasurement({
+    containerRef,
+    enabled: measurementEnabled,
+    rotation,
+    mirrorHorizontal,
+    getSource: () => {
+      const visualizer = visualizerRef.current
+      return visualizer?.getMeasurementAt
+        ? visualizer as ScopeMeasurementSource
+        : null
+    },
+  })
 
   useEffect(() => {
     if (!captureSpectrumPeakInfo) {
@@ -622,8 +645,13 @@ export default function ScopeModule({
 
   return (
     <div
-      className="scope-module"
+      className={[
+        'scope-module',
+        measurementEnabled ? 'scope-measurement-surface' : '',
+        measurementController.active ? 'is-measuring' : '',
+      ].filter(Boolean).join(' ')}
       ref={containerRef}
+      {...measurementController.pointerBindings}
       style={{
         minWidth: 0,
         height: '100%',
@@ -637,7 +665,11 @@ export default function ScopeModule({
           ...getScopeCanvasTransformStyle(rotation, mirrorHorizontal),
         }}
       />
-      {scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
+      <ScopeMeasurementOverlay
+        containerRef={containerRef}
+        measurement={measurementController.measurement}
+      />
+      {!measurementController.active && scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
         <div
           ref={spectrumPeakMode === 'following' ? peakOverlayRef : null}
           className={[

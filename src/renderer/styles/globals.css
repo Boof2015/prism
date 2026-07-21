@@ -783,6 +783,84 @@ button.toolbar__version:hover {
   height: 100%;
 }
 
+.scope-measurement-surface {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.scope-measurement-surface.is-measuring {
+  user-select: none;
+}
+
+.scope-measurement {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.scope-measurement__line {
+  position: absolute;
+  display: block;
+  background: var(--scope-overlay-text);
+  opacity: 0.58;
+  box-shadow: 0 0 0.5px rgba(0, 0, 0, 0.5);
+}
+
+.scope-measurement__line--vertical {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+
+.scope-measurement__line--horizontal {
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+.scope-measurement__readout {
+  position: absolute;
+  max-width: calc(100% - 16px);
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border: 1px solid var(--scope-overlay-border);
+  border-radius: 5px;
+  background: var(--scope-overlay-bg);
+  color: var(--scope-overlay-text);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.2);
+}
+
+.scope-measurement__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.scope-measurement__value,
+.scope-measurement__separator {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.scope-measurement__value {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.scope-measurement__separator {
+  opacity: 0.4;
+}
+
 .scope-module__peak-info {
   position: absolute;
   z-index: 3;

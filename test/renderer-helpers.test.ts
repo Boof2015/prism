@@ -52,9 +52,19 @@ import { resolveThemeCreditDetails, resolveThemeOptionLabel } from '../src/rende
 import { scopeSettingsToOptions } from '../src/renderer/components/ScopeModule'
 import { scopeSummary } from '../src/renderer/components/ScopeSettingsSection'
 import {
+  inverseTransformNormalizedScopePoint,
   resolveScopeCanvasLayout,
   transformNormalizedScopePoint,
 } from '../src/renderer/scopeCanvasTransform'
+import {
+  SPECTRUM_MEASUREMENT_SMOOTHING,
+  frequencyAtNormalizedPosition,
+  resolveMeasurementReadoutPosition,
+  resolveOscilloscopeMeasurement,
+  resolveSpectrogramMeasurement,
+  resolveSpectrumMeasurement,
+  resolveWaveformMeasurement,
+} from '../src/renderer/scopeMeasurement'
 import {
   applyInputGainToStereoSamples,
   inputGainDbToLinear,
@@ -800,6 +810,7 @@ interface FakeSpectrumNativeAnalyzer extends SpectrumNativeAnalyzer {
     fillSideMagnitudes: number
     fillChannelMaxMagnitudes: number
     resets: number
+    smoothingValues: number[]
   }
 }
 
@@ -887,6 +898,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     fillSideMagnitudes: 0,
     fillChannelMaxMagnitudes: 0,
     resets: 0,
+    smoothingValues: [],
   }
 
   const resize = (size: number): void => {
@@ -1009,6 +1021,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     },
     setSmoothing: (nextSmoothing) => {
       smoothing = Math.min(0.99, Math.max(0, nextSmoothing))
+      calls.smoothingValues.push(nextSmoothing)
     },
     pushSamples: (audioData) => {
       calls.monoPushes.push(new Float32Array(audioData))
@@ -1663,6 +1676,108 @@ test('scope point transforms mirror the source axis before clockwise rotation', 
   assertAlmostEqual(mirrored270.y, 0.2, 1e-12, 'mirrored 270-degree y coordinate')
 })
 
+test('scope point inverse transforms round-trip every rotation and mirror state', () => {
+  const point = { x: 0.217, y: 0.683 }
+  for (const rotation of [0, 90, 180, 270] as const) {
+    for (const mirrorHorizontal of [false, true]) {
+      const viewportPoint = transformNormalizedScopePoint(point, rotation, mirrorHorizontal)
+      const restored = inverseTransformNormalizedScopePoint(viewportPoint, rotation, mirrorHorizontal)
+      assertAlmostEqual(restored.x, point.x, 1e-12, `${rotation}° mirror=${mirrorHorizontal} x`)
+      assertAlmostEqual(restored.y, point.y, 1e-12, `${rotation}° mirror=${mirrorHorizontal} y`)
+    }
+  }
+})
+
+test('scope measurement helpers resolve MiniMeters-style cursor axis values', () => {
+  const spectrumX = Math.log10(1000 / 20) / Math.log10(20000 / 20)
+  const spectrum = resolveSpectrumMeasurement(
+    { x: spectrumX, y: 0.5 },
+    {
+      sampleRate: 48000,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      minDecibels: -90,
+      maxDecibels: -10,
+      scaleType: 'log',
+    },
+  )
+  assert.deepEqual(spectrum.values.slice(0, 2), ['-50.00dB', '1.00kHz'])
+  assert.match(spectrum.values[2] ?? '', /^B5 /)
+
+  const nyquistLimited = resolveSpectrumMeasurement(
+    { x: 1, y: 0 },
+    {
+      sampleRate: 8000,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      minDecibels: -90,
+      maxDecibels: -10,
+      scaleType: 'log',
+    },
+  )
+  assert.equal(nyquistLimited.values[1], '4.00kHz')
+
+  const oscilloscope = resolveOscilloscopeMeasurement({ x: 0.5, y: 0.25 }, 48000, 2048)
+  assert.deepEqual(oscilloscope.values, ['21.32ms', '+0.500', '-6.02dBFS'])
+
+  const waveform = resolveWaveformMeasurement(
+    { x: 0, y: 0.025 },
+    { mode: 'mono', scrollSpeed: 1, canvasPixelWidth: 129 },
+  )
+  assert.deepEqual(waveform.values, ['1.00s ago', '+1.000', '+0.00dBFS'])
+
+  const stereoWaveform = resolveWaveformMeasurement(
+    { x: 1, y: 0.75 },
+    { mode: 'stereo', scrollSpeed: 1, canvasPixelWidth: 129 },
+  )
+  assert.deepEqual(stereoWaveform.values, ['R', '0.00ms ago', '+0.000', '-∞dBFS'])
+})
+
+test('spectrogram measurement follows scale mode and rendered history speed', () => {
+  assert.equal(frequencyAtNormalizedPosition(0.5, 20, 20000, 'linear'), 10010)
+  assertAlmostEqual(
+    frequencyAtNormalizedPosition(0.5, 20, 20000, 'log'),
+    Math.sqrt(20 * 20000),
+    1e-9,
+    'log midpoint',
+  )
+  const melMidpoint = frequencyAtNormalizedPosition(0.5, 20, 20000, 'mel')
+  assert.ok(melMidpoint > 1000 && melMidpoint < 10000)
+
+  const measurement = resolveSpectrogramMeasurement(
+    { x: 0.5, y: 0 },
+    {
+      sampleRate: 48000,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      scaleMode: 'log',
+      fftSize: 4096,
+      scrollSpeed: 2,
+      canvasPixelWidth: 101,
+    },
+  )
+  assert.deepEqual(measurement.values.slice(0, 2), ['266.67ms ago', '20.00kHz'])
+})
+
+test('measurement readout flips and clamps at viewport edges', () => {
+  assert.deepEqual(
+    resolveMeasurementReadoutPosition(
+      { x: 190, y: 90 },
+      { width: 200, height: 100 },
+      { width: 80, height: 24 },
+    ),
+    { left: 98, top: 54 },
+  )
+  assert.deepEqual(
+    resolveMeasurementReadoutPosition(
+      { x: 2, y: 2 },
+      { width: 60, height: 30 },
+      { width: 80, height: 40 },
+    ),
+    { left: 8, top: 8 },
+  )
+})
+
 test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer options', () => {
   const profile = createDefaultProfile('Default')
   profile.scopeSettings.spectrum.showSideLine = true
@@ -1677,6 +1792,50 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.lineColor, theme.spectrum.line)
   assert.equal(options.backgroundColor, theme.spectrum.background)
   assert.equal(options.gridColor, theme.spectrum.guides)
+})
+
+test('SpectrumAnalyzer applies and restores transient measurement smoothing without resetting', () => {
+  const dom = installFakeCanvasDom()
+  const nativeAnalyzer = createFakeSpectrumNativeAnalyzer()
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    smoothing: 0.9,
+    dataSource,
+    nativeAnalyzer,
+  })
+
+  try {
+    const resetsBeforeMeasurement = nativeAnalyzer.calls.resets
+    analyzer.setMeasurementActive(true)
+    assert.equal(nativeAnalyzer.calls.smoothingValues.at(-1), SPECTRUM_MEASUREMENT_SMOOTHING)
+    assert.equal(nativeAnalyzer.calls.resets, resetsBeforeMeasurement)
+
+    analyzer.setMeasurementActive(false)
+    assertAlmostEqual(
+      nativeAnalyzer.calls.smoothingValues.at(-1) ?? 0,
+      0.9,
+      1e-12,
+      'configured smoothing should be restored',
+    )
+
+    analyzer.setOptions({ smoothing: 0.99 })
+    analyzer.setMeasurementActive(true)
+    assertAlmostEqual(
+      nativeAnalyzer.calls.smoothingValues.at(-1) ?? 0,
+      0.99,
+      1e-12,
+      'higher user smoothing should be preserved',
+    )
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
 })
 
 test('SpectrumAnalyzer side line uses native stereo spectrum without draining mono samples', () => {
