@@ -20,8 +20,10 @@ MinimumSize panelMinimumSize(PanelId panel) {
             return {30, 5};
         case PanelId::Vectorscope:
             return {30, 8};
-        case PanelId::Levels:
+        case PanelId::VUMeter:
             return {30, 5};
+        case PanelId::LUFSMeter:
+            return {30, 7};
     }
     return {1, 1};
 }
@@ -151,7 +153,7 @@ LayoutPreset resolvePreset(LayoutPreset requested, int width, int height) {
         : LayoutPreset::Stacked;
 }
 
-LayoutNode makeRoot(LayoutPreset preset) {
+LayoutNode makeRoot(LayoutPreset preset, int width, int height) {
     if (preset == LayoutPreset::Columns) {
         return LayoutNode::split(SplitAxis::Columns, {
             LayoutNode::split(SplitAxis::Rows, {
@@ -159,14 +161,24 @@ LayoutNode makeRoot(LayoutPreset preset) {
                 LayoutNode::leaf(PanelId::Oscilloscope, 2),
             }, 3),
             LayoutNode::split(SplitAxis::Rows, {
-                LayoutNode::leaf(PanelId::Vectorscope, 1),
-                LayoutNode::leaf(PanelId::Levels, 1),
+                LayoutNode::leaf(PanelId::Vectorscope, 2),
+                LayoutNode::leaf(PanelId::VUMeter, 1),
+                LayoutNode::leaf(PanelId::LUFSMeter, 1),
             }, 1),
+        });
+    }
+    if (width >= 60 && height >= 14) {
+        return LayoutNode::split(SplitAxis::Rows, {
+            LayoutNode::leaf(PanelId::Spectrum, 3),
+            LayoutNode::split(SplitAxis::Columns, {
+                LayoutNode::leaf(PanelId::VUMeter),
+                LayoutNode::leaf(PanelId::LUFSMeter),
+            }, 2),
         });
     }
     return LayoutNode::split(SplitAxis::Rows, {
         LayoutNode::leaf(PanelId::Spectrum, 4),
-        LayoutNode::leaf(PanelId::Levels, 1),
+        LayoutNode::leaf(PanelId::VUMeter, 1),
     });
 }
 
@@ -203,7 +215,7 @@ DashboardLayout buildDashboardLayout(int width,
     layout.resolvedPreset = resolvePreset(requestedPreset, width, height);
     layout.root = expandedPanel
         ? LayoutNode::leaf(*expandedPanel)
-        : makeRoot(layout.resolvedPreset);
+        : makeRoot(layout.resolvedPreset, width, height);
 
     // The header and footer each consume one terminal row.
     resolveNode(layout.root, 0, 0, width, height - 2, layout.panels);
@@ -239,7 +251,8 @@ std::vector<PanelId> panelOrder() {
         PanelId::Spectrum,
         PanelId::Oscilloscope,
         PanelId::Vectorscope,
-        PanelId::Levels,
+        PanelId::VUMeter,
+        PanelId::LUFSMeter,
     };
 }
 

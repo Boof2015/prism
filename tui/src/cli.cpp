@@ -63,7 +63,7 @@ std::string usageText() {
         "  s                 Open settings for the focused scope.\n"
         "  l                 Cycle automatic, stacked, and column layouts.\n"
         "  v                 Cycle vectorscope display modes.\n"
-        "  1 / 2 / 3 / 4     Focus Spectrum, Oscilloscope, Vectorscope, or Levels.\n"
+        "  1 / 2 / 3 / 4 / 5 Focus Spectrum, Oscilloscope, Vectorscope, VU, or LUFS.\n"
         "  r                 Reset analyzers and integrated loudness.\n"
         "  q / Esc / Ctrl-C  Quit.\n";
 }

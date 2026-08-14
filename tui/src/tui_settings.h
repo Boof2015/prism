@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dashboard_layout.h"
+#include "meter_display_model.h"
 #include "scope_plot_model.h"
 
 #include <filesystem>
@@ -15,6 +16,8 @@ enum class SettingsPage {
     Spectrum,
     Oscilloscope,
     Vectorscope,
+    VUMeter,
+    LUFSMeter,
 };
 
 enum class SettingId {
@@ -29,6 +32,11 @@ enum class SettingId {
     VectorscopeMode,
     VectorscopeGuides,
     VectorscopeDetail,
+    VUMeterMode,
+    VUMeterOrientation,
+    VUNeedleChannels,
+    VUReferenceLevel,
+    LUFSReadout,
 };
 
 enum class VectorscopeDetail {
@@ -49,6 +57,11 @@ struct TuiSettings {
     VectorscopeMode vectorscopeMode = VectorscopeMode::Lissajous;
     bool vectorscopeGuides = true;
     VectorscopeDetail vectorscopeDetail = VectorscopeDetail::Detailed;
+    VUMeterMode vuMeterMode = VUMeterMode::Bar;
+    VUMeterOrientation vuMeterOrientation = VUMeterOrientation::Horizontal;
+    VUNeedleChannels vuNeedleChannels = VUNeedleChannels::Stereo;
+    float vuReferenceDbfs = -14.0f;
+    LUFSReadout lufsReadout = LUFSReadout::ShortTerm;
 };
 
 struct SettingDescriptor {

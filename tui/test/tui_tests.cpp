@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "dashboard_layout.h"
 #include "display_model.h"
+#include "meter_display_model.h"
 #include "scope_plot_model.h"
 #include "snapshot_store.h"
 #include "spectrum_peak_model.h"
@@ -155,29 +156,36 @@ void testProjectionAndLayout() {
     require(!wide.terminalTooSmall &&
         wide.resolvedPreset == Prism::Tui::LayoutPreset::Columns,
         "wide, tall terminals should use the columns dashboard");
-    require(wide.panels.size() == 4 &&
+    require(wide.panels.size() == 5 &&
         wide.panels[0].panel == Prism::Tui::PanelId::Spectrum &&
         wide.panels[1].panel == Prism::Tui::PanelId::Oscilloscope &&
         wide.panels[2].panel == Prism::Tui::PanelId::Vectorscope &&
-        wide.panels[3].panel == Prism::Tui::PanelId::Levels,
-        "the dashboard should contain all four scope panels");
+        wide.panels[3].panel == Prism::Tui::PanelId::VUMeter &&
+        wide.panels[4].panel == Prism::Tui::PanelId::LUFSMeter,
+        "the dashboard should contain all five scope panels");
     require(wide.panels[0].width == wide.panels[1].width &&
         wide.panels[2].width == wide.panels[3].width &&
+        wide.panels[3].width == wide.panels[4].width &&
         wide.panels[0].width + wide.panels[2].width == 100 &&
         wide.panels[0].width > wide.panels[2].width,
         "dashboard columns should fill the width and favor visual plots");
     require(wide.panels[0].height + wide.panels[1].height == 28 &&
-        wide.panels[2].height + wide.panels[3].height == 28,
+        wide.panels[2].height + wide.panels[3].height +
+            wide.panels[4].height == 28,
         "both dashboard columns should fill the available height");
 
     const auto stacked = Prism::Tui::buildDashboardLayout(
         60, 20, Prism::Tui::LayoutPreset::Automatic);
     require(stacked.resolvedPreset == Prism::Tui::LayoutPreset::Stacked,
         "short terminals should stack their panels");
-    require(stacked.panels.size() == 2 &&
+    require(stacked.panels.size() == 3 &&
+        stacked.panels[0].panel == Prism::Tui::PanelId::Spectrum &&
+        stacked.panels[1].panel == Prism::Tui::PanelId::VUMeter &&
+        stacked.panels[2].panel == Prism::Tui::PanelId::LUFSMeter &&
         stacked.panels[0].height + stacked.panels[1].height == 18 &&
-        stacked.panels[0].height > stacked.panels[1].height,
-        "stacked panels should fill the dashboard and favor the spectrum");
+        stacked.panels[1].height == stacked.panels[2].height &&
+        stacked.panels[1].width + stacked.panels[2].width == 60,
+        "compact dashboards should keep VU and LUFS as separate scopes");
 
     const auto minimum = Prism::Tui::buildDashboardLayout(
         44, 12, Prism::Tui::LayoutPreset::Automatic);
@@ -192,22 +200,42 @@ void testProjectionAndLayout() {
         "short resize should select the compact screen");
 
     const auto expanded = Prism::Tui::buildDashboardLayout(
-        100, 30, Prism::Tui::LayoutPreset::Columns, Prism::Tui::PanelId::Levels);
+        100, 30, Prism::Tui::LayoutPreset::Columns, Prism::Tui::PanelId::LUFSMeter);
     require(expanded.panels.size() == 1 &&
-        expanded.panels[0].panel == Prism::Tui::PanelId::Levels &&
+        expanded.panels[0].panel == Prism::Tui::PanelId::LUFSMeter &&
         expanded.panels[0].width == 100 && expanded.panels[0].height == 28,
         "expanded panels should occupy the complete dashboard area");
     require(Prism::Tui::nextPanel(Prism::Tui::PanelId::Spectrum) ==
         Prism::Tui::PanelId::Oscilloscope,
         "panel focus should cycle forward");
     require(Prism::Tui::nextPanel(Prism::Tui::PanelId::Spectrum, true) ==
-        Prism::Tui::PanelId::Levels,
+        Prism::Tui::PanelId::LUFSMeter,
         "panel focus should cycle backward");
     const auto compactPanels = Prism::Tui::visiblePanelOrder(stacked);
-    require(compactPanels.size() == 2 &&
+    require(compactPanels.size() == 3 &&
         Prism::Tui::nextPanel(
-            Prism::Tui::PanelId::Spectrum, compactPanels) == Prism::Tui::PanelId::Levels,
+            Prism::Tui::PanelId::Spectrum, compactPanels) == Prism::Tui::PanelId::VUMeter,
         "compact layout focus should skip hidden visual scopes");
+}
+
+void testMeterDisplayModels() {
+    require(std::abs(Prism::Tui::dbfsToClassicVu(-14.0f, -14.0f)) < 0.001f,
+        "the reference level should map exactly to 0 VU");
+    require(std::abs(
+        Prism::Tui::classicVuToNormalized(0.0f) - 0.81f) < 0.001f,
+        "the TUI should preserve Prism's classic nonlinear VU scale");
+    require(Prism::Tui::classicVuToNormalized(-10.0f) <
+        Prism::Tui::classicVuToNormalized(-5.0f),
+        "classic VU projection should remain monotonic");
+    require(Prism::Tui::compactMeterToNormalized(-50.0f) == 0.0f &&
+        Prism::Tui::compactMeterToNormalized(0.0f) == 1.0f,
+        "LUFS compact bars should use the GUI's -50 to 0 range");
+    require(std::abs(
+        Prism::Tui::stereoRmsDbAverage(-10.0f, -10.0f) + 10.0f) < 0.001f,
+        "combined VU needles should average channels in the power domain");
+    require(Prism::Tui::selectLufsReadout(
+        -10.0f, -12.0f, -14.0f, Prism::Tui::LUFSReadout::Integrated) == -14.0f,
+        "LUFS readout selection should drive the dedicated loudness bar");
 }
 
 void testSpectrumPeakModel() {
@@ -251,7 +279,7 @@ void testSettingsModelAndPersistence() {
         "settings normalization should enforce public ranges");
 
     const auto pages = Prism::Tui::settingsPages();
-    require(pages.size() == 4 &&
+    require(pages.size() == 6 &&
         Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::General).size() == 3,
         "settings should expose shallow category pages");
     Prism::Tui::TuiSettings adjusted;
@@ -276,6 +304,14 @@ void testSettingsModelAndPersistence() {
         adjusted, Prism::Tui::SettingId::OscilloscopePitchLock, 1) &&
         adjusted.oscilloscopePitchLock,
         "pitch lock should remain independently re-enableable");
+    require(Prism::Tui::adjustSetting(
+        adjusted, Prism::Tui::SettingId::VUMeterMode, 1) &&
+        adjusted.vuMeterMode == Prism::Tui::VUMeterMode::Needle,
+        "VU settings should expose the GUI's needle presentation");
+    require(Prism::Tui::adjustSetting(
+        adjusted, Prism::Tui::SettingId::LUFSReadout, 1) &&
+        adjusted.lufsReadout == Prism::Tui::LUFSReadout::Integrated,
+        "LUFS settings should select an independent loudness window");
     require(Prism::Tui::resetSetting(
         adjusted, Prism::Tui::SettingId::InputTrim) &&
         adjusted.inputTrimDb == 0.0f,
@@ -552,6 +588,7 @@ void testThreadSafeSnapshots() {
 int main() {
     testCli();
     testProjectionAndLayout();
+    testMeterDisplayModels();
     testSpectrumPeakModel();
     testSettingsModelAndPersistence();
     testScopePlotModels();

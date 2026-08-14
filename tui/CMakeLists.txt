@@ -33,6 +33,7 @@ add_library(prism_tui_analysis STATIC
     src/cli.cpp
     src/dashboard_layout.cpp
     src/display_model.cpp
+    src/meter_display_model.cpp
     src/scope_plot_model.cpp
     src/spectrum_peak_model.cpp
     src/tui_settings.cpp

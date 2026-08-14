@@ -34,6 +34,17 @@ const std::vector<SettingDescriptor> kVectorscopeSettings = {
     {SettingId::VectorscopeDetail, "Point detail", "Balances point density against terminal rendering cost."},
 };
 
+const std::vector<SettingDescriptor> kVUMeterSettings = {
+    {SettingId::VUMeterMode, "Display mode", "Switches between Prism's bar and classic needle faces."},
+    {SettingId::VUMeterOrientation, "Bar orientation", "Chooses horizontal or vertical bars when bar mode is active."},
+    {SettingId::VUNeedleChannels, "Needle channels", "Shows stereo needles or one power-averaged needle."},
+    {SettingId::VUReferenceLevel, "0 VU reference", "Calibrates 0 VU to a dBFS reference level."},
+};
+
+const std::vector<SettingDescriptor> kLUFSMeterSettings = {
+    {SettingId::LUFSReadout, "Loudness readout", "Chooses which LUFS window drives the main bar and badge."},
+};
+
 float snap(float value, float step) {
     return std::round(value / step) * step;
 }
@@ -70,6 +81,27 @@ std::string serializeVectorDetail(VectorscopeDetail detail) {
         case VectorscopeDetail::Maximum: return "maximum";
     }
     return "detailed";
+}
+
+std::string serializeVuMode(VUMeterMode mode) {
+    return mode == VUMeterMode::Needle ? "needle" : "bar";
+}
+
+std::string serializeVuOrientation(VUMeterOrientation orientation) {
+    return orientation == VUMeterOrientation::Vertical ? "vertical" : "horizontal";
+}
+
+std::string serializeVuNeedleChannels(VUNeedleChannels channels) {
+    return channels == VUNeedleChannels::Combined ? "combined" : "stereo";
+}
+
+std::string serializeLufsReadout(LUFSReadout readout) {
+    switch (readout) {
+        case LUFSReadout::Momentary: return "momentary";
+        case LUFSReadout::ShortTerm: return "short_term";
+        case LUFSReadout::Integrated: return "integrated";
+    }
+    return "short_term";
 }
 
 bool parseBool(const std::string& value, bool fallback) {
@@ -122,6 +154,33 @@ VectorscopeDetail parseVectorDetail(const std::string& value,
     return fallback;
 }
 
+VUMeterMode parseVuMode(const std::string& value, VUMeterMode fallback) {
+    if (value == "bar") return VUMeterMode::Bar;
+    if (value == "needle") return VUMeterMode::Needle;
+    return fallback;
+}
+
+VUMeterOrientation parseVuOrientation(const std::string& value,
+                                      VUMeterOrientation fallback) {
+    if (value == "horizontal") return VUMeterOrientation::Horizontal;
+    if (value == "vertical") return VUMeterOrientation::Vertical;
+    return fallback;
+}
+
+VUNeedleChannels parseVuNeedleChannels(const std::string& value,
+                                       VUNeedleChannels fallback) {
+    if (value == "stereo") return VUNeedleChannels::Stereo;
+    if (value == "combined") return VUNeedleChannels::Combined;
+    return fallback;
+}
+
+LUFSReadout parseLufsReadout(const std::string& value, LUFSReadout fallback) {
+    if (value == "momentary") return LUFSReadout::Momentary;
+    if (value == "short_term") return LUFSReadout::ShortTerm;
+    if (value == "integrated") return LUFSReadout::Integrated;
+    return fallback;
+}
+
 const char* environmentValue(const char* name) {
     const char* value = std::getenv(name);
     return value != nullptr && value[0] != '\0' ? value : nullptr;
@@ -135,6 +194,8 @@ TuiSettings normalizeSettings(TuiSettings settings) {
     settings.spectrumTiltDbPerOctave = std::clamp(
         snap(settings.spectrumTiltDbPerOctave, 0.1f), -2.0f, 8.0f);
     settings.oscilloscopeTraceWeight = std::clamp(settings.oscilloscopeTraceWeight, 1, 3);
+    settings.vuReferenceDbfs = std::clamp(
+        snap(settings.vuReferenceDbfs, 1.0f), -30.0f, 0.0f);
     if (!settings.oscilloscopePitchLock) {
         settings.oscilloscopeFrequencyReadout = false;
     }
@@ -152,7 +213,12 @@ bool operator==(const TuiSettings& left, const TuiSettings& right) {
         left.oscilloscopeTraceWeight == right.oscilloscopeTraceWeight &&
         left.vectorscopeMode == right.vectorscopeMode &&
         left.vectorscopeGuides == right.vectorscopeGuides &&
-        left.vectorscopeDetail == right.vectorscopeDetail;
+        left.vectorscopeDetail == right.vectorscopeDetail &&
+        left.vuMeterMode == right.vuMeterMode &&
+        left.vuMeterOrientation == right.vuMeterOrientation &&
+        left.vuNeedleChannels == right.vuNeedleChannels &&
+        left.vuReferenceDbfs == right.vuReferenceDbfs &&
+        left.lufsReadout == right.lufsReadout;
 }
 
 bool operator!=(const TuiSettings& left, const TuiSettings& right) {
@@ -165,6 +231,8 @@ std::vector<SettingsPage> settingsPages() {
         SettingsPage::Spectrum,
         SettingsPage::Oscilloscope,
         SettingsPage::Vectorscope,
+        SettingsPage::VUMeter,
+        SettingsPage::LUFSMeter,
     };
 }
 
@@ -175,6 +243,8 @@ const char* settingsPageName(SettingsPage page) {
         case SettingsPage::Spectrum: return "Spectrum";
         case SettingsPage::Oscilloscope: return "Oscilloscope";
         case SettingsPage::Vectorscope: return "Vectorscope";
+        case SettingsPage::VUMeter: return "VU meter";
+        case SettingsPage::LUFSMeter: return "LUFS meter";
     }
     return "Settings";
 }
@@ -186,6 +256,8 @@ const char* settingsPageDescription(SettingsPage page) {
         case SettingsPage::Spectrum: return "Frequency analysis and readouts.";
         case SettingsPage::Oscilloscope: return "Waveform stabilization and presentation.";
         case SettingsPage::Vectorscope: return "Stereo projection and point rendering.";
+        case SettingsPage::VUMeter: return "Classic level, peak, and phase metering.";
+        case SettingsPage::LUFSMeter: return "Loudness window and target presentation.";
     }
     return {};
 }
@@ -196,6 +268,8 @@ const std::vector<SettingDescriptor>& settingsForPage(SettingsPage page) {
         case SettingsPage::Spectrum: return kSpectrumSettings;
         case SettingsPage::Oscilloscope: return kOscilloscopeSettings;
         case SettingsPage::Vectorscope: return kVectorscopeSettings;
+        case SettingsPage::VUMeter: return kVUMeterSettings;
+        case SettingsPage::LUFSMeter: return kLUFSMeterSettings;
         case SettingsPage::Home: break;
     }
     static const std::vector<SettingDescriptor> empty;
@@ -231,6 +305,16 @@ std::string settingValue(const TuiSettings& settings, SettingId setting) {
                 case VectorscopeDetail::Detailed: return "Detailed";
                 case VectorscopeDetail::Maximum: return "Maximum";
             }
+        case SettingId::VUMeterMode:
+            return vuMeterModeName(settings.vuMeterMode);
+        case SettingId::VUMeterOrientation:
+            return vuMeterOrientationName(settings.vuMeterOrientation);
+        case SettingId::VUNeedleChannels:
+            return vuNeedleChannelsName(settings.vuNeedleChannels);
+        case SettingId::VUReferenceLevel:
+            return trimFloat(settings.vuReferenceDbfs, 0) + " dBFS";
+        case SettingId::LUFSReadout:
+            return lufsReadoutName(settings.lufsReadout);
     }
     return {};
 }
@@ -302,6 +386,32 @@ bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
             settings.vectorscopeDetail = static_cast<VectorscopeDetail>(value);
             break;
         }
+        case SettingId::VUMeterMode:
+            settings.vuMeterMode = settings.vuMeterMode == VUMeterMode::Bar
+                ? VUMeterMode::Needle
+                : VUMeterMode::Bar;
+            break;
+        case SettingId::VUMeterOrientation:
+            settings.vuMeterOrientation =
+                settings.vuMeterOrientation == VUMeterOrientation::Horizontal
+                    ? VUMeterOrientation::Vertical
+                    : VUMeterOrientation::Horizontal;
+            break;
+        case SettingId::VUNeedleChannels:
+            settings.vuNeedleChannels =
+                settings.vuNeedleChannels == VUNeedleChannels::Stereo
+                    ? VUNeedleChannels::Combined
+                    : VUNeedleChannels::Stereo;
+            break;
+        case SettingId::VUReferenceLevel:
+            settings.vuReferenceDbfs += direction > 0 ? 1.0f : -1.0f;
+            break;
+        case SettingId::LUFSReadout: {
+            int value = static_cast<int>(settings.lufsReadout);
+            value = (value + (direction > 0 ? 1 : 2)) % 3;
+            settings.lufsReadout = static_cast<LUFSReadout>(value);
+            break;
+        }
     }
     settings = normalizeSettings(settings);
     return settings != before;
@@ -322,6 +432,11 @@ bool resetSetting(TuiSettings& settings, SettingId setting) {
         case SettingId::VectorscopeMode: settings.vectorscopeMode = defaults.vectorscopeMode; break;
         case SettingId::VectorscopeGuides: settings.vectorscopeGuides = defaults.vectorscopeGuides; break;
         case SettingId::VectorscopeDetail: settings.vectorscopeDetail = defaults.vectorscopeDetail; break;
+        case SettingId::VUMeterMode: settings.vuMeterMode = defaults.vuMeterMode; break;
+        case SettingId::VUMeterOrientation: settings.vuMeterOrientation = defaults.vuMeterOrientation; break;
+        case SettingId::VUNeedleChannels: settings.vuNeedleChannels = defaults.vuNeedleChannels; break;
+        case SettingId::VUReferenceLevel: settings.vuReferenceDbfs = defaults.vuReferenceDbfs; break;
+        case SettingId::LUFSReadout: settings.lufsReadout = defaults.lufsReadout; break;
     }
     return settings != before;
 }
@@ -367,6 +482,11 @@ TuiSettings loadSettings(const std::filesystem::path& path) {
         else if (key == "vector_mode") settings.vectorscopeMode = parseVectorMode(value, settings.vectorscopeMode);
         else if (key == "vector_guides") settings.vectorscopeGuides = parseBool(value, settings.vectorscopeGuides);
         else if (key == "vector_detail") settings.vectorscopeDetail = parseVectorDetail(value, settings.vectorscopeDetail);
+        else if (key == "vu_mode") settings.vuMeterMode = parseVuMode(value, settings.vuMeterMode);
+        else if (key == "vu_orientation") settings.vuMeterOrientation = parseVuOrientation(value, settings.vuMeterOrientation);
+        else if (key == "vu_needle_channels") settings.vuNeedleChannels = parseVuNeedleChannels(value, settings.vuNeedleChannels);
+        else if (key == "vu_reference_dbfs") settings.vuReferenceDbfs = parseFloat(value, settings.vuReferenceDbfs);
+        else if (key == "lufs_readout") settings.lufsReadout = parseLufsReadout(value, settings.lufsReadout);
     }
     return normalizeSettings(settings);
 }
@@ -398,7 +518,12 @@ bool saveSettings(const TuiSettings& rawSettings,
            << "osc_trace_weight=" << settings.oscilloscopeTraceWeight << '\n'
            << "vector_mode=" << serializeVectorMode(settings.vectorscopeMode) << '\n'
            << "vector_guides=" << (settings.vectorscopeGuides ? "true" : "false") << '\n'
-           << "vector_detail=" << serializeVectorDetail(settings.vectorscopeDetail) << '\n';
+           << "vector_detail=" << serializeVectorDetail(settings.vectorscopeDetail) << '\n'
+           << "vu_mode=" << serializeVuMode(settings.vuMeterMode) << '\n'
+           << "vu_orientation=" << serializeVuOrientation(settings.vuMeterOrientation) << '\n'
+           << "vu_needle_channels=" << serializeVuNeedleChannels(settings.vuNeedleChannels) << '\n'
+           << "vu_reference_dbfs=" << settings.vuReferenceDbfs << '\n'
+           << "lufs_readout=" << serializeLufsReadout(settings.lufsReadout) << '\n';
     if (!output) {
         if (error) *error = "could not write settings file";
         return false;

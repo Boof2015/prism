@@ -10,7 +10,8 @@ enum class PanelId {
     Spectrum,
     Oscilloscope,
     Vectorscope,
-    Levels,
+    VUMeter,
+    LUFSMeter,
 };
 
 enum class SplitAxis {

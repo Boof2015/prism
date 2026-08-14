@@ -3,6 +3,7 @@
 #include "analysis_pipeline.h"
 #include "dashboard_layout.h"
 #include "display_model.h"
+#include "meter_display_model.h"
 #include "scope_plot_model.h"
 #include "snapshot_store.h"
 #include "tui_settings.h"
@@ -89,7 +90,7 @@ struct InterfaceState {
     bool settingsOpen = false;
     SettingsPage settingsPage = SettingsPage::Home;
     size_t settingsHomeSelection = 0;
-    std::array<size_t, 5> settingsSelections{};
+    std::array<size_t, 7> settingsSelections{};
     std::string settingsStatus;
 };
 
@@ -152,8 +153,10 @@ std::string panelName(PanelId panel) {
             return "Oscilloscope";
         case PanelId::Vectorscope:
             return "Vectorscope";
-        case PanelId::Levels:
-            return "Levels";
+        case PanelId::VUMeter:
+            return "VU Meter";
+        case PanelId::LUFSMeter:
+            return "LUFS Meter";
     }
     return "Panel";
 }
@@ -166,8 +169,10 @@ std::string panelNumber(PanelId panel) {
             return "2";
         case PanelId::Vectorscope:
             return "3";
-        case PanelId::Levels:
+        case PanelId::VUMeter:
             return "4";
+        case PanelId::LUFSMeter:
+            return "5";
     }
     return "?";
 }
@@ -468,52 +473,435 @@ ftxui::Element renderVectorscopePanel(const DisplayFrame& frame,
         size(HEIGHT, EQUAL, std::max(1, height));
 }
 
-ftxui::Element renderLevelsPanel(const DisplayFrame& frame,
-                                 int width,
-                                 int height,
-                                 bool focused) {
+std::string formatVuReference(float referenceDbfs) {
+    std::ostringstream output;
+    output << std::fixed << std::setprecision(0) << referenceDbfs << " dBFS";
+    return output.str();
+}
+
+ftxui::Element renderClassicVuGauge(float levelDb,
+                                    float peakDb,
+                                    float referenceDbfs,
+                                    int columns) {
+    using namespace ftxui;
+    const int resolvedColumns = std::max(1, columns);
+    const int levelColumns = std::clamp(
+        static_cast<int>(std::lround(
+            vuDbToNormalized(levelDb, referenceDbfs) * resolvedColumns)),
+        0,
+        resolvedColumns);
+    const int peakColumn = std::clamp(
+        static_cast<int>(std::lround(
+            vuDbToNormalized(peakDb, referenceDbfs) * (resolvedColumns - 1))),
+        0,
+        resolvedColumns - 1);
+    const int hotColumn = static_cast<int>(std::lround(
+        classicVuToNormalized(0.0f) * resolvedColumns));
+    const bool showPeak = std::isfinite(peakDb) && peakDb > -59.0f;
+
+    Elements cells;
+    cells.reserve(static_cast<size_t>(resolvedColumns));
+    for (int column = 0; column < resolvedColumns; ++column) {
+        if (showPeak && column == peakColumn) {
+            const bool hot = dbfsToClassicVu(peakDb, referenceDbfs) > 0.0f;
+            cells.push_back(text("│") | color(
+                hot ? Color::RedLight : Color::CyanLight));
+        } else if (column < levelColumns) {
+            cells.push_back(text("█") | color(
+                column >= hotColumn ? Color::Red : Color::Cyan));
+        } else {
+            cells.push_back(text("·") | color(Color::GrayDark));
+        }
+    }
+    return hbox(std::move(cells)) | size(WIDTH, EQUAL, resolvedColumns);
+}
+
+ftxui::Element renderCorrelationGauge(float correlation, int columns) {
+    using namespace ftxui;
+    const int resolvedColumns = std::max(5, columns);
+    const int center = resolvedColumns / 2;
+    const float clamped = std::clamp(correlation, -1.0f, 1.0f);
+    const int extent = static_cast<int>(std::lround(
+        std::abs(clamped) * static_cast<float>(center)));
+    Elements cells;
+    cells.reserve(static_cast<size_t>(resolvedColumns));
+    for (int column = 0; column < resolvedColumns; ++column) {
+        const bool positiveFill = clamped >= 0.0f &&
+            column >= center && column < center + extent;
+        const bool negativeFill = clamped < 0.0f &&
+            column < center && column >= center - extent;
+        if (column == center) {
+            cells.push_back(text("│") | color(Color::GrayLight));
+        } else if (positiveFill) {
+            cells.push_back(text("█") | color(Color::Cyan));
+        } else if (negativeFill) {
+            cells.push_back(text("█") | color(Color::Red));
+        } else {
+            cells.push_back(text("·") | color(Color::GrayDark));
+        }
+    }
+    return hbox({
+        text("-1 ") | dim,
+        hbox(std::move(cells)) | size(WIDTH, EQUAL, resolvedColumns),
+        text(" +1") | dim,
+    });
+}
+
+std::string buildClassicVuScale(int columns) {
+    std::string result(static_cast<size_t>(std::max(1, columns)), ' ');
+    const auto place = [&](float vu, const std::string& label) {
+        if (label.size() > result.size()) return;
+        const size_t position = static_cast<size_t>(std::lround(
+            classicVuToNormalized(vu) * static_cast<float>(result.size() - 1)));
+        const size_t start = std::min(
+            result.size() - label.size(),
+            position > label.size() / 2 ? position - label.size() / 2 : size_t{0});
+        result.replace(start, label.size(), label);
+    };
+    place(-20.0f, "-20");
+    place(-10.0f, "-10");
+    place(-5.0f, "-5");
+    place(0.0f, "0");
+    place(3.0f, "+3");
+    return result;
+}
+
+ftxui::Element renderHorizontalVu(const DisplayFrame& frame,
+                                  int contentWidth,
+                                  int contentHeight,
+                                  const TuiSettings& settings) {
+    using namespace ftxui;
+    const int gaugeWidth = std::max(5, contentWidth - 13);
+    const auto channel = [&](const char* label, float level, float peak) {
+        return hbox({
+            text(std::string(label) + " ") | bold,
+            renderClassicVuGauge(level, peak, settings.vuReferenceDbfs, gaugeWidth),
+            text(" " + formatDb(level) + " dB") | dim,
+        });
+    };
+    Elements body;
+    body.push_back(filler());
+    body.push_back(channel("L", frame.vu.vuLDb, frame.vu.peakLDb));
+    body.push_back(channel("R", frame.vu.vuRDb, frame.vu.peakRDb));
+    if (contentHeight >= 6) {
+        body.push_back(hbox({
+            text("  "),
+            text(buildClassicVuScale(gaugeWidth)) | dim,
+        }));
+    }
+    body.push_back(renderCorrelationGauge(
+        frame.vu.correlation, std::max(5, contentWidth - 8)) | center);
+    body.push_back(filler());
+    return vbox(std::move(body));
+}
+
+ftxui::Element renderVerticalVuBar(float levelDb,
+                                   float peakDb,
+                                   float referenceDbfs,
+                                   int row,
+                                   int rows) {
+    using namespace ftxui;
+    const float level = vuDbToNormalized(levelDb, referenceDbfs);
+    const float peak = vuDbToNormalized(peakDb, referenceDbfs);
+    const float top = 1.0f - static_cast<float>(row) / static_cast<float>(rows);
+    const float bottom = 1.0f - static_cast<float>(row + 1) / static_cast<float>(rows);
+    const bool peakHere = peak > bottom && peak <= top;
+    const bool filled = level > bottom;
+    const bool hot = bottom >= classicVuToNormalized(0.0f);
+    if (peakHere) return text("━━") | color(hot ? Color::RedLight : Color::CyanLight);
+    if (filled) return text("██") | color(hot ? Color::Red : Color::Cyan);
+    return text("··") | color(Color::GrayDark);
+}
+
+ftxui::Element renderVerticalVu(const DisplayFrame& frame,
+                                int contentWidth,
+                                int contentHeight,
+                                const TuiSettings& settings) {
+    using namespace ftxui;
+    const int meterRows = std::max(1, contentHeight - 3);
+    Elements rows;
+    rows.push_back(text("L      R") | center | bold);
+    for (int row = 0; row < meterRows; ++row) {
+        rows.push_back(hbox({
+            renderVerticalVuBar(
+                frame.vu.vuLDb, frame.vu.peakLDb,
+                settings.vuReferenceDbfs, row, meterRows),
+            text("    "),
+            renderVerticalVuBar(
+                frame.vu.vuRDb, frame.vu.peakRDb,
+                settings.vuReferenceDbfs, row, meterRows),
+        }) | center);
+    }
+    rows.push_back(text(
+        formatDb(frame.vu.vuLDb) + "     " + formatDb(frame.vu.vuRDb) + " dB") |
+        center | dim);
+    rows.push_back(renderCorrelationGauge(
+        frame.vu.correlation, std::max(5, contentWidth - 8)) | center);
+    return vbox(std::move(rows));
+}
+
+ftxui::Element renderNeedleVu(const DisplayFrame& frame,
+                              int contentWidth,
+                              int contentHeight,
+                              const TuiSettings& settings) {
+    using namespace ftxui;
+    const bool combined = settings.vuNeedleChannels == VUNeedleChannels::Combined;
+    const float combinedDb = stereoRmsDbAverage(frame.vu.vuLDb, frame.vu.vuRDb);
+    const float combinedPeak = std::max(frame.vu.peakLDb, frame.vu.peakRDb);
+    const float referenceDbfs = settings.vuReferenceDbfs;
+    const int plotRows = std::max(1, contentHeight - 2);
+    auto face = canvas([
+        left = frame.vu.vuLDb,
+        right = frame.vu.vuRDb,
+        leftPeak = frame.vu.peakLDb,
+        rightPeak = frame.vu.peakRDb,
+        combinedDb,
+        combinedPeak,
+        combined,
+        referenceDbfs
+    ](Canvas& surface) {
+        constexpr float pi = 3.14159265358979323846f;
+        const int canvasWidth = surface.width();
+        const int canvasHeight = surface.height();
+        if (canvasWidth < 8 || canvasHeight < 8) return;
+        const float startAngle = pi * 1.08f;
+        const float endAngle = pi * 1.92f;
+        const int centerX = canvasWidth / 2;
+        const int centerY = canvasHeight - 2;
+        const int radiusX = std::max(3, static_cast<int>(
+            static_cast<float>(centerX - 2) / std::abs(std::cos(startAngle))));
+        const int radiusY = std::max(3, std::min(
+            centerY - 2,
+            static_cast<int>(static_cast<float>(canvasHeight) * 0.78f)));
+        const auto point = [&](float angle, float scale) {
+            return std::pair<int, int>{
+                centerX + static_cast<int>(std::lround(
+                    std::cos(angle) * static_cast<float>(radiusX) * scale)),
+                centerY + static_cast<int>(std::lround(
+                    std::sin(angle) * static_cast<float>(radiusY) * scale)),
+            };
+        };
+        const auto drawArc = [&](float from, float to, float scale, const Color& color) {
+            constexpr int segments = 80;
+            auto previous = point(from, scale);
+            for (int index = 1; index <= segments; ++index) {
+                const float amount = static_cast<float>(index) /
+                    static_cast<float>(segments);
+                const float angle = from + (to - from) * amount;
+                const auto next = point(angle, scale);
+                surface.DrawPointLine(
+                    previous.first, previous.second,
+                    next.first, next.second, color);
+                previous = next;
+            }
+        };
+        const auto angleForDb = [&](float db) {
+            return startAngle + vuDbToNormalized(db, referenceDbfs) *
+                (endAngle - startAngle);
+        };
+        const auto drawNeedle = [&](float db, float peak, float scale, const Color& color) {
+            const float angle = angleForDb(db);
+            const auto tip = point(angle, scale * 0.92f);
+            surface.DrawPointLine(centerX, centerY, tip.first, tip.second, color);
+            const float peakAngle = angleForDb(peak);
+            const auto peakInner = point(peakAngle, scale * 0.91f);
+            const auto peakOuter = point(peakAngle, scale * 1.04f);
+            surface.DrawPointLine(
+                peakInner.first, peakInner.second,
+                peakOuter.first, peakOuter.second,
+                dbfsToClassicVu(peak, referenceDbfs) > 0.0f
+                    ? Color::RedLight
+                    : color);
+        };
+
+        drawArc(startAngle, endAngle, 1.0f, Color::GrayDark);
+        if (!combined) drawArc(startAngle, endAngle, 0.78f, Color::RGB(54, 64, 68));
+        const std::array<float, 9> ticks = {
+            -20.0f, -10.0f, -5.0f, -3.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f};
+        for (float vu : ticks) {
+            const float angle = startAngle + classicVuToNormalized(vu) *
+                (endAngle - startAngle);
+            const auto inner = point(angle, 0.92f);
+            const auto outer = point(angle, 1.05f);
+            surface.DrawPointLine(
+                inner.first, inner.second,
+                outer.first, outer.second,
+                vu >= 0.0f ? Color::Red : Color::GrayLight);
+        }
+        const float hotAngle = startAngle + classicVuToNormalized(0.0f) *
+            (endAngle - startAngle);
+        drawArc(hotAngle, endAngle, 1.0f, Color::Red);
+
+        if (combined) {
+            drawArc(startAngle, angleForDb(combinedDb), 1.0f, Color::Cyan);
+            drawNeedle(combinedDb, combinedPeak, 1.0f, Color::CyanLight);
+        } else {
+            drawArc(startAngle, angleForDb(left), 0.78f, Color::BlueLight);
+            drawArc(startAngle, angleForDb(right), 1.0f, Color::Cyan);
+            drawNeedle(left, leftPeak, 0.78f, Color::BlueLight);
+            drawNeedle(right, rightPeak, 1.0f, Color::CyanLight);
+        }
+        surface.DrawPointCircleFilled(centerX, centerY, 1, Color::CyanLight);
+    }) | size(HEIGHT, EQUAL, plotRows) | flex;
+
+    const std::string readings = combined
+        ? formatDb(combinedDb) + " dB"
+        : "L " + formatDb(frame.vu.vuLDb) + " dB    " +
+            formatDb(frame.vu.vuRDb) + " dB R";
+    return vbox({
+        std::move(face),
+        text(readings) | center | color(Color::CyanLight),
+        renderCorrelationGauge(
+            frame.vu.correlation, std::max(5, contentWidth - 8)) | center,
+    });
+}
+
+ftxui::Element renderVUMeterPanel(const DisplayFrame& frame,
+                                  int width,
+                                  int height,
+                                  bool focused,
+                                  const TuiSettings& settings) {
     using namespace ftxui;
     const int contentWidth = std::max(1, width - 2);
     const int contentHeight = std::max(1, height - 2);
-    const size_t meterWidth = static_cast<size_t>(std::max(4, contentWidth - 14));
+    std::string detail = vuMeterModeName(settings.vuMeterMode);
+    if (width >= 42 && settings.vuMeterMode == VUMeterMode::Bar) {
+        detail += " • " + std::string(vuMeterOrientationName(
+            settings.vuMeterOrientation));
+    } else if (width >= 42) {
+        detail += " • " + std::string(vuNeedleChannelsName(
+            settings.vuNeedleChannels));
+    }
+    if (width >= 58) {
+        detail += " • 0 VU " + formatVuReference(settings.vuReferenceDbfs);
+    }
 
-    const auto meterRow = [&](const char* label, float level, float peak) {
-        return hbox({
-            text(std::string(label) + " ") | bold,
-            text(buildMeterBar(level, peak, meterWidth)) | color(Color::Cyan),
-            text("  " + formatDb(level) + " dB"),
-        });
-    };
-
-    Elements body;
-    body.push_back(meterRow("L", frame.vu.barLDb, frame.vu.peakLDb));
-    body.push_back(meterRow("R", frame.vu.barRDb, frame.vu.peakRDb));
-    if (contentHeight >= 7) {
-        body.push_back(separatorEmpty());
-        const auto loudnessRow = [&](const char* label, float value) {
-            return hbox({
-                text(label) | color(Color::Yellow),
-                filler(),
-                text(formatLufs(value) + " LUFS") | color(Color::YellowLight),
-            });
-        };
-        body.push_back(loudnessRow("Momentary", frame.lufs.momentaryLUFS));
-        body.push_back(loudnessRow("Short term", frame.lufs.shortTermLUFS));
-        body.push_back(loudnessRow("Integrated", frame.lufs.integratedLUFS));
+    Element body;
+    if (settings.vuMeterMode == VUMeterMode::Needle) {
+        body = renderNeedleVu(frame, contentWidth, contentHeight, settings);
+    } else if (settings.vuMeterOrientation == VUMeterOrientation::Vertical) {
+        body = renderVerticalVu(frame, contentWidth, contentHeight, settings);
     } else {
-        const std::string lufs =
-            "LUFS  M " + formatLufs(frame.lufs.momentaryLUFS) +
-            "  S " + formatLufs(frame.lufs.shortTermLUFS) +
-            "  I " + formatLufs(frame.lufs.integratedLUFS);
-        body.push_back(text(lufs) | color(Color::Yellow));
+        body = renderHorizontalVu(frame, contentWidth, contentHeight, settings);
     }
-    while (static_cast<int>(body.size()) < contentHeight) {
-        body.push_back(filler());
+    auto panel = window(
+        panelTitle(PanelId::VUMeter, focused, detail),
+        std::move(body));
+    return stylePanel(std::move(panel), focused) |
+        size(WIDTH, EQUAL, std::max(1, width)) |
+        size(HEIGHT, EQUAL, std::max(1, height));
+}
+
+std::string lufsScaleLabel(int row, int rows) {
+    const std::array<int, 6> ticks = {0, -6, -12, -24, -36, -50};
+    for (int tick : ticks) {
+        const int tickRow = static_cast<int>(std::lround(
+            (1.0f - compactMeterToNormalized(static_cast<float>(tick))) *
+            static_cast<float>(std::max(0, rows - 1))));
+        if (tickRow == row) {
+            std::ostringstream label;
+            label << std::setw(3) << std::abs(tick);
+            return label.str();
+        }
+    }
+    return "   ";
+}
+
+ftxui::Element renderLufsBarCell(float levelDb,
+                                 float peakDb,
+                                 int row,
+                                 int rows,
+                                 int width,
+                                 bool showPeak,
+                                 bool targetRow) {
+    using namespace ftxui;
+    const float level = compactMeterToNormalized(levelDb);
+    const float peak = compactMeterToNormalized(peakDb);
+    const float top = 1.0f - static_cast<float>(row) / static_cast<float>(rows);
+    const float bottom = 1.0f - static_cast<float>(row + 1) / static_cast<float>(rows);
+    const bool peakHere = showPeak && peak > bottom && peak <= top;
+    const bool filled = level > bottom;
+    const auto repeat = [width](const char* glyph) {
+        std::string result;
+        for (int index = 0; index < width; ++index) result += glyph;
+        return result;
+    };
+    if (targetRow) return text(repeat("─")) |
+        color(Color::RedLight);
+    if (peakHere) return text(repeat("━")) |
+        color(Color::CyanLight);
+    if (filled) return text(repeat("█")) |
+        color(Color::Cyan);
+    return text(repeat("·")) |
+        color(Color::GrayDark);
+}
+
+ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
+                                    int width,
+                                    int height,
+                                    bool focused,
+                                    const TuiSettings& settings) {
+    using namespace ftxui;
+    constexpr float targetLufs = -14.0f;
+    const int contentHeight = std::max(1, height - 2);
+    const int meterRows = std::max(1, contentHeight - 1);
+    const float selected = selectLufsReadout(
+        frame.lufs.momentaryLUFS,
+        frame.lufs.shortTermLUFS,
+        frame.lufs.integratedLUFS,
+        settings.lufsReadout);
+    const int selectedRow = static_cast<int>(std::lround(
+        (1.0f - compactMeterToNormalized(selected)) *
+        static_cast<float>(std::max(0, meterRows - 1))));
+    const int targetRow = static_cast<int>(std::lround(
+        (1.0f - compactMeterToNormalized(targetLufs)) *
+        static_cast<float>(std::max(0, meterRows - 1))));
+
+    Elements rows;
+    rows.push_back(hbox({
+        text("    L R LUFS") | dim,
+        filler(),
+        text("target -14") | color(Color::RedLight) | dim,
+    }));
+    for (int row = 0; row < meterRows; ++row) {
+        Elements parts;
+        const auto gap = [&]() {
+            auto element = text(row == targetRow ? "─" : " ");
+            return row == targetRow
+                ? element | color(Color::RedLight)
+                : element;
+        };
+        parts.push_back(text(lufsScaleLabel(row, meterRows)) | dim);
+        parts.push_back(gap());
+        parts.push_back(renderLufsBarCell(
+            frame.lufs.barLDb, frame.lufs.peakLDb,
+            row, meterRows, 2, true, row == targetRow));
+        parts.push_back(gap());
+        parts.push_back(renderLufsBarCell(
+            frame.lufs.barRDb, frame.lufs.peakRDb,
+            row, meterRows, 2, true, row == targetRow));
+        parts.push_back(gap());
+        parts.push_back(renderLufsBarCell(
+            selected, selected,
+            row, meterRows, 3, false, row == targetRow));
+        parts.push_back(text(" "));
+        if (row == selectedRow) {
+            parts.push_back(
+                text(" " + formatLufs(selected) + " LUFS ") |
+                bgcolor(Color::Cyan) | color(Color::Black) | bold);
+        }
+        rows.push_back(hbox(std::move(parts)));
     }
 
+    std::string detail = lufsReadoutName(settings.lufsReadout);
+    if (width >= 52) {
+        detail += " • M " + formatLufs(frame.lufs.momentaryLUFS) +
+            " • S " + formatLufs(frame.lufs.shortTermLUFS) +
+            " • I " + formatLufs(frame.lufs.integratedLUFS);
+    }
     auto panel = window(
-        panelTitle(PanelId::Levels, focused),
-        vbox(std::move(body)));
+        panelTitle(PanelId::LUFSMeter, focused, detail),
+        vbox(std::move(rows)));
     return stylePanel(std::move(panel), focused) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
@@ -551,8 +939,20 @@ ftxui::Element renderLayoutNode(const LayoutNode& node,
                     rect->height,
                     focused,
                     state.settings);
-            case PanelId::Levels:
-                return renderLevelsPanel(frame, rect->width, rect->height, focused);
+            case PanelId::VUMeter:
+                return renderVUMeterPanel(
+                    frame,
+                    rect->width,
+                    rect->height,
+                    focused,
+                    state.settings);
+            case PanelId::LUFSMeter:
+                return renderLUFSMeterPanel(
+                    frame,
+                    rect->width,
+                    rect->height,
+                    focused,
+                    state.settings);
         }
     }
 
@@ -1025,7 +1425,8 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
         if (event == Event::Character('1')) selectedPanel = PanelId::Spectrum;
         if (event == Event::Character('2')) selectedPanel = PanelId::Oscilloscope;
         if (event == Event::Character('3')) selectedPanel = PanelId::Vectorscope;
-        if (event == Event::Character('4')) selectedPanel = PanelId::Levels;
+        if (event == Event::Character('4')) selectedPanel = PanelId::VUMeter;
+        if (event == Event::Character('5')) selectedPanel = PanelId::LUFSMeter;
         if (selectedPanel) {
             interfaceState.focusedPanel = *selectedPanel;
             if (interfaceState.expandedPanel) {
