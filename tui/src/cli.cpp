@@ -60,8 +60,10 @@ std::string usageText() {
         "Controls:\n"
         "  Tab / Shift-Tab   Focus the next or previous panel.\n"
         "  Enter             Expand the focused panel or restore the dashboard.\n"
+        "  s                 Open settings for the focused scope.\n"
         "  l                 Cycle automatic, stacked, and column layouts.\n"
-        "  1 / 2             Focus Spectrum or Levels.\n"
+        "  v                 Cycle vectorscope display modes.\n"
+        "  1 / 2 / 3 / 4     Focus Spectrum, Oscilloscope, Vectorscope, or Levels.\n"
         "  r                 Reset analyzers and integrated loudness.\n"
         "  q / Esc / Ctrl-C  Quit.\n";
 }

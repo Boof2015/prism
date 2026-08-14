@@ -33,7 +33,13 @@ add_library(prism_tui_analysis STATIC
     src/cli.cpp
     src/dashboard_layout.cpp
     src/display_model.cpp
+    src/scope_plot_model.cpp
+    src/spectrum_peak_model.cpp
+    src/tui_settings.cpp
     ${PRISM_NATIVE_DIR}/spectrum.cpp
+    ${PRISM_NATIVE_DIR}/oscilloscope.cpp
+    ${PRISM_NATIVE_DIR}/vectorscope.cpp
+    ${PRISM_NATIVE_DIR}/multiband.cpp
     ${PRISM_NATIVE_DIR}/vumeter.cpp
     ${PRISM_NATIVE_DIR}/lufsmeter.cpp
     ${PRISM_NATIVE_DIR}/dsp_utils.cpp)

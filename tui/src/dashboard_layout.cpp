@@ -16,6 +16,10 @@ MinimumSize panelMinimumSize(PanelId panel) {
     switch (panel) {
         case PanelId::Spectrum:
             return {30, 5};
+        case PanelId::Oscilloscope:
+            return {30, 5};
+        case PanelId::Vectorscope:
+            return {30, 8};
         case PanelId::Levels:
             return {30, 5};
     }
@@ -134,13 +138,15 @@ void resolveNode(const LayoutNode& node,
 
 LayoutPreset resolvePreset(LayoutPreset requested, int width, int height) {
     constexpr int minimumColumnsWidth = 72;
-    if (requested == LayoutPreset::Columns && width < minimumColumnsWidth) {
+    constexpr int minimumColumnsHeight = 18;
+    if (requested == LayoutPreset::Columns &&
+        (width < minimumColumnsWidth || height < minimumColumnsHeight)) {
         return LayoutPreset::Stacked;
     }
     if (requested != LayoutPreset::Automatic) {
         return requested;
     }
-    return width >= 96 && height >= 28
+    return width >= minimumColumnsWidth && height >= minimumColumnsHeight
         ? LayoutPreset::Columns
         : LayoutPreset::Stacked;
 }
@@ -148,8 +154,14 @@ LayoutPreset resolvePreset(LayoutPreset requested, int width, int height) {
 LayoutNode makeRoot(LayoutPreset preset) {
     if (preset == LayoutPreset::Columns) {
         return LayoutNode::split(SplitAxis::Columns, {
-            LayoutNode::leaf(PanelId::Spectrum, 4),
-            LayoutNode::leaf(PanelId::Levels, 1),
+            LayoutNode::split(SplitAxis::Rows, {
+                LayoutNode::leaf(PanelId::Spectrum, 3),
+                LayoutNode::leaf(PanelId::Oscilloscope, 2),
+            }, 3),
+            LayoutNode::split(SplitAxis::Rows, {
+                LayoutNode::leaf(PanelId::Vectorscope, 1),
+                LayoutNode::leaf(PanelId::Levels, 1),
+            }, 1),
         });
     }
     return LayoutNode::split(SplitAxis::Rows, {
@@ -223,19 +235,50 @@ std::string layoutPresetName(LayoutPreset preset) {
 }
 
 std::vector<PanelId> panelOrder() {
-    return {PanelId::Spectrum, PanelId::Levels};
+    return {
+        PanelId::Spectrum,
+        PanelId::Oscilloscope,
+        PanelId::Vectorscope,
+        PanelId::Levels,
+    };
 }
 
 PanelId nextPanel(PanelId panel, bool reverse) {
-    const auto panels = panelOrder();
+    return nextPanel(panel, panelOrder(), reverse);
+}
+
+PanelId nextPanel(PanelId panel,
+                  const std::vector<PanelId>& panels,
+                  bool reverse) {
+    if (panels.empty()) {
+        return panel;
+    }
     const auto found = std::find(panels.begin(), panels.end(), panel);
-    const size_t index = found == panels.end()
-        ? 0
-        : static_cast<size_t>(std::distance(panels.begin(), found));
+    if (found == panels.end()) {
+        return reverse ? panels.back() : panels.front();
+    }
+    const size_t index = static_cast<size_t>(std::distance(panels.begin(), found));
     if (reverse) {
         return panels[(index + panels.size() - 1) % panels.size()];
     }
     return panels[(index + 1) % panels.size()];
+}
+
+std::vector<PanelId> visiblePanelOrder(const DashboardLayout& layout) {
+    std::vector<PanelId> result;
+    for (const auto panel : panelOrder()) {
+        if (layoutContainsPanel(layout, panel)) {
+            result.push_back(panel);
+        }
+    }
+    return result;
+}
+
+bool layoutContainsPanel(const DashboardLayout& layout, PanelId panel) {
+    return std::any_of(
+        layout.panels.begin(),
+        layout.panels.end(),
+        [panel](const PanelRect& rect) { return rect.panel == panel; });
 }
 
 }  // namespace Prism::Tui

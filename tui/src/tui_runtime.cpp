@@ -3,21 +3,27 @@
 #include "analysis_pipeline.h"
 #include "dashboard_layout.h"
 #include "display_model.h"
+#include "scope_plot_model.h"
 #include "snapshot_store.h"
+#include "tui_settings.h"
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/dom/canvas.hpp>
 #include <ftxui/dom/elements.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <csignal>
 #include <cstdio>
 #include <exception>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -34,7 +40,11 @@ namespace Prism::Tui {
 namespace {
 
 constexpr auto kCapturePollInterval = std::chrono::milliseconds(2);
-constexpr auto kDisplayFrameInterval = std::chrono::milliseconds(33);
+
+std::chrono::microseconds displayFrameInterval(int framesPerSecond) {
+    return std::chrono::microseconds(
+        1000000 / std::max(1, framesPerSecond));
+}
 
 volatile std::sig_atomic_t signalRequested = 0;
 
@@ -61,8 +71,11 @@ private:
 
 struct DisplayFrame {
     std::vector<float> magnitudes;
+    std::optional<SpectrumPeakInfo> spectrumPeak;
     Visualizer::VUMeterSnapshot vu{};
     Visualizer::LUFSMeterSnapshot lufs{};
+    OscilloscopeFrame oscilloscope;
+    VectorscopeFrame vectorscope;
     double sampleRate = 48000.0;
     std::string backend;
     std::string device;
@@ -71,11 +84,30 @@ struct DisplayFrame {
 
 struct InterfaceState {
     PanelId focusedPanel = PanelId::Spectrum;
-    LayoutPreset layoutPreset = LayoutPreset::Automatic;
     std::optional<PanelId> expandedPanel;
+    TuiSettings settings;
+    bool settingsOpen = false;
+    SettingsPage settingsPage = SettingsPage::Home;
+    size_t settingsHomeSelection = 0;
+    std::array<size_t, 5> settingsSelections{};
+    std::string settingsStatus;
 };
 
-std::string makeCaptureStatus(const DisplayFrame& frame, bool compact) {
+size_t settingsPageIndex(SettingsPage page) {
+    return static_cast<size_t>(page);
+}
+
+size_t& settingsSelection(InterfaceState& state) {
+    return state.settingsSelections[settingsPageIndex(state.settingsPage)];
+}
+
+const size_t& settingsSelection(const InterfaceState& state) {
+    return state.settingsSelections[settingsPageIndex(state.settingsPage)];
+}
+
+std::string makeCaptureStatus(const DisplayFrame& frame,
+                              const TuiSettings& settings,
+                              bool compact) {
     std::ostringstream sampleRate;
     const double kilohertz = frame.sampleRate / 1000.0;
     sampleRate << std::fixed << std::setprecision(
@@ -85,28 +117,68 @@ std::string makeCaptureStatus(const DisplayFrame& frame, bool compact) {
         footer += frame.device + " • ";
     }
     footer += sampleRate.str() + " kHz";
+    if (settings.inputTrimDb != 0.0f) {
+        std::ostringstream trim;
+        trim << " • trim " << (settings.inputTrimDb > 0.0f ? "+" : "")
+             << std::fixed << std::setprecision(1) << settings.inputTrimDb << " dB";
+        footer += trim.str();
+    }
     if (frame.captureOverrun) {
         footer += " • capture overrun";
     }
     return footer;
 }
 
+std::string formatSpectrumPeak(const SpectrumPeakInfo& peak, int width) {
+    std::ostringstream frequency;
+    frequency << std::fixed << std::setprecision(
+        peak.frequencyHz < 1000.0f ? 1 : 0) << peak.frequencyHz << " Hz";
+    if (width < 42) {
+        return frequency.str();
+    }
+    std::ostringstream db;
+    db << std::fixed << std::setprecision(1) << peak.dbfs << " dBFS";
+    if (width < 58) {
+        return db.str() + " • " + frequency.str();
+    }
+    return db.str() + " • " + frequency.str() + " • " + peak.pitch;
+}
+
 std::string panelName(PanelId panel) {
     switch (panel) {
         case PanelId::Spectrum:
             return "Spectrum";
+        case PanelId::Oscilloscope:
+            return "Oscilloscope";
+        case PanelId::Vectorscope:
+            return "Vectorscope";
         case PanelId::Levels:
             return "Levels";
     }
     return "Panel";
 }
 
-ftxui::Element panelTitle(PanelId panel, bool focused) {
+std::string panelNumber(PanelId panel) {
+    switch (panel) {
+        case PanelId::Spectrum:
+            return "1";
+        case PanelId::Oscilloscope:
+            return "2";
+        case PanelId::Vectorscope:
+            return "3";
+        case PanelId::Levels:
+            return "4";
+    }
+    return "?";
+}
+
+ftxui::Element panelTitle(PanelId panel,
+                          bool focused,
+                          const std::string& detail = {}) {
     using namespace ftxui;
-    const std::string number = panel == PanelId::Spectrum ? "1" : "2";
-    std::string label = " " + number + " " + panelName(panel);
-    if (panel == PanelId::Spectrum) {
-        label += "  •  FFT " + std::to_string(kDefaultFftSize);
+    std::string label = " " + panelNumber(panel) + " " + panelName(panel);
+    if (!detail.empty()) {
+        label += "  •  " + detail;
     }
     label += " ";
     auto title = text(label);
@@ -123,7 +195,8 @@ ftxui::Element stylePanel(ftxui::Element content, bool focused) {
 ftxui::Element renderSpectrumPanel(const DisplayFrame& frame,
                                    int width,
                                    int height,
-                                   bool focused) {
+                                   bool focused,
+                                   const TuiSettings& settings) {
     using namespace ftxui;
     const size_t contentWidth = static_cast<size_t>(std::max(1, width - 2));
     const size_t contentHeight = static_cast<size_t>(std::max(1, height - 2));
@@ -132,6 +205,7 @@ ftxui::Element renderSpectrumPanel(const DisplayFrame& frame,
     SpectrumProjectionOptions projectionOptions;
     projectionOptions.sampleRate = static_cast<float>(frame.sampleRate);
     projectionOptions.maxFrequency = std::min(20000.0f, projectionOptions.sampleRate * 0.5f);
+    projectionOptions.tiltDbPerOctave = settings.spectrumTiltDbPerOctave;
     const auto projected = projectSpectrum(
         frame.magnitudes,
         kDefaultFftSize,
@@ -150,9 +224,245 @@ ftxui::Element renderSpectrumPanel(const DisplayFrame& frame,
             color(Color::GrayDark));
     }
 
+    const std::string detail = settings.spectrumPeakReadout && frame.spectrumPeak
+        ? formatSpectrumPeak(*frame.spectrumPeak, width)
+        : "FFT " + std::to_string(kDefaultFftSize);
     auto panel = window(
-        panelTitle(PanelId::Spectrum, focused),
+        panelTitle(
+            PanelId::Spectrum,
+            focused,
+            detail),
         vbox(std::move(spectrumElements)));
+    return stylePanel(std::move(panel), focused) |
+        size(WIDTH, EQUAL, std::max(1, width)) |
+        size(HEIGHT, EQUAL, std::max(1, height));
+}
+
+ftxui::Element renderOscilloscopePanel(const DisplayFrame& frame,
+                                       int width,
+                                       int height,
+                                       bool focused,
+                                       const TuiSettings& settings) {
+    using namespace ftxui;
+    std::string detail = settings.oscilloscopePitchLock ? "Pitch lock" : "Free run";
+    if (settings.oscilloscopeFrequencyReadout &&
+        frame.oscilloscope.signalPresent &&
+        std::isfinite(frame.oscilloscope.detectedPitch) &&
+        frame.oscilloscope.detectedPitch > 0.0f) {
+        detail = std::to_string(static_cast<int>(
+            std::lround(frame.oscilloscope.detectedPitch))) + " Hz" +
+            (settings.oscilloscopePitchLock ? " lock" : "");
+    }
+
+    auto plot = canvas([
+        samples = frame.oscilloscope.samples,
+        signalPresent = frame.oscilloscope.signalPresent,
+        traceWeight = settings.oscilloscopeTraceWeight
+    ](Canvas& surface) {
+        const int canvasWidth = surface.width();
+        const int canvasHeight = surface.height();
+        if (canvasWidth <= 0 || canvasHeight <= 0) {
+            return;
+        }
+
+        const int centerY = oscilloscopeZeroY(canvasHeight);
+        surface.DrawPointLine(
+            0, centerY, canvasWidth - 1, centerY, Color::GrayDark);
+        if (!signalPresent) {
+            return;
+        }
+        const auto points = buildOscilloscopePlot(
+            samples, canvasWidth, canvasHeight);
+        for (size_t index = 1; index < points.size(); ++index) {
+            for (int thickness = 0; thickness < traceWeight; ++thickness) {
+                surface.DrawPointLine(
+                    points[index - 1].x,
+                    std::clamp(points[index - 1].y + thickness, 0, canvasHeight - 1),
+                    points[index].x,
+                    std::clamp(points[index].y + thickness, 0, canvasHeight - 1),
+                    Color::CyanLight);
+            }
+        }
+    }) | flex;
+
+    auto panel = window(
+        panelTitle(PanelId::Oscilloscope, focused, detail),
+        std::move(plot));
+    return stylePanel(std::move(panel), focused) |
+        size(WIDTH, EQUAL, std::max(1, width)) |
+        size(HEIGHT, EQUAL, std::max(1, height));
+}
+
+void drawVectorscopeGrid(ftxui::Canvas& surface, VectorscopeMode mode) {
+    using ftxui::Color;
+    const auto layout = getVectorscopePlotLayout(
+        surface.width(), surface.height(), mode);
+    if (layout.radius <= 0 || mode == VectorscopeMode::Lissajous) {
+        return;
+    }
+
+    const auto grid = Color::RGB(76, 82, 88);
+    const auto guide = Color::RGB(48, 53, 58);
+    const int left = layout.centerX - layout.radius;
+    const int right = layout.centerX + layout.radius;
+    const int top = layout.centerY - layout.radius;
+    const int bottom = layout.centerY + layout.radius;
+    const int halfRadius = std::max(1, layout.radius / 2);
+    const int diagonal = static_cast<int>(std::lround(
+        static_cast<float>(layout.radius) * 0.70710678f));
+    const auto drawTriangle = [&](int radius, const Color& color) {
+        surface.DrawPointLine(
+            layout.centerX, layout.centerY - radius,
+            layout.centerX - radius, layout.centerY, color);
+        surface.DrawPointLine(
+            layout.centerX - radius, layout.centerY,
+            layout.centerX + radius, layout.centerY, color);
+        surface.DrawPointLine(
+            layout.centerX + radius, layout.centerY,
+            layout.centerX, layout.centerY - radius, color);
+    };
+    const auto drawDiamond = [&](int radius, const Color& color) {
+        surface.DrawPointLine(
+            layout.centerX, layout.centerY - radius,
+            layout.centerX + radius, layout.centerY, color);
+        surface.DrawPointLine(
+            layout.centerX + radius, layout.centerY,
+            layout.centerX, layout.centerY + radius, color);
+        surface.DrawPointLine(
+            layout.centerX, layout.centerY + radius,
+            layout.centerX - radius, layout.centerY, color);
+        surface.DrawPointLine(
+            layout.centerX - radius, layout.centerY,
+            layout.centerX, layout.centerY - radius, color);
+    };
+    switch (mode) {
+        case VectorscopeMode::PolarUnipolar:
+            surface.DrawPointCircle(
+                layout.centerX, layout.centerY, layout.radius, grid);
+            surface.DrawPointCircle(
+                layout.centerX, layout.centerY, halfRadius, guide);
+            surface.DrawPointLine(
+                layout.centerX, top, layout.centerX, layout.centerY, grid);
+            surface.DrawPointLine(
+                layout.centerX, layout.centerY,
+                layout.centerX - diagonal, layout.centerY - diagonal, guide);
+            surface.DrawPointLine(
+                layout.centerX, layout.centerY,
+                layout.centerX + diagonal, layout.centerY - diagonal, guide);
+            break;
+        case VectorscopeMode::PolarBipolar:
+            surface.DrawPointCircle(
+                layout.centerX, layout.centerY, layout.radius, grid);
+            surface.DrawPointCircle(
+                layout.centerX, layout.centerY, halfRadius, guide);
+            surface.DrawPointLine(
+                layout.centerX, top, layout.centerX, bottom, grid);
+            surface.DrawPointLine(
+                left, layout.centerY, right, layout.centerY, guide);
+            surface.DrawPointLine(
+                layout.centerX - diagonal, layout.centerY - diagonal,
+                layout.centerX + diagonal, layout.centerY + diagonal, guide);
+            surface.DrawPointLine(
+                layout.centerX + diagonal, layout.centerY - diagonal,
+                layout.centerX - diagonal, layout.centerY + diagonal, guide);
+            break;
+        case VectorscopeMode::LinearUnipolar:
+            drawTriangle(layout.radius, grid);
+            drawTriangle(halfRadius, guide);
+            surface.DrawPointLine(
+                layout.centerX, top, layout.centerX, layout.centerY, grid);
+            break;
+        case VectorscopeMode::LinearBipolar:
+            drawDiamond(layout.radius, grid);
+            drawDiamond(halfRadius, guide);
+            surface.DrawPointLine(
+                layout.centerX, top, layout.centerX, bottom, grid);
+            surface.DrawPointLine(
+                left, layout.centerY, right, layout.centerY, guide);
+            break;
+        case VectorscopeMode::Lissajous:
+            break;
+    }
+}
+
+ftxui::Element renderVectorscopePanel(const DisplayFrame& frame,
+                                      int width,
+                                      int height,
+                                      bool focused,
+                                      const TuiSettings& settings) {
+    using namespace ftxui;
+    const VectorscopeMode mode = settings.vectorscopeMode;
+    const int densityDivisor = settings.vectorscopeDetail == VectorscopeDetail::Balanced
+        ? 10
+        : settings.vectorscopeDetail == VectorscopeDetail::Maximum ? 3 : 6;
+    auto plot = canvas([
+        multibandPoints = frame.vectorscope.multibandPoints,
+        pointCount = frame.vectorscope.pointCount,
+        mode,
+        showGuides = settings.vectorscopeGuides,
+        densityDivisor
+    ](Canvas& surface) {
+        const int canvasWidth = surface.width();
+        const int canvasHeight = surface.height();
+        if (canvasWidth <= 0 || canvasHeight <= 0) {
+            return;
+        }
+
+        if (showGuides) {
+            drawVectorscopeGrid(surface, mode);
+        }
+
+        const auto bands = buildVectorscopePlot(
+            multibandPoints,
+            pointCount,
+            canvasWidth,
+            canvasHeight,
+            mode,
+            densityDivisor);
+        constexpr int ageBuckets = 8;
+        const std::array<std::array<int, 3>, 3> baseColors = {{
+            {{255, 68, 68}},
+            {{68, 221, 68}},
+            {{68, 136, 255}},
+        }};
+        std::array<std::array<Color, ageBuckets>, 3> colors;
+        for (size_t band = 0; band < colors.size(); ++band) {
+            for (int bucket = 0; bucket < ageBuckets; ++bucket) {
+                const float brightness = 0.3f + 0.7f *
+                    static_cast<float>(bucket + 1) /
+                    static_cast<float>(ageBuckets);
+                colors[band][bucket] = Color::RGB(
+                    static_cast<uint8_t>(std::lround(
+                        static_cast<float>(baseColors[band][0]) * brightness)),
+                    static_cast<uint8_t>(std::lround(
+                        static_cast<float>(baseColors[band][1]) * brightness)),
+                    static_cast<uint8_t>(std::lround(
+                        static_cast<float>(baseColors[band][2]) * brightness)));
+            }
+        }
+        for (int bucket = 0; bucket < ageBuckets; ++bucket) {
+            for (size_t band = 0; band < bands.size(); ++band) {
+                for (const auto& point : bands[band]) {
+                    const int pointBucket = std::min(
+                        ageBuckets - 1,
+                        static_cast<int>(point.intensity *
+                            static_cast<float>(ageBuckets)));
+                    if (pointBucket != bucket) {
+                        continue;
+                    }
+                    surface.DrawPoint(
+                        point.x, point.y, true, colors[band][bucket]);
+                }
+            }
+        }
+    }) | flex;
+
+    auto panel = window(
+        panelTitle(
+            PanelId::Vectorscope,
+            focused,
+            vectorscopeModeName(mode)),
+        std::move(plot));
     return stylePanel(std::move(panel), focused) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
@@ -219,17 +529,28 @@ const PanelRect* findPanelRect(const DashboardLayout& layout, PanelId panel) {
 ftxui::Element renderLayoutNode(const LayoutNode& node,
                                 const DashboardLayout& layout,
                                 const DisplayFrame& frame,
-                                PanelId focusedPanel) {
+                                const InterfaceState& state) {
     using namespace ftxui;
     if (node.isLeaf()) {
         const auto* rect = findPanelRect(layout, *node.panel);
         if (rect == nullptr) {
             return emptyElement();
         }
-        const bool focused = *node.panel == focusedPanel;
+        const bool focused = *node.panel == state.focusedPanel;
         switch (*node.panel) {
             case PanelId::Spectrum:
-                return renderSpectrumPanel(frame, rect->width, rect->height, focused);
+                return renderSpectrumPanel(
+                    frame, rect->width, rect->height, focused, state.settings);
+            case PanelId::Oscilloscope:
+                return renderOscilloscopePanel(
+                    frame, rect->width, rect->height, focused, state.settings);
+            case PanelId::Vectorscope:
+                return renderVectorscopePanel(
+                    frame,
+                    rect->width,
+                    rect->height,
+                    focused,
+                    state.settings);
             case PanelId::Levels:
                 return renderLevelsPanel(frame, rect->width, rect->height, focused);
         }
@@ -238,7 +559,7 @@ ftxui::Element renderLayoutNode(const LayoutNode& node,
     Elements children;
     children.reserve(node.children.size());
     for (const auto& child : node.children) {
-        children.push_back(renderLayoutNode(child, layout, frame, focusedPanel));
+        children.push_back(renderLayoutNode(child, layout, frame, state));
     }
     return node.axis == SplitAxis::Columns
         ? hbox(std::move(children))
@@ -248,8 +569,8 @@ ftxui::Element renderLayoutNode(const LayoutNode& node,
 ftxui::Element renderHeader(const DashboardLayout& layout,
                             const InterfaceState& state) {
     using namespace ftxui;
-    std::string layoutName = layoutPresetName(state.layoutPreset);
-    if (state.layoutPreset == LayoutPreset::Automatic) {
+    std::string layoutName = layoutPresetName(state.settings.layoutPreset);
+    if (state.settings.layoutPreset == LayoutPreset::Automatic) {
         layoutName += "→" + layoutPresetName(layout.resolvedPreset);
     }
     return hbox({
@@ -270,11 +591,12 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
     const bool minimal = width < 64;
     const std::string enterAction = state.expandedPanel ? "restore" : "expand";
     const std::string controls = minimal
-        ? "Tab • Enter • l • q"
+        ? "Tab • Enter • s • q"
         : compact
-            ? "Tab focus • Enter " + enterAction + " • l layout • q quit"
-            : "Tab focus • Enter " + enterAction + " • l layout • r reset • q quit";
-    auto status = text(makeCaptureStatus(frame, compact)) | dim;
+            ? "Tab focus • Enter " + enterAction + " • s settings • q quit"
+            : "Tab focus • Enter " + enterAction +
+                " • s settings • v mode • l layout • r reset • q quit";
+    auto status = text(makeCaptureStatus(frame, state.settings, compact)) | dim;
     if (frame.captureOverrun) {
         status = status | color(Color::RedLight);
     }
@@ -285,13 +607,109 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
     });
 }
 
+ftxui::Element settingsRow(const std::string& label,
+                           const std::string& value,
+                           bool selected) {
+    using namespace ftxui;
+    auto row = hbox({
+        text(selected ? " › " : "   "),
+        text(label),
+        filler(),
+        text(value),
+        text(" "),
+    });
+    if (selected) {
+        row = row | color(Color::CyanLight) | bold |
+            bgcolor(Color::RGB(24, 42, 46));
+    } else {
+        row = row | color(Color::GrayLight);
+    }
+    return row | size(HEIGHT, EQUAL, 1);
+}
+
+ftxui::Element renderSettings(const InterfaceState& state,
+                              int width,
+                              int height) {
+    using namespace ftxui;
+    const int contentWidth = std::max(1, width - 2);
+    const int contentHeight = std::max(1, height - 2);
+    const std::string breadcrumb = state.settingsPage == SettingsPage::Home
+        ? " PRISM / SETTINGS"
+        : " PRISM / SETTINGS › " + std::string(settingsPageName(state.settingsPage));
+    Elements rows;
+    std::string selectedDescription;
+    const size_t maximumVisibleRows = static_cast<size_t>(
+        std::max(1, contentHeight - 8));
+    if (state.settingsPage == SettingsPage::Home) {
+        const auto pages = settingsPages();
+        const size_t selectedIndex = std::min(
+            state.settingsHomeSelection,
+            pages.empty() ? size_t{0} : pages.size() - 1);
+        const size_t firstVisible = selectedIndex >= maximumVisibleRows
+            ? selectedIndex - maximumVisibleRows + 1
+            : 0;
+        const size_t lastVisible = std::min(
+            pages.size(), firstVisible + maximumVisibleRows);
+        for (size_t index = firstVisible; index < lastVisible; ++index) {
+            const bool selected = index == state.settingsHomeSelection;
+            rows.push_back(settingsRow(
+                std::to_string(index + 1) + "  " + settingsPageName(pages[index]),
+                {},
+                selected));
+            if (selected) selectedDescription = settingsPageDescription(pages[index]);
+        }
+    } else {
+        const auto& settings = settingsForPage(state.settingsPage);
+        const size_t selectedIndex = std::min(
+            settingsSelection(state),
+            settings.empty() ? size_t{0} : settings.size() - 1);
+        const size_t firstVisible = selectedIndex >= maximumVisibleRows
+            ? selectedIndex - maximumVisibleRows + 1
+            : 0;
+        const size_t lastVisible = std::min(
+            settings.size(), firstVisible + maximumVisibleRows);
+        for (size_t index = firstVisible; index < lastVisible; ++index) {
+            const bool selected = index == selectedIndex;
+            rows.push_back(settingsRow(
+                settings[index].name,
+                settingValue(state.settings, settings[index].id),
+                selected));
+            if (selected) selectedDescription = settings[index].description;
+        }
+    }
+
+    const std::string controls = state.settingsPage == SettingsPage::Home
+        ? "↑↓ select  •  Enter open  •  s/Esc dashboard"
+        : contentWidth < 76
+            ? "↑↓ select  •  ←→ adjust  •  Enter  •  Esc back"
+            : "↑↓ select  •  ←→ adjust  •  Enter toggle  •  Backspace default  •  Esc back";
+    auto content = vbox({
+        text(breadcrumb) | color(Color::CyanLight) | bold,
+        separator(),
+        text(settingsPageDescription(state.settingsPage)) | dim,
+        separatorEmpty(),
+        vbox(std::move(rows)),
+        filler(),
+        text(selectedDescription) | color(Color::GrayLight),
+        state.settingsStatus.empty()
+            ? emptyElement()
+            : text(state.settingsStatus) | color(Color::RedLight),
+        separator(),
+        text(controls) | dim,
+    }) | size(WIDTH, EQUAL, contentWidth) |
+        size(HEIGHT, EQUAL, contentHeight);
+    return std::move(content) | borderRounded |
+        size(WIDTH, EQUAL, width) |
+        size(HEIGHT, EQUAL, height);
+}
+
 ftxui::Element renderFrame(const DisplayFrame& frame,
                            int width,
                            int height,
                            const InterfaceState& state) {
     using namespace ftxui;
     const auto layout = buildDashboardLayout(
-        width, height, state.layoutPreset, state.expandedPanel);
+        width, height, state.settings.layoutPreset, state.expandedPanel);
     if (layout.terminalTooSmall) {
         return vbox({
             filler(),
@@ -302,10 +720,21 @@ ftxui::Element renderFrame(const DisplayFrame& frame,
         });
     }
 
-    return vbox({
+    auto dashboard = vbox({
         renderHeader(layout, state) | size(HEIGHT, EQUAL, 1),
-        renderLayoutNode(layout.root, layout, frame, state.focusedPanel),
+        renderLayoutNode(layout.root, layout, frame, state),
         renderFooter(frame, state, width) | size(HEIGHT, EQUAL, 1),
+    });
+    if (!state.settingsOpen) {
+        return dashboard;
+    }
+
+    const int settingsWidth = std::min(84, std::max(40, width - 4));
+    const int settingsHeight = std::min(16, std::max(10, height - 2));
+    return dbox({
+        std::move(dashboard) | dim,
+        renderSettings(state, settingsWidth, settingsHeight) |
+            borderEmpty | clear_under | center,
     });
 }
 
@@ -327,7 +756,11 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
 
     ScreenInteractive screen = ScreenInteractive::Fullscreen();
     SnapshotStore<DisplayFrame> frameStore;
+    SnapshotStore<TuiSettings> settingsStore;
     InterfaceState interfaceState;
+    const std::filesystem::path settingsPath = defaultSettingsPath();
+    interfaceState.settings = loadSettings(settingsPath);
+    settingsStore.publish(interfaceState.settings);
     DisplayFrame initial;
     initial.magnitudes.assign(kDefaultFftSize / 2, -100.0f);
     initial.sampleRate = started.sampleRate;
@@ -337,12 +770,17 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
 
     std::atomic<bool> running{true};
     std::atomic<bool> resetRequested{false};
+    std::atomic<bool> redrawQueued{false};
     std::exception_ptr workerError;
     auto exitLoop = screen.ExitLoopClosure();
 
     std::thread worker([&]() {
         try {
             AnalysisPipeline pipeline(static_cast<float>(started.sampleRate));
+            TuiSettings appliedSettings = settingsStore.read();
+            pipeline.setInputTrimDb(appliedSettings.inputTrimDb);
+            pipeline.setSpectrumTilt(appliedSettings.spectrumTiltDbPerOctave);
+            pipeline.setOscilloscopePitchLock(appliedSettings.oscilloscopePitchLock);
 
             bool captureOverrun = false;
             auto nextFrameAt = std::chrono::steady_clock::now();
@@ -357,6 +795,21 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     captureOverrun = false;
                 }
 
+                const TuiSettings requestedSettings = settingsStore.read();
+                if (requestedSettings != appliedSettings) {
+                    const bool refreshChanged =
+                        requestedSettings.refreshRate != appliedSettings.refreshRate;
+                    pipeline.setInputTrimDb(requestedSettings.inputTrimDb);
+                    pipeline.setSpectrumTilt(
+                        requestedSettings.spectrumTiltDbPerOctave);
+                    pipeline.setOscilloscopePitchLock(
+                        requestedSettings.oscilloscopePitchLock);
+                    appliedSettings = requestedSettings;
+                    if (refreshChanged) {
+                        nextFrameAt = std::chrono::steady_clock::now();
+                    }
+                }
+
                 drainCapture(*capture, pipeline, captureOverrun);
 
                 const auto now = std::chrono::steady_clock::now();
@@ -364,15 +817,21 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     DisplayFrame next;
                     auto analyzed = pipeline.snapshot();
                     next.magnitudes = std::move(analyzed.magnitudes);
+                    next.spectrumPeak = std::move(analyzed.spectrumPeak);
                     next.vu = analyzed.vu;
                     next.lufs = analyzed.lufs;
+                    next.oscilloscope = std::move(analyzed.oscilloscope);
+                    next.vectorscope = std::move(analyzed.vectorscope);
                     next.sampleRate = started.sampleRate;
                     next.backend = capture->backendName();
                     next.device = started.deviceLabel.empty() ? started.deviceId : started.deviceLabel;
                     next.captureOverrun = captureOverrun;
                     frameStore.publish(std::move(next));
-                    screen.PostEvent(Event::Custom);
-                    nextFrameAt = now + kDisplayFrameInterval;
+                    if (running.load() && !redrawQueued.exchange(true)) {
+                        screen.PostEvent(Event::Custom);
+                    }
+                    nextFrameAt = now + displayFrameInterval(
+                        appliedSettings.refreshRate);
                 }
                 std::this_thread::sleep_for(kCapturePollInterval);
             }
@@ -388,8 +847,126 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
         return renderFrame(
             frameStore.read(), screen.dimx(), screen.dimy(), interfaceState);
     });
+    const auto persistSettings = [&]() {
+        interfaceState.settings = normalizeSettings(interfaceState.settings);
+        settingsStore.publish(interfaceState.settings);
+        std::string error;
+        if (!saveSettings(interfaceState.settings, settingsPath, &error)) {
+            interfaceState.settingsStatus = "Settings were applied but could not be saved: " + error;
+        } else {
+            interfaceState.settingsStatus.clear();
+        }
+    };
+    const auto closeSettings = [&]() {
+        interfaceState.settingsOpen = false;
+        interfaceState.settingsPage = SettingsPage::Home;
+        const auto dashboard = buildDashboardLayout(
+            screen.dimx(),
+            screen.dimy(),
+            interfaceState.settings.layoutPreset,
+            interfaceState.expandedPanel);
+        if (!interfaceState.expandedPanel &&
+            !layoutContainsPanel(dashboard, interfaceState.focusedPanel)) {
+            const auto visible = visiblePanelOrder(dashboard);
+            if (!visible.empty()) interfaceState.focusedPanel = visible.front();
+        }
+    };
     auto component = CatchEvent(renderer, [&](Event event) {
-        if (event == Event::Character('q') || event == Event::Escape || event == Event::CtrlC) {
+        if (event == Event::Custom) {
+            redrawQueued.store(false);
+            return false;
+        }
+        if (event == Event::Character('q') || event == Event::CtrlC) {
+            running.store(false);
+            exitLoop();
+            return true;
+        }
+        if (event == Event::Character('s')) {
+            if (interfaceState.settingsOpen) {
+                closeSettings();
+            } else {
+                interfaceState.settingsOpen = true;
+                interfaceState.settingsPage = SettingsPage::Home;
+                interfaceState.settingsHomeSelection = 0;
+            }
+            return true;
+        }
+        if (interfaceState.settingsOpen) {
+            if (event == Event::Escape) {
+                if (interfaceState.settingsPage == SettingsPage::Home) {
+                    closeSettings();
+                } else {
+                    const auto pages = settingsPages();
+                    const auto found = std::find(
+                        pages.begin(), pages.end(), interfaceState.settingsPage);
+                    interfaceState.settingsHomeSelection = found == pages.end()
+                        ? 0
+                        : static_cast<size_t>(std::distance(pages.begin(), found));
+                    interfaceState.settingsPage = SettingsPage::Home;
+                }
+                return true;
+            }
+
+            if (interfaceState.settingsPage == SettingsPage::Home) {
+                const auto pages = settingsPages();
+                if (event == Event::ArrowUp || event == Event::ArrowDown) {
+                    const int direction = event == Event::ArrowDown ? 1 : -1;
+                    const int count = static_cast<int>(pages.size());
+                    interfaceState.settingsHomeSelection = static_cast<size_t>(
+                        (static_cast<int>(interfaceState.settingsHomeSelection) +
+                            direction + count) % count);
+                    return true;
+                }
+                if (event == Event::Return && !pages.empty()) {
+                    interfaceState.settingsPage = pages[std::min(
+                        interfaceState.settingsHomeSelection, pages.size() - 1)];
+                    return true;
+                }
+                for (size_t index = 0; index < pages.size(); ++index) {
+                    if (event == Event::Character(
+                            static_cast<char>('1' + index))) {
+                        interfaceState.settingsPage = pages[index];
+                        interfaceState.settingsHomeSelection = index;
+                        return true;
+                    }
+                }
+                return true;
+            }
+
+            const auto& pageSettings = settingsForPage(interfaceState.settingsPage);
+            size_t& selected = settingsSelection(interfaceState);
+            if (!pageSettings.empty()) {
+                selected = std::min(selected, pageSettings.size() - 1);
+            }
+            if ((event == Event::ArrowUp || event == Event::ArrowDown) &&
+                !pageSettings.empty()) {
+                const int direction = event == Event::ArrowDown ? 1 : -1;
+                const int count = static_cast<int>(pageSettings.size());
+                selected = static_cast<size_t>(
+                    (static_cast<int>(selected) + direction + count) % count);
+                return true;
+            }
+            if (!pageSettings.empty() &&
+                (event == Event::ArrowLeft || event == Event::ArrowRight ||
+                 event == Event::Return)) {
+                const int direction = event == Event::ArrowLeft ? -1 : 1;
+                if (adjustSetting(
+                        interfaceState.settings,
+                        pageSettings[selected].id,
+                        direction)) {
+                    persistSettings();
+                }
+                return true;
+            }
+            if (!pageSettings.empty() && event == Event::Backspace) {
+                if (resetSetting(interfaceState.settings, pageSettings[selected].id)) {
+                    persistSettings();
+                }
+                return true;
+            }
+            return true;
+        }
+        if (event == Event::Escape) {
             running.store(false);
             exitLoop();
             return true;
@@ -398,9 +975,24 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             resetRequested.store(true);
             return true;
         }
+        if (event == Event::Character('v')) {
+            adjustSetting(
+                interfaceState.settings, SettingId::VectorscopeMode, 1);
+            persistSettings();
+            return true;
+        }
         if (event == Event::Tab || event == Event::TabReverse) {
+            const auto navigationLayout = buildDashboardLayout(
+                screen.dimx(),
+                screen.dimy(),
+                interfaceState.settings.layoutPreset,
+                interfaceState.expandedPanel);
+            const auto navigationPanels = interfaceState.expandedPanel
+                ? panelOrder()
+                : visiblePanelOrder(navigationLayout);
             interfaceState.focusedPanel = nextPanel(
                 interfaceState.focusedPanel,
+                navigationPanels,
                 event == Event::TabReverse);
             if (interfaceState.expandedPanel) {
                 interfaceState.expandedPanel = interfaceState.focusedPanel;
@@ -416,16 +1008,34 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             return true;
         }
         if (event == Event::Character('l')) {
-            interfaceState.layoutPreset = nextLayoutPreset(interfaceState.layoutPreset);
+            adjustSetting(interfaceState.settings, SettingId::Layout, 1);
+            persistSettings();
             interfaceState.expandedPanel.reset();
+            const auto nextLayout = buildDashboardLayout(
+                screen.dimx(), screen.dimy(), interfaceState.settings.layoutPreset);
+            if (!layoutContainsPanel(nextLayout, interfaceState.focusedPanel)) {
+                const auto visible = visiblePanelOrder(nextLayout);
+                if (!visible.empty()) {
+                    interfaceState.focusedPanel = visible.front();
+                }
+            }
             return true;
         }
-        if (event == Event::Character('1') || event == Event::Character('2')) {
-            interfaceState.focusedPanel = event == Event::Character('1')
-                ? PanelId::Spectrum
-                : PanelId::Levels;
+        std::optional<PanelId> selectedPanel;
+        if (event == Event::Character('1')) selectedPanel = PanelId::Spectrum;
+        if (event == Event::Character('2')) selectedPanel = PanelId::Oscilloscope;
+        if (event == Event::Character('3')) selectedPanel = PanelId::Vectorscope;
+        if (event == Event::Character('4')) selectedPanel = PanelId::Levels;
+        if (selectedPanel) {
+            interfaceState.focusedPanel = *selectedPanel;
             if (interfaceState.expandedPanel) {
                 interfaceState.expandedPanel = interfaceState.focusedPanel;
+            } else {
+                const auto currentLayout = buildDashboardLayout(
+                    screen.dimx(), screen.dimy(), interfaceState.settings.layoutPreset);
+                if (!layoutContainsPanel(currentLayout, interfaceState.focusedPanel)) {
+                    interfaceState.expandedPanel = interfaceState.focusedPanel;
+                }
             }
             return true;
         }

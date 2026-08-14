@@ -8,6 +8,8 @@ namespace Prism::Tui {
 
 enum class PanelId {
     Spectrum,
+    Oscilloscope,
+    Vectorscope,
     Levels,
 };
 
@@ -62,5 +64,10 @@ LayoutPreset nextLayoutPreset(LayoutPreset preset);
 std::string layoutPresetName(LayoutPreset preset);
 std::vector<PanelId> panelOrder();
 PanelId nextPanel(PanelId panel, bool reverse = false);
+PanelId nextPanel(PanelId panel,
+                  const std::vector<PanelId>& panels,
+                  bool reverse = false);
+std::vector<PanelId> visiblePanelOrder(const DashboardLayout& layout);
+bool layoutContainsPanel(const DashboardLayout& layout, PanelId panel);
 
 }  // namespace Prism::Tui
