@@ -9,6 +9,8 @@
 
 namespace Prism::Tui {
 
+constexpr size_t kDefaultFftSize = 4096;
+
 struct AnalysisFrame {
     std::vector<float> magnitudes;
     Visualizer::VUMeterSnapshot vu{};
@@ -17,7 +19,7 @@ struct AnalysisFrame {
 
 class AnalysisPipeline {
 public:
-    explicit AnalysisPipeline(float sampleRate, size_t fftSize = 2048);
+    explicit AnalysisPipeline(float sampleRate, size_t fftSize = kDefaultFftSize);
 
     void process(const Prism::Capture::AudioChunk& chunk);
     AnalysisFrame snapshot();

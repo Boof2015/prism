@@ -56,7 +56,14 @@ std::string usageText() {
         "  --device <id>     Capture a specific system output device.\n"
         "  --list-devices    List available system output devices.\n"
         "  -h, --help        Show this help.\n"
-        "  -V, --version     Show the Prism TUI version.\n";
+        "  -V, --version     Show the Prism TUI version.\n\n"
+        "Controls:\n"
+        "  Tab / Shift-Tab   Focus the next or previous panel.\n"
+        "  Enter             Expand the focused panel or restore the dashboard.\n"
+        "  l                 Cycle automatic, stacked, and column layouts.\n"
+        "  1 / 2             Focus Spectrum or Levels.\n"
+        "  r                 Reset analyzers and integrated loudness.\n"
+        "  q / Esc / Ctrl-C  Quit.\n";
 }
 
 }  // namespace Prism::Tui

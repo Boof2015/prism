@@ -31,6 +31,7 @@ find_package(Threads REQUIRED)
 add_library(prism_tui_analysis STATIC
     src/analysis_pipeline.cpp
     src/cli.cpp
+    src/dashboard_layout.cpp
     src/display_model.cpp
     ${PRISM_NATIVE_DIR}/spectrum.cpp
     ${PRISM_NATIVE_DIR}/vumeter.cpp

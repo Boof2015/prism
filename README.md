@@ -51,7 +51,9 @@ Capture-to-display latency measures under 8ms. When tested at 120fps, measured l
 
 Installable Prism packages also provide `prism-tui`, a native terminal frontend
 for the shared C++ capture and analysis engine. It shows a responsive spectrum,
-stereo VU meters, and momentary, short-term, and integrated LUFS readings.
+stereo VU meters, and momentary, short-term, and integrated LUFS readings. The
+dashboard uses a 4096-point FFT by default and automatically switches between
+stacked and column layouts as the terminal is resized.
 
 ```bash
 prism-tui                    # Capture the default system output
@@ -61,11 +63,13 @@ prism-tui --help
 prism-tui --version
 ```
 
-Press `r` to reset the analyzers and integrated loudness, or `q`, Escape, or
-Ctrl-C to quit. Interactive mode requires a terminal of at least 44 by 12 cells.
-Quote a device ID if it contains spaces. Successful help, version, listing, and
-interactive exits return `0`; usage errors return `2`; capture and runtime
-failures return `1`.
+Press Tab or Shift-Tab to focus a panel, Enter to expand or restore it, and `l`
+to cycle automatic, stacked, and column layouts. Number keys `1` and `2` focus
+Spectrum and Levels. Press `r` to reset the analyzers and integrated loudness,
+or `q`, Escape, or Ctrl-C to quit. Interactive mode requires a terminal of at
+least 44 by 12 cells. Quote a device ID if it contains spaces. Successful help,
+version, listing, and interactive exits return `0`; usage errors return `2`;
+capture and runtime failures return `1`.
 
 The v0 TUI captures system output only. Microphone/device-input capture, Prism
 profiles and themes, file/stdin analysis, and the other visualizers remain GUI

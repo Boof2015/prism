@@ -1,5 +1,6 @@
 #include "analysis_pipeline.h"
 #include "cli.h"
+#include "dashboard_layout.h"
 #include "display_model.h"
 #include "snapshot_store.h"
 #include "system_audio_capture.h"
@@ -104,6 +105,8 @@ void testCli() {
         "duplicate device options should fail");
     require(!Prism::Tui::parseArguments({"--help", "--version"}).ok,
         "exclusive commands should not combine");
+    require(Prism::Tui::usageText().find("Tab / Shift-Tab") != std::string::npos,
+        "help should describe dashboard keyboard controls");
 }
 
 void testProjectionAndLayout() {
@@ -127,8 +130,12 @@ void testProjectionAndLayout() {
         std::cerr << "Projected 1 kHz peak column: " << peak << '\n';
     }
     require(peak > 55 && peak < 75, "1 kHz peak should land in the logarithmic center region");
-    require(Prism::Tui::buildSpectrumRows(projected, 6).size() == 6,
+    const auto blockRows = Prism::Tui::buildSpectrumRows(projected, 6);
+    require(blockRows.size() == 6,
         "spectrum rows should follow the requested height");
+    require(std::any_of(blockRows.begin(), blockRows.end(), [](const std::string& row) {
+        return row.find("█") != std::string::npos;
+    }), "spectrum should retain its solid block fill style");
     require(Prism::Tui::buildSpectrumRows(projected, 0).empty(),
         "zero-height spectrum should be empty");
     const auto meter = Prism::Tui::buildMeterBar(-12.0f, -6.0f, 20);
@@ -137,16 +144,49 @@ void testProjectionAndLayout() {
     require(meter.find("│") != std::string::npos,
         "meter bar should include its peak marker");
 
-    const auto normal = Prism::Tui::calculateLayout(100, 30);
-    const auto narrow = Prism::Tui::calculateLayout(44, 12);
-    require(!normal.terminalTooSmall && normal.spectrumRowCount == 20,
-        "normal terminal layout should fill available height");
-    require(!narrow.terminalTooSmall && narrow.contentWidth == 40,
-        "minimum terminal layout should remain renderable");
-    require(Prism::Tui::calculateLayout(43, 12).terminalTooSmall,
+    const auto wide = Prism::Tui::buildDashboardLayout(
+        100, 30, Prism::Tui::LayoutPreset::Automatic);
+    require(!wide.terminalTooSmall &&
+        wide.resolvedPreset == Prism::Tui::LayoutPreset::Columns,
+        "wide, tall terminals should use the columns dashboard");
+    require(wide.panels.size() == 2 &&
+        wide.panels[0].width + wide.panels[1].width == 100 &&
+        wide.panels[0].width > wide.panels[1].width,
+        "column panels should fill the width and favor the spectrum");
+
+    const auto stacked = Prism::Tui::buildDashboardLayout(
+        80, 20, Prism::Tui::LayoutPreset::Automatic);
+    require(stacked.resolvedPreset == Prism::Tui::LayoutPreset::Stacked,
+        "short terminals should stack their panels");
+    require(stacked.panels.size() == 2 &&
+        stacked.panels[0].height + stacked.panels[1].height == 18 &&
+        stacked.panels[0].height > stacked.panels[1].height,
+        "stacked panels should fill the dashboard and favor the spectrum");
+
+    const auto minimum = Prism::Tui::buildDashboardLayout(
+        44, 12, Prism::Tui::LayoutPreset::Automatic);
+    require(!minimum.terminalTooSmall && minimum.panels.size() == 2 &&
+        minimum.panels[0].height == 5 && minimum.panels[1].height == 5,
+        "minimum terminal layout should keep both panels usable");
+    require(Prism::Tui::buildDashboardLayout(
+        43, 12, Prism::Tui::LayoutPreset::Automatic).terminalTooSmall,
         "narrow resize should select the compact screen");
-    require(Prism::Tui::calculateLayout(80, 11).terminalTooSmall,
+    require(Prism::Tui::buildDashboardLayout(
+        80, 11, Prism::Tui::LayoutPreset::Automatic).terminalTooSmall,
         "short resize should select the compact screen");
+
+    const auto expanded = Prism::Tui::buildDashboardLayout(
+        100, 30, Prism::Tui::LayoutPreset::Columns, Prism::Tui::PanelId::Levels);
+    require(expanded.panels.size() == 1 &&
+        expanded.panels[0].panel == Prism::Tui::PanelId::Levels &&
+        expanded.panels[0].width == 100 && expanded.panels[0].height == 28,
+        "expanded panels should occupy the complete dashboard area");
+    require(Prism::Tui::nextPanel(Prism::Tui::PanelId::Spectrum) ==
+        Prism::Tui::PanelId::Levels,
+        "panel focus should cycle forward");
+    require(Prism::Tui::nextPanel(Prism::Tui::PanelId::Spectrum, true) ==
+        Prism::Tui::PanelId::Levels,
+        "panel focus should cycle backward");
 }
 
 void testPipelineAndFakeCapture() {
@@ -160,6 +200,8 @@ void testPipelineAndFakeCapture() {
         capture.chunks.push_back(sineChunk(1000.0f, 0.25f, 2400, 48000.0f));
     }
 
+    require(Prism::Tui::kDefaultFftSize == 4096,
+        "the TUI spectrum should default to a 4096-point FFT");
     Prism::Tui::AnalysisPipeline pipeline(48000.0f);
     bool captureOverrun = false;
     capture.nextOverwriteCount = 3;
@@ -172,6 +214,8 @@ void testPipelineAndFakeCapture() {
     worker.join();
     require(captureOverrun, "capture draining should publish queue overruns");
     const auto frame = pipeline.snapshot();
+    require(frame.magnitudes.size() == Prism::Tui::kDefaultFftSize / 2,
+        "the default analysis pipeline should publish the 4096-point spectrum");
     require(frame.vu.barLDb > -20.0f && frame.vu.barLDb < -5.0f,
         "VU level should reflect deterministic input");
     require(std::isfinite(frame.lufs.momentaryLUFS) && frame.lufs.momentaryLUFS > -60.0f,

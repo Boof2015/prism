@@ -29,18 +29,6 @@ void placeLabel(std::string& axis, size_t position, const std::string& label) {
 
 }  // namespace
 
-LayoutModel calculateLayout(int width, int height) {
-    LayoutModel model;
-    model.terminalTooSmall = width < 44 || height < 12;
-    if (model.terminalTooSmall) {
-        return model;
-    }
-    model.contentWidth = static_cast<size_t>(std::max(8, width - 4));
-    model.spectrumRowCount = static_cast<size_t>(std::max(2, height - 10));
-    model.meterWidth = static_cast<size_t>(std::max(8, width - 19));
-    return model;
-}
-
 std::vector<float> projectSpectrum(const std::vector<float>& magnitudes,
                                    size_t fftSize,
                                    size_t columns,

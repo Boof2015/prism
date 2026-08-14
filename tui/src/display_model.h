@@ -15,15 +15,6 @@ struct SpectrumProjectionOptions {
     float tiltReferenceHz = 1000.0f;
 };
 
-struct LayoutModel {
-    bool terminalTooSmall = true;
-    size_t contentWidth = 0;
-    size_t spectrumRowCount = 0;
-    size_t meterWidth = 0;
-};
-
-LayoutModel calculateLayout(int width, int height);
-
 std::vector<float> projectSpectrum(const std::vector<float>& magnitudes,
                                    size_t fftSize,
                                    size_t columns,
