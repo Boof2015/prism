@@ -1,7 +1,7 @@
 #!/bin/bash
 # Postinstall: after the macOS Installer drops Prism.app into /Applications, copy
 # the bundled VST3 / AU plugins out of the app's Resources into the system
-# Audio Plug-Ins folders so DAWs find them.
+# Audio Plug-Ins folders so DAWs find them, and expose prism-tui on PATH.
 #
 # Standard pkg postinstall args:
 #   $1 = full path to the installer package
@@ -17,8 +17,10 @@ APP_PATH="${2:-/Applications}/Prism.app"
 [ -d "$APP_PATH" ] || APP_PATH="/Applications/Prism.app"
 
 PLUGINS_SRC="$APP_PATH/Contents/Resources/plugins"
-VST3_DEST="/Library/Audio/Plug-Ins/VST3"
-AU_DEST="/Library/Audio/Plug-Ins/Components"
+VST3_DEST="${PRISM_VST3_DEST_DIR:-/Library/Audio/Plug-Ins/VST3}"
+AU_DEST="${PRISM_AU_DEST_DIR:-/Library/Audio/Plug-Ins/Components}"
+TUI_SOURCE="$APP_PATH/Contents/Resources/tui/prism-tui"
+TUI_LINK="${PRISM_TUI_LINK_PATH:-/usr/local/bin/prism-tui}"
 
 mkdir -p "$VST3_DEST" "$AU_DEST"
 
@@ -27,6 +29,20 @@ if [ -d "$PLUGINS_SRC/VST3" ]; then
 fi
 if [ -d "$PLUGINS_SRC/AU" ]; then
   cp -R "$PLUGINS_SRC/AU/"*.component "$AU_DEST/" 2>/dev/null || true
+fi
+
+if [ -f "$TUI_SOURCE" ]; then
+  chmod 755 "$TUI_SOURCE"
+  mkdir -p "$(dirname "$TUI_LINK")"
+  if [ -e "$TUI_LINK" ] || [ -L "$TUI_LINK" ]; then
+    if [ ! -L "$TUI_LINK" ] || [ "$(readlink "$TUI_LINK")" != "$TUI_SOURCE" ]; then
+      echo "Prism postinstall: $TUI_LINK already exists and was left unchanged." >&2
+    fi
+  else
+    ln -s "$TUI_SOURCE" "$TUI_LINK"
+  fi
+else
+  echo "Prism postinstall: bundled prism-tui not found at $TUI_SOURCE" >&2
 fi
 
 exit 0

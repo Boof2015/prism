@@ -2,4 +2,4 @@
 
 #include <napi.h>
 
-void RegisterWindowsCapture(Napi::Env env, Napi::Object exports);
+void RegisterWindowsMedia(Napi::Env env, Napi::Object exports);

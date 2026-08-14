@@ -1,11 +1,51 @@
 #!/bin/sh
 # Package post-install hook for Linux .deb/.rpm builds. The app package installs
-# Prism under /opt, then this copies the bundled native Linux VST3 bundles into
-# the global VST3 scan path used by Linux DAWs.
+# Prism under /opt, then this exposes prism-tui on PATH and copies the bundled
+# native Linux VST3 bundles into the global VST3 scan path used by Linux DAWs.
 
 set -eu
 
 DEST_DIR="${PRISM_VST3_DEST_DIR:-/usr/lib/vst3}"
+TUI_LINK="${PRISM_TUI_LINK_PATH:-/usr/bin/prism-tui}"
+
+find_tui() {
+  if [ -n "${PRISM_TUI_SOURCE_PATH:-}" ] && [ -f "$PRISM_TUI_SOURCE_PATH" ]; then
+    printf '%s\n' "$PRISM_TUI_SOURCE_PATH"
+    return 0
+  fi
+
+  for executable in \
+    /opt/Prism/resources/tui/prism-tui \
+    /opt/prism/resources/tui/prism-tui
+  do
+    if [ -f "$executable" ]; then
+      printf '%s\n' "$executable"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+install_tui() {
+  tui_source="$(find_tui || true)"
+  if [ -z "$tui_source" ]; then
+    echo "Prism TUI install: bundled executable not found; skipping PATH link." >&2
+    return 0
+  fi
+
+  chmod 755 "$tui_source"
+  if [ -e "$TUI_LINK" ] || [ -L "$TUI_LINK" ]; then
+    if [ -L "$TUI_LINK" ] && [ "$(readlink "$TUI_LINK")" = "$tui_source" ]; then
+      return 0
+    fi
+    echo "Prism TUI install: $TUI_LINK already exists and was left unchanged." >&2
+    return 0
+  fi
+
+  ln -s "$tui_source" "$TUI_LINK"
+  echo "Prism TUI installed at $TUI_LINK"
+}
 
 find_source_dir() {
   if [ -n "${PRISM_VST3_SOURCE_DIR:-}" ] && [ -d "$PRISM_VST3_SOURCE_DIR" ]; then
@@ -39,6 +79,8 @@ install_plugin() {
   rm -rf "$dest_plugin"
   cp -a "$source_plugin" "$DEST_DIR/"
 }
+
+install_tui
 
 SOURCE_DIR="$(find_source_dir || true)"
 if [ -z "$SOURCE_DIR" ]; then

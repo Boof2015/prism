@@ -11,9 +11,11 @@
 ; to Common Files succeed without a second elevation. On uninstall, the bundles
 ; are removed unconditionally (harmless if the user opted out at install time).
 
+!include "LogicLib.nsh"
+!include "WinMessages.nsh"
+
 !ifndef BUILD_UNINSTALLER
   !include "nsDialogs.nsh"
-  !include "LogicLib.nsh"
 
   Var PRISM_VST_CHECKBOX
   Var PRISM_VST_STATE
@@ -53,6 +55,25 @@
   !macroend
 
   !macro customInstall
+    ${IfNot} ${FileExists} "$INSTDIR\resources\tui\prism-tui.exe"
+      DetailPrint "ERROR: bundled prism-tui.exe was not found"
+      MessageBox MB_OK|MB_ICONSTOP "The bundled prism-tui executable was not found.$\r$\n$\r$\nMissing path:$\r$\n$INSTDIR\resources\tui\prism-tui.exe" /SD IDOK
+      Abort
+    ${EndIf}
+
+    ; PowerShell avoids NSIS string-length truncation on machines with a large
+    ; PATH. It removes exact duplicates, appends Prism once, and leaves every
+    ; other entry intact. PowerShell comparisons are case-insensitive here.
+    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { param([string]$$entry) $$path = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$entries = @($$path -split ';' | Where-Object { $$_ -and $$_ -ine $$entry }); $$entries += $$entry; [Environment]::SetEnvironmentVariable('Path', ($$entries -join ';'), 'Machine') }" "$INSTDIR\resources\tui"`
+    Pop $0
+    ${If} $0 != 0
+      DetailPrint "ERROR: could not add Prism TUI to the machine PATH (exit code $0)"
+      MessageBox MB_OK|MB_ICONSTOP "Prism could not add prism-tui to the machine PATH.$\r$\n$\r$\nPowerShell exit code: $0" /SD IDOK
+      Abort
+    ${EndIf}
+    SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+    DetailPrint "Added $INSTDIR\resources\tui to the machine PATH"
+
     ${If} $PRISM_VST_STATE == ${BST_CHECKED}
       DetailPrint "Installing Prism VST3 plugins to $COMMONFILES64\VST3"
 
@@ -79,6 +100,16 @@
 !endif
 
 !macro customUnInstall
+  ; Remove only Prism's exact machine-PATH entry. A failure is non-fatal so an
+  ; otherwise valid uninstall is never blocked.
+  nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { param([string]$$entry) $$path = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$entries = @($$path -split ';' | Where-Object { $$_ -and $$_ -ine $$entry }); [Environment]::SetEnvironmentVariable('Path', ($$entries -join ';'), 'Machine') }" "$INSTDIR\resources\tui"`
+  Pop $0
+  ${If} $0 == 0
+    SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  ${Else}
+    DetailPrint "WARNING: could not remove Prism TUI from the machine PATH (exit code $0)"
+  ${EndIf}
+
   ; Always attempt removal — harmless RMDir if the bundle isn't there (user opted
   ; out at install or removed manually).
   RMDir /r "$COMMONFILES64\VST3\Prism Spectrum.vst3"

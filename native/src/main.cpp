@@ -2,8 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
-#include "linux_capture.h"
-#include "macos_capture.h"
+#include "system_audio_capture_napi.h"
 #include "windows_capture.h"
 #include "oscilloscope.h"
 #include "spectrum.h"
@@ -765,9 +764,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     lufsExports.Set("reset", Napi::Function::New(env, LUFSMeterReset));
     exports.Set("lufsmeter", lufsExports);
 
-    RegisterMacOSCapture(env, exports);
-    RegisterWindowsCapture(env, exports);
-    RegisterLinuxCapture(env, exports);
+    RegisterSystemAudioCapture(env, exports);
+    RegisterWindowsMedia(env, exports);
     RegisterWindowChrome(env, exports);
 
     return exports;

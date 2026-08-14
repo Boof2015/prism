@@ -47,6 +47,30 @@ Prism pulls audio at the OS level, straight from CoreAudio on macOS, WASAPI on W
 
 Capture-to-display latency measures under 8ms. When tested at 120fps, measured latency was 0ms. What you see is what you hear.
 
+## Terminal UI
+
+Installable Prism packages also provide `prism-tui`, a native terminal frontend
+for the shared C++ capture and analysis engine. It shows a responsive spectrum,
+stereo VU meters, and momentary, short-term, and integrated LUFS readings.
+
+```bash
+prism-tui                    # Capture the default system output
+prism-tui --list-devices     # Print output device IDs; no TTY required
+prism-tui --device <id>      # Capture a specific output device
+prism-tui --help
+prism-tui --version
+```
+
+Press `r` to reset the analyzers and integrated loudness, or `q`, Escape, or
+Ctrl-C to quit. Interactive mode requires a terminal of at least 44 by 12 cells.
+Quote a device ID if it contains spaces. Successful help, version, listing, and
+interactive exits return `0`; usage errors return `2`; capture and runtime
+failures return `1`.
+
+The v0 TUI captures system output only. Microphone/device-input capture, Prism
+profiles and themes, file/stdin analysis, and the other visualizers remain GUI
+features for now. CoreAudio process tapping requires macOS 14.2 or newer.
+
 ## Profiles
 
 Save the whole rack as a profile. What's visible, how it's laid out, per-scope settings, popout window positions as a `.prsm` file. Keep separate profiles for different workflows and share them with others.
@@ -68,7 +92,7 @@ Prebuilt binaries for Windows, macOS, and Linux are available on the [Releases](
 
 ## Building from Source
 
-**Prerequisites:** Node.js 18+, npm, and a C++ compiler toolchain.
+**Prerequisites:** Node.js 18+, npm, CMake 3.22+, and a C++ compiler toolchain.
 
 | Platform | Toolchain |
 |----------|-----------|
@@ -87,17 +111,33 @@ The `postinstall` script compiles the native C++ module for your platform.
 ```bash
 npm run dev              # Development
 npm run build            # Build application assets
-npm run dist             # Package for current platform
-npm run dist:mac         # macOS (DMG + ZIP)
+npm run configure:tui    # Configure the standalone CMake project
+npm run build:tui        # Build prism-tui into tui/build/bin
+npm run test:tui         # Build and run native TUI tests
+npm run dist             # Package for current platform, including prism-tui
+npm run dist:mac         # macOS (PKG + ZIP)
 npm run dist:win         # Windows (NSIS + Portable)
 npm run dist:linux       # Linux (AppImage + DEB + RPM + tar.gz)
 ```
 
-Linux `.deb` and `.rpm` releases install the seven Prism VST3 plugins to
-`/usr/lib/vst3`. The Linux `tar.gz` release includes a `resources/plugins/install-vst3.sh`
-helper that installs them to `$HOME/.vst3` by default. The AppImage is app-only;
-it does not install DAW plugins. DAWs commonly scan `$HOME/.vst3`, `/usr/lib/vst3`,
-and `/usr/local/lib/vst3`.
+The TUI build downloads the pinned FTXUI 7.0.1 source through CMake. On Linux it
+also requires the PulseAudio development package (`libpulse-dev` on Debian and
+Ubuntu). The executable is at `tui/build/bin/prism-tui` on macOS/Linux and
+typically `tui/build/bin/Release/prism-tui.exe` with a multi-config Windows
+generator.
+
+The macOS PKG links `prism-tui` into `/usr/local/bin`, the Windows NSIS installer
+adds Prism's TUI resource directory to the machine `PATH`, and Linux `.deb` and
+`.rpm` packages link it into `/usr/bin`. Uninstallers remove only the Prism-owned
+PATH entry or link. ZIP, portable Windows, and Linux `tar.gz` archives may carry
+the executable under the app's resources but do not modify `PATH`.
+
+Linux `.deb` and `.rpm` releases also install the seven Prism VST3 plugins to
+`/usr/lib/vst3`. The Linux `tar.gz` release includes a
+`resources/plugins/install-vst3.sh` helper that installs them to `$HOME/.vst3`
+by default. The AppImage remains GUI-only: it carries neither installable DAW
+plugin resources nor `prism-tui`. DAWs commonly scan `$HOME/.vst3`,
+`/usr/lib/vst3`, and `/usr/local/lib/vst3`.
 
 The DAW plugins build with CMake from the [`plugin/`](plugin/) directory. See
 [`plugin/README.md`](plugin/README.md) for the per-platform build and install steps.
@@ -115,6 +155,8 @@ If you find Prism useful and want to support a broke college student, consider s
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html). See [LICENSE](LICENSE) for the full text.
+Third-party license notices, including FTXUI's MIT license, are recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Star History
 

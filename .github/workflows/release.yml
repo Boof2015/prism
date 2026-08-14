@@ -115,15 +115,17 @@ jobs:
           fi
           echo "Native module built successfully: $(ls -lh native/build/Release/visualizer_dsp.node)"
 
-      # Linux AppImage is app-only. Build it before staging DAW plugins so the
-      # portable artifact does not carry installable VST3 resources.
-      - name: Prepare empty Linux plugin resources for AppImage
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          rm -rf plugin/dist-installer
-          mkdir -p plugin/dist-installer
+      - name: Typecheck
+        run: npm run typecheck
 
+      - name: Test native spectrum and capture exports
+        run: npm run test:spectrum-native
+
+      - name: Build and test Prism TUI
+        run: npm run test:tui
+
+      # The AppImage-specific electron-builder config excludes both the native
+      # terminal frontend and DAW plugins regardless of local staging state.
       - name: Build Linux AppImage
         if: runner.os == 'Linux'
         run: npm run dist:linux:appimage
@@ -249,6 +251,23 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Stage Prism TUI for installer
+        run: npm run stage:tui
+
+      - name: Smoke-test staged Prism TUI
+        shell: bash
+        run: |
+          tui_binary="tui/dist-installer/prism-tui"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tui_binary="tui/dist-installer/prism-tui.exe"
+          fi
+          if [ ! -f "$tui_binary" ]; then
+            echo "ERROR: staged prism-tui executable was not found: $tui_binary"
+            exit 1
+          fi
+          "$tui_binary" --help
+          "$tui_binary" --version
 
       - name: Build distributable
         if: runner.os != 'Linux'

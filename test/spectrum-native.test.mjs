@@ -3,7 +3,8 @@ import { createRequire } from 'node:module'
 import test from 'node:test'
 
 const require = createRequire(import.meta.url)
-const { spectrum } = require('../native/build/Release/visualizer_dsp.node')
+const nativeAddon = require('../native/build/Release/visualizer_dsp.node')
+const { spectrum } = nativeAddon
 
 const SAMPLE_RATE = 48000
 const SILENCE_DB = -120
@@ -44,6 +45,39 @@ function interpolatePeakDb(magnitudes) {
   const offset = Math.max(-0.5, Math.min(0.5, 0.5 * (y1 - y3) / denominator))
   return y2 - (0.25 * (y1 - y3) * offset)
 }
+
+test('native capture exports preserve the renderer-facing API shape', () => {
+  for (const exportName of ['macosCapture', 'windowsCapture', 'linuxCapture']) {
+    const capture = nativeAddon[exportName]
+    assert.ok(capture, `${exportName} should be exported`)
+    for (const method of ['getSupport', 'listOutputDevices', 'start', 'stop', 'drain', 'nowMilliseconds']) {
+      assert.equal(typeof capture[method], 'function', `${exportName}.${method} should be a function`)
+    }
+  }
+
+  const activeExport = process.platform === 'darwin'
+    ? 'macosCapture'
+    : process.platform === 'win32'
+      ? 'windowsCapture'
+      : 'linuxCapture'
+  const support = nativeAddon[activeExport].getSupport()
+  assert.equal(typeof support.available, 'boolean')
+  assert.ok(support.reason === null || typeof support.reason === 'string')
+
+  for (const exportName of ['macosCapture', 'windowsCapture', 'linuxCapture']) {
+    if (exportName === activeExport) continue
+    const capture = nativeAddon[exportName]
+    assert.deepEqual(capture.listOutputDevices(), [])
+    assert.equal(capture.getSupport().available, false)
+    assert.deepEqual(capture.drain(), { chunks: [], overwriteCount: 0, queueDepth: 0 })
+    assert.throws(() => capture.start(), /unavailable on the current platform/)
+  }
+
+  assert.ok(nativeAddon.windowsMedia)
+  for (const method of ['getSupport', 'getSpotifyPlaybackState', 'sendSpotifyControl']) {
+    assert.equal(typeof nativeAddon.windowsMedia[method], 'function')
+  }
+})
 
 test('spectrum channel-max dBFS is calibrated for bin-centered amplitudes', () => {
   const fftSize = 2048
