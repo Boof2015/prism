@@ -25,7 +25,6 @@ enum class SettingsPage {
 enum class SettingId {
     InputTrim,
     RefreshRate,
-    Layout,
     SpectrumPeakReadout,
     SpectrumTilt,
     OscilloscopePitchLock,
@@ -66,7 +65,7 @@ enum class WaveformMode { Mono, Stereo };
 struct TuiSettings {
     float inputTrimDb = 0.0f;
     int refreshRate = 60;
-    LayoutPreset layoutPreset = LayoutPreset::Automatic;
+    RackLayout rackLayout = defaultRackLayout();
     bool spectrumPeakReadout = true;
     float spectrumTiltDbPerOctave = 2.0f;
     bool oscilloscopePitchLock = true;
@@ -119,6 +118,10 @@ const char* spectrogramOrientationName(SpectrogramOrientation orientation);
 const char* waveformModeName(WaveformMode mode);
 
 std::filesystem::path defaultSettingsPath();
+TuiSettings parseSettingsText(const std::string& text,
+                              const TuiSettings& fallback = TuiSettings{});
+std::string serializeSettingsText(const TuiSettings& settings,
+                                  bool includeRefreshRate = true);
 TuiSettings loadSettings(const std::filesystem::path& path);
 bool saveSettings(const TuiSettings& settings,
                   const std::filesystem::path& path,

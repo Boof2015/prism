@@ -3,6 +3,7 @@
 #include "dashboard_layout.h"
 #include "display_model.h"
 #include "meter_display_model.h"
+#include "profile_library.h"
 #include "scope_plot_model.h"
 #include "scrolling_history.h"
 #include "snapshot_store.h"
@@ -15,7 +16,9 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -113,8 +116,10 @@ void testCli() {
         "exclusive commands should not combine");
     require(Prism::Tui::usageText().find("Tab / Shift-Tab") != std::string::npos,
         "help should describe dashboard keyboard controls");
-    require(Prism::Tui::usageText().find("Cycle vectorscope") != std::string::npos,
-        "help should describe vectorscope mode controls");
+    require(Prism::Tui::usageText().find("Cycle vectorscope") == std::string::npos,
+        "help should not advertise the removed vectorscope shortcut");
+    require(Prism::Tui::usageText().find("Open profiles") != std::string::npos,
+        "help should describe the profile library shortcut");
 }
 
 void testProjectionAndLayout() {
@@ -152,56 +157,100 @@ void testProjectionAndLayout() {
     require(meter.find("│") != std::string::npos,
         "meter bar should include its peak marker");
 
-    const auto wide = Prism::Tui::buildDashboardLayout(
-        100, 30, Prism::Tui::LayoutPreset::Automatic);
-    require(!wide.terminalTooSmall &&
-        wide.resolvedPreset == Prism::Tui::LayoutPreset::Columns,
-        "wide, tall terminals should use the columns dashboard");
-    require(wide.panels.size() == 5 &&
-        wide.panels[0].panel == Prism::Tui::PanelId::Spectrum &&
-        wide.panels[1].panel == Prism::Tui::PanelId::Oscilloscope &&
-        wide.panels[2].panel == Prism::Tui::PanelId::Vectorscope &&
-        wide.panels[3].panel == Prism::Tui::PanelId::VUMeter &&
-        wide.panels[4].panel == Prism::Tui::PanelId::LUFSMeter,
-        "the dashboard should contain all five scope panels");
-    require(wide.panels[0].width == wide.panels[1].width &&
-        wide.panels[2].width == wide.panels[3].width &&
-        wide.panels[3].width == wide.panels[4].width &&
-        wide.panels[0].width + wide.panels[2].width == 100 &&
-        wide.panels[0].width > wide.panels[2].width,
-        "dashboard columns should fill the width and favor visual plots");
-    require(wide.panels[0].height + wide.panels[1].height == 28 &&
-        wide.panels[2].height + wide.panels[3].height +
-            wide.panels[4].height == 28,
-        "both dashboard columns should fill the available height");
+    const auto rack = Prism::Tui::defaultRackLayout();
+    const auto full = Prism::Tui::buildDashboardLayout(140, 44, rack);
+    require(!full.terminalTooSmall && full.configuredRows == 3 &&
+        full.visibleRows == 3 && full.hiddenRows == 0 &&
+        full.hiddenPanels == 0 && full.panels.size() == 7,
+        "large dashboards should show the complete three-row scope rack");
+    require(Prism::Tui::visiblePanelOrder(full) ==
+        Prism::Tui::configuredPanelOrder(rack),
+        "the dashboard should preserve rack row and tile order");
+    require(std::all_of(full.panels.begin(), full.panels.end(), [](const auto& panel) {
+        return panel.width >= 30 && panel.height >= 5;
+    }), "all seven panes should retain usable bounds");
 
-    const auto stacked = Prism::Tui::buildDashboardLayout(
-        60, 20, Prism::Tui::LayoutPreset::Automatic);
-    require(stacked.resolvedPreset == Prism::Tui::LayoutPreset::Stacked,
-        "short terminals should stack their panels");
-    require(stacked.panels.size() == 3 &&
-        stacked.panels[0].panel == Prism::Tui::PanelId::Spectrum &&
-        stacked.panels[1].panel == Prism::Tui::PanelId::VUMeter &&
-        stacked.panels[2].panel == Prism::Tui::PanelId::LUFSMeter &&
-        stacked.panels[0].height + stacked.panels[1].height == 18 &&
-        stacked.panels[1].height == stacked.panels[2].height &&
-        stacked.panels[1].width + stacked.panels[2].width == 60,
-        "compact dashboards should keep VU and LUFS as separate scopes");
+    const auto spectrumRight = Prism::Tui::spatialNeighbor(
+        full,
+        Prism::Tui::PanelId::Spectrum,
+        Prism::Tui::NavigationDirection::Right);
+    require(spectrumRight &&
+        *spectrumRight == Prism::Tui::PanelId::Oscilloscope,
+        "spatial navigation should select the adjacent scope in a row");
+    const auto vectorscopeLeft = Prism::Tui::spatialNeighbor(
+        full,
+        Prism::Tui::PanelId::Vectorscope,
+        Prism::Tui::NavigationDirection::Left);
+    require(vectorscopeLeft &&
+        *vectorscopeLeft == Prism::Tui::PanelId::Oscilloscope,
+        "spatial navigation should move left within a row");
+    const auto spectrumDown = Prism::Tui::spatialNeighbor(
+        full,
+        Prism::Tui::PanelId::Spectrum,
+        Prism::Tui::NavigationDirection::Down);
+    require(spectrumDown && *spectrumDown == Prism::Tui::PanelId::Waveform,
+        "vertical navigation should choose the most-overlapping scope below");
+    const auto vectorscopeDown = Prism::Tui::spatialNeighbor(
+        full,
+        Prism::Tui::PanelId::Vectorscope,
+        Prism::Tui::NavigationDirection::Down);
+    require(vectorscopeDown &&
+        *vectorscopeDown == Prism::Tui::PanelId::LUFSMeter,
+        "vertical navigation should respect unequal scope widths");
+    const auto lufsUp = Prism::Tui::spatialNeighbor(
+        full,
+        Prism::Tui::PanelId::LUFSMeter,
+        Prism::Tui::NavigationDirection::Up);
+    require(lufsUp && *lufsUp == Prism::Tui::PanelId::Vectorscope,
+        "vertical spatial navigation should be reversible across rows");
+    require(!Prism::Tui::spatialNeighbor(
+            full,
+            Prism::Tui::PanelId::Spectrum,
+            Prism::Tui::NavigationDirection::Left),
+        "spatial navigation should stop at the dashboard edge");
 
-    const auto minimum = Prism::Tui::buildDashboardLayout(
-        44, 12, Prism::Tui::LayoutPreset::Automatic);
-    require(!minimum.terminalTooSmall && minimum.panels.size() == 2 &&
-        minimum.panels[0].height == 5 && minimum.panels[1].height == 5,
-        "minimum terminal layout should keep both panels usable");
-    require(Prism::Tui::buildDashboardLayout(
-        43, 12, Prism::Tui::LayoutPreset::Automatic).terminalTooSmall,
+    const auto twoRows = Prism::Tui::buildDashboardLayout(100, 20, rack);
+    require(twoRows.visibleRows == 2 && twoRows.hiddenRows == 1 &&
+        twoRows.panels.size() == 6 && twoRows.hiddenPanels == 1 &&
+        !Prism::Tui::layoutContainsPanel(
+            twoRows, Prism::Tui::PanelId::Spectrogram),
+        "shorter terminals should remove complete bottom rows instead of squashing them");
+
+    const auto oneRow = Prism::Tui::buildDashboardLayout(100, 14, rack);
+    require(oneRow.visibleRows == 1 && oneRow.hiddenRows == 2 &&
+        oneRow.panels.size() == 3 && oneRow.hiddenPanels == 4,
+        "height collapse should retain the first rack row at its usable size");
+
+    const auto narrow = Prism::Tui::buildDashboardLayout(60, 44, rack);
+    require(narrow.visibleRows == 3 && narrow.panels.size() == 5 &&
+        narrow.hiddenPanels == 2 &&
+        std::all_of(narrow.panels.begin(), narrow.panels.end(), [](const auto& panel) {
+            return panel.width >= 30;
+        }),
+        "narrow terminals should hide trailing scopes rather than crush their widths");
+
+    const auto minimum = Prism::Tui::buildDashboardLayout(44, 12, rack);
+    require(!minimum.terminalTooSmall && minimum.panels.size() == 1 &&
+        minimum.panels[0].panel == Prism::Tui::PanelId::Spectrum &&
+        minimum.panels[0].width == 44 && minimum.panels[0].height == 10,
+        "the minimum terminal should retain one complete usable scope");
+    require(Prism::Tui::buildDashboardLayout(43, 12, rack).terminalTooSmall,
         "narrow resize should select the compact screen");
-    require(Prism::Tui::buildDashboardLayout(
-        80, 11, Prism::Tui::LayoutPreset::Automatic).terminalTooSmall,
+    require(Prism::Tui::buildDashboardLayout(80, 11, rack).terminalTooSmall,
         "short resize should select the compact screen");
 
+    Prism::Tui::RackLayout compactMeters{{
+        {1, {{Prism::Tui::PanelId::LUFSMeter, 1}}},
+        {1, {{Prism::Tui::PanelId::VUMeter, 1}}},
+    }};
+    const auto compactMeterLayout = Prism::Tui::buildDashboardLayout(
+        44, 12, compactMeters);
+    require(compactMeterLayout.visibleRows == 2 &&
+        compactMeterLayout.panels.size() == 2,
+        "LUFS should fit in a compact four-row pane without hiding the next row");
+
     const auto expanded = Prism::Tui::buildDashboardLayout(
-        100, 30, Prism::Tui::LayoutPreset::Columns, Prism::Tui::PanelId::LUFSMeter);
+        100, 30, rack, Prism::Tui::PanelId::LUFSMeter);
     require(expanded.panels.size() == 1 &&
         expanded.panels[0].panel == Prism::Tui::PanelId::LUFSMeter &&
         expanded.panels[0].width == 100 && expanded.panels[0].height == 28,
@@ -212,21 +261,55 @@ void testProjectionAndLayout() {
     require(Prism::Tui::nextPanel(Prism::Tui::PanelId::Spectrum, true) ==
         Prism::Tui::PanelId::Waveform,
         "panel focus should cycle backward");
-    const auto compactPanels = Prism::Tui::visiblePanelOrder(stacked);
+    const auto compactPanels = Prism::Tui::visiblePanelOrder(oneRow);
     require(compactPanels.size() == 3 &&
         Prism::Tui::nextPanel(
-            Prism::Tui::PanelId::Spectrum, compactPanels) == Prism::Tui::PanelId::VUMeter,
-        "compact layout focus should skip hidden visual scopes");
+            Prism::Tui::PanelId::Spectrum, compactPanels) ==
+                Prism::Tui::PanelId::Oscilloscope,
+        "compact layout focus should follow only the visible rack scopes");
 
-    const auto full = Prism::Tui::buildDashboardLayout(
-        140, 44, Prism::Tui::LayoutPreset::Automatic);
-    require(full.panels.size() == 7 &&
-        Prism::Tui::layoutContainsPanel(full, Prism::Tui::PanelId::Spectrogram) &&
-        Prism::Tui::layoutContainsPanel(full, Prism::Tui::PanelId::Waveform),
-        "large dashboards should compose all seven scopes at once");
-    require(std::all_of(full.panels.begin(), full.panels.end(), [](const auto& panel) {
-        return panel.width > 0 && panel.height > 0;
-    }), "all seven panes should remain bounded after responsive layout");
+    const std::string encodedRack = Prism::Tui::serializeRackLayout(rack);
+    require(Prism::Tui::parseRackLayout(encodedRack, {}) == rack,
+        "rack layouts should round-trip through their compact configuration form");
+    require(Prism::Tui::parseRackLayout("not-a-rack", rack) == rack,
+        "malformed saved racks should fall back safely");
+    auto editedRack = rack;
+    require(Prism::Tui::moveRackPanelHorizontal(
+            editedRack, Prism::Tui::PanelId::Spectrum, 1) &&
+        editedRack.rows[0].tiles[1].panel == Prism::Tui::PanelId::Spectrum,
+        "rack tiles should reorder within a row");
+    require(Prism::Tui::moveRackPanelVertical(
+            editedRack, Prism::Tui::PanelId::Spectrum, 1) &&
+        Prism::Tui::rackPanelLocation(
+            editedRack, Prism::Tui::PanelId::Spectrum)->first == 1,
+        "rack tiles should move between rows");
+    require(Prism::Tui::resizeRackPanel(
+            editedRack, Prism::Tui::PanelId::Spectrum, 1) &&
+        Prism::Tui::resizeRackRow(
+            editedRack, Prism::Tui::PanelId::Spectrum, 1),
+        "rack editing should resize both scope widths and row heights");
+
+    Prism::Tui::RackLayout splitRack{{
+        {1, {{Prism::Tui::PanelId::Spectrum, 1},
+             {Prism::Tui::PanelId::Oscilloscope, 1}}},
+    }};
+    require(Prism::Tui::splitRackRow(
+            splitRack, Prism::Tui::PanelId::Spectrum) &&
+        splitRack.rows.size() == 2,
+        "rack editing should split a scope into a new row");
+    require(Prism::Tui::removeRackPanel(
+            editedRack, Prism::Tui::PanelId::Vectorscope) &&
+        Prism::Tui::addRackPanel(
+            editedRack,
+            Prism::Tui::PanelId::Vectorscope,
+            Prism::Tui::PanelId::Oscilloscope),
+        "rack editing should remove and restore optional scopes");
+    Prism::Tui::RackLayout lastScope{{
+        {1, {{Prism::Tui::PanelId::Spectrum, 1}}},
+    }};
+    require(!Prism::Tui::removeRackPanel(
+            lastScope, Prism::Tui::PanelId::Spectrum),
+        "rack editing should never remove the final scope");
 }
 
 void testMeterDisplayModels() {
@@ -291,7 +374,7 @@ void testSettingsModelAndPersistence() {
 
     const auto pages = Prism::Tui::settingsPages();
     require(pages.size() == 8 &&
-        Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::General).size() == 3,
+        Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::General).size() == 2,
         "settings should expose shallow category pages");
     Prism::Tui::TuiSettings adjusted;
     require(Prism::Tui::adjustSetting(
@@ -344,7 +427,9 @@ void testSettingsModelAndPersistence() {
         "prism-tui-settings-test.conf";
     std::error_code ignored;
     std::filesystem::remove(settingsPath, ignored);
-    adjusted.layoutPreset = Prism::Tui::LayoutPreset::Columns;
+    require(Prism::Tui::moveRackPanelHorizontal(
+            adjusted.rackLayout, Prism::Tui::PanelId::Spectrum, 1),
+        "settings persistence should include an edited rack layout");
     adjusted.vectorscopeMode = Prism::Tui::VectorscopeMode::PolarBipolar;
     adjusted.vectorscopeDetail = Prism::Tui::VectorscopeDetail::Maximum;
     std::string error;
@@ -353,6 +438,89 @@ void testSettingsModelAndPersistence() {
     require(Prism::Tui::loadSettings(settingsPath) == adjusted,
         "persisted settings should round-trip without changing values");
     std::filesystem::remove(settingsPath, ignored);
+}
+
+void testProfileLibrary() {
+    const auto root = std::filesystem::temp_directory_path() /
+        "prism-tui-profile-library-test";
+    const auto profilesPath = root / "profiles";
+    const auto statePath = root / "profile-state.conf";
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+
+    Prism::Tui::TuiProfileLibrary library(profilesPath, statePath);
+    std::string error;
+    require(library.load(&error),
+        "the profile library should initialize its managed directory");
+    require(library.profiles().size() == 1 &&
+        library.profiles().front().id == Prism::Tui::kDefaultTuiProfileId &&
+        library.profiles().front().isDefault,
+        "the profile library should always provide a default profile");
+
+    Prism::Tui::TuiSettings settings;
+    settings.inputTrimDb = 4.0f;
+    settings.refreshRate = 30;
+    settings.spectrogramContrast = 1.7f;
+    require(Prism::Tui::moveRackPanelHorizontal(
+            settings.rackLayout, Prism::Tui::PanelId::Spectrum, 1),
+        "profile fixtures should retain custom rack ordering");
+    std::string profileId;
+    require(library.saveNew("Studio Wide", settings, &profileId, &error),
+        "the current TUI setup should save as a named profile");
+    require(library.activeProfileId() == profileId &&
+        library.find(profileId) &&
+        Prism::Tui::profileSettingsEqual(
+            library.find(profileId)->settings, settings),
+        "saving a profile should activate and preserve its scoped settings");
+
+    bool foundProfileFile = false;
+    for (const auto& entry : std::filesystem::directory_iterator(profilesPath)) {
+        if (entry.path().extension() != Prism::Tui::kTuiProfileExtension) continue;
+        std::ifstream input(entry.path());
+        const std::string text{
+            std::istreambuf_iterator<char>(input),
+            std::istreambuf_iterator<char>()};
+        if (text.find("id=" + profileId) == std::string::npos) continue;
+        foundProfileFile = true;
+        require(text.find("format=prism-tui-profile") != std::string::npos &&
+            text.find("refresh_rate=") == std::string::npos,
+            ".prsmt files should be versioned and exclude global refresh settings");
+    }
+    require(foundProfileFile,
+        "saved TUI profiles should use the .prsmt extension");
+
+    Prism::Tui::TuiSettings differentRefresh = settings;
+    differentRefresh.refreshRate = 60;
+    require(Prism::Tui::profileSettingsEqual(settings, differentRefresh),
+        "refresh rate should not make an active profile dirty");
+    const auto applied = Prism::Tui::applyProfileSettings(
+        settings, differentRefresh);
+    require(applied.refreshRate == 60 && applied.inputTrimDb == 4.0f,
+        "loading a profile should preserve global refresh rate while applying trim");
+
+    settings.waveformMultiband = true;
+    require(library.overwrite(profileId, settings, &error) &&
+        library.find(profileId)->settings.waveformMultiband,
+        "overwriting should replace the active profile snapshot");
+    require(library.renameProfile(profileId, "Live Rack", &error) &&
+        library.find(profileId)->name == "Live Rack",
+        "user profiles should be renameable without changing their identity");
+
+    Prism::Tui::TuiProfileLibrary reloaded(profilesPath, statePath);
+    require(reloaded.load(&error) &&
+        reloaded.activeProfileId() == profileId &&
+        reloaded.find(profileId)->name == "Live Rack",
+        "the active profile and renamed file should survive a restart");
+    require(!reloaded.renameProfile(
+            Prism::Tui::kDefaultTuiProfileId, "Other", &error) &&
+        !reloaded.deleteProfile(
+            Prism::Tui::kDefaultTuiProfileId, &error),
+        "the default profile should not be renamed or deleted");
+    require(reloaded.deleteProfile(profileId, &error) &&
+        reloaded.activeProfileId().empty() && !reloaded.find(profileId),
+        "deleting the active profile should clear the active selection safely");
+
+    std::filesystem::remove_all(root, ignored);
 }
 
 void testScopePlotModels() {
@@ -679,6 +847,7 @@ int main() {
     testMeterDisplayModels();
     testSpectrumPeakModel();
     testSettingsModelAndPersistence();
+    testProfileLibrary();
     testScopePlotModels();
     testPitchReadoutResponse();
     testScrollingHistory();

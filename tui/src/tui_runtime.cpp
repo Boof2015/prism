@@ -4,6 +4,7 @@
 #include "dashboard_layout.h"
 #include "display_model.h"
 #include "meter_display_model.h"
+#include "profile_library.h"
 #include "scope_plot_model.h"
 #include "snapshot_store.h"
 #include "tui_settings.h"
@@ -127,16 +128,64 @@ struct DisplayFrame {
     bool captureOverrun = false;
 };
 
+enum class LayoutOverlay {
+    None,
+    AddScope,
+    Help,
+};
+
+enum class ProfileOverlayMode {
+    Browse,
+    SaveAs,
+    Rename,
+    ConfirmOverwrite,
+    ConfirmDelete,
+    ConfirmLoad,
+};
+
 struct InterfaceState {
     PanelId focusedPanel = PanelId::Spectrum;
     std::optional<PanelId> expandedPanel;
     TuiSettings settings;
+    bool layoutEditing = false;
+    LayoutOverlay layoutOverlay = LayoutOverlay::None;
+    size_t layoutAddSelection = 0;
+    std::string layoutStatus;
     bool settingsOpen = false;
     SettingsPage settingsPage = SettingsPage::Home;
     size_t settingsHomeSelection = 0;
     std::array<size_t, 9> settingsSelections{};
     std::string settingsStatus;
+    bool profilesOpen = false;
+    ProfileOverlayMode profileMode = ProfileOverlayMode::Browse;
+    std::vector<TuiProfile> profiles;
+    std::string activeProfileId;
+    bool profileDirty = false;
+    size_t profileSelection = 0;
+    std::string profileInput;
+    std::string profileStatus;
+    bool profileStatusError = false;
+    std::string pendingProfileId;
 };
+
+const TuiProfile* activeProfile(const InterfaceState& state) {
+    const auto found = std::find_if(
+        state.profiles.begin(), state.profiles.end(), [&](const auto& profile) {
+            return profile.id == state.activeProfileId;
+        });
+    return found == state.profiles.end() ? nullptr : &*found;
+}
+
+bool calculateUnsavedProfileChanges(const InterfaceState& state) {
+    if (const auto* active = activeProfile(state)) {
+        return !profileSettingsEqual(state.settings, active->settings);
+    }
+    return !profileSettingsEqual(state.settings, TuiSettings{});
+}
+
+bool hasUnsavedProfileChanges(const InterfaceState& state) {
+    return state.profileDirty;
+}
 
 size_t settingsPageIndex(SettingsPage page) {
     return static_cast<size_t>(page);
@@ -227,6 +276,77 @@ std::string panelNumber(PanelId panel) {
             return "7";
     }
     return "?";
+}
+
+std::vector<PanelId> removedRackPanels(const RackLayout& rack) {
+    std::vector<PanelId> removed;
+    for (const auto panel : panelOrder()) {
+        if (!rackPanelLocation(rack, panel)) removed.push_back(panel);
+    }
+    return removed;
+}
+
+std::optional<NavigationDirection> plainArrowDirection(
+    const ftxui::Event& event) {
+    using ftxui::Event;
+    if (event == Event::ArrowLeft) return NavigationDirection::Left;
+    if (event == Event::ArrowRight) return NavigationDirection::Right;
+    if (event == Event::ArrowUp) return NavigationDirection::Up;
+    if (event == Event::ArrowDown) return NavigationDirection::Down;
+    return std::nullopt;
+}
+
+std::optional<NavigationDirection> moveArrowDirection(
+    const ftxui::Event& event) {
+    using ftxui::Event;
+    if (event == Event::ArrowLeftCtrl ||
+        event == Event::Special("\x1b[1;2D") ||
+        event == Event::Special("\x1b[d") ||
+        event == Event::Character('H')) {
+        return NavigationDirection::Left;
+    }
+    if (event == Event::ArrowRightCtrl ||
+        event == Event::Special("\x1b[1;2C") ||
+        event == Event::Special("\x1b[c") ||
+        event == Event::Character('L')) {
+        return NavigationDirection::Right;
+    }
+    if (event == Event::ArrowUpCtrl ||
+        event == Event::Special("\x1b[1;2A") ||
+        event == Event::Special("\x1b[a") ||
+        event == Event::Character('K')) {
+        return NavigationDirection::Up;
+    }
+    if (event == Event::ArrowDownCtrl ||
+        event == Event::Special("\x1b[1;2B") ||
+        event == Event::Special("\x1b[b") ||
+        event == Event::Character('J')) {
+        return NavigationDirection::Down;
+    }
+    return std::nullopt;
+}
+
+void eraseLastUtf8Character(std::string& value) {
+    if (value.empty()) return;
+    value.pop_back();
+    while (!value.empty() &&
+           (static_cast<unsigned char>(value.back()) & 0xc0) == 0x80) {
+        value.pop_back();
+    }
+}
+
+bool appendProfileNameCharacter(std::string& value,
+                                const ftxui::Event& event) {
+    if (!event.is_character()) return false;
+    const std::string character = event.character();
+    if (character.empty() || value.size() + character.size() > 64) return true;
+    if (std::any_of(character.begin(), character.end(), [](unsigned char byte) {
+            return byte < 0x20 || byte == 0x7f;
+        })) {
+        return true;
+    }
+    value += character;
+    return true;
 }
 
 ftxui::Element panelTitle(PanelId panel,
@@ -1381,19 +1501,56 @@ ftxui::Element renderLayoutNode(const LayoutNode& node,
 }
 
 ftxui::Element renderHeader(const DashboardLayout& layout,
-                            const InterfaceState& state) {
+                            const InterfaceState& state,
+                            int width) {
     using namespace ftxui;
-    std::string layoutName = layoutPresetName(state.settings.layoutPreset);
-    if (state.settings.layoutPreset == LayoutPreset::Automatic) {
-        layoutName += "→" + layoutPresetName(layout.resolvedPreset);
+    std::ostringstream rackStatus;
+    if (state.layoutEditing) {
+        rackStatus << "EDIT LAYOUT";
+        if (const auto location = rackPanelLocation(
+                state.settings.rackLayout, state.focusedPanel)) {
+            const auto& row = state.settings.rackLayout.rows[location->first];
+            const auto& tile = row.tiles[location->second];
+            rackStatus << " • row " << location->first + 1 << "/"
+                       << state.settings.rackLayout.rows.size();
+            if (width >= 76) {
+                rackStatus << " • width " << tile.weight
+                           << " • height " << row.weight;
+            }
+        }
+        const size_t removedCount = removedRackPanels(
+            state.settings.rackLayout).size();
+        if (removedCount > 0 && width >= 110) {
+            rackStatus << " • " << removedCount << " removed";
+        }
+    } else {
+        rackStatus << "rack • " << layout.visibleRows << "/"
+                   << layout.configuredRows << " rows";
+        if (layout.hiddenPanels > 0 && width >= 80) {
+            rackStatus << " • " << layout.hiddenPanels << " scope"
+                       << (layout.hiddenPanels == 1 ? "" : "s") << " hidden";
+        }
     }
+    const auto* profile = activeProfile(state);
+    const bool profileDirty = hasUnsavedProfileChanges(state);
+    const std::string profileLabel = profile
+        ? " • " + profile->name + (profileDirty ? " *" : "")
+        : profileDirty ? " • Working *" : "";
+    Element profileElement = width >= 90 && !profileLabel.empty()
+        ? text(profileLabel) |
+            (profileDirty ? color(Color::YellowLight) : dim) |
+            size(WIDTH, LESS_THAN, 32)
+        : emptyElement();
     return hbox({
         text(" PRISM") | color(Color::CyanLight) | bold,
         text(" TUI") | bold,
+        std::move(profileElement),
         filler(),
         state.expandedPanel
             ? text("FOCUS • " + panelName(*state.expandedPanel) + " ") | color(Color::CyanLight)
-            : text(layoutName + " ") | dim,
+            : state.layoutEditing
+                ? text(rackStatus.str() + " ") | color(Color::CyanLight) | bold
+                : text(rackStatus.str() + " ") | dim,
     });
 }
 
@@ -1403,13 +1560,36 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
     using namespace ftxui;
     const bool compact = width < 108;
     const bool minimal = width < 64;
+    if (state.layoutEditing) {
+        const std::string essentialControls = "a add • ? help • Enter done";
+        if (!state.layoutStatus.empty()) {
+            if (width < 80) {
+                return text(" " + state.layoutStatus) |
+                    color(Color::CyanLight);
+            }
+            return hbox({
+                text(" " + state.layoutStatus) | color(Color::CyanLight) | bold,
+                filler(),
+                text(essentialControls + " ") | color(Color::GrayLight),
+            });
+        }
+        const std::string controls = width < 64
+            ? essentialControls
+            : width < 110
+                ? "arrows select • Shift+arrows move • a add • ? help • Enter done"
+                : width < 160
+                    ? "arrows select • Shift+arrows move • [ ] width • a add • x remove • ? help • Enter done"
+                    : "arrows select • Shift+arrows move • [] width • ,. height • n new row • a add • x remove • ? help • Enter done";
+        return text(controls + " ") | color(Color::CyanLight) | align_right;
+    }
     const std::string enterAction = state.expandedPanel ? "restore" : "expand";
     const std::string controls = minimal
-        ? "Tab • Enter • s • q"
+        ? "Tab • Enter • p • s • q"
         : compact
-            ? "Tab focus • Enter " + enterAction + " • s settings • q quit"
+            ? "Tab focus • Enter " + enterAction +
+                " • p profiles • s settings • q quit"
             : "Tab focus • Enter " + enterAction +
-                " • s settings • v mode • l layout • r reset • q quit";
+                " • p profiles • s settings • l edit layout • r reset • q quit";
     auto status = text(makeCaptureStatus(frame, state.settings, compact)) | dim;
     if (frame.captureOverrun) {
         status = status | color(Color::RedLight);
@@ -1439,6 +1619,104 @@ ftxui::Element settingsRow(const std::string& label,
         row = row | color(Color::GrayLight);
     }
     return row | size(HEIGHT, EQUAL, 1);
+}
+
+ftxui::Element renderLayoutAddScope(const InterfaceState& state,
+                                    int width,
+                                    int height) {
+    using namespace ftxui;
+    const int contentWidth = std::max(1, width - 2);
+    const int contentHeight = std::max(1, height - 2);
+    const auto removed = removedRackPanels(state.settings.rackLayout);
+    Elements rows;
+    if (removed.empty()) {
+        rows.push_back(filler());
+        rows.push_back(
+            text("All seven scopes are already in the rack.") |
+            color(Color::GrayLight) | center);
+        rows.push_back(filler());
+    } else {
+        const size_t selected = std::min(
+            state.layoutAddSelection, removed.size() - 1);
+        const size_t maximumVisible = static_cast<size_t>(
+            std::max(1, contentHeight - 8));
+        const size_t firstVisible = selected >= maximumVisible
+            ? selected - maximumVisible + 1
+            : 0;
+        const size_t lastVisible = std::min(
+            removed.size(), firstVisible + maximumVisible);
+        for (size_t index = firstVisible; index < lastVisible; ++index) {
+            rows.push_back(settingsRow(
+                panelNumber(removed[index]) + "  " + panelName(removed[index]),
+                index == selected ? "add" : "",
+                index == selected));
+        }
+        rows.push_back(filler());
+    }
+
+    std::string destination = "after " + panelName(state.focusedPanel);
+    if (const auto location = rackPanelLocation(
+            state.settings.rackLayout, state.focusedPanel)) {
+        destination += " in row " + std::to_string(location->first + 1);
+    }
+    auto content = vbox({
+        text(" PRISM / EDIT LAYOUT / ADD SCOPE") |
+            color(Color::CyanLight) | bold,
+        separator(),
+        removed.empty()
+            ? text("Nothing to restore.") | dim
+            : text("Choose a removed scope. It will be inserted " + destination + ".") | dim,
+        separatorEmpty(),
+        vbox(std::move(rows)),
+        separator(),
+        text(removed.empty()
+            ? "Esc back"
+            : "↑↓ select  •  Enter add  •  Esc back") | dim,
+    }) | size(WIDTH, EQUAL, contentWidth) |
+        size(HEIGHT, EQUAL, contentHeight);
+    return std::move(content) | borderRounded |
+        size(WIDTH, EQUAL, width) |
+        size(HEIGHT, EQUAL, height);
+}
+
+ftxui::Element renderLayoutHelp(int width, int height) {
+    using namespace ftxui;
+    const int contentWidth = std::max(1, width - 2);
+    const int contentHeight = std::max(1, height - 2);
+    Elements instructions;
+    if (contentHeight < 15) {
+        instructions.push_back(text("Arrows select • Shift+arrows move."));
+        instructions.push_back(text("Ctrl+arrows or H/J/K/L also move."));
+        instructions.push_back(text("[ ] scope width • , . row height."));
+        instructions.push_back(text("a adds by name • x removes."));
+    } else {
+        instructions.push_back(text("Arrow keys          Select the nearest scope spatially."));
+        instructions.push_back(text("Tab / Shift-Tab     Select the next or previous visible scope."));
+        instructions.push_back(text("Shift + arrows      Reorder within a row or move between rows."));
+        instructions.push_back(text("Ctrl + arrows       Movement fallback for terminal compatibility."));
+        instructions.push_back(text("H / J / K / L       Additional movement fallback (uppercase)."));
+        instructions.push_back(text("[ / ]             Make the selected scope narrower or wider."));
+        instructions.push_back(text(", / .             Make the selected row shorter or taller."));
+        instructions.push_back(text("n                 Move the scope into a new row (three maximum)."));
+        instructions.push_back(text("x                 Remove the selected scope."));
+        instructions.push_back(text("a                 Add a removed scope by name."));
+    }
+
+    auto content = vbox({
+        text(" PRISM / EDIT LAYOUT / HELP") | color(Color::CyanLight) | bold,
+        separator(),
+        vbox(std::move(instructions)),
+        filler(),
+        contentHeight >= 12
+            ? text("Changes are saved immediately.") | color(Color::GrayLight)
+            : emptyElement(),
+        separator(),
+        text("? / Esc back") | dim,
+    }) | size(WIDTH, EQUAL, contentWidth) |
+        size(HEIGHT, EQUAL, contentHeight);
+    return std::move(content) | borderRounded |
+        size(WIDTH, EQUAL, width) |
+        size(HEIGHT, EQUAL, height);
 }
 
 ftxui::Element renderSettings(const InterfaceState& state,
@@ -1517,13 +1795,177 @@ ftxui::Element renderSettings(const InterfaceState& state,
         size(HEIGHT, EQUAL, height);
 }
 
+ftxui::Element renderProfiles(const InterfaceState& state,
+                              int width,
+                              int height) {
+    using namespace ftxui;
+    const int contentWidth = std::max(1, width - 2);
+    const int contentHeight = std::max(1, height - 2);
+    const auto selectedIndex = state.profiles.empty()
+        ? size_t{0}
+        : std::min(state.profileSelection, state.profiles.size() - 1);
+    const TuiProfile* selected = state.profiles.empty()
+        ? nullptr
+        : &state.profiles[selectedIndex];
+    const TuiProfile* active = activeProfile(state);
+    const bool dirty = hasUnsavedProfileChanges(state);
+
+    if (state.profileMode == ProfileOverlayMode::Browse) {
+        Elements rows;
+        const size_t maximumVisibleRows = static_cast<size_t>(
+            std::max(1, contentHeight - 8));
+        const size_t firstVisible = selectedIndex >= maximumVisibleRows
+            ? selectedIndex - maximumVisibleRows + 1
+            : 0;
+        const size_t lastVisible = std::min(
+            state.profiles.size(), firstVisible + maximumVisibleRows);
+        for (size_t index = firstVisible; index < lastVisible; ++index) {
+            const auto& profile = state.profiles[index];
+            const bool isSelected = index == selectedIndex;
+            const bool isActive = profile.id == state.activeProfileId;
+            auto row = hbox({
+                text(isSelected ? " › " : "   "),
+                text(isActive ? "● " : "  ") |
+                    color(isActive ? Color::CyanLight : Color::GrayDark),
+                text(profile.name) | (isSelected ? bold : dim),
+                isActive && dirty
+                    ? text("  * modified") | color(Color::YellowLight)
+                    : emptyElement(),
+                filler(),
+                profile.isDefault ? text("default ") | dim : emptyElement(),
+            });
+            rows.push_back(isSelected
+                ? std::move(row) | bgcolor(Color::RGB(18, 49, 52)) |
+                    color(Color::CyanLight)
+                : std::move(row));
+        }
+        const std::string activeDescription = active
+            ? "Active: " + active->name + (dirty ? "  •  modified" : "")
+            : dirty
+                ? "Working setup is not saved to a profile."
+                : "No active profile.";
+        auto content = vbox({
+            text(" PRISM / PROFILES") | color(Color::CyanLight) | bold,
+            separator(),
+            text(activeDescription) |
+                (dirty ? color(Color::YellowLight) : color(Color::GrayLight)),
+            separatorEmpty(),
+            vbox(std::move(rows)),
+            filler(),
+            state.profileStatus.empty()
+                ? emptyElement()
+                : text(state.profileStatus) | color(
+                    state.profileStatusError
+                        ? Color::RedLight
+                        : Color::CyanLight),
+            separator(),
+            text(contentWidth < 60
+                ? "↑↓ select • Enter load • n save • Esc"
+                : contentWidth < 74
+                    ? "↑↓ select • Enter load • n new • w write • Esc"
+                : "↑↓ select  •  Enter load  •  n save as  •  w overwrite  •  r rename  •  d delete  •  Esc") | dim,
+        }) | size(WIDTH, EQUAL, contentWidth) |
+            size(HEIGHT, EQUAL, contentHeight);
+        return std::move(content) | borderRounded |
+            size(WIDTH, EQUAL, width) |
+            size(HEIGHT, EQUAL, height);
+    }
+
+    std::string title;
+    std::string message;
+    std::string controls = "Enter confirm  •  Esc cancel";
+    Element action = emptyElement();
+    switch (state.profileMode) {
+        case ProfileOverlayMode::SaveAs:
+            title = " PRISM / PROFILES / SAVE AS";
+            message = state.pendingProfileId.empty()
+                ? "Save the current rack and scope settings as a new profile."
+                : "Save the current setup before loading another profile.";
+            action = hbox({
+                text(" Name  ") | dim,
+                text(state.profileInput.empty() ? " " : state.profileInput) | bold,
+                text("▌") | color(Color::CyanLight),
+            }) | border;
+            break;
+        case ProfileOverlayMode::Rename:
+            title = " PRISM / PROFILES / RENAME";
+            message = selected
+                ? "Rename “" + selected->name + "”."
+                : "Choose a profile to rename.";
+            action = hbox({
+                text(" Name  ") | dim,
+                text(state.profileInput.empty() ? " " : state.profileInput) | bold,
+                text("▌") | color(Color::CyanLight),
+            }) | border;
+            break;
+        case ProfileOverlayMode::ConfirmOverwrite:
+            title = " PRISM / PROFILES / OVERWRITE";
+            message = active
+                ? "Replace “" + active->name + "” with the current setup?"
+                : "There is no active profile to overwrite.";
+            action = text("This changes the saved .prsmt file.") |
+                color(Color::YellowLight);
+            break;
+        case ProfileOverlayMode::ConfirmDelete:
+            title = " PRISM / PROFILES / DELETE";
+            message = selected
+                ? "Delete “" + selected->name + "”?"
+                : "Choose a profile to delete.";
+            action = text("This cannot be undone.") | color(Color::RedLight);
+            controls = "d confirm delete  •  Esc cancel";
+            break;
+        case ProfileOverlayMode::ConfirmLoad:
+            title = " PRISM / PROFILES / UNSAVED CHANGES";
+            message = "Loading another profile will replace the current setup.";
+            action = contentWidth < 60
+                ? active
+                    ? vbox({
+                        text("w  save active profile, then load"),
+                        text("n  save as a new profile, then load"),
+                        text("d  discard changes and load"),
+                    }) | color(Color::YellowLight)
+                    : vbox({
+                        text("n  save as a new profile, then load"),
+                        text("d  discard changes and load"),
+                    }) | color(Color::YellowLight)
+                : text(active
+                    ? "w save & load  •  n save as & load  •  d discard & load"
+                    : "n save as & load  •  d discard & load") |
+                    color(Color::YellowLight);
+            controls = "Choose an action  •  Esc cancel";
+            break;
+        case ProfileOverlayMode::Browse:
+            break;
+    }
+    auto content = vbox({
+        text(title) | color(Color::CyanLight) | bold,
+        separator(),
+        text(message),
+        separatorEmpty(),
+        std::move(action),
+        filler(),
+        state.profileStatus.empty()
+            ? emptyElement()
+            : text(state.profileStatus) | color(
+                state.profileStatusError
+                    ? Color::RedLight
+                    : Color::CyanLight),
+        separator(),
+        text(controls) | dim,
+    }) | size(WIDTH, EQUAL, contentWidth) |
+        size(HEIGHT, EQUAL, contentHeight);
+    return std::move(content) | borderRounded |
+        size(WIDTH, EQUAL, width) |
+        size(HEIGHT, EQUAL, height);
+}
+
 ftxui::Element renderFrame(const DisplayFrame& frame,
                            int width,
                            int height,
                            const InterfaceState& state) {
     using namespace ftxui;
     const auto layout = buildDashboardLayout(
-        width, height, state.settings.layoutPreset, state.expandedPanel);
+        width, height, state.settings.rackLayout, state.expandedPanel);
     if (layout.terminalTooSmall) {
         return vbox({
             filler(),
@@ -1535,21 +1977,43 @@ ftxui::Element renderFrame(const DisplayFrame& frame,
     }
 
     auto dashboard = vbox({
-        renderHeader(layout, state) | size(HEIGHT, EQUAL, 1),
+        renderHeader(layout, state, width) | size(HEIGHT, EQUAL, 1),
         renderLayoutNode(layout.root, layout, frame, state),
         renderFooter(frame, state, width) | size(HEIGHT, EQUAL, 1),
     });
-    if (!state.settingsOpen) {
-        return dashboard;
+    if (state.profilesOpen) {
+        const int profilesWidth = std::min(92, std::max(44, width - 4));
+        const int profilesHeight = std::min(18, std::max(12, height - 2));
+        return dbox({
+            std::move(dashboard) | dim,
+            renderProfiles(state, profilesWidth, profilesHeight) |
+                borderEmpty | clear_under | center,
+        });
     }
-
-    const int settingsWidth = std::min(84, std::max(40, width - 4));
-    const int settingsHeight = std::min(16, std::max(10, height - 2));
-    return dbox({
-        std::move(dashboard) | dim,
-        renderSettings(state, settingsWidth, settingsHeight) |
-            borderEmpty | clear_under | center,
-    });
+    if (state.settingsOpen) {
+        const int settingsWidth = std::min(84, std::max(40, width - 4));
+        const int settingsHeight = std::min(16, std::max(10, height - 2));
+        return dbox({
+            std::move(dashboard) | dim,
+            renderSettings(state, settingsWidth, settingsHeight) |
+                borderEmpty | clear_under | center,
+        });
+    }
+    if (state.layoutEditing && state.layoutOverlay != LayoutOverlay::None) {
+        const bool help = state.layoutOverlay == LayoutOverlay::Help;
+        const int overlayWidth = std::min(
+            help ? 84 : 72, std::max(40, width - 4));
+        const int overlayHeight = std::min(
+            help ? 18 : 16, std::max(10, height - 2));
+        auto overlay = help
+            ? renderLayoutHelp(overlayWidth, overlayHeight)
+            : renderLayoutAddScope(state, overlayWidth, overlayHeight);
+        return dbox({
+            std::move(dashboard) | dim,
+            std::move(overlay) | borderEmpty | clear_under | center,
+        });
+    }
+    return dashboard;
 }
 
 }  // namespace
@@ -1574,6 +2038,18 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     InterfaceState interfaceState;
     const std::filesystem::path settingsPath = defaultSettingsPath();
     interfaceState.settings = loadSettings(settingsPath);
+    TuiProfileLibrary profileLibrary(
+        defaultProfileDirectory(), defaultProfileStatePath());
+    std::string profileLoadError;
+    if (!profileLibrary.load(&profileLoadError)) {
+        interfaceState.profileStatus =
+            "Could not load profiles: " + profileLoadError;
+        interfaceState.profileStatusError = true;
+    }
+    interfaceState.profiles = profileLibrary.profiles();
+    interfaceState.activeProfileId = profileLibrary.activeProfileId();
+    interfaceState.profileDirty =
+        calculateUnsavedProfileChanges(interfaceState);
     settingsStore.publish(interfaceState.settings);
     DisplayFrame initial;
     initial.magnitudes.assign(kDefaultFftSize / 2, -100.0f);
@@ -1681,6 +2157,8 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     });
     const auto persistSettings = [&]() {
         interfaceState.settings = normalizeSettings(interfaceState.settings);
+        interfaceState.profileDirty =
+            calculateUnsavedProfileChanges(interfaceState);
         settingsStore.publish(interfaceState.settings);
         std::string error;
         if (!saveSettings(interfaceState.settings, settingsPath, &error)) {
@@ -1689,13 +2167,68 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             interfaceState.settingsStatus.clear();
         }
     };
+    const auto syncProfiles = [&]() {
+        interfaceState.profiles = profileLibrary.profiles();
+        interfaceState.activeProfileId = profileLibrary.activeProfileId();
+        interfaceState.profileDirty =
+            calculateUnsavedProfileChanges(interfaceState);
+        if (interfaceState.profiles.empty()) {
+            interfaceState.profileSelection = 0;
+        } else {
+            interfaceState.profileSelection = std::min(
+                interfaceState.profileSelection,
+                interfaceState.profiles.size() - 1);
+        }
+    };
+    const auto selectProfile = [&](const std::string& id) {
+        const auto found = std::find_if(
+            interfaceState.profiles.begin(),
+            interfaceState.profiles.end(),
+            [&](const auto& profile) { return profile.id == id; });
+        if (found != interfaceState.profiles.end()) {
+            interfaceState.profileSelection = static_cast<size_t>(
+                std::distance(interfaceState.profiles.begin(), found));
+        }
+    };
+    const auto loadProfile = [&](const std::string& id) {
+        const auto* profile = profileLibrary.find(id);
+        if (!profile) {
+            interfaceState.profileStatus = "Profile was not found.";
+            interfaceState.profileStatusError = true;
+            return false;
+        }
+        const TuiSettings loaded = applyProfileSettings(
+            profile->settings, interfaceState.settings);
+        std::string error;
+        if (!profileLibrary.activate(id, &error)) {
+            interfaceState.profileStatus = "Could not activate profile: " + error;
+            interfaceState.profileStatusError = true;
+            return false;
+        }
+        interfaceState.settings = loaded;
+        interfaceState.expandedPanel.reset();
+        persistSettings();
+        const auto dashboard = buildDashboardLayout(
+            screen.dimx(),
+            screen.dimy(),
+            interfaceState.settings.rackLayout);
+        if (!layoutContainsPanel(dashboard, interfaceState.focusedPanel)) {
+            const auto visible = visiblePanelOrder(dashboard);
+            if (!visible.empty()) interfaceState.focusedPanel = visible.front();
+        }
+        syncProfiles();
+        selectProfile(id);
+        interfaceState.profileStatus = "Loaded " + profile->name;
+        interfaceState.profileStatusError = false;
+        return true;
+    };
     const auto closeSettings = [&]() {
         interfaceState.settingsOpen = false;
         interfaceState.settingsPage = SettingsPage::Home;
         const auto dashboard = buildDashboardLayout(
             screen.dimx(),
             screen.dimy(),
-            interfaceState.settings.layoutPreset,
+            interfaceState.settings.rackLayout,
             interfaceState.expandedPanel);
         if (!interfaceState.expandedPanel &&
             !layoutContainsPanel(dashboard, interfaceState.focusedPanel)) {
@@ -1703,17 +2236,352 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             if (!visible.empty()) interfaceState.focusedPanel = visible.front();
         }
     };
+    const auto panelForEvent = [](const Event& event) -> std::optional<PanelId> {
+        if (event == Event::Character('1')) return PanelId::Spectrum;
+        if (event == Event::Character('2')) return PanelId::Oscilloscope;
+        if (event == Event::Character('3')) return PanelId::Vectorscope;
+        if (event == Event::Character('4')) return PanelId::VUMeter;
+        if (event == Event::Character('5')) return PanelId::LUFSMeter;
+        if (event == Event::Character('6')) return PanelId::Spectrogram;
+        if (event == Event::Character('7')) return PanelId::Waveform;
+        return std::nullopt;
+    };
+    const auto addedScopeStatus = [&](PanelId panel) {
+        const auto dashboard = buildDashboardLayout(
+            screen.dimx(), screen.dimy(), interfaceState.settings.rackLayout);
+        return "Added " + panelName(panel) +
+            (layoutContainsPanel(dashboard, panel)
+                ? ""
+                : " • hidden at this terminal size");
+    };
     auto component = CatchEvent(renderer, [&](Event event) {
         if (event == Event::Custom) {
             redrawQueued.store(false);
             return false;
         }
-        if (event == Event::Character('q') || event == Event::CtrlC) {
+        if (event == Event::CtrlC) {
             running.store(false);
             exitLoop();
             return true;
         }
+        if (interfaceState.profilesOpen) {
+            const auto selectedProfile = [&]() -> const TuiProfile* {
+                if (interfaceState.profiles.empty()) return nullptr;
+                return &interfaceState.profiles[std::min(
+                    interfaceState.profileSelection,
+                    interfaceState.profiles.size() - 1)];
+            };
+            const auto returnToProfileBrowser = [&]() {
+                interfaceState.profileMode = ProfileOverlayMode::Browse;
+                interfaceState.profileInput.clear();
+                interfaceState.pendingProfileId.clear();
+            };
+
+            if (interfaceState.profileMode == ProfileOverlayMode::Browse) {
+                if (event == Event::Escape || event == Event::Character('p')) {
+                    interfaceState.profilesOpen = false;
+                    interfaceState.profileStatus.clear();
+                    return true;
+                }
+                if (!interfaceState.profiles.empty() &&
+                    (event == Event::ArrowUp || event == Event::ArrowDown)) {
+                    const int direction = event == Event::ArrowDown ? 1 : -1;
+                    const int count = static_cast<int>(interfaceState.profiles.size());
+                    interfaceState.profileSelection = static_cast<size_t>(
+                        (static_cast<int>(interfaceState.profileSelection) +
+                            direction + count) % count);
+                    interfaceState.profileStatus.clear();
+                    return true;
+                }
+                if (event == Event::Character('n')) {
+                    interfaceState.profileMode = ProfileOverlayMode::SaveAs;
+                    interfaceState.profileInput.clear();
+                    interfaceState.profileStatus.clear();
+                    return true;
+                }
+                if (event == Event::Character('w')) {
+                    if (interfaceState.activeProfileId.empty()) {
+                        interfaceState.profileStatus =
+                            "No active profile. Use n to save this setup first.";
+                        interfaceState.profileStatusError = true;
+                    } else {
+                        interfaceState.profileMode =
+                            ProfileOverlayMode::ConfirmOverwrite;
+                        interfaceState.profileStatus.clear();
+                    }
+                    return true;
+                }
+                if (event == Event::Character('r')) {
+                    const auto* selected = selectedProfile();
+                    if (!selected) {
+                        interfaceState.profileStatus = "No profile is selected.";
+                        interfaceState.profileStatusError = true;
+                    } else if (selected->isDefault) {
+                        interfaceState.profileStatus =
+                            "The default profile cannot be renamed.";
+                        interfaceState.profileStatusError = true;
+                    } else {
+                        interfaceState.profileMode = ProfileOverlayMode::Rename;
+                        interfaceState.profileInput = selected->name;
+                        interfaceState.profileStatus.clear();
+                    }
+                    return true;
+                }
+                if (event == Event::Character('d')) {
+                    const auto* selected = selectedProfile();
+                    if (!selected) {
+                        interfaceState.profileStatus = "No profile is selected.";
+                        interfaceState.profileStatusError = true;
+                    } else if (selected->isDefault) {
+                        interfaceState.profileStatus =
+                            "The default profile cannot be deleted.";
+                        interfaceState.profileStatusError = true;
+                    } else {
+                        interfaceState.profileMode =
+                            ProfileOverlayMode::ConfirmDelete;
+                        interfaceState.profileStatus.clear();
+                    }
+                    return true;
+                }
+                if (event == Event::Return) {
+                    const auto* selected = selectedProfile();
+                    if (!selected) {
+                        interfaceState.profileStatus = "No profile is selected.";
+                        interfaceState.profileStatusError = true;
+                    } else if (selected->id == interfaceState.activeProfileId &&
+                               !hasUnsavedProfileChanges(interfaceState)) {
+                        interfaceState.profileStatus =
+                            selected->name + " is already active.";
+                        interfaceState.profileStatusError = false;
+                    } else if (hasUnsavedProfileChanges(interfaceState)) {
+                        interfaceState.pendingProfileId = selected->id;
+                        interfaceState.profileMode =
+                            ProfileOverlayMode::ConfirmLoad;
+                        interfaceState.profileStatus.clear();
+                    } else if (loadProfile(selected->id)) {
+                        interfaceState.profilesOpen = false;
+                    }
+                    return true;
+                }
+                return true;
+            }
+
+            if (interfaceState.profileMode == ProfileOverlayMode::SaveAs ||
+                interfaceState.profileMode == ProfileOverlayMode::Rename) {
+                if (event == Event::Escape) {
+                    if (interfaceState.profileMode == ProfileOverlayMode::SaveAs &&
+                        !interfaceState.pendingProfileId.empty()) {
+                        interfaceState.profileMode =
+                            ProfileOverlayMode::ConfirmLoad;
+                        interfaceState.profileInput.clear();
+                    } else {
+                        returnToProfileBrowser();
+                    }
+                    interfaceState.profileStatus.clear();
+                    return true;
+                }
+                if (event == Event::Backspace) {
+                    eraseLastUtf8Character(interfaceState.profileInput);
+                    interfaceState.profileStatus.clear();
+                    return true;
+                }
+                if (event == Event::Return) {
+                    std::string error;
+                    if (interfaceState.profileMode == ProfileOverlayMode::SaveAs) {
+                        std::string createdId;
+                        if (!profileLibrary.saveNew(
+                                interfaceState.profileInput,
+                                interfaceState.settings,
+                                &createdId,
+                                &error)) {
+                            interfaceState.profileStatus = error;
+                            interfaceState.profileStatusError = true;
+                            return true;
+                        }
+                        const std::string pendingLoad =
+                            interfaceState.pendingProfileId;
+                        syncProfiles();
+                        selectProfile(createdId);
+                        interfaceState.profileInput.clear();
+                        interfaceState.pendingProfileId.clear();
+                        if (!pendingLoad.empty()) {
+                            if (loadProfile(pendingLoad)) {
+                                interfaceState.profilesOpen = false;
+                            }
+                        } else {
+                            interfaceState.profileMode = ProfileOverlayMode::Browse;
+                            interfaceState.profileStatus = "Saved new profile.";
+                            interfaceState.profileStatusError = false;
+                        }
+                    } else {
+                        const auto* selected = selectedProfile();
+                        if (!selected) {
+                            interfaceState.profileStatus =
+                                "No profile is selected.";
+                            interfaceState.profileStatusError = true;
+                            return true;
+                        }
+                        const std::string id = selected->id;
+                        if (!profileLibrary.renameProfile(
+                                id, interfaceState.profileInput, &error)) {
+                            interfaceState.profileStatus = error;
+                            interfaceState.profileStatusError = true;
+                            return true;
+                        }
+                        syncProfiles();
+                        selectProfile(id);
+                        interfaceState.profileMode = ProfileOverlayMode::Browse;
+                        interfaceState.profileInput.clear();
+                        interfaceState.profileStatus = "Profile renamed.";
+                        interfaceState.profileStatusError = false;
+                    }
+                    return true;
+                }
+                if (appendProfileNameCharacter(
+                        interfaceState.profileInput, event)) {
+                    interfaceState.profileStatus.clear();
+                    return true;
+                }
+                return true;
+            }
+
+            if (event == Event::Escape) {
+                returnToProfileBrowser();
+                interfaceState.profileStatus.clear();
+                return true;
+            }
+            if (interfaceState.profileMode ==
+                    ProfileOverlayMode::ConfirmOverwrite &&
+                (event == Event::Return || event == Event::Character('w'))) {
+                std::string error;
+                if (!profileLibrary.overwrite(
+                        interfaceState.activeProfileId,
+                        interfaceState.settings,
+                        &error)) {
+                    interfaceState.profileStatus = error;
+                    interfaceState.profileStatusError = true;
+                } else {
+                    const std::string activeId = interfaceState.activeProfileId;
+                    syncProfiles();
+                    selectProfile(activeId);
+                    interfaceState.profileMode = ProfileOverlayMode::Browse;
+                    interfaceState.profileStatus = "Active profile overwritten.";
+                    interfaceState.profileStatusError = false;
+                }
+                return true;
+            }
+            if (interfaceState.profileMode ==
+                    ProfileOverlayMode::ConfirmDelete &&
+                event == Event::Character('d')) {
+                const auto* selected = selectedProfile();
+                if (!selected) {
+                    returnToProfileBrowser();
+                    interfaceState.profileStatus = "No profile is selected.";
+                    interfaceState.profileStatusError = true;
+                    return true;
+                }
+                const std::string deletedName = selected->name;
+                std::string error;
+                if (!profileLibrary.deleteProfile(selected->id, &error)) {
+                    interfaceState.profileStatus = error;
+                    interfaceState.profileStatusError = true;
+                } else {
+                    syncProfiles();
+                    interfaceState.profileMode = ProfileOverlayMode::Browse;
+                    interfaceState.profileStatus = "Deleted " + deletedName;
+                    interfaceState.profileStatusError = false;
+                }
+                return true;
+            }
+            if (interfaceState.profileMode == ProfileOverlayMode::ConfirmLoad) {
+                if (event == Event::Character('n')) {
+                    interfaceState.profileMode = ProfileOverlayMode::SaveAs;
+                    interfaceState.profileInput.clear();
+                    interfaceState.profileStatus.clear();
+                    return true;
+                }
+                if (event == Event::Character('w') &&
+                    !interfaceState.activeProfileId.empty()) {
+                    std::string error;
+                    if (!profileLibrary.overwrite(
+                            interfaceState.activeProfileId,
+                            interfaceState.settings,
+                            &error)) {
+                        interfaceState.profileStatus = error;
+                        interfaceState.profileStatusError = true;
+                        return true;
+                    }
+                    syncProfiles();
+                    const std::string pending = interfaceState.pendingProfileId;
+                    interfaceState.pendingProfileId.clear();
+                    if (loadProfile(pending)) {
+                        interfaceState.profilesOpen = false;
+                    }
+                    return true;
+                }
+                if (event == Event::Character('d')) {
+                    const std::string pending = interfaceState.pendingProfileId;
+                    interfaceState.pendingProfileId.clear();
+                    if (loadProfile(pending)) {
+                        interfaceState.profilesOpen = false;
+                    }
+                    return true;
+                }
+            }
+            return true;
+        }
+        if (event == Event::Character('q')) {
+            running.store(false);
+            exitLoop();
+            return true;
+        }
+        if (event == Event::Character('p') &&
+            !interfaceState.settingsOpen && !interfaceState.layoutEditing) {
+            interfaceState.profilesOpen = true;
+            interfaceState.profileMode = ProfileOverlayMode::Browse;
+            interfaceState.profileInput.clear();
+            interfaceState.pendingProfileId.clear();
+            if (!interfaceState.profiles.empty()) {
+                interfaceState.profileStatus.clear();
+                interfaceState.profileStatusError = false;
+            }
+            if (!interfaceState.activeProfileId.empty()) {
+                selectProfile(interfaceState.activeProfileId);
+            }
+            return true;
+        }
+        if (event == Event::Character('l') && !interfaceState.settingsOpen) {
+            interfaceState.layoutEditing = !interfaceState.layoutEditing;
+            interfaceState.expandedPanel.reset();
+            interfaceState.layoutOverlay = LayoutOverlay::None;
+            interfaceState.layoutAddSelection = 0;
+            if (interfaceState.layoutEditing) {
+                interfaceState.layoutStatus =
+                    "Arrows select • Shift+arrows move • a restores scopes";
+                const auto editableLayout = buildDashboardLayout(
+                    screen.dimx(),
+                    screen.dimy(),
+                    interfaceState.settings.rackLayout);
+                if (!layoutContainsPanel(
+                        editableLayout, interfaceState.focusedPanel)) {
+                    const auto visible = visiblePanelOrder(editableLayout);
+                    if (!visible.empty()) {
+                        interfaceState.focusedPanel = visible.front();
+                    }
+                }
+            } else {
+                interfaceState.layoutStatus.clear();
+            }
+            if (!interfaceState.layoutEditing) persistSettings();
+            return true;
+        }
         if (event == Event::Character('s')) {
+            if (interfaceState.layoutEditing) {
+                interfaceState.layoutEditing = false;
+                interfaceState.layoutOverlay = LayoutOverlay::None;
+                interfaceState.layoutStatus.clear();
+                persistSettings();
+            }
             if (interfaceState.settingsOpen) {
                 closeSettings();
             } else {
@@ -1721,6 +2589,220 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 interfaceState.settingsPage = SettingsPage::Home;
                 interfaceState.settingsHomeSelection = 0;
             }
+            return true;
+        }
+        if (interfaceState.layoutEditing) {
+            if (interfaceState.layoutOverlay == LayoutOverlay::Help) {
+                if (event == Event::Escape || event == Event::Return ||
+                    event == Event::Character('?') ||
+                    event == Event::Character('h')) {
+                    interfaceState.layoutOverlay = LayoutOverlay::None;
+                } else if (event == Event::Character('a')) {
+                    interfaceState.layoutOverlay = LayoutOverlay::AddScope;
+                    interfaceState.layoutAddSelection = 0;
+                }
+                return true;
+            }
+            if (interfaceState.layoutOverlay == LayoutOverlay::AddScope) {
+                const auto removed = removedRackPanels(
+                    interfaceState.settings.rackLayout);
+                if (event == Event::Escape || event == Event::Character('a')) {
+                    interfaceState.layoutOverlay = LayoutOverlay::None;
+                    return true;
+                }
+                if (event == Event::Character('?') ||
+                    event == Event::Character('h')) {
+                    interfaceState.layoutOverlay = LayoutOverlay::Help;
+                    return true;
+                }
+                if (!removed.empty() &&
+                    (event == Event::ArrowUp || event == Event::ArrowDown)) {
+                    const int direction = event == Event::ArrowDown ? 1 : -1;
+                    const int count = static_cast<int>(removed.size());
+                    interfaceState.layoutAddSelection = static_cast<size_t>(
+                        (static_cast<int>(std::min(
+                            interfaceState.layoutAddSelection,
+                            removed.size() - 1)) + direction + count) % count);
+                    return true;
+                }
+                if (event == Event::Return) {
+                    if (removed.empty()) {
+                        interfaceState.layoutStatus =
+                            "All scopes are already in the rack";
+                    } else {
+                        const PanelId added = removed[std::min(
+                            interfaceState.layoutAddSelection,
+                            removed.size() - 1)];
+                        if (addRackPanel(
+                                interfaceState.settings.rackLayout,
+                                added,
+                                interfaceState.focusedPanel)) {
+                            interfaceState.focusedPanel = added;
+                            interfaceState.layoutStatus = addedScopeStatus(added);
+                            persistSettings();
+                        }
+                    }
+                    interfaceState.layoutOverlay = LayoutOverlay::None;
+                    interfaceState.layoutAddSelection = 0;
+                    return true;
+                }
+                return true;
+            }
+            if (event == Event::Character('?') ||
+                event == Event::Character('h')) {
+                interfaceState.layoutOverlay = LayoutOverlay::Help;
+                interfaceState.layoutStatus.clear();
+                return true;
+            }
+            if (event == Event::Character('a')) {
+                interfaceState.layoutOverlay = LayoutOverlay::AddScope;
+                interfaceState.layoutAddSelection = 0;
+                interfaceState.layoutStatus.clear();
+                return true;
+            }
+            if (event == Event::Escape || event == Event::Return) {
+                interfaceState.layoutEditing = false;
+                interfaceState.layoutOverlay = LayoutOverlay::None;
+                interfaceState.layoutStatus.clear();
+                persistSettings();
+                return true;
+            }
+            if (event == Event::Tab || event == Event::TabReverse) {
+                const auto navigationLayout = buildDashboardLayout(
+                    screen.dimx(),
+                    screen.dimy(),
+                    interfaceState.settings.rackLayout);
+                interfaceState.focusedPanel = nextPanel(
+                    interfaceState.focusedPanel,
+                    visiblePanelOrder(navigationLayout),
+                    event == Event::TabReverse);
+                interfaceState.layoutStatus =
+                    "Selected " + panelName(interfaceState.focusedPanel);
+                return true;
+            }
+            if (const auto direction = plainArrowDirection(event)) {
+                const auto navigationLayout = buildDashboardLayout(
+                    screen.dimx(),
+                    screen.dimy(),
+                    interfaceState.settings.rackLayout);
+                if (const auto neighbor = spatialNeighbor(
+                        navigationLayout,
+                        interfaceState.focusedPanel,
+                        *direction)) {
+                    interfaceState.focusedPanel = *neighbor;
+                    interfaceState.layoutStatus =
+                        "Selected " + panelName(*neighbor);
+                } else {
+                    interfaceState.layoutStatus = "No scope in that direction";
+                }
+                return true;
+            }
+
+            bool changed = false;
+            std::string feedback;
+            if (const auto direction = moveArrowDirection(event)) {
+                if (*direction == NavigationDirection::Left ||
+                    *direction == NavigationDirection::Right) {
+                    const int movement = *direction == NavigationDirection::Left
+                        ? -1
+                        : 1;
+                    changed = moveRackPanelHorizontal(
+                        interfaceState.settings.rackLayout,
+                        interfaceState.focusedPanel,
+                        movement);
+                    feedback = changed
+                        ? "Moved " + panelName(interfaceState.focusedPanel) +
+                            (movement < 0 ? " left" : " right")
+                        : movement < 0
+                            ? "Already first in this row"
+                            : "Already last in this row";
+                } else {
+                    const int movement = *direction == NavigationDirection::Up
+                        ? -1
+                        : 1;
+                    changed = moveRackPanelVertical(
+                        interfaceState.settings.rackLayout,
+                        interfaceState.focusedPanel,
+                        movement);
+                    feedback = changed
+                        ? "Moved " + panelName(interfaceState.focusedPanel) +
+                            (movement < 0 ? " up" : " down")
+                        : movement < 0 ? "No row above" : "No row below";
+                }
+            } else if (event == Event::Character('[')) {
+                changed = resizeRackPanel(
+                    interfaceState.settings.rackLayout,
+                    interfaceState.focusedPanel,
+                    -1);
+                feedback = changed ? "Reduced scope width" : "Minimum scope width";
+            } else if (event == Event::Character(']')) {
+                changed = resizeRackPanel(
+                    interfaceState.settings.rackLayout,
+                    interfaceState.focusedPanel,
+                    1);
+                feedback = changed ? "Increased scope width" : "Maximum scope width";
+            } else if (event == Event::Character(',')) {
+                changed = resizeRackRow(
+                    interfaceState.settings.rackLayout,
+                    interfaceState.focusedPanel,
+                    -1);
+                feedback = changed ? "Reduced row height" : "Minimum row height";
+            } else if (event == Event::Character('.')) {
+                changed = resizeRackRow(
+                    interfaceState.settings.rackLayout,
+                    interfaceState.focusedPanel,
+                    1);
+                feedback = changed ? "Increased row height" : "Maximum row height";
+            } else if (event == Event::Character('n')) {
+                changed = splitRackRow(
+                    interfaceState.settings.rackLayout,
+                    interfaceState.focusedPanel);
+                feedback = changed
+                    ? "Created a new row for " + panelName(interfaceState.focusedPanel)
+                    : "Cannot create another row here";
+            } else if (event == Event::Character('x')) {
+                const PanelId removedPanel = interfaceState.focusedPanel;
+                const auto configured = configuredPanelOrder(
+                    interfaceState.settings.rackLayout);
+                const auto selected = std::find(
+                    configured.begin(), configured.end(), interfaceState.focusedPanel);
+                PanelId nextFocus = interfaceState.focusedPanel;
+                if (configured.size() > 1 && selected != configured.end()) {
+                    const size_t selectedIndex = static_cast<size_t>(
+                        std::distance(configured.begin(), selected));
+                    nextFocus = configured[
+                        selectedIndex + 1 < configured.size()
+                            ? selectedIndex + 1
+                            : selectedIndex - 1];
+                }
+                changed = removeRackPanel(
+                    interfaceState.settings.rackLayout,
+                    interfaceState.focusedPanel);
+                if (changed) {
+                    interfaceState.focusedPanel = nextFocus;
+                    feedback = "Removed " + panelName(removedPanel) +
+                        " • a adds it back";
+                } else {
+                    feedback = "At least one scope must remain";
+                }
+            } else if (const auto selectedPanel = panelForEvent(event)) {
+                if (rackPanelLocation(
+                        interfaceState.settings.rackLayout, *selectedPanel)) {
+                    interfaceState.focusedPanel = *selectedPanel;
+                    feedback = "Selected " + panelName(*selectedPanel);
+                } else {
+                    changed = addRackPanel(
+                        interfaceState.settings.rackLayout,
+                        *selectedPanel,
+                        interfaceState.focusedPanel);
+                    if (changed) {
+                        interfaceState.focusedPanel = *selectedPanel;
+                        feedback = addedScopeStatus(*selectedPanel);
+                    }
+                }
+            }
+            if (!feedback.empty()) interfaceState.layoutStatus = feedback;
+            if (changed) persistSettings();
             return true;
         }
         if (interfaceState.settingsOpen) {
@@ -1807,17 +2889,11 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             resetRequested.store(true);
             return true;
         }
-        if (event == Event::Character('v')) {
-            adjustSetting(
-                interfaceState.settings, SettingId::VectorscopeMode, 1);
-            persistSettings();
-            return true;
-        }
         if (event == Event::Tab || event == Event::TabReverse) {
             const auto navigationLayout = buildDashboardLayout(
                 screen.dimx(),
                 screen.dimy(),
-                interfaceState.settings.layoutPreset,
+                interfaceState.settings.rackLayout,
                 interfaceState.expandedPanel);
             const auto navigationPanels = interfaceState.expandedPanel
                 ? panelOrder()
@@ -1839,35 +2915,13 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             }
             return true;
         }
-        if (event == Event::Character('l')) {
-            adjustSetting(interfaceState.settings, SettingId::Layout, 1);
-            persistSettings();
-            interfaceState.expandedPanel.reset();
-            const auto nextLayout = buildDashboardLayout(
-                screen.dimx(), screen.dimy(), interfaceState.settings.layoutPreset);
-            if (!layoutContainsPanel(nextLayout, interfaceState.focusedPanel)) {
-                const auto visible = visiblePanelOrder(nextLayout);
-                if (!visible.empty()) {
-                    interfaceState.focusedPanel = visible.front();
-                }
-            }
-            return true;
-        }
-        std::optional<PanelId> selectedPanel;
-        if (event == Event::Character('1')) selectedPanel = PanelId::Spectrum;
-        if (event == Event::Character('2')) selectedPanel = PanelId::Oscilloscope;
-        if (event == Event::Character('3')) selectedPanel = PanelId::Vectorscope;
-        if (event == Event::Character('4')) selectedPanel = PanelId::VUMeter;
-        if (event == Event::Character('5')) selectedPanel = PanelId::LUFSMeter;
-        if (event == Event::Character('6')) selectedPanel = PanelId::Spectrogram;
-        if (event == Event::Character('7')) selectedPanel = PanelId::Waveform;
-        if (selectedPanel) {
+        if (const auto selectedPanel = panelForEvent(event)) {
             interfaceState.focusedPanel = *selectedPanel;
             if (interfaceState.expandedPanel) {
                 interfaceState.expandedPanel = interfaceState.focusedPanel;
             } else {
                 const auto currentLayout = buildDashboardLayout(
-                    screen.dimx(), screen.dimy(), interfaceState.settings.layoutPreset);
+                    screen.dimx(), screen.dimy(), interfaceState.settings.rackLayout);
                 if (!layoutContainsPanel(currentLayout, interfaceState.focusedPanel)) {
                     interfaceState.expandedPanel = interfaceState.focusedPanel;
                 }

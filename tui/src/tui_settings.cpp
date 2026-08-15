@@ -5,8 +5,10 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
 #include <system_error>
+#include <utility>
 
 namespace Prism::Tui {
 namespace {
@@ -14,7 +16,6 @@ namespace {
 const std::vector<SettingDescriptor> kGeneralSettings = {
     {SettingId::InputTrim, "Input trim", "Applies gain before every analyzer."},
     {SettingId::RefreshRate, "Refresh rate", "Controls how often the terminal display is published."},
-    {SettingId::Layout, "Dashboard layout", "Chooses automatic, stacked, or column panes."},
 };
 
 const std::vector<SettingDescriptor> kSpectrumSettings = {
@@ -73,10 +74,6 @@ std::string trimFloat(float value, int precision) {
     std::ostringstream output;
     output << std::fixed << std::setprecision(precision) << value;
     return output.str();
-}
-
-std::string serializeLayout(LayoutPreset layout) {
-    return layoutPresetName(layout);
 }
 
 std::string serializeVectorMode(VectorscopeMode mode) {
@@ -176,13 +173,6 @@ int parseInt(const std::string& value, int fallback) {
     } catch (...) {
         return fallback;
     }
-}
-
-LayoutPreset parseLayout(const std::string& value, LayoutPreset fallback) {
-    if (value == "auto") return LayoutPreset::Automatic;
-    if (value == "stacked") return LayoutPreset::Stacked;
-    if (value == "columns") return LayoutPreset::Columns;
-    return fallback;
 }
 
 VectorscopeMode parseVectorMode(const std::string& value, VectorscopeMode fallback) {
@@ -307,6 +297,7 @@ const char* waveformModeName(WaveformMode mode) {
 TuiSettings normalizeSettings(TuiSettings settings) {
     settings.inputTrimDb = std::clamp(snap(settings.inputTrimDb, 0.5f), -12.0f, 12.0f);
     settings.refreshRate = settings.refreshRate <= 30 ? 30 : 60;
+    settings.rackLayout = normalizeRackLayout(std::move(settings.rackLayout));
     settings.spectrumTiltDbPerOctave = std::clamp(
         snap(settings.spectrumTiltDbPerOctave, 0.1f), -2.0f, 8.0f);
     settings.oscilloscopeTraceWeight = std::clamp(settings.oscilloscopeTraceWeight, 1, 3);
@@ -328,7 +319,7 @@ TuiSettings normalizeSettings(TuiSettings settings) {
 bool operator==(const TuiSettings& left, const TuiSettings& right) {
     return left.inputTrimDb == right.inputTrimDb &&
         left.refreshRate == right.refreshRate &&
-        left.layoutPreset == right.layoutPreset &&
+        left.rackLayout == right.rackLayout &&
         left.spectrumPeakReadout == right.spectrumPeakReadout &&
         left.spectrumTiltDbPerOctave == right.spectrumTiltDbPerOctave &&
         left.oscilloscopePitchLock == right.oscilloscopePitchLock &&
@@ -424,8 +415,6 @@ std::string settingValue(const TuiSettings& settings, SettingId setting) {
                 trimFloat(settings.inputTrimDb, 1) + " dB";
         case SettingId::RefreshRate:
             return std::to_string(settings.refreshRate) + " FPS";
-        case SettingId::Layout:
-            return layoutPresetName(settings.layoutPreset);
         case SettingId::SpectrumPeakReadout:
             return boolValue(settings.spectrumPeakReadout);
         case SettingId::SpectrumTilt:
@@ -497,17 +486,6 @@ bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
             break;
         case SettingId::RefreshRate:
             settings.refreshRate = settings.refreshRate == 60 ? 30 : 60;
-            break;
-        case SettingId::Layout:
-            if (direction > 0) {
-                settings.layoutPreset = nextLayoutPreset(settings.layoutPreset);
-            } else {
-                settings.layoutPreset = settings.layoutPreset == LayoutPreset::Automatic
-                    ? LayoutPreset::Columns
-                    : settings.layoutPreset == LayoutPreset::Columns
-                        ? LayoutPreset::Stacked
-                        : LayoutPreset::Automatic;
-            }
             break;
         case SettingId::SpectrumPeakReadout:
             settings.spectrumPeakReadout = !settings.spectrumPeakReadout;
@@ -628,7 +606,6 @@ bool resetSetting(TuiSettings& settings, SettingId setting) {
     switch (setting) {
         case SettingId::InputTrim: settings.inputTrimDb = defaults.inputTrimDb; break;
         case SettingId::RefreshRate: settings.refreshRate = defaults.refreshRate; break;
-        case SettingId::Layout: settings.layoutPreset = defaults.layoutPreset; break;
         case SettingId::SpectrumPeakReadout: settings.spectrumPeakReadout = defaults.spectrumPeakReadout; break;
         case SettingId::SpectrumTilt: settings.spectrumTiltDbPerOctave = defaults.spectrumTiltDbPerOctave; break;
         case SettingId::OscilloscopePitchLock: settings.oscilloscopePitchLock = defaults.oscilloscopePitchLock; break;
@@ -678,8 +655,18 @@ std::filesystem::path defaultSettingsPath() {
 }
 
 TuiSettings loadSettings(const std::filesystem::path& path) {
-    TuiSettings settings;
     std::ifstream input(path);
+    if (!input) return {};
+    return parseSettingsText(
+        std::string(
+            std::istreambuf_iterator<char>(input),
+            std::istreambuf_iterator<char>()));
+}
+
+TuiSettings parseSettingsText(const std::string& text,
+                              const TuiSettings& fallback) {
+    TuiSettings settings = fallback;
+    std::istringstream input(text);
     std::string line;
     while (std::getline(input, line)) {
         const size_t separator = line.find('=');
@@ -688,7 +675,7 @@ TuiSettings loadSettings(const std::filesystem::path& path) {
         const std::string value = line.substr(separator + 1);
         if (key == "input_trim_db") settings.inputTrimDb = parseFloat(value, settings.inputTrimDb);
         else if (key == "refresh_rate") settings.refreshRate = parseInt(value, settings.refreshRate);
-        else if (key == "layout") settings.layoutPreset = parseLayout(value, settings.layoutPreset);
+        else if (key == "rack_layout") settings.rackLayout = parseRackLayout(value, settings.rackLayout);
         else if (key == "spectrum_peak") settings.spectrumPeakReadout = parseBool(value, settings.spectrumPeakReadout);
         else if (key == "spectrum_tilt") settings.spectrumTiltDbPerOctave = parseFloat(value, settings.spectrumTiltDbPerOctave);
         else if (key == "osc_pitch_lock") settings.oscilloscopePitchLock = parseBool(value, settings.oscilloscopePitchLock);
@@ -716,26 +703,15 @@ TuiSettings loadSettings(const std::filesystem::path& path) {
     return normalizeSettings(settings);
 }
 
-bool saveSettings(const TuiSettings& rawSettings,
-                  const std::filesystem::path& path,
-                  std::string* error) {
+std::string serializeSettingsText(const TuiSettings& rawSettings,
+                                  bool includeRefreshRate) {
     const TuiSettings settings = normalizeSettings(rawSettings);
-    std::error_code filesystemError;
-    if (!path.parent_path().empty()) {
-        std::filesystem::create_directories(path.parent_path(), filesystemError);
-        if (filesystemError) {
-            if (error) *error = filesystemError.message();
-            return false;
-        }
+    std::ostringstream output;
+    output << "input_trim_db=" << settings.inputTrimDb << '\n';
+    if (includeRefreshRate) {
+        output << "refresh_rate=" << settings.refreshRate << '\n';
     }
-    std::ofstream output(path, std::ios::trunc);
-    if (!output) {
-        if (error) *error = "could not open settings file";
-        return false;
-    }
-    output << "input_trim_db=" << settings.inputTrimDb << '\n'
-           << "refresh_rate=" << settings.refreshRate << '\n'
-           << "layout=" << serializeLayout(settings.layoutPreset) << '\n'
+    output << "rack_layout=" << serializeRackLayout(settings.rackLayout) << '\n'
            << "spectrum_peak=" << (settings.spectrumPeakReadout ? "true" : "false") << '\n'
            << "spectrum_tilt=" << settings.spectrumTiltDbPerOctave << '\n'
            << "osc_pitch_lock=" << (settings.oscilloscopePitchLock ? "true" : "false") << '\n'
@@ -759,6 +735,26 @@ bool saveSettings(const TuiSettings& rawSettings,
            << "waveform_mode=" << serializeWaveformMode(settings.waveformMode) << '\n'
            << "waveform_scroll=" << settings.waveformScrollSpeed << '\n'
            << "waveform_multiband=" << (settings.waveformMultiband ? "true" : "false") << '\n';
+    return output.str();
+}
+
+bool saveSettings(const TuiSettings& rawSettings,
+                  const std::filesystem::path& path,
+                  std::string* error) {
+    std::error_code filesystemError;
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path(), filesystemError);
+        if (filesystemError) {
+            if (error) *error = filesystemError.message();
+            return false;
+        }
+    }
+    std::ofstream output(path, std::ios::trunc);
+    if (!output) {
+        if (error) *error = "could not open settings file";
+        return false;
+    }
+    output << serializeSettingsText(rawSettings);
     if (!output) {
         if (error) *error = "could not write settings file";
         return false;
