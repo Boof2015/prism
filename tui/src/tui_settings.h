@@ -25,6 +25,7 @@ enum class SettingsPage {
 
 enum class SettingId {
     Theme,
+    TerminalCompatibility,
     InputTrim,
     RefreshRate,
     SpectrumPeakReadout,
@@ -63,9 +64,12 @@ enum class SpectrogramClarity { Classic, Sharp, Sharper };
 enum class SpectrogramScale { Mel, Logarithmic, Linear };
 enum class SpectrogramOrientation { Horizontal, Vertical };
 enum class WaveformMode { Mono, Stereo };
+enum class TerminalCompatibilityMode { Modern, Compatible, Safe };
 
 struct TuiSettings {
     std::string themeId = "Default";
+    TerminalCompatibilityMode terminalCompatibility =
+        TerminalCompatibilityMode::Modern;
     float inputTrimDb = 0.0f;
     int refreshRate = 60;
     RackLayout rackLayout = defaultRackLayout();
@@ -119,6 +123,8 @@ const char* spectrogramClarityName(SpectrogramClarity clarity);
 const char* spectrogramScaleName(SpectrogramScale scale);
 const char* spectrogramOrientationName(SpectrogramOrientation orientation);
 const char* waveformModeName(WaveformMode mode);
+const char* terminalCompatibilityName(TerminalCompatibilityMode mode);
+int effectiveRefreshRate(int requestedRate, TerminalCompatibilityMode mode);
 
 std::filesystem::path defaultSettingsPath();
 TuiSettings parseSettingsText(const std::string& text,

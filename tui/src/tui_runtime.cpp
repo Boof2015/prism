@@ -3,6 +3,7 @@
 #include "analysis_pipeline.h"
 #include "dashboard_layout.h"
 #include "display_model.h"
+#include "frame_rate_meter.h"
 #include "meter_display_model.h"
 #include "output_selection.h"
 #include "profile_library.h"
@@ -200,9 +201,12 @@ struct InterfaceState {
     uint64_t appliedOutputSwitchSerial = 0;
     uint64_t outputListSerial = 0;
     uint64_t appliedOutputListSerial = 0;
+    double renderedFramesPerSecond = 0.0;
 };
 
 const TuiTheme* renderTheme = nullptr;
+TerminalCompatibilityMode renderTerminalCompatibility =
+    TerminalCompatibilityMode::Modern;
 
 const TuiTheme& palette() {
     static const TuiTheme fallback = defaultTuiTheme();
@@ -210,7 +214,83 @@ const TuiTheme& palette() {
 }
 
 ftxui::Color terminalColor(const ThemeColor& color) {
-    return ftxui::Color::RGB(color.red, color.green, color.blue);
+    using Color = ftxui::Color;
+    if (renderTerminalCompatibility == TerminalCompatibilityMode::Modern) {
+        return Color::RGB(color.red, color.green, color.blue);
+    }
+
+    if (renderTerminalCompatibility == TerminalCompatibilityMode::Compatible) {
+        constexpr std::array<int, 6> levels = {0, 95, 135, 175, 215, 255};
+        const auto nearestLevel = [&](int channel) {
+            size_t nearest = 0;
+            int nearestDistance = 256;
+            for (size_t index = 0; index < levels.size(); ++index) {
+                const int distance = std::abs(channel - levels[index]);
+                if (distance < nearestDistance) {
+                    nearest = index;
+                    nearestDistance = distance;
+                }
+            }
+            return nearest;
+        };
+        const size_t red = nearestLevel(color.red);
+        const size_t green = nearestLevel(color.green);
+        const size_t blue = nearestLevel(color.blue);
+        const int cubeRed = levels[red];
+        const int cubeGreen = levels[green];
+        const int cubeBlue = levels[blue];
+        const int cubeDistance =
+            (static_cast<int>(color.red) - cubeRed) *
+                (static_cast<int>(color.red) - cubeRed) +
+            (static_cast<int>(color.green) - cubeGreen) *
+                (static_cast<int>(color.green) - cubeGreen) +
+            (static_cast<int>(color.blue) - cubeBlue) *
+                (static_cast<int>(color.blue) - cubeBlue);
+        const int average = (
+            static_cast<int>(color.red) + color.green + color.blue) / 3;
+        const int grayIndex = std::clamp(
+            static_cast<int>(std::lround((average - 8) / 10.0)), 0, 23);
+        const int gray = 8 + grayIndex * 10;
+        const int grayDistance =
+            (static_cast<int>(color.red) - gray) *
+                (static_cast<int>(color.red) - gray) +
+            (static_cast<int>(color.green) - gray) *
+                (static_cast<int>(color.green) - gray) +
+            (static_cast<int>(color.blue) - gray) *
+                (static_cast<int>(color.blue) - gray);
+        const int index = grayDistance < cubeDistance
+            ? 232 + grayIndex
+            : 16 + static_cast<int>(red * 36 + green * 6 + blue);
+        return Color(static_cast<Color::Palette256>(index));
+    }
+
+    static constexpr std::array<std::array<int, 3>, 16> ansi = {{
+        {{0, 0, 0}}, {{205, 0, 0}}, {{0, 205, 0}}, {{205, 205, 0}},
+        {{0, 0, 238}}, {{205, 0, 205}}, {{0, 205, 205}}, {{229, 229, 229}},
+        {{127, 127, 127}}, {{255, 0, 0}}, {{0, 255, 0}}, {{255, 255, 0}},
+        {{92, 92, 255}}, {{255, 0, 255}}, {{0, 255, 255}}, {{255, 255, 255}},
+    }};
+    size_t nearest = 0;
+    int nearestDistance = 3 * 256 * 256;
+    for (size_t index = 0; index < ansi.size(); ++index) {
+        const int red = static_cast<int>(color.red) - ansi[index][0];
+        const int green = static_cast<int>(color.green) - ansi[index][1];
+        const int blue = static_cast<int>(color.blue) - ansi[index][2];
+        const int distance = red * red + green * green + blue * blue;
+        if (distance < nearestDistance) {
+            nearest = index;
+            nearestDistance = distance;
+        }
+    }
+    return Color(static_cast<Color::Palette16>(nearest));
+}
+
+ftxui::Color terminalRgb(int red, int green, int blue) {
+    return terminalColor({
+        static_cast<uint8_t>(std::clamp(red, 0, 255)),
+        static_cast<uint8_t>(std::clamp(green, 0, 255)),
+        static_cast<uint8_t>(std::clamp(blue, 0, 255)),
+    });
 }
 
 void fillCanvasBackground(ftxui::Canvas& surface,
@@ -268,6 +348,7 @@ const size_t& settingsSelection(const InterfaceState& state) {
 
 std::string makeCaptureStatus(const DisplayFrame& frame,
                               const TuiSettings& settings,
+                              double renderedFramesPerSecond,
                               bool compact) {
     std::ostringstream sampleRate;
     const double kilohertz = frame.sampleRate / 1000.0;
@@ -286,6 +367,19 @@ std::string makeCaptureStatus(const DisplayFrame& frame,
     }
     if (frame.captureOverrun) {
         footer += " • capture overrun";
+    }
+    if (!compact) {
+        const int target = effectiveRefreshRate(
+            settings.refreshRate, settings.terminalCompatibility);
+        footer += " • ";
+        if (renderedFramesPerSecond > 0.0 &&
+            std::isfinite(renderedFramesPerSecond)) {
+            footer += std::to_string(static_cast<int>(
+                std::lround(renderedFramesPerSecond)));
+        } else {
+            footer += "--";
+        }
+        footer += "/" + std::to_string(target) + " FPS";
     }
     return footer;
 }
@@ -1185,7 +1279,7 @@ ftxui::Color interpolateColor(const ThemeColor& from,
                               const ThemeColor& to,
                               float amount) {
     const float t = std::clamp(amount, 0.0f, 1.0f);
-    return ftxui::Color::RGB(
+    return terminalRgb(
         static_cast<uint8_t>(std::lround(from.red +
             (static_cast<int>(to.red) - from.red) * t)),
         static_cast<uint8_t>(std::lround(from.green +
@@ -1448,7 +1542,7 @@ ftxui::Color waveformBandColor(const float* summary, bool multiband) {
                 weights[band] * static_cast<float>(value)));
         }
     }
-    return ftxui::Color::RGB(
+    return terminalRgb(
         std::clamp(mixed[0], 0, 255),
         std::clamp(mixed[1], 0, 255),
         std::clamp(mixed[2], 0, 255));
@@ -1706,7 +1800,11 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
                 " • o outputs • p profiles • s settings • q quit"
             : "Tab focus • Enter " + enterAction +
                 " • o outputs • p profiles • s settings • l edit layout • r reset • q quit";
-    auto status = text(makeCaptureStatus(frame, state.settings, compact)) | dim;
+    auto status = text(makeCaptureStatus(
+        frame,
+        state.settings,
+        state.renderedFramesPerSecond,
+        compact)) | dim;
     if (frame.captureOverrun) {
         status = status | color(terminalColor(palette().danger));
     }
@@ -2395,7 +2493,12 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 const TuiSettings requestedSettings = settingsStore.read();
                 if (requestedSettings != appliedSettings) {
                     const bool refreshChanged =
-                        requestedSettings.refreshRate != appliedSettings.refreshRate;
+                        effectiveRefreshRate(
+                            requestedSettings.refreshRate,
+                            requestedSettings.terminalCompatibility) !=
+                        effectiveRefreshRate(
+                            appliedSettings.refreshRate,
+                            appliedSettings.terminalCompatibility);
                     pipeline->setInputTrimDb(requestedSettings.inputTrimDb);
                     pipeline->setSpectrumTilt(
                         requestedSettings.spectrumTiltDbPerOctave);
@@ -2446,7 +2549,9 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                         screen.PostEvent(Event::Custom);
                     }
                     nextFrameAt = now +
-                        displayFrameInterval(appliedSettings.refreshRate);
+                        displayFrameInterval(effectiveRefreshRate(
+                            appliedSettings.refreshRate,
+                            appliedSettings.terminalCompatibility));
                 }
                 std::this_thread::sleep_for(kCapturePollInterval);
             }
@@ -2458,8 +2563,15 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
         }
     });
 
+    FrameRateMeter frameRateMeter;
     auto renderer = Renderer([&]() {
         renderTheme = &interfaceState.theme;
+        renderTerminalCompatibility =
+            interfaceState.settings.terminalCompatibility;
+        const double renderedAt = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        interfaceState.renderedFramesPerSecond =
+            frameRateMeter.record(renderedAt);
         return renderFrame(
             frameStore.read(), screen.dimx(), screen.dimy(), interfaceState) |
             color(terminalColor(interfaceState.theme.text)) |

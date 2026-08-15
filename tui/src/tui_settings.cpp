@@ -15,6 +15,7 @@ namespace {
 
 const std::vector<SettingDescriptor> kAppearanceSettings = {
     {SettingId::Theme, "Theme", "Uses Prism .iro files from the shared Prism Themes folder."},
+    {SettingId::TerminalCompatibility, "Terminal mode", "Modern uses truecolor; Compatible uses 256 colors at up to 60 FPS; Safe uses ANSI colors at 30 FPS."},
 };
 
 const std::vector<SettingDescriptor> kGeneralSettings = {
@@ -153,6 +154,15 @@ std::string serializeWaveformMode(WaveformMode mode) {
     return mode == WaveformMode::Stereo ? "stereo" : "mono";
 }
 
+std::string serializeTerminalCompatibility(TerminalCompatibilityMode mode) {
+    switch (mode) {
+        case TerminalCompatibilityMode::Modern: return "modern";
+        case TerminalCompatibilityMode::Compatible: return "compatible";
+        case TerminalCompatibilityMode::Safe: return "safe";
+    }
+    return "modern";
+}
+
 bool parseBool(const std::string& value, bool fallback) {
     if (value == "true" || value == "1" || value == "on") return true;
     if (value == "false" || value == "0" || value == "off") return false;
@@ -259,6 +269,15 @@ WaveformMode parseWaveformMode(const std::string& value, WaveformMode fallback) 
     return fallback;
 }
 
+TerminalCompatibilityMode parseTerminalCompatibility(
+    const std::string& value,
+    TerminalCompatibilityMode fallback) {
+    if (value == "modern") return TerminalCompatibilityMode::Modern;
+    if (value == "compatible") return TerminalCompatibilityMode::Compatible;
+    if (value == "safe") return TerminalCompatibilityMode::Safe;
+    return fallback;
+}
+
 const char* environmentValue(const char* name) {
     const char* value = std::getenv(name);
     return value != nullptr && value[0] != '\0' ? value : nullptr;
@@ -298,6 +317,30 @@ const char* waveformModeName(WaveformMode mode) {
     return mode == WaveformMode::Stereo ? "Stereo" : "Mono";
 }
 
+const char* terminalCompatibilityName(TerminalCompatibilityMode mode) {
+    switch (mode) {
+        case TerminalCompatibilityMode::Modern: return "Modern";
+        case TerminalCompatibilityMode::Compatible: return "Compatible";
+        case TerminalCompatibilityMode::Safe: return "Safe";
+    }
+    return "Modern";
+}
+
+int effectiveRefreshRate(int requestedRate, TerminalCompatibilityMode mode) {
+    const int normalized = requestedRate <= 30
+        ? 30
+        : requestedRate <= 60 ? 60 : 120;
+    switch (mode) {
+        case TerminalCompatibilityMode::Modern:
+            return normalized;
+        case TerminalCompatibilityMode::Compatible:
+            return std::min(normalized, 60);
+        case TerminalCompatibilityMode::Safe:
+            return 30;
+    }
+    return normalized;
+}
+
 TuiSettings normalizeSettings(TuiSettings settings) {
     settings.themeId.erase(std::remove_if(
         settings.themeId.begin(), settings.themeId.end(), [](char character) {
@@ -329,6 +372,7 @@ TuiSettings normalizeSettings(TuiSettings settings) {
 
 bool operator==(const TuiSettings& left, const TuiSettings& right) {
     return left.themeId == right.themeId &&
+        left.terminalCompatibility == right.terminalCompatibility &&
         left.inputTrimDb == right.inputTrimDb &&
         left.refreshRate == right.refreshRate &&
         left.rackLayout == right.rackLayout &&
@@ -428,6 +472,8 @@ std::string settingValue(const TuiSettings& settings, SettingId setting) {
     switch (setting) {
         case SettingId::Theme:
             return settings.themeId;
+        case SettingId::TerminalCompatibility:
+            return terminalCompatibilityName(settings.terminalCompatibility);
         case SettingId::InputTrim:
             return (settings.inputTrimDb > 0.0f ? "+" : "") +
                 trimFloat(settings.inputTrimDb, 1) + " dB";
@@ -502,6 +548,13 @@ bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
     switch (setting) {
         case SettingId::Theme:
             return false;
+        case SettingId::TerminalCompatibility: {
+            int value = static_cast<int>(settings.terminalCompatibility);
+            value = (value + (direction > 0 ? 1 : 2)) % 3;
+            settings.terminalCompatibility =
+                static_cast<TerminalCompatibilityMode>(value);
+            break;
+        }
         case SettingId::InputTrim:
             settings.inputTrimDb += direction > 0 ? 0.5f : -0.5f;
             break;
@@ -634,6 +687,7 @@ bool resetSetting(TuiSettings& settings, SettingId setting) {
     const TuiSettings before = settings;
     switch (setting) {
         case SettingId::Theme: settings.themeId = defaults.themeId; break;
+        case SettingId::TerminalCompatibility: settings.terminalCompatibility = defaults.terminalCompatibility; break;
         case SettingId::InputTrim: settings.inputTrimDb = defaults.inputTrimDb; break;
         case SettingId::RefreshRate: settings.refreshRate = defaults.refreshRate; break;
         case SettingId::SpectrumPeakReadout: settings.spectrumPeakReadout = defaults.spectrumPeakReadout; break;
@@ -704,6 +758,7 @@ TuiSettings parseSettingsText(const std::string& text,
         const std::string key = line.substr(0, separator);
         const std::string value = line.substr(separator + 1);
         if (key == "theme_id") settings.themeId = value;
+        else if (key == "terminal_mode") settings.terminalCompatibility = parseTerminalCompatibility(value, settings.terminalCompatibility);
         else if (key == "input_trim_db") settings.inputTrimDb = parseFloat(value, settings.inputTrimDb);
         else if (key == "refresh_rate") settings.refreshRate = parseInt(value, settings.refreshRate);
         else if (key == "rack_layout") settings.rackLayout = parseRackLayout(value, settings.rackLayout);
@@ -738,12 +793,14 @@ std::string serializeSettingsText(const TuiSettings& rawSettings,
                                   bool includeRefreshRate) {
     const TuiSettings settings = normalizeSettings(rawSettings);
     std::ostringstream output;
-    output << "theme_id=" << settings.themeId << '\n'
-           << "input_trim_db=" << settings.inputTrimDb << '\n';
+    output << "theme_id=" << settings.themeId << '\n';
     if (includeRefreshRate) {
-        output << "refresh_rate=" << settings.refreshRate << '\n';
+        output << "terminal_mode="
+               << serializeTerminalCompatibility(settings.terminalCompatibility) << '\n'
+               << "refresh_rate=" << settings.refreshRate << '\n';
     }
-    output << "rack_layout=" << serializeRackLayout(settings.rackLayout) << '\n'
+    output << "input_trim_db=" << settings.inputTrimDb << '\n'
+           << "rack_layout=" << serializeRackLayout(settings.rackLayout) << '\n'
            << "spectrum_peak=" << (settings.spectrumPeakReadout ? "true" : "false") << '\n'
            << "spectrum_tilt=" << settings.spectrumTiltDbPerOctave << '\n'
            << "osc_pitch_lock=" << (settings.oscilloscopePitchLock ? "true" : "false") << '\n'

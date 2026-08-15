@@ -430,6 +430,8 @@ bool profileSettingsEqual(const TuiSettings& left,
     TuiSettings normalizedLeft = normalizeSettings(left);
     TuiSettings normalizedRight = normalizeSettings(right);
     normalizedLeft.refreshRate = normalizedRight.refreshRate;
+    normalizedLeft.terminalCompatibility =
+        normalizedRight.terminalCompatibility;
     return normalizedLeft == normalizedRight;
 }
 
@@ -437,6 +439,8 @@ TuiSettings applyProfileSettings(const TuiSettings& profile,
                                  const TuiSettings& working) {
     TuiSettings applied = normalizeSettings(profile);
     applied.refreshRate = normalizeSettings(working).refreshRate;
+    applied.terminalCompatibility =
+        normalizeSettings(working).terminalCompatibility;
     return applied;
 }
 

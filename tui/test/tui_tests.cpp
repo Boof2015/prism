@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "dashboard_layout.h"
 #include "display_model.h"
+#include "frame_rate_meter.h"
 #include "meter_display_model.h"
 #include "output_selection.h"
 #include "profile_library.h"
@@ -549,10 +550,29 @@ void testSettingsModelAndPersistence() {
 
     const auto pages = Prism::Tui::settingsPages();
     require(pages.size() == 9 &&
-        Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::Appearance).size() == 1 &&
+        Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::Appearance).size() == 2 &&
         Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::General).size() == 2,
         "settings should expose shallow category pages");
     Prism::Tui::TuiSettings adjusted;
+    require(Prism::Tui::adjustSetting(
+            adjusted, Prism::Tui::SettingId::TerminalCompatibility, 1) &&
+        adjusted.terminalCompatibility ==
+            Prism::Tui::TerminalCompatibilityMode::Compatible &&
+        Prism::Tui::effectiveRefreshRate(
+            120, adjusted.terminalCompatibility) == 60,
+        "compatible terminals should use the 256-color mode with a 60 FPS cap");
+    require(Prism::Tui::adjustSetting(
+            adjusted, Prism::Tui::SettingId::TerminalCompatibility, 1) &&
+        adjusted.terminalCompatibility ==
+            Prism::Tui::TerminalCompatibilityMode::Safe &&
+        Prism::Tui::effectiveRefreshRate(
+            120, adjusted.terminalCompatibility) == 30,
+        "safe terminals should use the ANSI mode with a 30 FPS cap");
+    require(Prism::Tui::adjustSetting(
+            adjusted, Prism::Tui::SettingId::TerminalCompatibility, 1) &&
+        adjusted.terminalCompatibility ==
+            Prism::Tui::TerminalCompatibilityMode::Modern,
+        "terminal compatibility should cycle back to modern truecolor");
     require(Prism::Tui::adjustSetting(
         adjusted, Prism::Tui::SettingId::RefreshRate, 1) &&
         adjusted.refreshRate == 120 &&
@@ -623,6 +643,8 @@ void testSettingsModelAndPersistence() {
     adjusted.vectorscopeMode = Prism::Tui::VectorscopeMode::PolarBipolar;
     adjusted.vectorscopeDetail = Prism::Tui::VectorscopeDetail::Maximum;
     adjusted.themeId = "Test Theme";
+    adjusted.terminalCompatibility =
+        Prism::Tui::TerminalCompatibilityMode::Compatible;
     std::string error;
     require(Prism::Tui::saveSettings(adjusted, settingsPath, &error),
         "settings should persist to a TUI-specific configuration file");
@@ -650,6 +672,8 @@ void testProfileLibrary() {
 
     Prism::Tui::TuiSettings settings;
     settings.themeId = "Test Theme";
+    settings.terminalCompatibility =
+        Prism::Tui::TerminalCompatibilityMode::Safe;
     settings.inputTrimDb = 4.0f;
     settings.refreshRate = 30;
     settings.spectrogramContrast = 1.7f;
@@ -676,20 +700,26 @@ void testProfileLibrary() {
         foundProfileFile = true;
         require(text.find("format=prism-tui-profile") != std::string::npos &&
             text.find("theme_id=Test Theme") != std::string::npos &&
-            text.find("refresh_rate=") == std::string::npos,
-            ".prsmt files should retain themes while excluding global refresh settings");
+            text.find("refresh_rate=") == std::string::npos &&
+            text.find("terminal_mode=") == std::string::npos,
+            ".prsmt files should retain themes while excluding terminal runtime settings");
     }
     require(foundProfileFile,
         "saved TUI profiles should use the .prsmt extension");
 
     Prism::Tui::TuiSettings differentRefresh = settings;
     differentRefresh.refreshRate = 60;
+    differentRefresh.terminalCompatibility =
+        Prism::Tui::TerminalCompatibilityMode::Modern;
     require(Prism::Tui::profileSettingsEqual(settings, differentRefresh),
-        "refresh rate should not make an active profile dirty");
+        "terminal runtime settings should not make an active profile dirty");
     const auto applied = Prism::Tui::applyProfileSettings(
         settings, differentRefresh);
-    require(applied.refreshRate == 60 && applied.inputTrimDb == 4.0f,
-        "loading a profile should preserve global refresh rate while applying trim");
+    require(applied.refreshRate == 60 &&
+        applied.terminalCompatibility ==
+            Prism::Tui::TerminalCompatibilityMode::Modern &&
+        applied.inputTrimDb == 4.0f,
+        "loading a profile should preserve terminal runtime settings while applying trim");
 
     settings.waveformMultiband = true;
     require(library.overwrite(profileId, settings, &error) &&
@@ -1032,6 +1062,23 @@ void testThreadSafeSnapshots() {
         "immutable display snapshots should publish safely across threads");
 }
 
+void testFrameRateMeter() {
+    Prism::Tui::FrameRateMeter meter;
+    require(meter.record(0.0) == 0.0 && meter.record(0.01) == 0.0,
+        "render telemetry should wait for a stable sample window");
+    meter.reset();
+    for (int frame = 0; frame <= 60; ++frame) {
+        meter.record(static_cast<double>(frame) / 60.0);
+    }
+    require(std::abs(meter.framesPerSecond() - 60.0) < 0.1,
+        "render telemetry should measure a deterministic 60 FPS cadence");
+    meter.reset();
+    require(meter.framesPerSecond() == 0.0 && meter.record(5.0) == 0.0,
+        "render telemetry should reset without inventing an initial frame rate");
+    require(meter.record(4.0) == 0.0,
+        "render telemetry should recover safely from a regressing clock");
+}
+
 }  // namespace
 
 int main() {
@@ -1047,6 +1094,7 @@ int main() {
     testPitchReadoutResponse();
     testScrollingHistory();
     testPipelineAndFakeCapture();
+    testFrameRateMeter();
     testThreadSafeSnapshots();
     std::cout << "Prism TUI tests passed\n";
     return 0;
