@@ -4,6 +4,7 @@
 #include "display_model.h"
 #include "meter_display_model.h"
 #include "scope_plot_model.h"
+#include "scrolling_history.h"
 #include "snapshot_store.h"
 #include "spectrum_peak_model.h"
 #include "system_audio_capture.h"
@@ -209,13 +210,23 @@ void testProjectionAndLayout() {
         Prism::Tui::PanelId::Oscilloscope,
         "panel focus should cycle forward");
     require(Prism::Tui::nextPanel(Prism::Tui::PanelId::Spectrum, true) ==
-        Prism::Tui::PanelId::LUFSMeter,
+        Prism::Tui::PanelId::Waveform,
         "panel focus should cycle backward");
     const auto compactPanels = Prism::Tui::visiblePanelOrder(stacked);
     require(compactPanels.size() == 3 &&
         Prism::Tui::nextPanel(
             Prism::Tui::PanelId::Spectrum, compactPanels) == Prism::Tui::PanelId::VUMeter,
         "compact layout focus should skip hidden visual scopes");
+
+    const auto full = Prism::Tui::buildDashboardLayout(
+        140, 44, Prism::Tui::LayoutPreset::Automatic);
+    require(full.panels.size() == 7 &&
+        Prism::Tui::layoutContainsPanel(full, Prism::Tui::PanelId::Spectrogram) &&
+        Prism::Tui::layoutContainsPanel(full, Prism::Tui::PanelId::Waveform),
+        "large dashboards should compose all seven scopes at once");
+    require(std::all_of(full.panels.begin(), full.panels.end(), [](const auto& panel) {
+        return panel.width > 0 && panel.height > 0;
+    }), "all seven panes should remain bounded after responsive layout");
 }
 
 void testMeterDisplayModels() {
@@ -279,7 +290,7 @@ void testSettingsModelAndPersistence() {
         "settings normalization should enforce public ranges");
 
     const auto pages = Prism::Tui::settingsPages();
-    require(pages.size() == 6 &&
+    require(pages.size() == 8 &&
         Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::General).size() == 3,
         "settings should expose shallow category pages");
     Prism::Tui::TuiSettings adjusted;
@@ -312,6 +323,18 @@ void testSettingsModelAndPersistence() {
         adjusted, Prism::Tui::SettingId::LUFSReadout, 1) &&
         adjusted.lufsReadout == Prism::Tui::LUFSReadout::Integrated,
         "LUFS settings should select an independent loudness window");
+    require(Prism::Tui::adjustSetting(
+        adjusted, Prism::Tui::SettingId::SpectrogramClarity, -1) &&
+        adjusted.spectrogramClarity == Prism::Tui::SpectrogramClarity::Sharp,
+        "spectrogram settings should cycle through the native clarity modes");
+    require(Prism::Tui::adjustSetting(
+        adjusted, Prism::Tui::SettingId::WaveformMode, 1) &&
+        adjusted.waveformMode == Prism::Tui::WaveformMode::Stereo,
+        "waveform settings should expose independent mono and stereo modes");
+    require(Prism::Tui::adjustSetting(
+        adjusted, Prism::Tui::SettingId::WaveformMultiband, 1) &&
+        adjusted.waveformMultiband,
+        "waveform settings should expose the GUI multiband color mode");
     require(Prism::Tui::resetSetting(
         adjusted, Prism::Tui::SettingId::InputTrim) &&
         adjusted.inputTrimDb == 0.0f,
@@ -480,6 +503,27 @@ void testPitchReadoutResponse() {
         "free-running oscilloscope windows should advance with every audio chunk");
 }
 
+void testScrollingHistory() {
+    Prism::Tui::ScrollingHistory history(2, 3);
+    history.append(std::vector<float>{
+        1.0f, 10.0f,
+        2.0f, 20.0f,
+        3.0f, 30.0f,
+        4.0f, 40.0f,
+    });
+    const auto wrapped = history.snapshot();
+    require(wrapped.columnCount == 3 && wrapped.columnStride == 2,
+        "rolling histories should remain at their fixed column capacity");
+    require(wrapped.values == std::vector<float>({
+        2.0f, 20.0f,
+        3.0f, 30.0f,
+        4.0f, 40.0f,
+    }), "rolling history snapshots should publish oldest-to-newest columns");
+    history.reset();
+    require(history.snapshot().values.empty(),
+        "history reset should remove old visual data");
+}
+
 void testPipelineAndFakeCapture() {
     FakeCapture capture;
     Prism::Capture::StartResult started;
@@ -527,6 +571,35 @@ void testPipelineAndFakeCapture() {
         frame.vectorscope.multibandPoints.end(),
         [](float sample) { return std::isfinite(sample); }),
         "vectorscope samples should remain finite");
+    require(frame.spectrogram.display.columnCount > 0 &&
+        frame.spectrogram.display.columnStride == Prism::Tui::kSpectrogramHistoryRows &&
+        frame.spectrogram.heat.columnCount == frame.spectrogram.display.columnCount,
+        "the pipeline should publish synchronized spectrogram intensity histories");
+    const size_t latestSpectrogramOffset =
+        (frame.spectrogram.display.columnCount - 1) *
+        frame.spectrogram.display.columnStride;
+    const auto spectrogramBegin =
+        frame.spectrogram.display.values.begin() +
+        static_cast<std::ptrdiff_t>(latestSpectrogramOffset);
+    const auto spectrogramEnd = spectrogramBegin +
+        static_cast<std::ptrdiff_t>(frame.spectrogram.display.columnStride);
+    const size_t dominantSpectrogramRow = static_cast<size_t>(std::distance(
+        spectrogramBegin, std::max_element(spectrogramBegin, spectrogramEnd)));
+    require(dominantSpectrogramRow > 42 && dominantSpectrogramRow < 68,
+        "a deterministic 1 kHz tone should occupy the expected logarithmic spectrogram band");
+    require(frame.waveform.history.columnCount > 0 &&
+        frame.waveform.history.columnStride == Visualizer::WAVEFORM_STEREO_SUMMARY_STRIDE &&
+        !frame.waveform.stereo,
+        "the pipeline should publish a bounded mono waveform history by default");
+    const size_t latestWaveformOffset =
+        (frame.waveform.history.columnCount - 1) * frame.waveform.history.columnStride;
+    const float* latestWaveform =
+        frame.waveform.history.values.data() + latestWaveformOffset;
+    require(latestWaveform[0] < -0.20f && latestWaveform[1] > 0.20f,
+        "waveform columns should retain the real minimum and maximum sample envelope");
+    require(std::all_of(latestWaveform + 2, latestWaveform + 5, [](float value) {
+        return std::isfinite(value) && value >= 0.0f;
+    }), "waveform columns should retain finite native multiband RMS values");
     require(frame.vu.barLDb > -20.0f && frame.vu.barLDb < -5.0f,
         "VU level should reflect deterministic input");
     require(std::isfinite(frame.lufs.momentaryLUFS) && frame.lufs.momentaryLUFS > -60.0f,
@@ -548,12 +621,22 @@ void testPipelineAndFakeCapture() {
         "input trim should affect the real loudness analyzer before processing");
 
     Prism::Tui::AnalysisPipeline stereoPipeline(48000.0f);
+    stereoPipeline.setWaveformSettings(true, 2);
     for (int index = 0; index < 20; ++index) {
         stereoPipeline.process(stereoSineChunk(1000.0f, 0.5f, 0.125f, 2400, 48000.0f));
     }
     const auto stereo = stereoPipeline.snapshot();
     require(stereo.vu.barLDb > stereo.vu.barRDb + 10.0f,
         "stereo VU values should preserve independent channel levels");
+    require(stereo.waveform.stereo && stereo.waveform.history.columnCount > 0,
+        "stereo waveform mode should publish independent channel envelopes");
+    const size_t stereoWaveformOffset =
+        (stereo.waveform.history.columnCount - 1) *
+        stereo.waveform.history.columnStride;
+    const float* stereoWaveform =
+        stereo.waveform.history.values.data() + stereoWaveformOffset;
+    require(stereoWaveform[1] > stereoWaveform[6] * 3.0f,
+        "stereo waveform envelopes should preserve independent channel amplitudes");
     pipeline.reset();
     const auto reset = pipeline.snapshot();
     require(reset.lufs.integratedLUFS <= -59.0f, "reset should clear integrated loudness");
@@ -563,6 +646,11 @@ void testPipelineAndFakeCapture() {
         "reset should clear the fast pitch readout");
     require(reset.vectorscope.pointCount == 0 && reset.vectorscope.multibandPoints.empty(),
         "reset should clear vectorscope history");
+    require(reset.spectrogram.display.columnCount == 0 &&
+        reset.spectrogram.heat.columnCount == 0,
+        "reset should clear both spectrogram histories");
+    require(reset.waveform.history.columnCount == 0,
+        "reset should clear waveform history");
     require(capture.stopped, "fake capture should stop cleanly");
 }
 
@@ -593,6 +681,7 @@ int main() {
     testSettingsModelAndPersistence();
     testScopePlotModels();
     testPitchReadoutResponse();
+    testScrollingHistory();
     testPipelineAndFakeCapture();
     testThreadSafeSnapshots();
     std::cout << "Prism TUI tests passed\n";

@@ -25,7 +25,13 @@ int normalizedOscilloscopeDisplaySamples(float sampleRate) {
 }  // namespace
 
 AnalysisPipeline::AnalysisPipeline(float sampleRate, size_t fftSize)
-    : spectrum_(fftSize), sampleRate_(sampleRate), fftSize_(fftSize) {
+    : spectrum_(fftSize),
+      spectrogramDisplayHistory_(kSpectrogramHistoryRows, kSpectrogramHistoryColumns),
+      spectrogramHeatHistory_(kSpectrogramHistoryRows, kSpectrogramHistoryColumns),
+      waveformHistory_(Visualizer::WAVEFORM_STEREO_SUMMARY_STRIDE,
+                       kWaveformHistoryColumns),
+      sampleRate_(sampleRate),
+      fftSize_(fftSize) {
     spectrum_.setSampleRate(sampleRate);
     spectrum_.setSmoothing(0.9f);
     vu_.setSampleRate(sampleRate);
@@ -34,6 +40,8 @@ AnalysisPipeline::AnalysisPipeline(float sampleRate, size_t fftSize)
     oscilloscope_.setPitchLock(true);
     oscilloscope_.setDisplaySamples(normalizedOscilloscopeDisplaySamples(sampleRate));
     vectorscope_.setSampleRate(sampleRate);
+    setSpectrogramSettings(2.0f, 1.0f, 4.0f, "sharper", "log", "horizontal");
+    setWaveformSettings(false, 1);
 }
 
 void AnalysisPipeline::process(const Prism::Capture::AudioChunk& chunk) {
@@ -62,6 +70,30 @@ void AnalysisPipeline::process(const Prism::Capture::AudioChunk& chunk) {
     }
     oscilloscope_.pushSamples(monoScratch_.data(), count);
     vectorscope_.pushMultibandSamples(left, right, count);
+
+    const auto spectrogramColumns = spectrogram_.process(monoScratch_.data(), count);
+    spectrogramDisplayHistory_.append(spectrogramColumns.display);
+    spectrogramHeatHistory_.append(spectrogramColumns.heat);
+
+    if (waveformStereo_) {
+        const auto& columns = waveform_.processStereo(left, right, count);
+        waveformHistory_.append(columns);
+    } else {
+        const auto& columns = waveform_.processMono(monoScratch_.data(), count);
+        const size_t columnCount = columns.size() / Visualizer::WAVEFORM_MONO_SUMMARY_STRIDE;
+        waveformMonoScratch_.resize(
+            columnCount * Visualizer::WAVEFORM_STEREO_SUMMARY_STRIDE);
+        for (size_t column = 0; column < columnCount; ++column) {
+            const size_t source = column * Visualizer::WAVEFORM_MONO_SUMMARY_STRIDE;
+            const size_t destination = column * Visualizer::WAVEFORM_STEREO_SUMMARY_STRIDE;
+            for (size_t value = 0; value < Visualizer::WAVEFORM_MONO_SUMMARY_STRIDE; ++value) {
+                waveformMonoScratch_[destination + value] = columns[source + value];
+                waveformMonoScratch_[destination + Visualizer::WAVEFORM_MONO_SUMMARY_STRIDE + value] =
+                    columns[source + value];
+            }
+        }
+        waveformHistory_.append(waveformMonoScratch_);
+    }
 }
 
 AnalysisFrame AnalysisPipeline::snapshot() {
@@ -102,6 +134,10 @@ AnalysisFrame AnalysisPipeline::snapshot() {
         kVectorscopeDisplayPoints);
     frame.vectorscope.multibandPoints.resize(
         frame.vectorscope.pointCount * Visualizer::MULTIBAND_POINT_STRIDE);
+    frame.spectrogram.display = spectrogramDisplayHistory_.snapshot();
+    frame.spectrogram.heat = spectrogramHeatHistory_.snapshot();
+    frame.waveform.history = waveformHistory_.snapshot();
+    frame.waveform.stereo = waveformStereo_;
     return frame;
 }
 
@@ -111,10 +147,16 @@ void AnalysisPipeline::reset() {
     lufs_.reset();
     oscilloscope_.reset();
     vectorscope_.reset();
+    spectrogram_.reset();
+    waveform_.reset();
+    spectrogramDisplayHistory_.reset();
+    spectrogramHeatHistory_.reset();
+    waveformHistory_.reset();
     spectrumPeakTracker_.reset();
     monoScratch_.clear();
     trimmedLeftScratch_.clear();
     trimmedRightScratch_.clear();
+    waveformMonoScratch_.clear();
     displayPitch_ = 0.0f;
 }
 
@@ -131,6 +173,43 @@ void AnalysisPipeline::setSpectrumTilt(float dbPerOctave) {
 
 void AnalysisPipeline::setOscilloscopePitchLock(bool enabled) {
     oscilloscope_.setPitchLock(enabled);
+}
+
+void AnalysisPipeline::setSpectrogramSettings(float scrollSpeed,
+                                              float contrast,
+                                              float tiltDbPerOctave,
+                                              const std::string& clarityMode,
+                                              const std::string& scaleMode,
+                                              const std::string& orientation) {
+    Visualizer::SpectrogramConfig config;
+    config.fftSize = fftSize_;
+    config.sampleRate = sampleRate_;
+    config.rowCount = kSpectrogramHistoryRows;
+    config.minFrequency = 20.0f;
+    config.maxFrequency = 20000.0f;
+    config.minDecibels = -90.0f;
+    config.maxDecibels = -12.0f;
+    config.scrollSpeed = std::clamp(scrollSpeed, 0.5f, 4.0f);
+    config.contrast = std::clamp(contrast, 0.5f, 2.0f);
+    config.tiltDbPerOctave = std::clamp(tiltDbPerOctave, -2.0f, 8.0f);
+    config.clarityMode = clarityMode;
+    config.scaleMode = scaleMode;
+    config.orientation = orientation;
+    spectrogram_.configure(config);
+    spectrogramDisplayHistory_.reset();
+    spectrogramHeatHistory_.reset();
+}
+
+void AnalysisPipeline::setWaveformSettings(bool stereo, int scrollSpeed) {
+    waveformStereo_ = stereo;
+    waveformScrollSpeed_ = std::clamp(scrollSpeed, 1, 8);
+    constexpr float baseColumnsPerSecond = 128.0f;
+    const size_t samplesPerColumn = static_cast<size_t>(std::max(
+        1.0f,
+        std::round(sampleRate_ /
+                   (baseColumnsPerSecond * static_cast<float>(waveformScrollSpeed_)))));
+    waveform_.configure(sampleRate_, samplesPerColumn);
+    waveformHistory_.reset();
 }
 
 size_t drainCapture(Prism::Capture::SystemAudioCapture& capture,

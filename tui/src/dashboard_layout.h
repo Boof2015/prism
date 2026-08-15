@@ -12,6 +12,8 @@ enum class PanelId {
     Vectorscope,
     VUMeter,
     LUFSMeter,
+    Spectrogram,
+    Waveform,
 };
 
 enum class SplitAxis {

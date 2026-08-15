@@ -45,6 +45,22 @@ const std::vector<SettingDescriptor> kLUFSMeterSettings = {
     {SettingId::LUFSReadout, "Loudness readout", "Chooses which LUFS window drives the main bar and badge."},
 };
 
+const std::vector<SettingDescriptor> kSpectrogramSettings = {
+    {SettingId::SpectrogramColor, "Color", "Switches between Prism's heat palette and a focused mono display."},
+    {SettingId::SpectrogramClarity, "Clarity", "Controls frequency reassignment and spectral sharpness."},
+    {SettingId::SpectrogramScale, "Frequency scale", "Chooses logarithmic, mel, or linear frequency spacing."},
+    {SettingId::SpectrogramOrientation, "Orientation", "Scrolls time horizontally or vertically."},
+    {SettingId::SpectrogramScrollSpeed, "Scroll speed", "Changes how quickly new time columns move through the pane."},
+    {SettingId::SpectrogramContrast, "Contrast", "Shapes the intensity range without changing the analyzer input."},
+    {SettingId::SpectrogramTilt, "Display tilt", "Offsets frequencies by decibels per octave around 1 kHz."},
+};
+
+const std::vector<SettingDescriptor> kWaveformSettings = {
+    {SettingId::WaveformMode, "Channels", "Shows one mono envelope or separate left and right lanes."},
+    {SettingId::WaveformScrollSpeed, "Scroll speed", "Changes the time resolution of the rolling waveform."},
+    {SettingId::WaveformMultiband, "Multiband color", "Colors each envelope column by its dominant frequency band."},
+};
+
 float snap(float value, float step) {
     return std::round(value / step) * step;
 }
@@ -102,6 +118,38 @@ std::string serializeLufsReadout(LUFSReadout readout) {
         case LUFSReadout::Integrated: return "integrated";
     }
     return "short_term";
+}
+
+std::string serializeSpectrogramColor(SpectrogramColorMode mode) {
+    return mode == SpectrogramColorMode::Mono ? "mono" : "heat";
+}
+
+std::string serializeSpectrogramClarity(SpectrogramClarity clarity) {
+    switch (clarity) {
+        case SpectrogramClarity::Classic: return "classic";
+        case SpectrogramClarity::Sharp: return "sharp";
+        case SpectrogramClarity::Sharper: return "sharper";
+    }
+    return "sharper";
+}
+
+std::string serializeSpectrogramScale(SpectrogramScale scale) {
+    switch (scale) {
+        case SpectrogramScale::Mel: return "mel";
+        case SpectrogramScale::Logarithmic: return "log";
+        case SpectrogramScale::Linear: return "linear";
+    }
+    return "log";
+}
+
+std::string serializeSpectrogramOrientation(SpectrogramOrientation orientation) {
+    return orientation == SpectrogramOrientation::Vertical
+        ? "vertical"
+        : "horizontal";
+}
+
+std::string serializeWaveformMode(WaveformMode mode) {
+    return mode == WaveformMode::Stereo ? "stereo" : "mono";
 }
 
 bool parseBool(const std::string& value, bool fallback) {
@@ -181,12 +229,80 @@ LUFSReadout parseLufsReadout(const std::string& value, LUFSReadout fallback) {
     return fallback;
 }
 
+SpectrogramColorMode parseSpectrogramColor(
+    const std::string& value, SpectrogramColorMode fallback) {
+    if (value == "heat") return SpectrogramColorMode::Heat;
+    if (value == "mono") return SpectrogramColorMode::Mono;
+    return fallback;
+}
+
+SpectrogramClarity parseSpectrogramClarity(
+    const std::string& value, SpectrogramClarity fallback) {
+    if (value == "classic") return SpectrogramClarity::Classic;
+    if (value == "sharp") return SpectrogramClarity::Sharp;
+    if (value == "sharper") return SpectrogramClarity::Sharper;
+    return fallback;
+}
+
+SpectrogramScale parseSpectrogramScale(
+    const std::string& value, SpectrogramScale fallback) {
+    if (value == "mel") return SpectrogramScale::Mel;
+    if (value == "log") return SpectrogramScale::Logarithmic;
+    if (value == "linear") return SpectrogramScale::Linear;
+    return fallback;
+}
+
+SpectrogramOrientation parseSpectrogramOrientation(
+    const std::string& value, SpectrogramOrientation fallback) {
+    if (value == "horizontal") return SpectrogramOrientation::Horizontal;
+    if (value == "vertical") return SpectrogramOrientation::Vertical;
+    return fallback;
+}
+
+WaveformMode parseWaveformMode(const std::string& value, WaveformMode fallback) {
+    if (value == "mono") return WaveformMode::Mono;
+    if (value == "stereo") return WaveformMode::Stereo;
+    return fallback;
+}
+
 const char* environmentValue(const char* name) {
     const char* value = std::getenv(name);
     return value != nullptr && value[0] != '\0' ? value : nullptr;
 }
 
 }  // namespace
+
+const char* spectrogramColorName(SpectrogramColorMode mode) {
+    return mode == SpectrogramColorMode::Mono ? "Mono" : "Heat";
+}
+
+const char* spectrogramClarityName(SpectrogramClarity clarity) {
+    switch (clarity) {
+        case SpectrogramClarity::Classic: return "Classic";
+        case SpectrogramClarity::Sharp: return "Sharp";
+        case SpectrogramClarity::Sharper: return "Sharper";
+    }
+    return "Sharper";
+}
+
+const char* spectrogramScaleName(SpectrogramScale scale) {
+    switch (scale) {
+        case SpectrogramScale::Mel: return "Mel";
+        case SpectrogramScale::Logarithmic: return "Log";
+        case SpectrogramScale::Linear: return "Linear";
+    }
+    return "Log";
+}
+
+const char* spectrogramOrientationName(SpectrogramOrientation orientation) {
+    return orientation == SpectrogramOrientation::Vertical
+        ? "Vertical"
+        : "Horizontal";
+}
+
+const char* waveformModeName(WaveformMode mode) {
+    return mode == WaveformMode::Stereo ? "Stereo" : "Mono";
+}
 
 TuiSettings normalizeSettings(TuiSettings settings) {
     settings.inputTrimDb = std::clamp(snap(settings.inputTrimDb, 0.5f), -12.0f, 12.0f);
@@ -196,6 +312,13 @@ TuiSettings normalizeSettings(TuiSettings settings) {
     settings.oscilloscopeTraceWeight = std::clamp(settings.oscilloscopeTraceWeight, 1, 3);
     settings.vuReferenceDbfs = std::clamp(
         snap(settings.vuReferenceDbfs, 1.0f), -30.0f, 0.0f);
+    settings.spectrogramScrollSpeed = std::clamp(
+        snap(settings.spectrogramScrollSpeed, 0.5f), 0.5f, 4.0f);
+    settings.spectrogramContrast = std::clamp(
+        snap(settings.spectrogramContrast, 0.1f), 0.5f, 2.0f);
+    settings.spectrogramTiltDbPerOctave = std::clamp(
+        snap(settings.spectrogramTiltDbPerOctave, 0.5f), -2.0f, 8.0f);
+    settings.waveformScrollSpeed = std::clamp(settings.waveformScrollSpeed, 1, 8);
     if (!settings.oscilloscopePitchLock) {
         settings.oscilloscopeFrequencyReadout = false;
     }
@@ -218,7 +341,17 @@ bool operator==(const TuiSettings& left, const TuiSettings& right) {
         left.vuMeterOrientation == right.vuMeterOrientation &&
         left.vuNeedleChannels == right.vuNeedleChannels &&
         left.vuReferenceDbfs == right.vuReferenceDbfs &&
-        left.lufsReadout == right.lufsReadout;
+        left.lufsReadout == right.lufsReadout &&
+        left.spectrogramColor == right.spectrogramColor &&
+        left.spectrogramClarity == right.spectrogramClarity &&
+        left.spectrogramScale == right.spectrogramScale &&
+        left.spectrogramOrientation == right.spectrogramOrientation &&
+        left.spectrogramScrollSpeed == right.spectrogramScrollSpeed &&
+        left.spectrogramContrast == right.spectrogramContrast &&
+        left.spectrogramTiltDbPerOctave == right.spectrogramTiltDbPerOctave &&
+        left.waveformMode == right.waveformMode &&
+        left.waveformScrollSpeed == right.waveformScrollSpeed &&
+        left.waveformMultiband == right.waveformMultiband;
 }
 
 bool operator!=(const TuiSettings& left, const TuiSettings& right) {
@@ -233,6 +366,8 @@ std::vector<SettingsPage> settingsPages() {
         SettingsPage::Vectorscope,
         SettingsPage::VUMeter,
         SettingsPage::LUFSMeter,
+        SettingsPage::Spectrogram,
+        SettingsPage::Waveform,
     };
 }
 
@@ -245,6 +380,8 @@ const char* settingsPageName(SettingsPage page) {
         case SettingsPage::Vectorscope: return "Vectorscope";
         case SettingsPage::VUMeter: return "VU meter";
         case SettingsPage::LUFSMeter: return "LUFS meter";
+        case SettingsPage::Spectrogram: return "Spectrogram";
+        case SettingsPage::Waveform: return "Waveform";
     }
     return "Settings";
 }
@@ -258,6 +395,8 @@ const char* settingsPageDescription(SettingsPage page) {
         case SettingsPage::Vectorscope: return "Stereo projection and point rendering.";
         case SettingsPage::VUMeter: return "Classic level, peak, and phase metering.";
         case SettingsPage::LUFSMeter: return "Loudness window and target presentation.";
+        case SettingsPage::Spectrogram: return "Frequency history, color, and time direction.";
+        case SettingsPage::Waveform: return "Rolling amplitude envelope and band color.";
     }
     return {};
 }
@@ -270,6 +409,8 @@ const std::vector<SettingDescriptor>& settingsForPage(SettingsPage page) {
         case SettingsPage::Vectorscope: return kVectorscopeSettings;
         case SettingsPage::VUMeter: return kVUMeterSettings;
         case SettingsPage::LUFSMeter: return kLUFSMeterSettings;
+        case SettingsPage::Spectrogram: return kSpectrogramSettings;
+        case SettingsPage::Waveform: return kWaveformSettings;
         case SettingsPage::Home: break;
     }
     static const std::vector<SettingDescriptor> empty;
@@ -315,6 +456,26 @@ std::string settingValue(const TuiSettings& settings, SettingId setting) {
             return trimFloat(settings.vuReferenceDbfs, 0) + " dBFS";
         case SettingId::LUFSReadout:
             return lufsReadoutName(settings.lufsReadout);
+        case SettingId::SpectrogramColor:
+            return spectrogramColorName(settings.spectrogramColor);
+        case SettingId::SpectrogramClarity:
+            return spectrogramClarityName(settings.spectrogramClarity);
+        case SettingId::SpectrogramScale:
+            return spectrogramScaleName(settings.spectrogramScale);
+        case SettingId::SpectrogramOrientation:
+            return spectrogramOrientationName(settings.spectrogramOrientation);
+        case SettingId::SpectrogramScrollSpeed:
+            return trimFloat(settings.spectrogramScrollSpeed, 1) + "×";
+        case SettingId::SpectrogramContrast:
+            return trimFloat(settings.spectrogramContrast, 1) + "×";
+        case SettingId::SpectrogramTilt:
+            return trimFloat(settings.spectrogramTiltDbPerOctave, 1) + " dB/oct";
+        case SettingId::WaveformMode:
+            return waveformModeName(settings.waveformMode);
+        case SettingId::WaveformScrollSpeed:
+            return std::to_string(settings.waveformScrollSpeed) + "×";
+        case SettingId::WaveformMultiband:
+            return boolValue(settings.waveformMultiband);
     }
     return {};
 }
@@ -323,7 +484,8 @@ bool settingIsBoolean(SettingId setting) {
     return setting == SettingId::SpectrumPeakReadout ||
         setting == SettingId::OscilloscopePitchLock ||
         setting == SettingId::OscilloscopeFrequencyReadout ||
-        setting == SettingId::VectorscopeGuides;
+        setting == SettingId::VectorscopeGuides ||
+        setting == SettingId::WaveformMultiband;
 }
 
 bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
@@ -412,6 +574,49 @@ bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
             settings.lufsReadout = static_cast<LUFSReadout>(value);
             break;
         }
+        case SettingId::SpectrogramColor:
+            settings.spectrogramColor = settings.spectrogramColor == SpectrogramColorMode::Heat
+                ? SpectrogramColorMode::Mono
+                : SpectrogramColorMode::Heat;
+            break;
+        case SettingId::SpectrogramClarity: {
+            int value = static_cast<int>(settings.spectrogramClarity);
+            value = (value + (direction > 0 ? 1 : 2)) % 3;
+            settings.spectrogramClarity = static_cast<SpectrogramClarity>(value);
+            break;
+        }
+        case SettingId::SpectrogramScale: {
+            int value = static_cast<int>(settings.spectrogramScale);
+            value = (value + (direction > 0 ? 1 : 2)) % 3;
+            settings.spectrogramScale = static_cast<SpectrogramScale>(value);
+            break;
+        }
+        case SettingId::SpectrogramOrientation:
+            settings.spectrogramOrientation =
+                settings.spectrogramOrientation == SpectrogramOrientation::Horizontal
+                    ? SpectrogramOrientation::Vertical
+                    : SpectrogramOrientation::Horizontal;
+            break;
+        case SettingId::SpectrogramScrollSpeed:
+            settings.spectrogramScrollSpeed += direction > 0 ? 0.5f : -0.5f;
+            break;
+        case SettingId::SpectrogramContrast:
+            settings.spectrogramContrast += direction > 0 ? 0.1f : -0.1f;
+            break;
+        case SettingId::SpectrogramTilt:
+            settings.spectrogramTiltDbPerOctave += direction > 0 ? 0.5f : -0.5f;
+            break;
+        case SettingId::WaveformMode:
+            settings.waveformMode = settings.waveformMode == WaveformMode::Mono
+                ? WaveformMode::Stereo
+                : WaveformMode::Mono;
+            break;
+        case SettingId::WaveformScrollSpeed:
+            settings.waveformScrollSpeed += direction > 0 ? 1 : -1;
+            break;
+        case SettingId::WaveformMultiband:
+            settings.waveformMultiband = !settings.waveformMultiband;
+            break;
     }
     settings = normalizeSettings(settings);
     return settings != before;
@@ -437,6 +642,16 @@ bool resetSetting(TuiSettings& settings, SettingId setting) {
         case SettingId::VUNeedleChannels: settings.vuNeedleChannels = defaults.vuNeedleChannels; break;
         case SettingId::VUReferenceLevel: settings.vuReferenceDbfs = defaults.vuReferenceDbfs; break;
         case SettingId::LUFSReadout: settings.lufsReadout = defaults.lufsReadout; break;
+        case SettingId::SpectrogramColor: settings.spectrogramColor = defaults.spectrogramColor; break;
+        case SettingId::SpectrogramClarity: settings.spectrogramClarity = defaults.spectrogramClarity; break;
+        case SettingId::SpectrogramScale: settings.spectrogramScale = defaults.spectrogramScale; break;
+        case SettingId::SpectrogramOrientation: settings.spectrogramOrientation = defaults.spectrogramOrientation; break;
+        case SettingId::SpectrogramScrollSpeed: settings.spectrogramScrollSpeed = defaults.spectrogramScrollSpeed; break;
+        case SettingId::SpectrogramContrast: settings.spectrogramContrast = defaults.spectrogramContrast; break;
+        case SettingId::SpectrogramTilt: settings.spectrogramTiltDbPerOctave = defaults.spectrogramTiltDbPerOctave; break;
+        case SettingId::WaveformMode: settings.waveformMode = defaults.waveformMode; break;
+        case SettingId::WaveformScrollSpeed: settings.waveformScrollSpeed = defaults.waveformScrollSpeed; break;
+        case SettingId::WaveformMultiband: settings.waveformMultiband = defaults.waveformMultiband; break;
     }
     return settings != before;
 }
@@ -487,6 +702,16 @@ TuiSettings loadSettings(const std::filesystem::path& path) {
         else if (key == "vu_needle_channels") settings.vuNeedleChannels = parseVuNeedleChannels(value, settings.vuNeedleChannels);
         else if (key == "vu_reference_dbfs") settings.vuReferenceDbfs = parseFloat(value, settings.vuReferenceDbfs);
         else if (key == "lufs_readout") settings.lufsReadout = parseLufsReadout(value, settings.lufsReadout);
+        else if (key == "spectrogram_color") settings.spectrogramColor = parseSpectrogramColor(value, settings.spectrogramColor);
+        else if (key == "spectrogram_clarity") settings.spectrogramClarity = parseSpectrogramClarity(value, settings.spectrogramClarity);
+        else if (key == "spectrogram_scale") settings.spectrogramScale = parseSpectrogramScale(value, settings.spectrogramScale);
+        else if (key == "spectrogram_orientation") settings.spectrogramOrientation = parseSpectrogramOrientation(value, settings.spectrogramOrientation);
+        else if (key == "spectrogram_scroll") settings.spectrogramScrollSpeed = parseFloat(value, settings.spectrogramScrollSpeed);
+        else if (key == "spectrogram_contrast") settings.spectrogramContrast = parseFloat(value, settings.spectrogramContrast);
+        else if (key == "spectrogram_tilt") settings.spectrogramTiltDbPerOctave = parseFloat(value, settings.spectrogramTiltDbPerOctave);
+        else if (key == "waveform_mode") settings.waveformMode = parseWaveformMode(value, settings.waveformMode);
+        else if (key == "waveform_scroll") settings.waveformScrollSpeed = parseInt(value, settings.waveformScrollSpeed);
+        else if (key == "waveform_multiband") settings.waveformMultiband = parseBool(value, settings.waveformMultiband);
     }
     return normalizeSettings(settings);
 }
@@ -523,7 +748,17 @@ bool saveSettings(const TuiSettings& rawSettings,
            << "vu_orientation=" << serializeVuOrientation(settings.vuMeterOrientation) << '\n'
            << "vu_needle_channels=" << serializeVuNeedleChannels(settings.vuNeedleChannels) << '\n'
            << "vu_reference_dbfs=" << settings.vuReferenceDbfs << '\n'
-           << "lufs_readout=" << serializeLufsReadout(settings.lufsReadout) << '\n';
+           << "lufs_readout=" << serializeLufsReadout(settings.lufsReadout) << '\n'
+           << "spectrogram_color=" << serializeSpectrogramColor(settings.spectrogramColor) << '\n'
+           << "spectrogram_clarity=" << serializeSpectrogramClarity(settings.spectrogramClarity) << '\n'
+           << "spectrogram_scale=" << serializeSpectrogramScale(settings.spectrogramScale) << '\n'
+           << "spectrogram_orientation=" << serializeSpectrogramOrientation(settings.spectrogramOrientation) << '\n'
+           << "spectrogram_scroll=" << settings.spectrogramScrollSpeed << '\n'
+           << "spectrogram_contrast=" << settings.spectrogramContrast << '\n'
+           << "spectrogram_tilt=" << settings.spectrogramTiltDbPerOctave << '\n'
+           << "waveform_mode=" << serializeWaveformMode(settings.waveformMode) << '\n'
+           << "waveform_scroll=" << settings.waveformScrollSpeed << '\n'
+           << "waveform_multiband=" << (settings.waveformMultiband ? "true" : "false") << '\n';
     if (!output) {
         if (error) *error = "could not write settings file";
         return false;

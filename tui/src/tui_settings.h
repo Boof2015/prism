@@ -18,6 +18,8 @@ enum class SettingsPage {
     Vectorscope,
     VUMeter,
     LUFSMeter,
+    Spectrogram,
+    Waveform,
 };
 
 enum class SettingId {
@@ -37,6 +39,16 @@ enum class SettingId {
     VUNeedleChannels,
     VUReferenceLevel,
     LUFSReadout,
+    SpectrogramColor,
+    SpectrogramClarity,
+    SpectrogramScale,
+    SpectrogramOrientation,
+    SpectrogramScrollSpeed,
+    SpectrogramContrast,
+    SpectrogramTilt,
+    WaveformMode,
+    WaveformScrollSpeed,
+    WaveformMultiband,
 };
 
 enum class VectorscopeDetail {
@@ -44,6 +56,12 @@ enum class VectorscopeDetail {
     Detailed,
     Maximum,
 };
+
+enum class SpectrogramColorMode { Heat, Mono };
+enum class SpectrogramClarity { Classic, Sharp, Sharper };
+enum class SpectrogramScale { Mel, Logarithmic, Linear };
+enum class SpectrogramOrientation { Horizontal, Vertical };
+enum class WaveformMode { Mono, Stereo };
 
 struct TuiSettings {
     float inputTrimDb = 0.0f;
@@ -62,6 +80,16 @@ struct TuiSettings {
     VUNeedleChannels vuNeedleChannels = VUNeedleChannels::Stereo;
     float vuReferenceDbfs = -14.0f;
     LUFSReadout lufsReadout = LUFSReadout::ShortTerm;
+    SpectrogramColorMode spectrogramColor = SpectrogramColorMode::Heat;
+    SpectrogramClarity spectrogramClarity = SpectrogramClarity::Sharper;
+    SpectrogramScale spectrogramScale = SpectrogramScale::Logarithmic;
+    SpectrogramOrientation spectrogramOrientation = SpectrogramOrientation::Horizontal;
+    float spectrogramScrollSpeed = 2.0f;
+    float spectrogramContrast = 1.0f;
+    float spectrogramTiltDbPerOctave = 4.0f;
+    WaveformMode waveformMode = WaveformMode::Mono;
+    int waveformScrollSpeed = 1;
+    bool waveformMultiband = false;
 };
 
 struct SettingDescriptor {
@@ -83,6 +111,12 @@ std::string settingValue(const TuiSettings& settings, SettingId setting);
 bool settingIsBoolean(SettingId setting);
 bool adjustSetting(TuiSettings& settings, SettingId setting, int direction);
 bool resetSetting(TuiSettings& settings, SettingId setting);
+
+const char* spectrogramColorName(SpectrogramColorMode mode);
+const char* spectrogramClarityName(SpectrogramClarity clarity);
+const char* spectrogramScaleName(SpectrogramScale scale);
+const char* spectrogramOrientationName(SpectrogramOrientation orientation);
+const char* waveformModeName(WaveformMode mode);
 
 std::filesystem::path defaultSettingsPath();
 TuiSettings loadSettings(const std::filesystem::path& path);

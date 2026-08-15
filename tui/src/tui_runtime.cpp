@@ -47,6 +47,48 @@ std::chrono::microseconds displayFrameInterval(int framesPerSecond) {
         1000000 / std::max(1, framesPerSecond));
 }
 
+const char* spectrogramClarityConfig(SpectrogramClarity clarity) {
+    switch (clarity) {
+        case SpectrogramClarity::Classic: return "classic";
+        case SpectrogramClarity::Sharp: return "sharp";
+        case SpectrogramClarity::Sharper: return "sharper";
+    }
+    return "sharper";
+}
+
+const char* spectrogramScaleConfig(SpectrogramScale scale) {
+    switch (scale) {
+        case SpectrogramScale::Mel: return "mel";
+        case SpectrogramScale::Logarithmic: return "log";
+        case SpectrogramScale::Linear: return "linear";
+    }
+    return "log";
+}
+
+const char* spectrogramOrientationConfig(SpectrogramOrientation orientation) {
+    return orientation == SpectrogramOrientation::Vertical
+        ? "vertical"
+        : "horizontal";
+}
+
+void applySpectrogramSettings(AnalysisPipeline& pipeline,
+                              const TuiSettings& settings) {
+    pipeline.setSpectrogramSettings(
+        settings.spectrogramScrollSpeed,
+        settings.spectrogramContrast,
+        settings.spectrogramTiltDbPerOctave,
+        spectrogramClarityConfig(settings.spectrogramClarity),
+        spectrogramScaleConfig(settings.spectrogramScale),
+        spectrogramOrientationConfig(settings.spectrogramOrientation));
+}
+
+void applyWaveformSettings(AnalysisPipeline& pipeline,
+                           const TuiSettings& settings) {
+    pipeline.setWaveformSettings(
+        settings.waveformMode == WaveformMode::Stereo,
+        settings.waveformScrollSpeed);
+}
+
 volatile std::sig_atomic_t signalRequested = 0;
 
 void handleSignal(int) {
@@ -77,6 +119,8 @@ struct DisplayFrame {
     Visualizer::LUFSMeterSnapshot lufs{};
     OscilloscopeFrame oscilloscope;
     VectorscopeFrame vectorscope;
+    SpectrogramFrame spectrogram;
+    WaveformFrame waveform;
     double sampleRate = 48000.0;
     std::string backend;
     std::string device;
@@ -90,7 +134,7 @@ struct InterfaceState {
     bool settingsOpen = false;
     SettingsPage settingsPage = SettingsPage::Home;
     size_t settingsHomeSelection = 0;
-    std::array<size_t, 7> settingsSelections{};
+    std::array<size_t, 9> settingsSelections{};
     std::string settingsStatus;
 };
 
@@ -157,6 +201,10 @@ std::string panelName(PanelId panel) {
             return "VU Meter";
         case PanelId::LUFSMeter:
             return "LUFS Meter";
+        case PanelId::Spectrogram:
+            return "Spectrogram";
+        case PanelId::Waveform:
+            return "Waveform";
     }
     return "Panel";
 }
@@ -173,6 +221,10 @@ std::string panelNumber(PanelId panel) {
             return "4";
         case PanelId::LUFSMeter:
             return "5";
+        case PanelId::Spectrogram:
+            return "6";
+        case PanelId::Waveform:
+            return "7";
     }
     return "?";
 }
@@ -907,6 +959,247 @@ ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
         size(HEIGHT, EQUAL, std::max(1, height));
 }
 
+ftxui::Color interpolateColor(const std::array<int, 3>& from,
+                              const std::array<int, 3>& to,
+                              float amount) {
+    const float t = std::clamp(amount, 0.0f, 1.0f);
+    return ftxui::Color::RGB(
+        static_cast<uint8_t>(std::lround(from[0] + (to[0] - from[0]) * t)),
+        static_cast<uint8_t>(std::lround(from[1] + (to[1] - from[1]) * t)),
+        static_cast<uint8_t>(std::lround(from[2] + (to[2] - from[2]) * t)));
+}
+
+ftxui::Color spectrogramColor(float intensity, SpectrogramColorMode mode) {
+    const float value = std::clamp(intensity, 0.0f, 1.0f);
+    if (mode == SpectrogramColorMode::Mono) {
+        return interpolateColor(
+            {{5, 12, 14}}, {{102, 255, 255}}, std::pow(value, 0.72f));
+    }
+
+    constexpr std::array<float, 6> stops = {0.0f, 0.16f, 0.36f, 0.58f, 0.78f, 1.0f};
+    constexpr std::array<std::array<int, 3>, 6> colors = {{
+        {{5, 3, 12}},
+        {{15, 7, 33}},
+        {{61, 11, 94}},
+        {{163, 26, 121}},
+        {{255, 82, 87}},
+        {{255, 241, 209}},
+    }};
+    size_t upper = 1;
+    while (upper + 1 < stops.size() && value > stops[upper]) ++upper;
+    const size_t lower = upper - 1;
+    const float span = stops[upper] - stops[lower];
+    return interpolateColor(
+        colors[lower], colors[upper],
+        span > 0.0f ? (value - stops[lower]) / span : 0.0f);
+}
+
+float maxHistoryValue(const ScrollingHistoryFrame& history,
+                      size_t column,
+                      size_t firstRow,
+                      size_t lastRow) {
+    if (column >= history.columnCount || history.columnStride == 0 ||
+        history.values.size() < history.columnCount * history.columnStride) {
+        return 0.0f;
+    }
+    firstRow = std::min(firstRow, history.columnStride - 1);
+    lastRow = std::min(std::max(firstRow + 1, lastRow), history.columnStride);
+    float result = 0.0f;
+    const size_t offset = column * history.columnStride;
+    for (size_t row = firstRow; row < lastRow; ++row) {
+        result = std::max(result, history.values[offset + row]);
+    }
+    return result;
+}
+
+ftxui::Element renderSpectrogramPanel(const DisplayFrame& frame,
+                                      int width,
+                                      int height,
+                                      bool focused,
+                                      const TuiSettings& settings) {
+    using namespace ftxui;
+    const bool heat = settings.spectrogramColor == SpectrogramColorMode::Heat;
+    const auto& history = heat ? frame.spectrogram.heat : frame.spectrogram.display;
+    const bool vertical =
+        settings.spectrogramOrientation == SpectrogramOrientation::Vertical;
+    auto plot = canvas([
+        history,
+        colorMode = settings.spectrogramColor,
+        vertical
+    ](Canvas& surface) {
+        const int cellColumns = surface.width() / 2;
+        const int cellRows = surface.height() / 4;
+        if (cellColumns <= 0 || cellRows <= 0 || history.columnCount == 0 ||
+            history.columnStride == 0) {
+            return;
+        }
+
+        const int timeCells = vertical ? cellRows : cellColumns;
+        const int frequencyCells = vertical ? cellColumns : cellRows;
+        const size_t visibleColumns = std::min(
+            history.columnCount, static_cast<size_t>(timeCells));
+        const size_t sourceStart = history.columnCount - visibleColumns;
+        const int destinationStart = timeCells - static_cast<int>(visibleColumns);
+        for (size_t time = 0; time < visibleColumns; ++time) {
+            const size_t sourceColumn = sourceStart + time;
+            const int timeCell = destinationStart + static_cast<int>(time);
+            for (int frequencyCell = 0; frequencyCell < frequencyCells; ++frequencyCell) {
+                const float normalizedStart = static_cast<float>(frequencyCell) /
+                    static_cast<float>(frequencyCells);
+                const float normalizedEnd = static_cast<float>(frequencyCell + 1) /
+                    static_cast<float>(frequencyCells);
+                const size_t firstRow = static_cast<size_t>(std::floor(
+                    normalizedStart * static_cast<float>(history.columnStride)));
+                const size_t lastRow = static_cast<size_t>(std::ceil(
+                    normalizedEnd * static_cast<float>(history.columnStride)));
+                const float intensity = maxHistoryValue(
+                    history, sourceColumn, firstRow, lastRow);
+                if (!std::isfinite(intensity) || intensity < 0.008f) continue;
+
+                const int cellX = vertical ? frequencyCell : timeCell;
+                const int cellY = vertical
+                    ? timeCell
+                    : frequencyCell;
+                const Color color = spectrogramColor(intensity, colorMode);
+                for (int dx = 0; dx < 2; ++dx) {
+                    surface.DrawBlock(cellX * 2 + dx, cellY * 4, true, color);
+                    surface.DrawBlock(cellX * 2 + dx, cellY * 4 + 2, true, color);
+                }
+            }
+        }
+    }) | flex;
+
+    std::string detail = std::string(spectrogramColorName(settings.spectrogramColor));
+    if (width >= 48) {
+        detail += " • " + std::string(spectrogramScaleName(settings.spectrogramScale));
+    }
+    if (width >= 66) {
+        detail += " • " + std::string(
+            spectrogramOrientationName(settings.spectrogramOrientation));
+    }
+    auto panel = window(
+        panelTitle(PanelId::Spectrogram, focused, detail),
+        std::move(plot));
+    return stylePanel(std::move(panel), focused) |
+        size(WIDTH, EQUAL, std::max(1, width)) |
+        size(HEIGHT, EQUAL, std::max(1, height));
+}
+
+ftxui::Color waveformBandColor(const float* summary, bool multiband) {
+    using namespace ftxui;
+    if (!multiband || summary == nullptr) return Color::CyanLight;
+    std::array<float, 3> weights = {
+        std::max(0.0f, summary[2]),
+        std::max(0.0f, summary[3]),
+        std::max(0.0f, summary[4]),
+    };
+    float total = weights[0] + weights[1] + weights[2];
+    if (total <= 1.0e-8f) return Color::CyanLight;
+    for (float& weight : weights) {
+        weight = std::pow(weight / total, 2.6f);
+    }
+    total = weights[0] + weights[1] + weights[2];
+    for (float& weight : weights) {
+        weight /= std::max(total, 1.0e-8f);
+    }
+    constexpr std::array<std::array<int, 3>, 3> colors = {{
+        {{255, 68, 68}},
+        {{68, 221, 68}},
+        {{68, 136, 255}},
+    }};
+    std::array<int, 3> mixed{};
+    for (size_t channel = 0; channel < mixed.size(); ++channel) {
+        for (size_t band = 0; band < weights.size(); ++band) {
+            mixed[channel] += static_cast<int>(std::lround(
+                weights[band] * static_cast<float>(colors[band][channel])));
+        }
+    }
+    return Color::RGB(
+        std::clamp(mixed[0], 0, 255),
+        std::clamp(mixed[1], 0, 255),
+        std::clamp(mixed[2], 0, 255));
+}
+
+ftxui::Element renderWaveformPanel(const DisplayFrame& frame,
+                                   int width,
+                                   int height,
+                                   bool focused,
+                                   const TuiSettings& settings) {
+    using namespace ftxui;
+    const bool stereo = settings.waveformMode == WaveformMode::Stereo;
+    auto plot = canvas([
+        history = frame.waveform.history,
+        stereo,
+        multiband = settings.waveformMultiband
+    ](Canvas& surface) {
+        const int canvasWidth = surface.width();
+        const int canvasHeight = surface.height();
+        if (canvasWidth <= 0 || canvasHeight <= 0) return;
+
+        const int laneCount = stereo ? 2 : 1;
+        for (int lane = 0; lane < laneCount; ++lane) {
+            const int centerY = static_cast<int>(std::lround(
+                (static_cast<float>(lane) + 0.5f) *
+                static_cast<float>(canvasHeight) / static_cast<float>(laneCount)));
+            surface.DrawPointLine(
+                0, centerY, canvasWidth - 1, centerY,
+                Color::RGB(55, 61, 64));
+        }
+        if (stereo) {
+            surface.DrawPointLine(
+                0, canvasHeight / 2, canvasWidth - 1, canvasHeight / 2,
+                Color::RGB(40, 45, 48));
+        }
+
+        if (history.columnCount == 0 ||
+            history.columnStride < Visualizer::WAVEFORM_STEREO_SUMMARY_STRIDE ||
+            history.values.size() < history.columnCount * history.columnStride) {
+            return;
+        }
+        const size_t visibleColumns = std::min(
+            history.columnCount, static_cast<size_t>(canvasWidth));
+        const size_t sourceStart = history.columnCount - visibleColumns;
+        const int destinationStart = canvasWidth - static_cast<int>(visibleColumns);
+        const float laneHeight = static_cast<float>(canvasHeight) /
+            static_cast<float>(laneCount);
+        const float radius = std::max(1.0f, laneHeight * 0.44f);
+        for (size_t column = 0; column < visibleColumns; ++column) {
+            const size_t sourceColumn = sourceStart + column;
+            const float* summary = history.values.data() +
+                sourceColumn * history.columnStride;
+            const int x = destinationStart + static_cast<int>(column);
+            for (int lane = 0; lane < laneCount; ++lane) {
+                const float* channel = summary +
+                    (lane == 0 ? 0 : Visualizer::WAVEFORM_MONO_SUMMARY_STRIDE);
+                const float minimum = std::clamp(channel[0], -1.0f, 1.0f);
+                const float maximum = std::clamp(channel[1], -1.0f, 1.0f);
+                const float centerY = (static_cast<float>(lane) + 0.5f) * laneHeight;
+                const int top = std::clamp(
+                    static_cast<int>(std::lround(centerY - maximum * radius)),
+                    0, canvasHeight - 1);
+                const int bottom = std::clamp(
+                    static_cast<int>(std::lround(centerY - minimum * radius)),
+                    0, canvasHeight - 1);
+                surface.DrawBlockLine(
+                    x, std::min(top, bottom), x, std::max(top, bottom),
+                    waveformBandColor(channel, multiband));
+            }
+        }
+    }) | flex;
+
+    std::string detail = waveformModeName(settings.waveformMode);
+    if (settings.waveformMultiband) detail += " • Multiband";
+    if (width >= 58) {
+        detail += " • " + std::to_string(settings.waveformScrollSpeed) + "×";
+    }
+    auto panel = window(
+        panelTitle(PanelId::Waveform, focused, detail),
+        std::move(plot));
+    return stylePanel(std::move(panel), focused) |
+        size(WIDTH, EQUAL, std::max(1, width)) |
+        size(HEIGHT, EQUAL, std::max(1, height));
+}
+
 const PanelRect* findPanelRect(const DashboardLayout& layout, PanelId panel) {
     const auto found = std::find_if(
         layout.panels.begin(), layout.panels.end(),
@@ -948,6 +1241,20 @@ ftxui::Element renderLayoutNode(const LayoutNode& node,
                     state.settings);
             case PanelId::LUFSMeter:
                 return renderLUFSMeterPanel(
+                    frame,
+                    rect->width,
+                    rect->height,
+                    focused,
+                    state.settings);
+            case PanelId::Spectrogram:
+                return renderSpectrogramPanel(
+                    frame,
+                    rect->width,
+                    rect->height,
+                    focused,
+                    state.settings);
+            case PanelId::Waveform:
+                return renderWaveformPanel(
                     frame,
                     rect->width,
                     rect->height,
@@ -1181,6 +1488,8 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             pipeline.setInputTrimDb(appliedSettings.inputTrimDb);
             pipeline.setSpectrumTilt(appliedSettings.spectrumTiltDbPerOctave);
             pipeline.setOscilloscopePitchLock(appliedSettings.oscilloscopePitchLock);
+            applySpectrogramSettings(pipeline, appliedSettings);
+            applyWaveformSettings(pipeline, appliedSettings);
 
             bool captureOverrun = false;
             auto nextFrameAt = std::chrono::steady_clock::now();
@@ -1204,6 +1513,20 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                         requestedSettings.spectrumTiltDbPerOctave);
                     pipeline.setOscilloscopePitchLock(
                         requestedSettings.oscilloscopePitchLock);
+                    const bool spectrogramAnalysisChanged =
+                        requestedSettings.spectrogramClarity != appliedSettings.spectrogramClarity ||
+                        requestedSettings.spectrogramScale != appliedSettings.spectrogramScale ||
+                        requestedSettings.spectrogramOrientation != appliedSettings.spectrogramOrientation ||
+                        requestedSettings.spectrogramScrollSpeed != appliedSettings.spectrogramScrollSpeed ||
+                        requestedSettings.spectrogramContrast != appliedSettings.spectrogramContrast ||
+                        requestedSettings.spectrogramTiltDbPerOctave != appliedSettings.spectrogramTiltDbPerOctave;
+                    if (spectrogramAnalysisChanged) {
+                        applySpectrogramSettings(pipeline, requestedSettings);
+                    }
+                    if (requestedSettings.waveformMode != appliedSettings.waveformMode ||
+                        requestedSettings.waveformScrollSpeed != appliedSettings.waveformScrollSpeed) {
+                        applyWaveformSettings(pipeline, requestedSettings);
+                    }
                     appliedSettings = requestedSettings;
                     if (refreshChanged) {
                         nextFrameAt = std::chrono::steady_clock::now();
@@ -1222,6 +1545,8 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     next.lufs = analyzed.lufs;
                     next.oscilloscope = std::move(analyzed.oscilloscope);
                     next.vectorscope = std::move(analyzed.vectorscope);
+                    next.spectrogram = std::move(analyzed.spectrogram);
+                    next.waveform = std::move(analyzed.waveform);
                     next.sampleRate = started.sampleRate;
                     next.backend = capture->backendName();
                     next.device = started.deviceLabel.empty() ? started.deviceId : started.deviceLabel;
@@ -1230,8 +1555,8 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     if (running.load() && !redrawQueued.exchange(true)) {
                         screen.PostEvent(Event::Custom);
                     }
-                    nextFrameAt = now + displayFrameInterval(
-                        appliedSettings.refreshRate);
+                    nextFrameAt = now +
+                        displayFrameInterval(appliedSettings.refreshRate);
                 }
                 std::this_thread::sleep_for(kCapturePollInterval);
             }
@@ -1427,6 +1752,8 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
         if (event == Event::Character('3')) selectedPanel = PanelId::Vectorscope;
         if (event == Event::Character('4')) selectedPanel = PanelId::VUMeter;
         if (event == Event::Character('5')) selectedPanel = PanelId::LUFSMeter;
+        if (event == Event::Character('6')) selectedPanel = PanelId::Spectrogram;
+        if (event == Event::Character('7')) selectedPanel = PanelId::Waveform;
         if (selectedPanel) {
             interfaceState.focusedPanel = *selectedPanel;
             if (interfaceState.expandedPanel) {

@@ -34,6 +34,7 @@ add_library(prism_tui_analysis STATIC
     src/dashboard_layout.cpp
     src/display_model.cpp
     src/meter_display_model.cpp
+    src/scrolling_history.cpp
     src/scope_plot_model.cpp
     src/spectrum_peak_model.cpp
     src/tui_settings.cpp
@@ -43,6 +44,8 @@ add_library(prism_tui_analysis STATIC
     ${PRISM_NATIVE_DIR}/multiband.cpp
     ${PRISM_NATIVE_DIR}/vumeter.cpp
     ${PRISM_NATIVE_DIR}/lufsmeter.cpp
+    ${PRISM_NATIVE_DIR}/spectrogram.cpp
+    ${PRISM_NATIVE_DIR}/waveform.cpp
     ${PRISM_NATIVE_DIR}/dsp_utils.cpp)
 target_include_directories(prism_tui_analysis PUBLIC
     src

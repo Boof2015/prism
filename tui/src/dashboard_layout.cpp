@@ -24,6 +24,10 @@ MinimumSize panelMinimumSize(PanelId panel) {
             return {30, 5};
         case PanelId::LUFSMeter:
             return {30, 7};
+        case PanelId::Spectrogram:
+            return {30, 8};
+        case PanelId::Waveform:
+            return {30, 7};
     }
     return {1, 1};
 }
@@ -155,6 +159,21 @@ LayoutPreset resolvePreset(LayoutPreset requested, int width, int height) {
 
 LayoutNode makeRoot(LayoutPreset preset, int width, int height) {
     if (preset == LayoutPreset::Columns) {
+        if (width >= 108 && height >= 34) {
+            return LayoutNode::split(SplitAxis::Columns, {
+                LayoutNode::split(SplitAxis::Rows, {
+                    LayoutNode::leaf(PanelId::Spectrum, 3),
+                    LayoutNode::leaf(PanelId::Oscilloscope, 2),
+                    LayoutNode::leaf(PanelId::Waveform, 2),
+                }, 3),
+                LayoutNode::split(SplitAxis::Rows, {
+                    LayoutNode::leaf(PanelId::Vectorscope, 2),
+                    LayoutNode::leaf(PanelId::VUMeter, 1),
+                    LayoutNode::leaf(PanelId::LUFSMeter, 1),
+                    LayoutNode::leaf(PanelId::Spectrogram, 2),
+                }, 1),
+            });
+        }
         return LayoutNode::split(SplitAxis::Columns, {
             LayoutNode::split(SplitAxis::Rows, {
                 LayoutNode::leaf(PanelId::Spectrum, 3),
@@ -253,6 +272,8 @@ std::vector<PanelId> panelOrder() {
         PanelId::Vectorscope,
         PanelId::VUMeter,
         PanelId::LUFSMeter,
+        PanelId::Spectrogram,
+        PanelId::Waveform,
     };
 }
 
