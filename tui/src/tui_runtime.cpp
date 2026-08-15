@@ -8,6 +8,7 @@
 #include "scope_plot_model.h"
 #include "snapshot_store.h"
 #include "tui_settings.h"
+#include "tui_theme.h"
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
@@ -147,6 +148,7 @@ struct InterfaceState {
     PanelId focusedPanel = PanelId::Spectrum;
     std::optional<PanelId> expandedPanel;
     TuiSettings settings;
+    TuiTheme theme = defaultTuiTheme();
     bool layoutEditing = false;
     LayoutOverlay layoutOverlay = LayoutOverlay::None;
     size_t layoutAddSelection = 0;
@@ -154,7 +156,7 @@ struct InterfaceState {
     bool settingsOpen = false;
     SettingsPage settingsPage = SettingsPage::Home;
     size_t settingsHomeSelection = 0;
-    std::array<size_t, 9> settingsSelections{};
+    std::array<size_t, 10> settingsSelections{};
     std::string settingsStatus;
     bool profilesOpen = false;
     ProfileOverlayMode profileMode = ProfileOverlayMode::Browse;
@@ -167,6 +169,39 @@ struct InterfaceState {
     bool profileStatusError = false;
     std::string pendingProfileId;
 };
+
+const TuiTheme* renderTheme = nullptr;
+
+const TuiTheme& palette() {
+    static const TuiTheme fallback = defaultTuiTheme();
+    return renderTheme == nullptr ? fallback : *renderTheme;
+}
+
+ftxui::Color terminalColor(const ThemeColor& color) {
+    return ftxui::Color::RGB(color.red, color.green, color.blue);
+}
+
+void fillCanvasBackground(ftxui::Canvas& surface,
+                          const ftxui::Color& background) {
+    // Canvas nodes replace their parent cells after FTXUI's bgcolor decorator
+    // has run. Seed every terminal cell in the canvas so scope backgrounds are
+    // retained instead of exposing the terminal's own background.
+    for (int y = 0; y < surface.height(); y += 4) {
+        for (int x = 0; x < surface.width(); x += 2) {
+            surface.Style(x, y, [background](ftxui::Cell& cell) {
+                cell.background_color = background;
+            });
+        }
+    }
+}
+
+ThemeColor scaleColor(const ThemeColor& color, float brightness) {
+    const auto channel = [brightness](uint8_t value) {
+        return static_cast<uint8_t>(std::lround(std::clamp(
+            static_cast<float>(value) * brightness, 0.0f, 255.0f)));
+    };
+    return {channel(color.red), channel(color.green), channel(color.blue)};
+}
 
 const TuiProfile* activeProfile(const InterfaceState& state) {
     const auto found = std::find_if(
@@ -360,13 +395,31 @@ ftxui::Element panelTitle(PanelId panel,
     label += " ";
     auto title = text(label);
     return focused
-        ? title | color(Color::CyanLight) | bold
-        : title | color(Color::GrayDark);
+        ? title | color(terminalColor(palette().accent)) | bold
+        : title | color(terminalColor(palette().muted));
 }
 
-ftxui::Element stylePanel(ftxui::Element content, bool focused) {
+ThemeColor panelBackground(PanelId panel) {
+    const auto& theme = palette();
+    switch (panel) {
+        case PanelId::Spectrum: return theme.spectrumBackground;
+        case PanelId::Oscilloscope: return theme.oscilloscopeBackground;
+        case PanelId::Vectorscope: return theme.vectorscopeBackground;
+        case PanelId::VUMeter: return theme.vuBackground;
+        case PanelId::LUFSMeter: return theme.lufsBackground;
+        case PanelId::Spectrogram: return theme.spectrogramBackground;
+        case PanelId::Waveform: return theme.waveformBackground;
+    }
+    return theme.background;
+}
+
+ftxui::Element stylePanel(ftxui::Element content,
+                          bool focused,
+                          PanelId panel) {
     using namespace ftxui;
-    return content | color(focused ? Color::GrayLight : Color::GrayDark);
+    return content |
+        color(terminalColor(focused ? palette().text : palette().muted)) |
+        bgcolor(terminalColor(panelBackground(panel)));
 }
 
 ftxui::Element renderSpectrumPanel(const DisplayFrame& frame,
@@ -393,12 +446,13 @@ ftxui::Element renderSpectrumPanel(const DisplayFrame& frame,
     Elements spectrumElements;
     spectrumElements.reserve(rows.size() + 1);
     for (const auto& row : rows) {
-        spectrumElements.push_back(text(row) | color(Color::Cyan));
+        spectrumElements.push_back(
+            text(row) | color(terminalColor(palette().spectrumLine)));
     }
     if (contentHeight > 1) {
         spectrumElements.push_back(
             text(buildFrequencyAxis(contentWidth, projectionOptions.maxFrequency)) |
-            color(Color::GrayDark));
+            color(terminalColor(palette().spectrumLabels)));
     }
 
     const std::string detail = settings.spectrumPeakReadout && frame.spectrumPeak
@@ -410,7 +464,7 @@ ftxui::Element renderSpectrumPanel(const DisplayFrame& frame,
             focused,
             detail),
         vbox(std::move(spectrumElements)));
-    return stylePanel(std::move(panel), focused) |
+    return stylePanel(std::move(panel), focused, PanelId::Spectrum) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
 }
@@ -434,17 +488,21 @@ ftxui::Element renderOscilloscopePanel(const DisplayFrame& frame,
     auto plot = canvas([
         samples = frame.oscilloscope.samples,
         signalPresent = frame.oscilloscope.signalPresent,
-        traceWeight = settings.oscilloscopeTraceWeight
+        traceWeight = settings.oscilloscopeTraceWeight,
+        guideColor = terminalColor(palette().oscilloscopeGuides),
+        lineColor = terminalColor(palette().oscilloscopeLine),
+        backgroundColor = terminalColor(palette().oscilloscopeBackground)
     ](Canvas& surface) {
         const int canvasWidth = surface.width();
         const int canvasHeight = surface.height();
         if (canvasWidth <= 0 || canvasHeight <= 0) {
             return;
         }
+        fillCanvasBackground(surface, backgroundColor);
 
         const int centerY = oscilloscopeZeroY(canvasHeight);
         surface.DrawPointLine(
-            0, centerY, canvasWidth - 1, centerY, Color::GrayDark);
+            0, centerY, canvasWidth - 1, centerY, guideColor);
         if (!signalPresent) {
             return;
         }
@@ -457,7 +515,7 @@ ftxui::Element renderOscilloscopePanel(const DisplayFrame& frame,
                     std::clamp(points[index - 1].y + thickness, 0, canvasHeight - 1),
                     points[index].x,
                     std::clamp(points[index].y + thickness, 0, canvasHeight - 1),
-                    Color::CyanLight);
+                    lineColor);
             }
         }
     }) | flex;
@@ -465,12 +523,15 @@ ftxui::Element renderOscilloscopePanel(const DisplayFrame& frame,
     auto panel = window(
         panelTitle(PanelId::Oscilloscope, focused, detail),
         std::move(plot));
-    return stylePanel(std::move(panel), focused) |
+    return stylePanel(std::move(panel), focused, PanelId::Oscilloscope) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
 }
 
-void drawVectorscopeGrid(ftxui::Canvas& surface, VectorscopeMode mode) {
+void drawVectorscopeGrid(ftxui::Canvas& surface,
+                         VectorscopeMode mode,
+                         const ftxui::Color& grid,
+                         const ftxui::Color& guide) {
     using ftxui::Color;
     const auto layout = getVectorscopePlotLayout(
         surface.width(), surface.height(), mode);
@@ -478,8 +539,6 @@ void drawVectorscopeGrid(ftxui::Canvas& surface, VectorscopeMode mode) {
         return;
     }
 
-    const auto grid = Color::RGB(76, 82, 88);
-    const auto guide = Color::RGB(48, 53, 58);
     const int left = layout.centerX - layout.radius;
     const int right = layout.centerX + layout.radius;
     const int top = layout.centerY - layout.radius;
@@ -577,16 +636,21 @@ ftxui::Element renderVectorscopePanel(const DisplayFrame& frame,
         pointCount = frame.vectorscope.pointCount,
         mode,
         showGuides = settings.vectorscopeGuides,
-        densityDivisor
+        densityDivisor,
+        gridColor = terminalColor(palette().vectorscopeGuides),
+        guideColor = terminalColor(palette().vectorscopeGuidesSecondary),
+        bandColors = palette().vectorscopeBands,
+        backgroundColor = terminalColor(palette().vectorscopeBackground)
     ](Canvas& surface) {
         const int canvasWidth = surface.width();
         const int canvasHeight = surface.height();
         if (canvasWidth <= 0 || canvasHeight <= 0) {
             return;
         }
+        fillCanvasBackground(surface, backgroundColor);
 
         if (showGuides) {
-            drawVectorscopeGrid(surface, mode);
+            drawVectorscopeGrid(surface, mode, gridColor, guideColor);
         }
 
         const auto bands = buildVectorscopePlot(
@@ -597,24 +661,14 @@ ftxui::Element renderVectorscopePanel(const DisplayFrame& frame,
             mode,
             densityDivisor);
         constexpr int ageBuckets = 8;
-        const std::array<std::array<int, 3>, 3> baseColors = {{
-            {{255, 68, 68}},
-            {{68, 221, 68}},
-            {{68, 136, 255}},
-        }};
         std::array<std::array<Color, ageBuckets>, 3> colors;
         for (size_t band = 0; band < colors.size(); ++band) {
             for (int bucket = 0; bucket < ageBuckets; ++bucket) {
                 const float brightness = 0.3f + 0.7f *
                     static_cast<float>(bucket + 1) /
                     static_cast<float>(ageBuckets);
-                colors[band][bucket] = Color::RGB(
-                    static_cast<uint8_t>(std::lround(
-                        static_cast<float>(baseColors[band][0]) * brightness)),
-                    static_cast<uint8_t>(std::lround(
-                        static_cast<float>(baseColors[band][1]) * brightness)),
-                    static_cast<uint8_t>(std::lround(
-                        static_cast<float>(baseColors[band][2]) * brightness)));
+                colors[band][bucket] = terminalColor(
+                    scaleColor(bandColors[band], brightness));
             }
         }
         for (int bucket = 0; bucket < ageBuckets; ++bucket) {
@@ -640,7 +694,7 @@ ftxui::Element renderVectorscopePanel(const DisplayFrame& frame,
             focused,
             vectorscopeModeName(mode)),
         std::move(plot));
-    return stylePanel(std::move(panel), focused) |
+    return stylePanel(std::move(panel), focused, PanelId::Vectorscope) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
 }
@@ -677,12 +731,14 @@ ftxui::Element renderClassicVuGauge(float levelDb,
         if (showPeak && column == peakColumn) {
             const bool hot = dbfsToClassicVu(peakDb, referenceDbfs) > 0.0f;
             cells.push_back(text("│") | color(
-                hot ? Color::RedLight : Color::CyanLight));
+                terminalColor(hot ? palette().vuClip : palette().vuPeak)));
         } else if (column < levelColumns) {
             cells.push_back(text("█") | color(
-                column >= hotColumn ? Color::Red : Color::Cyan));
+                terminalColor(column >= hotColumn
+                    ? palette().vuClip
+                    : palette().vuLevel)));
         } else {
-            cells.push_back(text("·") | color(Color::GrayDark));
+            cells.push_back(text("·") | color(terminalColor(palette().vuTrack)));
         }
     }
     return hbox(std::move(cells)) | size(WIDTH, EQUAL, resolvedColumns);
@@ -703,13 +759,13 @@ ftxui::Element renderCorrelationGauge(float correlation, int columns) {
         const bool negativeFill = clamped < 0.0f &&
             column < center && column >= center - extent;
         if (column == center) {
-            cells.push_back(text("│") | color(Color::GrayLight));
+            cells.push_back(text("│") | color(terminalColor(palette().vuScale)));
         } else if (positiveFill) {
-            cells.push_back(text("█") | color(Color::Cyan));
+            cells.push_back(text("█") | color(terminalColor(palette().vuLevel)));
         } else if (negativeFill) {
-            cells.push_back(text("█") | color(Color::Red));
+            cells.push_back(text("█") | color(terminalColor(palette().vuClip)));
         } else {
-            cells.push_back(text("·") | color(Color::GrayDark));
+            cells.push_back(text("·") | color(terminalColor(palette().vuTrack)));
         }
     }
     return hbox({
@@ -780,9 +836,11 @@ ftxui::Element renderVerticalVuBar(float levelDb,
     const bool peakHere = peak > bottom && peak <= top;
     const bool filled = level > bottom;
     const bool hot = bottom >= classicVuToNormalized(0.0f);
-    if (peakHere) return text("━━") | color(hot ? Color::RedLight : Color::CyanLight);
-    if (filled) return text("██") | color(hot ? Color::Red : Color::Cyan);
-    return text("··") | color(Color::GrayDark);
+    if (peakHere) return text("━━") | color(terminalColor(
+        hot ? palette().vuClip : palette().vuPeak));
+    if (filled) return text("██") | color(terminalColor(
+        hot ? palette().vuClip : palette().vuLevel));
+    return text("··") | color(terminalColor(palette().vuTrack));
 }
 
 ftxui::Element renderVerticalVu(const DisplayFrame& frame,
@@ -830,11 +888,21 @@ ftxui::Element renderNeedleVu(const DisplayFrame& frame,
         combinedDb,
         combinedPeak,
         combined,
-        referenceDbfs
+        referenceDbfs,
+        scaleColor = terminalColor(palette().vuScale),
+        trackColor = terminalColor(palette().vuTrack),
+        clipColor = terminalColor(palette().vuClip),
+        levelColor = terminalColor(palette().vuLevel),
+        leftColor = terminalColor(palette().vuNeedleLeft),
+        rightColor = terminalColor(palette().vuNeedleRight),
+        combinedColor = terminalColor(palette().vuNeedleCombined),
+        backgroundColor = terminalColor(palette().vuBackground)
     ](Canvas& surface) {
         constexpr float pi = 3.14159265358979323846f;
         const int canvasWidth = surface.width();
         const int canvasHeight = surface.height();
+        if (canvasWidth <= 0 || canvasHeight <= 0) return;
+        fillCanvasBackground(surface, backgroundColor);
         if (canvasWidth < 8 || canvasHeight < 8) return;
         const float startAngle = pi * 1.08f;
         const float endAngle = pi * 1.92f;
@@ -882,12 +950,12 @@ ftxui::Element renderNeedleVu(const DisplayFrame& frame,
                 peakInner.first, peakInner.second,
                 peakOuter.first, peakOuter.second,
                 dbfsToClassicVu(peak, referenceDbfs) > 0.0f
-                    ? Color::RedLight
+                    ? clipColor
                     : color);
         };
 
-        drawArc(startAngle, endAngle, 1.0f, Color::GrayDark);
-        if (!combined) drawArc(startAngle, endAngle, 0.78f, Color::RGB(54, 64, 68));
+        drawArc(startAngle, endAngle, 1.0f, trackColor);
+        if (!combined) drawArc(startAngle, endAngle, 0.78f, trackColor);
         const std::array<float, 9> ticks = {
             -20.0f, -10.0f, -5.0f, -3.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f};
         for (float vu : ticks) {
@@ -898,22 +966,23 @@ ftxui::Element renderNeedleVu(const DisplayFrame& frame,
             surface.DrawPointLine(
                 inner.first, inner.second,
                 outer.first, outer.second,
-                vu >= 0.0f ? Color::Red : Color::GrayLight);
+                vu >= 0.0f ? clipColor : scaleColor);
         }
         const float hotAngle = startAngle + classicVuToNormalized(0.0f) *
             (endAngle - startAngle);
-        drawArc(hotAngle, endAngle, 1.0f, Color::Red);
+        drawArc(hotAngle, endAngle, 1.0f, clipColor);
 
         if (combined) {
-            drawArc(startAngle, angleForDb(combinedDb), 1.0f, Color::Cyan);
-            drawNeedle(combinedDb, combinedPeak, 1.0f, Color::CyanLight);
+            drawArc(startAngle, angleForDb(combinedDb), 1.0f, levelColor);
+            drawNeedle(combinedDb, combinedPeak, 1.0f, combinedColor);
         } else {
-            drawArc(startAngle, angleForDb(left), 0.78f, Color::BlueLight);
-            drawArc(startAngle, angleForDb(right), 1.0f, Color::Cyan);
-            drawNeedle(left, leftPeak, 0.78f, Color::BlueLight);
-            drawNeedle(right, rightPeak, 1.0f, Color::CyanLight);
+            drawArc(startAngle, angleForDb(left), 0.78f, leftColor);
+            drawArc(startAngle, angleForDb(right), 1.0f, rightColor);
+            drawNeedle(left, leftPeak, 0.78f, leftColor);
+            drawNeedle(right, rightPeak, 1.0f, rightColor);
         }
-        surface.DrawPointCircleFilled(centerX, centerY, 1, Color::CyanLight);
+        surface.DrawPointCircleFilled(
+            centerX, centerY, 1, combined ? combinedColor : levelColor);
     }) | size(HEIGHT, EQUAL, plotRows) | flex;
 
     const std::string readings = combined
@@ -922,7 +991,7 @@ ftxui::Element renderNeedleVu(const DisplayFrame& frame,
             formatDb(frame.vu.vuRDb) + " dB R";
     return vbox({
         std::move(face),
-        text(readings) | center | color(Color::CyanLight),
+        text(readings) | center | color(terminalColor(palette().vuLabels)),
         renderCorrelationGauge(
             frame.vu.correlation, std::max(5, contentWidth - 8)) | center,
     });
@@ -959,7 +1028,7 @@ ftxui::Element renderVUMeterPanel(const DisplayFrame& frame,
     auto panel = window(
         panelTitle(PanelId::VUMeter, focused, detail),
         std::move(body));
-    return stylePanel(std::move(panel), focused) |
+    return stylePanel(std::move(panel), focused, PanelId::VUMeter) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
 }
@@ -999,13 +1068,13 @@ ftxui::Element renderLufsBarCell(float levelDb,
         return result;
     };
     if (targetRow) return text(repeat("─")) |
-        color(Color::RedLight);
+        color(terminalColor(palette().lufsTarget));
     if (peakHere) return text(repeat("━")) |
-        color(Color::CyanLight);
+        color(terminalColor(palette().lufsLabels));
     if (filled) return text(repeat("█")) |
-        color(Color::Cyan);
+        color(terminalColor(palette().lufsLevel));
     return text(repeat("·")) |
-        color(Color::GrayDark);
+        color(terminalColor(palette().lufsTrack));
 }
 
 ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
@@ -1033,14 +1102,14 @@ ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
     rows.push_back(hbox({
         text("    L R LUFS") | dim,
         filler(),
-        text("target -14") | color(Color::RedLight) | dim,
+        text("target -14") | color(terminalColor(palette().lufsTarget)),
     }));
     for (int row = 0; row < meterRows; ++row) {
         Elements parts;
         const auto gap = [&]() {
             auto element = text(row == targetRow ? "─" : " ");
             return row == targetRow
-                ? element | color(Color::RedLight)
+                ? element | color(terminalColor(palette().lufsTarget))
                 : element;
         };
         parts.push_back(text(lufsScaleLabel(row, meterRows)) | dim);
@@ -1060,7 +1129,8 @@ ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
         if (row == selectedRow) {
             parts.push_back(
                 text(" " + formatLufs(selected) + " LUFS ") |
-                bgcolor(Color::Cyan) | color(Color::Black) | bold);
+                bgcolor(terminalColor(palette().lufsLevel)) |
+                color(terminalColor(palette().lufsBackground)) | bold);
         }
         rows.push_back(hbox(std::move(parts)));
     }
@@ -1074,36 +1144,39 @@ ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
     auto panel = window(
         panelTitle(PanelId::LUFSMeter, focused, detail),
         vbox(std::move(rows)));
-    return stylePanel(std::move(panel), focused) |
+    return stylePanel(std::move(panel), focused, PanelId::LUFSMeter) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
 }
 
-ftxui::Color interpolateColor(const std::array<int, 3>& from,
-                              const std::array<int, 3>& to,
+ftxui::Color interpolateColor(const ThemeColor& from,
+                              const ThemeColor& to,
                               float amount) {
     const float t = std::clamp(amount, 0.0f, 1.0f);
     return ftxui::Color::RGB(
-        static_cast<uint8_t>(std::lround(from[0] + (to[0] - from[0]) * t)),
-        static_cast<uint8_t>(std::lround(from[1] + (to[1] - from[1]) * t)),
-        static_cast<uint8_t>(std::lround(from[2] + (to[2] - from[2]) * t)));
+        static_cast<uint8_t>(std::lround(from.red +
+            (static_cast<int>(to.red) - from.red) * t)),
+        static_cast<uint8_t>(std::lround(from.green +
+            (static_cast<int>(to.green) - from.green) * t)),
+        static_cast<uint8_t>(std::lround(from.blue +
+            (static_cast<int>(to.blue) - from.blue) * t)));
 }
 
 ftxui::Color spectrogramColor(float intensity, SpectrogramColorMode mode) {
     const float value = std::clamp(intensity, 0.0f, 1.0f);
     if (mode == SpectrogramColorMode::Mono) {
         return interpolateColor(
-            {{5, 12, 14}}, {{102, 255, 255}}, std::pow(value, 0.72f));
+            palette().spectrogramBackground,
+            palette().spectrogramMono,
+            std::pow(value, 0.72f));
     }
 
-    constexpr std::array<float, 6> stops = {0.0f, 0.16f, 0.36f, 0.58f, 0.78f, 1.0f};
-    constexpr std::array<std::array<int, 3>, 6> colors = {{
-        {{5, 3, 12}},
-        {{15, 7, 33}},
-        {{61, 11, 94}},
-        {{163, 26, 121}},
-        {{255, 82, 87}},
-        {{255, 241, 209}},
+    constexpr std::array<float, 4> stops = {0.0f, 0.20f, 0.62f, 1.0f};
+    const std::array<ThemeColor, 4> colors = {{
+        palette().spectrogramBackground,
+        palette().spectrogramHeat[0],
+        palette().spectrogramHeat[1],
+        palette().spectrogramHeat[2],
     }};
     size_t upper = 1;
     while (upper + 1 < stops.size() && value > stops[upper]) ++upper;
@@ -1276,8 +1349,10 @@ ftxui::Element renderSpectrogramPanel(const DisplayFrame& frame,
         history,
         colorMode = settings.spectrogramColor,
         clarity = settings.spectrogramClarity,
-        vertical
+        vertical,
+        backgroundColor = terminalColor(palette().spectrogramBackground)
     ](Canvas& surface) {
+        fillCanvasBackground(surface, backgroundColor);
         if (surface.width() <= 0 || surface.height() <= 0 ||
             history.columnCount == 0 ||
             history.columnStride == 0) {
@@ -1307,21 +1382,22 @@ ftxui::Element renderSpectrogramPanel(const DisplayFrame& frame,
     auto panel = window(
         panelTitle(PanelId::Spectrogram, focused, detail),
         std::move(plot));
-    return stylePanel(std::move(panel), focused) |
+    return stylePanel(std::move(panel), focused, PanelId::Spectrogram) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
 }
 
 ftxui::Color waveformBandColor(const float* summary, bool multiband) {
-    using namespace ftxui;
-    if (!multiband || summary == nullptr) return Color::CyanLight;
+    if (!multiband || summary == nullptr) {
+        return terminalColor(palette().waveformLine);
+    }
     std::array<float, 3> weights = {
         std::max(0.0f, summary[2]),
         std::max(0.0f, summary[3]),
         std::max(0.0f, summary[4]),
     };
     float total = weights[0] + weights[1] + weights[2];
-    if (total <= 1.0e-8f) return Color::CyanLight;
+    if (total <= 1.0e-8f) return terminalColor(palette().waveformLine);
     for (float& weight : weights) {
         weight = std::pow(weight / total, 2.6f);
     }
@@ -1329,19 +1405,18 @@ ftxui::Color waveformBandColor(const float* summary, bool multiband) {
     for (float& weight : weights) {
         weight /= std::max(total, 1.0e-8f);
     }
-    constexpr std::array<std::array<int, 3>, 3> colors = {{
-        {{255, 68, 68}},
-        {{68, 221, 68}},
-        {{68, 136, 255}},
-    }};
     std::array<int, 3> mixed{};
     for (size_t channel = 0; channel < mixed.size(); ++channel) {
         for (size_t band = 0; band < weights.size(); ++band) {
+            const auto& color = palette().waveformBands[band];
+            const uint8_t value = channel == 0
+                ? color.red
+                : channel == 1 ? color.green : color.blue;
             mixed[channel] += static_cast<int>(std::lround(
-                weights[band] * static_cast<float>(colors[band][channel])));
+                weights[band] * static_cast<float>(value)));
         }
     }
-    return Color::RGB(
+    return ftxui::Color::RGB(
         std::clamp(mixed[0], 0, 255),
         std::clamp(mixed[1], 0, 255),
         std::clamp(mixed[2], 0, 255));
@@ -1357,11 +1432,15 @@ ftxui::Element renderWaveformPanel(const DisplayFrame& frame,
     auto plot = canvas([
         history = frame.waveform.history,
         stereo,
-        multiband = settings.waveformMultiband
+        multiband = settings.waveformMultiband,
+        guideColor = terminalColor(palette().waveformGuides),
+        secondaryGuideColor = terminalColor(palette().waveformGuidesSecondary),
+        backgroundColor = terminalColor(palette().waveformBackground)
     ](Canvas& surface) {
         const int canvasWidth = surface.width();
         const int canvasHeight = surface.height();
         if (canvasWidth <= 0 || canvasHeight <= 0) return;
+        fillCanvasBackground(surface, backgroundColor);
 
         const int laneCount = stereo ? 2 : 1;
         for (int lane = 0; lane < laneCount; ++lane) {
@@ -1370,12 +1449,12 @@ ftxui::Element renderWaveformPanel(const DisplayFrame& frame,
                 static_cast<float>(canvasHeight) / static_cast<float>(laneCount)));
             surface.DrawPointLine(
                 0, centerY, canvasWidth - 1, centerY,
-                Color::RGB(55, 61, 64));
+                guideColor);
         }
         if (stereo) {
             surface.DrawPointLine(
                 0, canvasHeight / 2, canvasWidth - 1, canvasHeight / 2,
-                Color::RGB(40, 45, 48));
+                secondaryGuideColor);
         }
 
         if (history.columnCount == 0 ||
@@ -1422,7 +1501,7 @@ ftxui::Element renderWaveformPanel(const DisplayFrame& frame,
     auto panel = window(
         panelTitle(PanelId::Waveform, focused, detail),
         std::move(plot));
-    return stylePanel(std::move(panel), focused) |
+    return stylePanel(std::move(panel), focused, PanelId::Waveform) |
         size(WIDTH, EQUAL, std::max(1, width)) |
         size(HEIGHT, EQUAL, std::max(1, height));
 }
@@ -1538,18 +1617,20 @@ ftxui::Element renderHeader(const DashboardLayout& layout,
         : profileDirty ? " • Working *" : "";
     Element profileElement = width >= 90 && !profileLabel.empty()
         ? text(profileLabel) |
-            (profileDirty ? color(Color::YellowLight) : dim) |
+            (profileDirty ? color(terminalColor(palette().warning)) : dim) |
             size(WIDTH, LESS_THAN, 32)
         : emptyElement();
     return hbox({
-        text(" PRISM") | color(Color::CyanLight) | bold,
+        text(" PRISM") | color(terminalColor(palette().accent)) | bold,
         text(" TUI") | bold,
         std::move(profileElement),
         filler(),
         state.expandedPanel
-            ? text("FOCUS • " + panelName(*state.expandedPanel) + " ") | color(Color::CyanLight)
+            ? text("FOCUS • " + panelName(*state.expandedPanel) + " ") |
+                color(terminalColor(palette().accent))
             : state.layoutEditing
-                ? text(rackStatus.str() + " ") | color(Color::CyanLight) | bold
+                ? text(rackStatus.str() + " ") |
+                    color(terminalColor(palette().accent)) | bold
                 : text(rackStatus.str() + " ") | dim,
     });
 }
@@ -1565,12 +1646,14 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
         if (!state.layoutStatus.empty()) {
             if (width < 80) {
                 return text(" " + state.layoutStatus) |
-                    color(Color::CyanLight);
+                    color(terminalColor(palette().accent));
             }
             return hbox({
-                text(" " + state.layoutStatus) | color(Color::CyanLight) | bold,
+                text(" " + state.layoutStatus) |
+                    color(terminalColor(palette().accent)) | bold,
                 filler(),
-                text(essentialControls + " ") | color(Color::GrayLight),
+                text(essentialControls + " ") |
+                    color(terminalColor(palette().muted)),
             });
         }
         const std::string controls = width < 64
@@ -1580,7 +1663,8 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
                 : width < 160
                     ? "arrows select • Shift+arrows move • [ ] width • a add • x remove • ? help • Enter done"
                     : "arrows select • Shift+arrows move • [] width • ,. height • n new row • a add • x remove • ? help • Enter done";
-        return text(controls + " ") | color(Color::CyanLight) | align_right;
+        return text(controls + " ") |
+            color(terminalColor(palette().accent)) | align_right;
     }
     const std::string enterAction = state.expandedPanel ? "restore" : "expand";
     const std::string controls = minimal
@@ -1592,7 +1676,7 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
                 " • p profiles • s settings • l edit layout • r reset • q quit";
     auto status = text(makeCaptureStatus(frame, state.settings, compact)) | dim;
     if (frame.captureOverrun) {
-        status = status | color(Color::RedLight);
+        status = status | color(terminalColor(palette().danger));
     }
     return hbox({
         status,
@@ -1613,10 +1697,10 @@ ftxui::Element settingsRow(const std::string& label,
         text(" "),
     });
     if (selected) {
-        row = row | color(Color::CyanLight) | bold |
-            bgcolor(Color::RGB(24, 42, 46));
+        row = row | color(terminalColor(palette().accent)) | bold |
+            bgcolor(terminalColor(palette().selection));
     } else {
-        row = row | color(Color::GrayLight);
+        row = row | color(terminalColor(palette().text));
     }
     return row | size(HEIGHT, EQUAL, 1);
 }
@@ -1633,7 +1717,7 @@ ftxui::Element renderLayoutAddScope(const InterfaceState& state,
         rows.push_back(filler());
         rows.push_back(
             text("All seven scopes are already in the rack.") |
-            color(Color::GrayLight) | center);
+            color(terminalColor(palette().muted)) | center);
         rows.push_back(filler());
     } else {
         const size_t selected = std::min(
@@ -1661,7 +1745,7 @@ ftxui::Element renderLayoutAddScope(const InterfaceState& state,
     }
     auto content = vbox({
         text(" PRISM / EDIT LAYOUT / ADD SCOPE") |
-            color(Color::CyanLight) | bold,
+            color(terminalColor(palette().accent)) | bold,
         separator(),
         removed.empty()
             ? text("Nothing to restore.") | dim
@@ -1703,12 +1787,14 @@ ftxui::Element renderLayoutHelp(int width, int height) {
     }
 
     auto content = vbox({
-        text(" PRISM / EDIT LAYOUT / HELP") | color(Color::CyanLight) | bold,
+        text(" PRISM / EDIT LAYOUT / HELP") |
+            color(terminalColor(palette().accent)) | bold,
         separator(),
         vbox(std::move(instructions)),
         filler(),
         contentHeight >= 12
-            ? text("Changes are saved immediately.") | color(Color::GrayLight)
+            ? text("Changes are saved immediately.") |
+                color(terminalColor(palette().muted))
             : emptyElement(),
         separator(),
         text("? / Esc back") | dim,
@@ -1776,16 +1862,16 @@ ftxui::Element renderSettings(const InterfaceState& state,
             ? "↑↓ select  •  ←→ adjust  •  Enter  •  Esc back"
             : "↑↓ select  •  ←→ adjust  •  Enter toggle  •  Backspace default  •  Esc back";
     auto content = vbox({
-        text(breadcrumb) | color(Color::CyanLight) | bold,
+        text(breadcrumb) | color(terminalColor(palette().accent)) | bold,
         separator(),
         text(settingsPageDescription(state.settingsPage)) | dim,
         separatorEmpty(),
         vbox(std::move(rows)),
         filler(),
-        text(selectedDescription) | color(Color::GrayLight),
+        text(selectedDescription) | color(terminalColor(palette().muted)),
         state.settingsStatus.empty()
             ? emptyElement()
-            : text(state.settingsStatus) | color(Color::RedLight),
+            : text(state.settingsStatus) | color(terminalColor(palette().danger)),
         separator(),
         text(controls) | dim,
     }) | size(WIDTH, EQUAL, contentWidth) |
@@ -1826,17 +1912,19 @@ ftxui::Element renderProfiles(const InterfaceState& state,
             auto row = hbox({
                 text(isSelected ? " › " : "   "),
                 text(isActive ? "● " : "  ") |
-                    color(isActive ? Color::CyanLight : Color::GrayDark),
+                    color(terminalColor(
+                        isActive ? palette().accent : palette().muted)),
                 text(profile.name) | (isSelected ? bold : dim),
                 isActive && dirty
-                    ? text("  * modified") | color(Color::YellowLight)
+                    ? text("  * modified") |
+                        color(terminalColor(palette().warning))
                     : emptyElement(),
                 filler(),
                 profile.isDefault ? text("default ") | dim : emptyElement(),
             });
             rows.push_back(isSelected
-                ? std::move(row) | bgcolor(Color::RGB(18, 49, 52)) |
-                    color(Color::CyanLight)
+                ? std::move(row) | bgcolor(terminalColor(palette().selection)) |
+                    color(terminalColor(palette().accent))
                 : std::move(row));
         }
         const std::string activeDescription = active
@@ -1845,19 +1933,22 @@ ftxui::Element renderProfiles(const InterfaceState& state,
                 ? "Working setup is not saved to a profile."
                 : "No active profile.";
         auto content = vbox({
-            text(" PRISM / PROFILES") | color(Color::CyanLight) | bold,
+            text(" PRISM / PROFILES") |
+                color(terminalColor(palette().accent)) | bold,
             separator(),
             text(activeDescription) |
-                (dirty ? color(Color::YellowLight) : color(Color::GrayLight)),
+                (dirty
+                    ? color(terminalColor(palette().warning))
+                    : color(terminalColor(palette().text))),
             separatorEmpty(),
             vbox(std::move(rows)),
             filler(),
             state.profileStatus.empty()
                 ? emptyElement()
                 : text(state.profileStatus) | color(
-                    state.profileStatusError
-                        ? Color::RedLight
-                        : Color::CyanLight),
+                    terminalColor(state.profileStatusError
+                        ? palette().danger
+                        : palette().accent)),
             separator(),
             text(contentWidth < 60
                 ? "↑↓ select • Enter load • n save • Esc"
@@ -1884,7 +1975,7 @@ ftxui::Element renderProfiles(const InterfaceState& state,
             action = hbox({
                 text(" Name  ") | dim,
                 text(state.profileInput.empty() ? " " : state.profileInput) | bold,
-                text("▌") | color(Color::CyanLight),
+                text("▌") | color(terminalColor(palette().accent)),
             }) | border;
             break;
         case ProfileOverlayMode::Rename:
@@ -1895,7 +1986,7 @@ ftxui::Element renderProfiles(const InterfaceState& state,
             action = hbox({
                 text(" Name  ") | dim,
                 text(state.profileInput.empty() ? " " : state.profileInput) | bold,
-                text("▌") | color(Color::CyanLight),
+                text("▌") | color(terminalColor(palette().accent)),
             }) | border;
             break;
         case ProfileOverlayMode::ConfirmOverwrite:
@@ -1904,14 +1995,15 @@ ftxui::Element renderProfiles(const InterfaceState& state,
                 ? "Replace “" + active->name + "” with the current setup?"
                 : "There is no active profile to overwrite.";
             action = text("This changes the saved .prsmt file.") |
-                color(Color::YellowLight);
+                color(terminalColor(palette().warning));
             break;
         case ProfileOverlayMode::ConfirmDelete:
             title = " PRISM / PROFILES / DELETE";
             message = selected
                 ? "Delete “" + selected->name + "”?"
                 : "Choose a profile to delete.";
-            action = text("This cannot be undone.") | color(Color::RedLight);
+            action = text("This cannot be undone.") |
+                color(terminalColor(palette().danger));
             controls = "d confirm delete  •  Esc cancel";
             break;
         case ProfileOverlayMode::ConfirmLoad:
@@ -1923,22 +2015,22 @@ ftxui::Element renderProfiles(const InterfaceState& state,
                         text("w  save active profile, then load"),
                         text("n  save as a new profile, then load"),
                         text("d  discard changes and load"),
-                    }) | color(Color::YellowLight)
+                    }) | color(terminalColor(palette().warning))
                     : vbox({
                         text("n  save as a new profile, then load"),
                         text("d  discard changes and load"),
-                    }) | color(Color::YellowLight)
+                    }) | color(terminalColor(palette().warning))
                 : text(active
                     ? "w save & load  •  n save as & load  •  d discard & load"
                     : "n save as & load  •  d discard & load") |
-                    color(Color::YellowLight);
+                    color(terminalColor(palette().warning));
             controls = "Choose an action  •  Esc cancel";
             break;
         case ProfileOverlayMode::Browse:
             break;
     }
     auto content = vbox({
-        text(title) | color(Color::CyanLight) | bold,
+        text(title) | color(terminalColor(palette().accent)) | bold,
         separator(),
         text(message),
         separatorEmpty(),
@@ -1947,9 +2039,9 @@ ftxui::Element renderProfiles(const InterfaceState& state,
         state.profileStatus.empty()
             ? emptyElement()
             : text(state.profileStatus) | color(
-                state.profileStatusError
-                    ? Color::RedLight
-                    : Color::CyanLight),
+                terminalColor(state.profileStatusError
+                    ? palette().danger
+                    : palette().accent)),
         separator(),
         text(controls) | dim,
     }) | size(WIDTH, EQUAL, contentWidth) |
@@ -1969,7 +2061,8 @@ ftxui::Element renderFrame(const DisplayFrame& frame,
     if (layout.terminalTooSmall) {
         return vbox({
             filler(),
-            text("PRISM TUI") | bold | color(Color::CyanLight) | center,
+            text("PRISM TUI") | bold |
+                color(terminalColor(palette().accent)) | center,
             text("Terminal too small — need at least 44 × 12") | center,
             text("q quit") | dim | center,
             filler(),
@@ -2038,6 +2131,17 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     InterfaceState interfaceState;
     const std::filesystem::path settingsPath = defaultSettingsPath();
     interfaceState.settings = loadSettings(settingsPath);
+    IroThemeLibrary themeLibrary(defaultIroThemeDirectory());
+    std::string themeLoadWarning;
+    if (!themeLibrary.load(&themeLoadWarning)) {
+        interfaceState.settingsStatus = themeLoadWarning;
+    } else if (!themeLoadWarning.empty()) {
+        interfaceState.settingsStatus = themeLoadWarning;
+    }
+    if (!themeLibrary.find(interfaceState.settings.themeId)) {
+        interfaceState.settings.themeId = "Default";
+    }
+    interfaceState.theme = themeLibrary.resolve(interfaceState.settings.themeId);
     TuiProfileLibrary profileLibrary(
         defaultProfileDirectory(), defaultProfileStatePath());
     std::string profileLoadError;
@@ -2152,11 +2256,18 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     });
 
     auto renderer = Renderer([&]() {
+        renderTheme = &interfaceState.theme;
         return renderFrame(
-            frameStore.read(), screen.dimx(), screen.dimy(), interfaceState);
+            frameStore.read(), screen.dimx(), screen.dimy(), interfaceState) |
+            color(terminalColor(interfaceState.theme.text)) |
+            bgcolor(terminalColor(interfaceState.theme.background));
     });
     const auto persistSettings = [&]() {
         interfaceState.settings = normalizeSettings(interfaceState.settings);
+        if (!themeLibrary.find(interfaceState.settings.themeId)) {
+            interfaceState.settings.themeId = "Default";
+        }
+        interfaceState.theme = themeLibrary.resolve(interfaceState.settings.themeId);
         interfaceState.profileDirty =
             calculateUnsavedProfileChanges(interfaceState);
         settingsStore.publish(interfaceState.settings);
@@ -2864,10 +2975,18 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 (event == Event::ArrowLeft || event == Event::ArrowRight ||
                  event == Event::Return)) {
                 const int direction = event == Event::ArrowLeft ? -1 : 1;
-                if (adjustSetting(
-                        interfaceState.settings,
-                        pageSettings[selected].id,
-                        direction)) {
+                const SettingId setting = pageSettings[selected].id;
+                bool changed = false;
+                if (setting == SettingId::Theme) {
+                    const std::string nextTheme = themeLibrary.adjacentId(
+                        interfaceState.settings.themeId, direction);
+                    changed = nextTheme != interfaceState.settings.themeId;
+                    interfaceState.settings.themeId = nextTheme;
+                } else {
+                    changed = adjustSetting(
+                        interfaceState.settings, setting, direction);
+                }
+                if (changed) {
                     persistSettings();
                 }
                 return true;

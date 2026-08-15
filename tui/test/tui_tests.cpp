@@ -10,6 +10,7 @@
 #include "spectrum_peak_model.h"
 #include "system_audio_capture.h"
 #include "tui_settings.h"
+#include "tui_theme.h"
 
 #include <algorithm>
 #include <cmath>
@@ -360,6 +361,104 @@ void testSpectrumPeakModel() {
         "silent spectra should not produce a peak readout");
 }
 
+void testIroThemes() {
+    constexpr const char* content = R"iro(
+[Theme]
+format = prism-theme
+version = 2
+credit = Prism Test
+description = Native theme parser fixture
+
+[App]
+background = 10, 20, 30
+accent = 40, 50, 60
+text = 230, 240, 250
+text_muted = 100, 110, 120
+border = 70, 80, 90
+
+[Scopes]
+background = 11, 21, 31
+guides = 71, 81, 91
+
+[Spectrum]
+line = 1, 2, 3
+
+[Vectorscope]
+band_low = 4, 5, 6
+band_mid = 7, 8, 9
+band_high = 10, 11, 12
+
+[Spectrogram]
+heat_low = 13, 14, 15
+heat_mid = 16, 17, 18
+heat_high = 19, 20, 21
+
+[Waveform]
+line = 22, 23, 24
+)iro";
+
+    Prism::Tui::TuiTheme parsed;
+    std::string error;
+    require(Prism::Tui::parseIroThemeText(content, "Test Theme", parsed, &error),
+        "valid Prism v2 .iro themes should parse natively");
+    require(parsed.id == "Test Theme" && parsed.credit == "Prism Test" &&
+        parsed.background == Prism::Tui::ThemeColor{10, 20, 30} &&
+        parsed.spectrumLine == Prism::Tui::ThemeColor{1, 2, 3},
+        "theme metadata and primary scope colors should be retained");
+    require(parsed.oscilloscopeLine == Prism::Tui::ThemeColor{40, 50, 60} &&
+        parsed.oscilloscopeBackground == Prism::Tui::ThemeColor{11, 21, 31},
+        "missing scope colors should inherit the shared Prism theme defaults");
+    require(parsed.vectorscopeBands[2] == Prism::Tui::ThemeColor{10, 11, 12} &&
+        parsed.spectrogramHeat[1] == Prism::Tui::ThemeColor{16, 17, 18} &&
+        parsed.waveformLine == Prism::Tui::ThemeColor{22, 23, 24},
+        "scope-specific .iro palettes should map to their TUI renderers");
+
+    Prism::Tui::TuiTheme invalid;
+    require(!Prism::Tui::parseIroThemeText(
+            "[Theme]\nformat=prism-theme\nversion=99\n",
+            "Invalid", invalid, &error),
+        "unsupported .iro versions should be rejected");
+
+    const auto root = std::filesystem::temp_directory_path() /
+        "prism-tui-iro-theme-test";
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    std::filesystem::create_directories(root, ignored);
+    {
+        std::ofstream output(root / "Test Theme.iro");
+        output << content;
+    }
+    {
+        std::ofstream output(root / "Redshift.iro");
+        output << content;
+    }
+    {
+        std::ofstream output(root / "_TEMPLATE.iro");
+        output << content;
+    }
+    {
+        std::ofstream output(root / "Broken.iro");
+        output << "[Theme]\nformat=not-prism\nversion=2\n";
+    }
+
+    Prism::Tui::IroThemeLibrary library(root);
+    std::string warning;
+    require(library.load(&warning) && library.themes().size() == 7 &&
+        library.find("Default") && library.find("Alpha Centauri") &&
+        library.find("Chroma Blue") && library.find("Chroma Green") &&
+        library.find("Redshift") && library.find("Stanky Leg") &&
+        library.find("Test Theme"),
+        "theme discovery should include bundled themes, load .iro files, and ignore templates");
+    require(library.find("Redshift")->spectrumLine ==
+        Prism::Tui::ThemeColor{1, 2, 3},
+        "managed .iro files should override bundled themes with the same filename stem");
+    const std::string nextTheme = library.adjacentId("Default", 1);
+    require(!warning.empty() && nextTheme != "Default" &&
+        library.find(nextTheme) && library.adjacentId(nextTheme, -1) == "Default",
+        "theme discovery should report invalid files and cycle deterministically");
+    std::filesystem::remove_all(root, ignored);
+}
+
 void testSettingsModelAndPersistence() {
     Prism::Tui::TuiSettings settings;
     settings.inputTrimDb = 30.0f;
@@ -373,7 +472,8 @@ void testSettingsModelAndPersistence() {
         "settings normalization should enforce public ranges");
 
     const auto pages = Prism::Tui::settingsPages();
-    require(pages.size() == 8 &&
+    require(pages.size() == 9 &&
+        Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::Appearance).size() == 1 &&
         Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::General).size() == 2,
         "settings should expose shallow category pages");
     Prism::Tui::TuiSettings adjusted;
@@ -432,6 +532,7 @@ void testSettingsModelAndPersistence() {
         "settings persistence should include an edited rack layout");
     adjusted.vectorscopeMode = Prism::Tui::VectorscopeMode::PolarBipolar;
     adjusted.vectorscopeDetail = Prism::Tui::VectorscopeDetail::Maximum;
+    adjusted.themeId = "Test Theme";
     std::string error;
     require(Prism::Tui::saveSettings(adjusted, settingsPath, &error),
         "settings should persist to a TUI-specific configuration file");
@@ -458,6 +559,7 @@ void testProfileLibrary() {
         "the profile library should always provide a default profile");
 
     Prism::Tui::TuiSettings settings;
+    settings.themeId = "Test Theme";
     settings.inputTrimDb = 4.0f;
     settings.refreshRate = 30;
     settings.spectrogramContrast = 1.7f;
@@ -483,8 +585,9 @@ void testProfileLibrary() {
         if (text.find("id=" + profileId) == std::string::npos) continue;
         foundProfileFile = true;
         require(text.find("format=prism-tui-profile") != std::string::npos &&
+            text.find("theme_id=Test Theme") != std::string::npos &&
             text.find("refresh_rate=") == std::string::npos,
-            ".prsmt files should be versioned and exclude global refresh settings");
+            ".prsmt files should retain themes while excluding global refresh settings");
     }
     require(foundProfileFile,
         "saved TUI profiles should use the .prsmt extension");
@@ -846,6 +949,7 @@ int main() {
     testProjectionAndLayout();
     testMeterDisplayModels();
     testSpectrumPeakModel();
+    testIroThemes();
     testSettingsModelAndPersistence();
     testProfileLibrary();
     testScopePlotModels();

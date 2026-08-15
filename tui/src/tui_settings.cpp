@@ -13,6 +13,10 @@
 namespace Prism::Tui {
 namespace {
 
+const std::vector<SettingDescriptor> kAppearanceSettings = {
+    {SettingId::Theme, "Theme", "Uses Prism .iro files from the shared Prism Themes folder."},
+};
+
 const std::vector<SettingDescriptor> kGeneralSettings = {
     {SettingId::InputTrim, "Input trim", "Applies gain before every analyzer."},
     {SettingId::RefreshRate, "Refresh rate", "Controls how often the terminal display is published."},
@@ -295,6 +299,11 @@ const char* waveformModeName(WaveformMode mode) {
 }
 
 TuiSettings normalizeSettings(TuiSettings settings) {
+    settings.themeId.erase(std::remove_if(
+        settings.themeId.begin(), settings.themeId.end(), [](char character) {
+            return character == '\n' || character == '\r';
+        }), settings.themeId.end());
+    if (settings.themeId.empty()) settings.themeId = "Default";
     settings.inputTrimDb = std::clamp(snap(settings.inputTrimDb, 0.5f), -12.0f, 12.0f);
     settings.refreshRate = settings.refreshRate <= 30 ? 30 : 60;
     settings.rackLayout = normalizeRackLayout(std::move(settings.rackLayout));
@@ -317,7 +326,8 @@ TuiSettings normalizeSettings(TuiSettings settings) {
 }
 
 bool operator==(const TuiSettings& left, const TuiSettings& right) {
-    return left.inputTrimDb == right.inputTrimDb &&
+    return left.themeId == right.themeId &&
+        left.inputTrimDb == right.inputTrimDb &&
         left.refreshRate == right.refreshRate &&
         left.rackLayout == right.rackLayout &&
         left.spectrumPeakReadout == right.spectrumPeakReadout &&
@@ -351,6 +361,7 @@ bool operator!=(const TuiSettings& left, const TuiSettings& right) {
 
 std::vector<SettingsPage> settingsPages() {
     return {
+        SettingsPage::Appearance,
         SettingsPage::General,
         SettingsPage::Spectrum,
         SettingsPage::Oscilloscope,
@@ -365,6 +376,7 @@ std::vector<SettingsPage> settingsPages() {
 const char* settingsPageName(SettingsPage page) {
     switch (page) {
         case SettingsPage::Home: return "Settings";
+        case SettingsPage::Appearance: return "Appearance";
         case SettingsPage::General: return "General";
         case SettingsPage::Spectrum: return "Spectrum";
         case SettingsPage::Oscilloscope: return "Oscilloscope";
@@ -380,6 +392,7 @@ const char* settingsPageName(SettingsPage page) {
 const char* settingsPageDescription(SettingsPage page) {
     switch (page) {
         case SettingsPage::Home: return "Choose a section.";
+        case SettingsPage::Appearance: return "Shared Prism .iro colors for the terminal dashboard.";
         case SettingsPage::General: return "Audio input and dashboard behavior.";
         case SettingsPage::Spectrum: return "Frequency analysis and readouts.";
         case SettingsPage::Oscilloscope: return "Waveform stabilization and presentation.";
@@ -394,6 +407,7 @@ const char* settingsPageDescription(SettingsPage page) {
 
 const std::vector<SettingDescriptor>& settingsForPage(SettingsPage page) {
     switch (page) {
+        case SettingsPage::Appearance: return kAppearanceSettings;
         case SettingsPage::General: return kGeneralSettings;
         case SettingsPage::Spectrum: return kSpectrumSettings;
         case SettingsPage::Oscilloscope: return kOscilloscopeSettings;
@@ -410,6 +424,8 @@ const std::vector<SettingDescriptor>& settingsForPage(SettingsPage page) {
 
 std::string settingValue(const TuiSettings& settings, SettingId setting) {
     switch (setting) {
+        case SettingId::Theme:
+            return settings.themeId;
         case SettingId::InputTrim:
             return (settings.inputTrimDb > 0.0f ? "+" : "") +
                 trimFloat(settings.inputTrimDb, 1) + " dB";
@@ -481,6 +497,8 @@ bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
     if (direction == 0) return false;
     const TuiSettings before = settings;
     switch (setting) {
+        case SettingId::Theme:
+            return false;
         case SettingId::InputTrim:
             settings.inputTrimDb += direction > 0 ? 0.5f : -0.5f;
             break;
@@ -604,6 +622,7 @@ bool resetSetting(TuiSettings& settings, SettingId setting) {
     const TuiSettings defaults;
     const TuiSettings before = settings;
     switch (setting) {
+        case SettingId::Theme: settings.themeId = defaults.themeId; break;
         case SettingId::InputTrim: settings.inputTrimDb = defaults.inputTrimDb; break;
         case SettingId::RefreshRate: settings.refreshRate = defaults.refreshRate; break;
         case SettingId::SpectrumPeakReadout: settings.spectrumPeakReadout = defaults.spectrumPeakReadout; break;
@@ -673,7 +692,8 @@ TuiSettings parseSettingsText(const std::string& text,
         if (separator == std::string::npos) continue;
         const std::string key = line.substr(0, separator);
         const std::string value = line.substr(separator + 1);
-        if (key == "input_trim_db") settings.inputTrimDb = parseFloat(value, settings.inputTrimDb);
+        if (key == "theme_id") settings.themeId = value;
+        else if (key == "input_trim_db") settings.inputTrimDb = parseFloat(value, settings.inputTrimDb);
         else if (key == "refresh_rate") settings.refreshRate = parseInt(value, settings.refreshRate);
         else if (key == "rack_layout") settings.rackLayout = parseRackLayout(value, settings.rackLayout);
         else if (key == "spectrum_peak") settings.spectrumPeakReadout = parseBool(value, settings.spectrumPeakReadout);
@@ -707,7 +727,8 @@ std::string serializeSettingsText(const TuiSettings& rawSettings,
                                   bool includeRefreshRate) {
     const TuiSettings settings = normalizeSettings(rawSettings);
     std::ostringstream output;
-    output << "input_trim_db=" << settings.inputTrimDb << '\n';
+    output << "theme_id=" << settings.themeId << '\n'
+           << "input_trim_db=" << settings.inputTrimDb << '\n';
     if (includeRefreshRate) {
         output << "refresh_rate=" << settings.refreshRate << '\n';
     }

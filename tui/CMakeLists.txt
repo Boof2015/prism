@@ -38,6 +38,7 @@ add_library(prism_tui_analysis STATIC
     src/scrolling_history.cpp
     src/scope_plot_model.cpp
     src/spectrum_peak_model.cpp
+    src/tui_theme.cpp
     src/tui_settings.cpp
     ${PRISM_NATIVE_DIR}/spectrum.cpp
     ${PRISM_NATIVE_DIR}/oscilloscope.cpp
@@ -52,6 +53,9 @@ target_include_directories(prism_tui_analysis PUBLIC
     src
     ${PRISM_NATIVE_DIR})
 target_link_libraries(prism_tui_analysis PUBLIC Threads::Threads)
+if(WIN32)
+    target_link_libraries(prism_tui_analysis PUBLIC shell32 ole32)
+endif()
 
 add_library(prism_system_capture STATIC)
 target_include_directories(prism_system_capture PUBLIC ${PRISM_NATIVE_DIR})

@@ -12,6 +12,7 @@ namespace Prism::Tui {
 
 enum class SettingsPage {
     Home,
+    Appearance,
     General,
     Spectrum,
     Oscilloscope,
@@ -23,6 +24,7 @@ enum class SettingsPage {
 };
 
 enum class SettingId {
+    Theme,
     InputTrim,
     RefreshRate,
     SpectrumPeakReadout,
@@ -63,6 +65,7 @@ enum class SpectrogramOrientation { Horizontal, Vertical };
 enum class WaveformMode { Mono, Stereo };
 
 struct TuiSettings {
+    std::string themeId = "Default";
     float inputTrimDb = 0.0f;
     int refreshRate = 60;
     RackLayout rackLayout = defaultRackLayout();
