@@ -1012,6 +1012,136 @@ float maxHistoryValue(const ScrollingHistoryFrame& history,
     return result;
 }
 
+float spectrogramPixelValue(const ScrollingHistoryFrame& history,
+                            size_t column,
+                            int frequencyPixel,
+                            int frequencyPixels) {
+    if (frequencyPixels <= 0 || frequencyPixel < 0 ||
+        frequencyPixel >= frequencyPixels) {
+        return 0.0f;
+    }
+    const float normalizedStart = static_cast<float>(frequencyPixel) /
+        static_cast<float>(frequencyPixels);
+    const float normalizedEnd = static_cast<float>(frequencyPixel + 1) /
+        static_cast<float>(frequencyPixels);
+    const size_t firstRow = static_cast<size_t>(std::floor(
+        normalizedStart * static_cast<float>(history.columnStride)));
+    const size_t lastRow = static_cast<size_t>(std::ceil(
+        normalizedEnd * static_cast<float>(history.columnStride)));
+    const float value = maxHistoryValue(history, column, firstRow, lastRow);
+    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+}
+
+void drawClassicSpectrogram(ftxui::Canvas& surface,
+                            const ScrollingHistoryFrame& history,
+                            SpectrogramColorMode colorMode,
+                            bool vertical) {
+    const int cellColumns = surface.width() / 2;
+    const int cellRows = surface.height() / 4;
+    if (cellColumns <= 0 || cellRows <= 0) return;
+
+    const int timeCells = vertical ? cellRows : cellColumns;
+    const int frequencyCells = vertical ? cellColumns : cellRows;
+    const size_t visibleColumns = std::min(
+        history.columnCount, static_cast<size_t>(timeCells));
+    const size_t sourceStart = history.columnCount - visibleColumns;
+    const int destinationStart = timeCells - static_cast<int>(visibleColumns);
+    for (size_t time = 0; time < visibleColumns; ++time) {
+        const size_t sourceColumn = sourceStart + time;
+        const int timeCell = destinationStart + static_cast<int>(time);
+        for (int frequencyCell = 0; frequencyCell < frequencyCells;
+             ++frequencyCell) {
+            const float intensity = spectrogramPixelValue(
+                history, sourceColumn, frequencyCell, frequencyCells);
+            if (intensity < 0.008f) continue;
+
+            const int cellX = vertical ? frequencyCell : timeCell;
+            const int cellY = vertical ? timeCell : frequencyCell;
+            const ftxui::Color color = spectrogramColor(intensity, colorMode);
+            for (int dx = 0; dx < 2; ++dx) {
+                surface.DrawBlock(cellX * 2 + dx, cellY * 4, true, color);
+                surface.DrawBlock(cellX * 2 + dx, cellY * 4 + 2, true, color);
+            }
+        }
+    }
+}
+
+void drawDetailedSpectrogram(ftxui::Canvas& surface,
+                             const ScrollingHistoryFrame& history,
+                             SpectrogramColorMode colorMode,
+                             SpectrogramClarity clarity,
+                             bool vertical) {
+    const int cellColumns = surface.width() / 2;
+    const int cellRows = surface.height() / 4;
+    if (cellColumns <= 0 || cellRows <= 0) return;
+
+    // A terminal cell contains eight Braille dots. Treat those as a 2x4
+    // spectrogram raster instead of collapsing the analyzer output to one
+    // solid character. The ordered thresholds give quieter energy texture
+    // without hiding the strongest narrow feature in each cell.
+    constexpr std::array<float, 8> orderedThresholds = {
+        1.0f / 9.0f, 5.0f / 9.0f,
+        7.0f / 9.0f, 3.0f / 9.0f,
+        2.0f / 9.0f, 6.0f / 9.0f,
+        8.0f / 9.0f, 4.0f / 9.0f,
+    };
+    const float thresholdScale = clarity == SpectrogramClarity::Sharp
+        ? 0.82f
+        : 1.0f;
+    const int timePixels = vertical ? surface.height() : surface.width();
+    const int frequencyPixels = vertical ? surface.width() : surface.height();
+    const size_t visibleColumns = std::min(
+        history.columnCount, static_cast<size_t>(timePixels));
+    const size_t sourceStart = history.columnCount - visibleColumns;
+    const int destinationStart = timePixels - static_cast<int>(visibleColumns);
+
+    for (int cellY = 0; cellY < cellRows; ++cellY) {
+        for (int cellX = 0; cellX < cellColumns; ++cellX) {
+            std::array<float, 8> intensities{};
+            float strongest = 0.0f;
+            size_t strongestIndex = 0;
+            for (int dotY = 0; dotY < 4; ++dotY) {
+                for (int dotX = 0; dotX < 2; ++dotX) {
+                    const size_t index = static_cast<size_t>(dotY * 2 + dotX);
+                    const int timePixel = vertical
+                        ? cellY * 4 + dotY
+                        : cellX * 2 + dotX;
+                    const int frequencyPixel = vertical
+                        ? cellX * 2 + dotX
+                        : cellY * 4 + dotY;
+                    if (timePixel < destinationStart) continue;
+                    const size_t sourceColumn = sourceStart +
+                        static_cast<size_t>(timePixel - destinationStart);
+                    intensities[index] = spectrogramPixelValue(
+                        history, sourceColumn, frequencyPixel, frequencyPixels);
+                    if (intensities[index] > strongest) {
+                        strongest = intensities[index];
+                        strongestIndex = index;
+                    }
+                }
+            }
+            if (strongest < 0.008f) continue;
+
+            const ftxui::Color color = spectrogramColor(strongest, colorMode);
+            for (int dotY = 0; dotY < 4; ++dotY) {
+                for (int dotX = 0; dotX < 2; ++dotX) {
+                    const size_t index = static_cast<size_t>(dotY * 2 + dotX);
+                    const bool strongestDot = index == strongestIndex;
+                    const bool visible = intensities[index] >=
+                        orderedThresholds[index] * thresholdScale;
+                    if (strongestDot || visible) {
+                        surface.DrawPoint(
+                            cellX * 2 + dotX,
+                            cellY * 4 + dotY,
+                            true,
+                            color);
+                    }
+                }
+            }
+        }
+    }
+}
+
 ftxui::Element renderSpectrogramPanel(const DisplayFrame& frame,
                                       int width,
                                       int height,
@@ -1025,51 +1155,28 @@ ftxui::Element renderSpectrogramPanel(const DisplayFrame& frame,
     auto plot = canvas([
         history,
         colorMode = settings.spectrogramColor,
+        clarity = settings.spectrogramClarity,
         vertical
     ](Canvas& surface) {
-        const int cellColumns = surface.width() / 2;
-        const int cellRows = surface.height() / 4;
-        if (cellColumns <= 0 || cellRows <= 0 || history.columnCount == 0 ||
+        if (surface.width() <= 0 || surface.height() <= 0 ||
+            history.columnCount == 0 ||
             history.columnStride == 0) {
             return;
         }
-
-        const int timeCells = vertical ? cellRows : cellColumns;
-        const int frequencyCells = vertical ? cellColumns : cellRows;
-        const size_t visibleColumns = std::min(
-            history.columnCount, static_cast<size_t>(timeCells));
-        const size_t sourceStart = history.columnCount - visibleColumns;
-        const int destinationStart = timeCells - static_cast<int>(visibleColumns);
-        for (size_t time = 0; time < visibleColumns; ++time) {
-            const size_t sourceColumn = sourceStart + time;
-            const int timeCell = destinationStart + static_cast<int>(time);
-            for (int frequencyCell = 0; frequencyCell < frequencyCells; ++frequencyCell) {
-                const float normalizedStart = static_cast<float>(frequencyCell) /
-                    static_cast<float>(frequencyCells);
-                const float normalizedEnd = static_cast<float>(frequencyCell + 1) /
-                    static_cast<float>(frequencyCells);
-                const size_t firstRow = static_cast<size_t>(std::floor(
-                    normalizedStart * static_cast<float>(history.columnStride)));
-                const size_t lastRow = static_cast<size_t>(std::ceil(
-                    normalizedEnd * static_cast<float>(history.columnStride)));
-                const float intensity = maxHistoryValue(
-                    history, sourceColumn, firstRow, lastRow);
-                if (!std::isfinite(intensity) || intensity < 0.008f) continue;
-
-                const int cellX = vertical ? frequencyCell : timeCell;
-                const int cellY = vertical
-                    ? timeCell
-                    : frequencyCell;
-                const Color color = spectrogramColor(intensity, colorMode);
-                for (int dx = 0; dx < 2; ++dx) {
-                    surface.DrawBlock(cellX * 2 + dx, cellY * 4, true, color);
-                    surface.DrawBlock(cellX * 2 + dx, cellY * 4 + 2, true, color);
-                }
-            }
+        if (clarity == SpectrogramClarity::Classic) {
+            drawClassicSpectrogram(surface, history, colorMode, vertical);
+        } else {
+            drawDetailedSpectrogram(
+                surface, history, colorMode, clarity, vertical);
         }
     }) | flex;
 
-    std::string detail = std::string(spectrogramColorName(settings.spectrogramColor));
+    std::string detail = std::string(
+        spectrogramClarityName(settings.spectrogramClarity));
+    if (width >= 42) {
+        detail += " • " + std::string(
+            spectrogramColorName(settings.spectrogramColor));
+    }
     if (width >= 48) {
         detail += " • " + std::string(spectrogramScaleName(settings.spectrogramScale));
     }
