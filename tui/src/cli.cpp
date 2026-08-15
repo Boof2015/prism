@@ -22,20 +22,20 @@ ParseResult parseArguments(const std::vector<std::string>& arguments) {
             result.options.command = Command::Version;
             continue;
         }
-        if (argument == "--list-devices") {
+        if (argument == "--list-devices" || argument == "--list-outputs") {
             if (arguments.size() != 1) {
-                return {false, {}, "--list-devices cannot be combined with other arguments."};
+                return {false, {}, argument + " cannot be combined with other arguments."};
             }
             result.options.command = Command::ListDevices;
             continue;
         }
-        if (argument == "--device") {
+        if (argument == "--device" || argument == "--output") {
             if (index + 1 >= arguments.size() || arguments[index + 1].empty() ||
                 arguments[index + 1][0] == '-') {
-                return {false, {}, "--device requires a non-empty device ID."};
+                return {false, {}, argument + " requires a non-empty output ID."};
             }
             if (!result.options.deviceId.empty()) {
-                return {false, {}, "--device may only be specified once."};
+                return {false, {}, "An output may only be specified once."};
             }
             result.options.deviceId = arguments[++index];
             continue;
@@ -48,18 +48,21 @@ ParseResult parseArguments(const std::vector<std::string>& arguments) {
 
 std::string usageText() {
     return
-        "Usage: prism-tui [--device <id>]\n"
-        "       prism-tui --list-devices\n"
+        "Usage: prism-tui [--output <id>]\n"
+        "       prism-tui --list-outputs\n"
         "       prism-tui --help\n"
         "       prism-tui --version\n\n"
         "Options:\n"
-        "  --device <id>     Capture a specific system output device.\n"
-        "  --list-devices    List available system output devices.\n"
+        "  --output <id>     Capture a specific system output device.\n"
+        "  --list-outputs    List available system output devices.\n"
+        "  --device <id>     Alias for --output.\n"
+        "  --list-devices    Alias for --list-outputs.\n"
         "  -h, --help        Show this help.\n"
         "  -V, --version     Show the Prism TUI version.\n\n"
         "Controls:\n"
         "  Tab / Shift-Tab   Focus the next or previous panel.\n"
         "  Enter             Expand the focused panel or restore the dashboard.\n"
+        "  o                 Choose the system output.\n"
         "  p                 Open profiles to load, save, or overwrite setups.\n"
         "  s                 Open settings.\n"
         "  l                 Edit the scope rack layout.\n"

@@ -34,6 +34,7 @@ add_library(prism_tui_analysis STATIC
     src/dashboard_layout.cpp
     src/display_model.cpp
     src/meter_display_model.cpp
+    src/output_selection.cpp
     src/profile_library.cpp
     src/scrolling_history.cpp
     src/scope_plot_model.cpp

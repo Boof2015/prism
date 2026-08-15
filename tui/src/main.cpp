@@ -58,6 +58,7 @@ int run(const std::vector<std::string>& arguments) {
         return 1;
     }
 
+    const auto outputDevices = capture->listOutputDevices();
     Prism::Capture::StartResult started;
     std::string errorMessage;
     if (!capture->start(parsed.options.deviceId, &started, &errorMessage)) {
@@ -67,7 +68,11 @@ int run(const std::vector<std::string>& arguments) {
         return 1;
     }
 
-    return Prism::Tui::runInteractive(std::move(capture), started);
+    return Prism::Tui::runInteractive(
+        std::move(capture),
+        started,
+        parsed.options.deviceId,
+        outputDevices);
 }
 
 }  // namespace

@@ -3,6 +3,7 @@
 #include "dashboard_layout.h"
 #include "display_model.h"
 #include "meter_display_model.h"
+#include "output_selection.h"
 #include "profile_library.h"
 #include "scope_plot_model.h"
 #include "scrolling_history.h"
@@ -70,16 +71,36 @@ class FakeCapture final : public Prism::Capture::SystemAudioCapture {
 public:
     Prism::Capture::Support getSupport() const override { return {true, {}}; }
     std::vector<Prism::Capture::OutputDevice> listOutputDevices() override {
-        return {{"fake", "Fake Output", 48000.0, 2, true}};
+        return {
+            {"fake", "Fake Output", 48000.0, 2, true},
+            {"alternate", "Alternate Output", 44100.0, 2, false},
+        };
     }
     bool start(const std::string& requested,
                Prism::Capture::StartResult* result,
-               std::string*) override {
-        if (!requested.empty() && requested != "fake") return false;
-        if (result) *result = {48000.0, 2, "fake", "Fake Output"};
+               std::string* error) override {
+        startRequests.push_back(requested);
+        const std::string selected = requested.empty() ? "fake" : requested;
+        if (failAllStarts || selected == failedDeviceId ||
+            (selected != "fake" && selected != "alternate")) {
+            if (error) *error = "Fake output failed to start.";
+            return false;
+        }
+        stopped = false;
+        activeDeviceId = selected;
+        if (result) {
+            *result = selected == "alternate"
+                ? Prism::Capture::StartResult{
+                    44100.0, 2, "alternate", "Alternate Output"}
+                : Prism::Capture::StartResult{
+                    48000.0, 2, "fake", "Fake Output"};
+        }
         return true;
     }
-    void stop() override { stopped = true; }
+    void stop() override {
+        stopped = true;
+        ++stopCount;
+    }
     Prism::Capture::DrainResult drain(size_t maxChunks) override {
         Prism::Capture::DrainResult result;
         const size_t count = std::min(maxChunks, chunks.size());
@@ -98,6 +119,11 @@ public:
     std::deque<Prism::Capture::AudioChunk> chunks;
     uint64_t nextOverwriteCount = 0;
     bool stopped = false;
+    bool failAllStarts = false;
+    std::string failedDeviceId;
+    std::string activeDeviceId;
+    std::vector<std::string> startRequests;
+    size_t stopCount = 0;
 };
 
 void testCli() {
@@ -107,12 +133,19 @@ void testCli() {
     require(parsed.options.deviceId == "device-id", "device ID should be retained");
     require(Prism::Tui::parseArguments({"--list-devices"}).options.command ==
         Prism::Tui::Command::ListDevices, "list command should parse");
+    auto output = Prism::Tui::parseArguments({"--output", "output-id"});
+    require(output.ok && output.options.deviceId == "output-id",
+        "the output alias should retain its output ID");
+    require(Prism::Tui::parseArguments({"--list-outputs"}).options.command ==
+        Prism::Tui::Command::ListDevices, "the output-list alias should parse");
     require(!Prism::Tui::parseArguments({"--device"}).ok, "missing device ID should fail");
     require(!Prism::Tui::parseArguments({"--device", "--help"}).ok,
         "an option should not be accepted as a device ID");
     require(!Prism::Tui::parseArguments({"--wat"}).ok, "unknown option should fail");
     require(!Prism::Tui::parseArguments({"--device", "fake", "--device", "fake"}).ok,
         "duplicate device options should fail");
+    require(!Prism::Tui::parseArguments({"--device", "fake", "--output", "fake"}).ok,
+        "mixed output aliases should still be rejected as duplicates");
     require(!Prism::Tui::parseArguments({"--help", "--version"}).ok,
         "exclusive commands should not combine");
     require(Prism::Tui::usageText().find("Tab / Shift-Tab") != std::string::npos,
@@ -121,6 +154,49 @@ void testCli() {
         "help should not advertise the removed vectorscope shortcut");
     require(Prism::Tui::usageText().find("Open profiles") != std::string::npos,
         "help should describe the profile library shortcut");
+    require(Prism::Tui::usageText().find("--list-outputs") != std::string::npos &&
+        Prism::Tui::usageText().find("Choose the system output") != std::string::npos,
+        "help should describe output aliases and the in-app picker");
+}
+
+void testOutputSwitching() {
+    FakeCapture capture;
+    Prism::Capture::StartResult started;
+    std::string error;
+    require(capture.start({}, &started, &error),
+        "fake output should start before switching");
+
+    const auto switched = Prism::Tui::switchOutputCapture(
+        capture, {}, started, "alternate");
+    require(switched.success && switched.captureRunning &&
+        switched.requestedDeviceId == "alternate" &&
+        switched.started.deviceId == "alternate" &&
+        switched.started.sampleRate == 44100.0,
+        "a live output switch should publish the new capture format");
+    require(capture.stopCount == 1 && capture.activeDeviceId == "alternate",
+        "a live switch should stop the old capture before starting the new one");
+
+    capture.failedDeviceId = "fake";
+    const auto restored = Prism::Tui::switchOutputCapture(
+        capture,
+        switched.requestedDeviceId,
+        switched.started,
+        "fake");
+    require(!restored.success && restored.captureRunning &&
+        restored.requestedDeviceId == "alternate" &&
+        restored.started.deviceId == "alternate" &&
+        restored.error.find("restored") != std::string::npos,
+        "a failed output switch should restore the previous capture");
+
+    capture.failAllStarts = true;
+    const auto failed = Prism::Tui::switchOutputCapture(
+        capture,
+        restored.requestedDeviceId,
+        restored.started,
+        "fake");
+    require(!failed.success && !failed.captureRunning &&
+        failed.error.find("could not be restored") != std::string::npos,
+        "an unrecoverable output switch should report that capture stopped");
 }
 
 void testProjectionAndLayout() {
@@ -960,6 +1036,7 @@ void testThreadSafeSnapshots() {
 
 int main() {
     testCli();
+    testOutputSwitching();
     testProjectionAndLayout();
     testMeterDisplayModels();
     testSpectrumPeakModel();

@@ -4,6 +4,7 @@
 #include "dashboard_layout.h"
 #include "display_model.h"
 #include "meter_display_model.h"
+#include "output_selection.h"
 #include "profile_library.h"
 #include "scope_plot_model.h"
 #include "snapshot_store.h"
@@ -28,6 +29,7 @@
 #include <iomanip>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -129,6 +131,25 @@ struct DisplayFrame {
     bool captureOverrun = false;
 };
 
+struct OutputSwitchRequest {
+    uint64_t serial = 0;
+    std::string requestedDeviceId;
+};
+
+struct OutputSwitchNotice {
+    uint64_t serial = 0;
+    bool complete = false;
+    bool success = false;
+    std::string activeRequestedDeviceId;
+    Prism::Capture::StartResult started;
+    std::string error;
+};
+
+struct OutputListNotice {
+    uint64_t serial = 0;
+    std::vector<Prism::Capture::OutputDevice> devices;
+};
+
 enum class LayoutOverlay {
     None,
     AddScope,
@@ -168,6 +189,17 @@ struct InterfaceState {
     std::string profileStatus;
     bool profileStatusError = false;
     std::string pendingProfileId;
+    bool outputsOpen = false;
+    std::vector<Prism::Capture::OutputDevice> outputDevices;
+    size_t outputSelection = 0;
+    std::string activeRequestedDeviceId;
+    std::string outputStatus;
+    bool outputStatusError = false;
+    bool outputSwitching = false;
+    uint64_t outputSwitchSerial = 0;
+    uint64_t appliedOutputSwitchSerial = 0;
+    uint64_t outputListSerial = 0;
+    uint64_t appliedOutputListSerial = 0;
 };
 
 const TuiTheme* renderTheme = nullptr;
@@ -1668,12 +1700,12 @@ ftxui::Element renderFooter(const DisplayFrame& frame,
     }
     const std::string enterAction = state.expandedPanel ? "restore" : "expand";
     const std::string controls = minimal
-        ? "Tab • Enter • p • s • q"
+        ? "Tab • Enter • o • p • s • q"
         : compact
             ? "Tab focus • Enter " + enterAction +
-                " • p profiles • s settings • q quit"
+                " • o outputs • p profiles • s settings • q quit"
             : "Tab focus • Enter " + enterAction +
-                " • p profiles • s settings • l edit layout • r reset • q quit";
+                " • o outputs • p profiles • s settings • l edit layout • r reset • q quit";
     auto status = text(makeCaptureStatus(frame, state.settings, compact)) | dim;
     if (frame.captureOverrun) {
         status = status | color(terminalColor(palette().danger));
@@ -1881,6 +1913,104 @@ ftxui::Element renderSettings(const InterfaceState& state,
         size(HEIGHT, EQUAL, height);
 }
 
+std::string outputFormat(const Prism::Capture::OutputDevice& device) {
+    std::ostringstream result;
+    const double kilohertz = device.sampleRate / 1000.0;
+    result << std::fixed << std::setprecision(
+        std::abs(kilohertz - std::round(kilohertz)) < 0.01 ? 0 : 1)
+           << kilohertz << " kHz • " << device.channelCount << " ch";
+    if (device.isDefault) result << " • default";
+    return result.str();
+}
+
+ftxui::Element renderOutputs(const DisplayFrame& frame,
+                             const InterfaceState& state,
+                             int width,
+                             int height) {
+    using namespace ftxui;
+    const int contentWidth = std::max(1, width - 2);
+    const int contentHeight = std::max(1, height - 2);
+    const size_t choiceCount = state.outputDevices.size() + 1;
+    const size_t selected = std::min(
+        state.outputSelection, choiceCount - 1);
+    const size_t maximumVisibleRows = static_cast<size_t>(
+        std::max(1, contentHeight - 9));
+    const size_t firstVisible = selected >= maximumVisibleRows
+        ? selected - maximumVisibleRows + 1
+        : 0;
+    const size_t lastVisible = std::min(
+        choiceCount, firstVisible + maximumVisibleRows);
+
+    Elements rows;
+    for (size_t index = firstVisible; index < lastVisible; ++index) {
+        const bool isSelected = index == selected;
+        const bool followsDefault = index == 0;
+        const bool isActive = followsDefault
+            ? state.activeRequestedDeviceId.empty()
+            : state.activeRequestedDeviceId == state.outputDevices[index - 1].id;
+        const std::string label = followsDefault
+            ? "Follow system default"
+            : state.outputDevices[index - 1].label;
+        const std::string format = followsDefault
+            ? "automatic"
+            : outputFormat(state.outputDevices[index - 1]);
+        auto row = hbox({
+            text(isSelected ? " › " : "   "),
+            text(isActive ? "● " : "  ") |
+                color(terminalColor(
+                    isActive ? palette().accent : palette().muted)),
+            text(label) | (isSelected ? bold : dim) | flex,
+            text("  " + format + " ") | dim,
+        });
+        rows.push_back(isSelected
+            ? std::move(row) |
+                bgcolor(terminalColor(palette().selection)) |
+                color(terminalColor(palette().accent))
+            : std::move(row));
+    }
+
+    std::string selectionDescription;
+    if (selected == 0) {
+        selectionDescription =
+            "Uses whichever output the operating system currently considers default.";
+    } else {
+        const auto& device = state.outputDevices[selected - 1];
+        selectionDescription = contentWidth < 76
+            ? device.id
+            : "Output ID: " + device.id;
+    }
+    const std::string active = "Active: " +
+        (frame.device.empty() ? std::string("unknown output") : frame.device) +
+        (state.activeRequestedDeviceId.empty()
+            ? " • following system default"
+            : " • explicitly selected");
+
+    auto content = vbox({
+        text(" PRISM / OUTPUTS") |
+            color(terminalColor(palette().accent)) | bold,
+        separator(),
+        text(active) | color(terminalColor(palette().text)),
+        separatorEmpty(),
+        vbox(std::move(rows)),
+        filler(),
+        text(selectionDescription) | color(terminalColor(palette().muted)),
+        state.outputStatus.empty()
+            ? emptyElement()
+            : text(state.outputStatus) | color(terminalColor(
+                state.outputStatusError
+                    ? palette().danger
+                    : palette().accent)),
+        separator(),
+        text(state.outputSwitching
+            ? "Switching output…  •  Esc keeps this screen open until complete"
+            : "↑↓ select  •  Enter switch  •  r refresh  •  o/Esc dashboard") | dim,
+    }) | size(WIDTH, EQUAL, contentWidth) |
+        size(HEIGHT, EQUAL, contentHeight);
+    return std::move(content) | borderRounded |
+        size(WIDTH, EQUAL, width) |
+        size(HEIGHT, EQUAL, height);
+}
+
 ftxui::Element renderProfiles(const InterfaceState& state,
                               int width,
                               int height) {
@@ -2074,6 +2204,15 @@ ftxui::Element renderFrame(const DisplayFrame& frame,
         renderLayoutNode(layout.root, layout, frame, state),
         renderFooter(frame, state, width) | size(HEIGHT, EQUAL, 1),
     });
+    if (state.outputsOpen) {
+        const int outputsWidth = std::min(96, std::max(44, width - 4));
+        const int outputsHeight = std::min(20, std::max(12, height - 2));
+        return dbox({
+            std::move(dashboard) | dim,
+            renderOutputs(frame, state, outputsWidth, outputsHeight) |
+                borderEmpty | clear_under | center,
+        });
+    }
     if (state.profilesOpen) {
         const int profilesWidth = std::min(92, std::max(44, width - 4));
         const int profilesHeight = std::min(18, std::max(12, height - 2));
@@ -2120,7 +2259,9 @@ bool stdinAndStdoutAreTerminals() {
 }
 
 int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
-                   const Prism::Capture::StartResult& started) {
+                   const Prism::Capture::StartResult& started,
+                   std::string requestedDeviceId,
+                   std::vector<Prism::Capture::OutputDevice> outputDevices) {
     using namespace ftxui;
     signalRequested = 0;
     SignalHandlerGuard signalHandlerGuard;
@@ -2128,7 +2269,12 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     ScreenInteractive screen = ScreenInteractive::Fullscreen();
     SnapshotStore<DisplayFrame> frameStore;
     SnapshotStore<TuiSettings> settingsStore;
+    SnapshotStore<OutputSwitchRequest> outputSwitchRequestStore;
+    SnapshotStore<OutputSwitchNotice> outputSwitchNoticeStore;
+    SnapshotStore<OutputListNotice> outputListNoticeStore;
     InterfaceState interfaceState;
+    interfaceState.outputDevices = std::move(outputDevices);
+    interfaceState.activeRequestedDeviceId = requestedDeviceId;
     const std::filesystem::path settingsPath = defaultSettingsPath();
     interfaceState.settings = loadSettings(settingsPath);
     IroThemeLibrary themeLibrary(defaultIroThemeDirectory());
@@ -2165,18 +2311,29 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     std::atomic<bool> running{true};
     std::atomic<bool> resetRequested{false};
     std::atomic<bool> redrawQueued{false};
+    std::atomic<uint64_t> outputListRequested{0};
     std::exception_ptr workerError;
     auto exitLoop = screen.ExitLoopClosure();
 
     std::thread worker([&]() {
         try {
-            AnalysisPipeline pipeline(static_cast<float>(started.sampleRate));
             TuiSettings appliedSettings = settingsStore.read();
-            pipeline.setInputTrimDb(appliedSettings.inputTrimDb);
-            pipeline.setSpectrumTilt(appliedSettings.spectrumTiltDbPerOctave);
-            pipeline.setOscilloscopePitchLock(appliedSettings.oscilloscopePitchLock);
-            applySpectrogramSettings(pipeline, appliedSettings);
-            applyWaveformSettings(pipeline, appliedSettings);
+            const auto makePipeline = [&](double sampleRate) {
+                auto next = std::make_unique<AnalysisPipeline>(
+                    static_cast<float>(sampleRate));
+                next->setInputTrimDb(appliedSettings.inputTrimDb);
+                next->setSpectrumTilt(appliedSettings.spectrumTiltDbPerOctave);
+                next->setOscilloscopePitchLock(
+                    appliedSettings.oscilloscopePitchLock);
+                applySpectrogramSettings(*next, appliedSettings);
+                applyWaveformSettings(*next, appliedSettings);
+                return next;
+            };
+            auto pipeline = makePipeline(started.sampleRate);
+            Prism::Capture::StartResult activeStarted = started;
+            std::string activeRequestedDeviceId = requestedDeviceId;
+            uint64_t handledOutputSwitchSerial = 0;
+            uint64_t handledOutputListSerial = 0;
 
             bool captureOverrun = false;
             auto nextFrameAt = std::chrono::steady_clock::now();
@@ -2186,8 +2343,52 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     exitLoop();
                     break;
                 }
+                const uint64_t requestedOutputListSerial =
+                    outputListRequested.load();
+                if (requestedOutputListSerial > handledOutputListSerial) {
+                    handledOutputListSerial = requestedOutputListSerial;
+                    outputListNoticeStore.publish({
+                        requestedOutputListSerial,
+                        capture->listOutputDevices(),
+                    });
+                    if (running.load() && !redrawQueued.exchange(true)) {
+                        screen.PostEvent(Event::Custom);
+                    }
+                }
+
+                const OutputSwitchRequest outputSwitchRequest =
+                    outputSwitchRequestStore.read();
+                if (outputSwitchRequest.serial > handledOutputSwitchSerial) {
+                    handledOutputSwitchSerial = outputSwitchRequest.serial;
+                    const auto outcome = switchOutputCapture(
+                        *capture,
+                        activeRequestedDeviceId,
+                        activeStarted,
+                        outputSwitchRequest.requestedDeviceId);
+                    if (outcome.captureRunning) {
+                        activeStarted = outcome.started;
+                        activeRequestedDeviceId = outcome.requestedDeviceId;
+                        pipeline = makePipeline(activeStarted.sampleRate);
+                        captureOverrun = false;
+                        nextFrameAt = std::chrono::steady_clock::now();
+                    }
+                    outputSwitchNoticeStore.publish({
+                        outputSwitchRequest.serial,
+                        true,
+                        outcome.success,
+                        outcome.requestedDeviceId,
+                        outcome.started,
+                        outcome.error,
+                    });
+                    if (running.load() && !redrawQueued.exchange(true)) {
+                        screen.PostEvent(Event::Custom);
+                    }
+                    if (!outcome.captureRunning) {
+                        throw std::runtime_error(outcome.error);
+                    }
+                }
                 if (resetRequested.exchange(false)) {
-                    pipeline.reset();
+                    pipeline->reset();
                     captureOverrun = false;
                 }
 
@@ -2195,10 +2396,10 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 if (requestedSettings != appliedSettings) {
                     const bool refreshChanged =
                         requestedSettings.refreshRate != appliedSettings.refreshRate;
-                    pipeline.setInputTrimDb(requestedSettings.inputTrimDb);
-                    pipeline.setSpectrumTilt(
+                    pipeline->setInputTrimDb(requestedSettings.inputTrimDb);
+                    pipeline->setSpectrumTilt(
                         requestedSettings.spectrumTiltDbPerOctave);
-                    pipeline.setOscilloscopePitchLock(
+                    pipeline->setOscilloscopePitchLock(
                         requestedSettings.oscilloscopePitchLock);
                     const bool spectrogramAnalysisChanged =
                         requestedSettings.spectrogramClarity != appliedSettings.spectrogramClarity ||
@@ -2208,11 +2409,11 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                         requestedSettings.spectrogramContrast != appliedSettings.spectrogramContrast ||
                         requestedSettings.spectrogramTiltDbPerOctave != appliedSettings.spectrogramTiltDbPerOctave;
                     if (spectrogramAnalysisChanged) {
-                        applySpectrogramSettings(pipeline, requestedSettings);
+                        applySpectrogramSettings(*pipeline, requestedSettings);
                     }
                     if (requestedSettings.waveformMode != appliedSettings.waveformMode ||
                         requestedSettings.waveformScrollSpeed != appliedSettings.waveformScrollSpeed) {
-                        applyWaveformSettings(pipeline, requestedSettings);
+                        applyWaveformSettings(*pipeline, requestedSettings);
                     }
                     appliedSettings = requestedSettings;
                     if (refreshChanged) {
@@ -2220,12 +2421,12 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     }
                 }
 
-                drainCapture(*capture, pipeline, captureOverrun);
+                drainCapture(*capture, *pipeline, captureOverrun);
 
                 const auto now = std::chrono::steady_clock::now();
                 if (now >= nextFrameAt) {
                     DisplayFrame next;
-                    auto analyzed = pipeline.snapshot();
+                    auto analyzed = pipeline->snapshot();
                     next.magnitudes = std::move(analyzed.magnitudes);
                     next.spectrumPeak = std::move(analyzed.spectrumPeak);
                     next.vu = analyzed.vu;
@@ -2234,9 +2435,11 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     next.vectorscope = std::move(analyzed.vectorscope);
                     next.spectrogram = std::move(analyzed.spectrogram);
                     next.waveform = std::move(analyzed.waveform);
-                    next.sampleRate = started.sampleRate;
+                    next.sampleRate = activeStarted.sampleRate;
                     next.backend = capture->backendName();
-                    next.device = started.deviceLabel.empty() ? started.deviceId : started.deviceLabel;
+                    next.device = activeStarted.deviceLabel.empty()
+                        ? activeStarted.deviceId
+                        : activeStarted.deviceLabel;
                     next.captureOverrun = captureOverrun;
                     frameStore.publish(std::move(next));
                     if (running.load() && !redrawQueued.exchange(true)) {
@@ -2365,14 +2568,132 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 ? ""
                 : " • hidden at this terminal size");
     };
+    const auto selectedOutputRequest = [&]() {
+        if (interfaceState.outputSelection == 0 ||
+            interfaceState.outputDevices.empty()) {
+            return std::string{};
+        }
+        const size_t index = std::min(
+            interfaceState.outputSelection - 1,
+            interfaceState.outputDevices.size() - 1);
+        return interfaceState.outputDevices[index].id;
+    };
+    const auto selectOutputRequest = [&](const std::string& id) {
+        if (id.empty()) {
+            interfaceState.outputSelection = 0;
+            return;
+        }
+        const auto found = std::find_if(
+            interfaceState.outputDevices.begin(),
+            interfaceState.outputDevices.end(),
+            [&](const auto& device) { return device.id == id; });
+        interfaceState.outputSelection = found == interfaceState.outputDevices.end()
+            ? 0
+            : static_cast<size_t>(
+                std::distance(interfaceState.outputDevices.begin(), found)) + 1;
+    };
+    const auto requestOutputList = [&]() {
+        interfaceState.outputStatus = "Refreshing available outputs…";
+        interfaceState.outputStatusError = false;
+        outputListRequested.store(++interfaceState.outputListSerial);
+    };
+    selectOutputRequest(interfaceState.activeRequestedDeviceId);
     auto component = CatchEvent(renderer, [&](Event event) {
         if (event == Event::Custom) {
             redrawQueued.store(false);
+            const OutputListNotice outputList = outputListNoticeStore.read();
+            if (outputList.serial > interfaceState.appliedOutputListSerial) {
+                const bool selectedDefault =
+                    interfaceState.outputSelection == 0;
+                const std::string selectedRequest = selectedOutputRequest();
+                interfaceState.appliedOutputListSerial = outputList.serial;
+                if (outputList.devices.empty()) {
+                    interfaceState.outputStatus =
+                        "No outputs were reported; current capture is unchanged.";
+                    interfaceState.outputStatusError = true;
+                } else {
+                    interfaceState.outputDevices = outputList.devices;
+                    selectOutputRequest(selectedDefault
+                        ? std::string{}
+                        : selectedRequest);
+                    if (!interfaceState.outputSwitching) {
+                        interfaceState.outputStatus =
+                            std::to_string(interfaceState.outputDevices.size()) +
+                            (interfaceState.outputDevices.size() == 1
+                                ? " output available."
+                                : " outputs available.");
+                        interfaceState.outputStatusError = false;
+                    }
+                }
+            }
+            const OutputSwitchNotice outputSwitch =
+                outputSwitchNoticeStore.read();
+            if (outputSwitch.complete &&
+                outputSwitch.serial > interfaceState.appliedOutputSwitchSerial) {
+                interfaceState.appliedOutputSwitchSerial = outputSwitch.serial;
+                interfaceState.outputSwitching = false;
+                interfaceState.activeRequestedDeviceId =
+                    outputSwitch.activeRequestedDeviceId;
+                selectOutputRequest(interfaceState.activeRequestedDeviceId);
+                interfaceState.outputStatusError = !outputSwitch.success;
+                if (outputSwitch.success) {
+                    const std::string label = outputSwitch.started.deviceLabel.empty()
+                        ? outputSwitch.started.deviceId
+                        : outputSwitch.started.deviceLabel;
+                    interfaceState.outputStatus = "Now using " + label + ".";
+                } else {
+                    interfaceState.outputStatus = outputSwitch.error;
+                }
+            }
             return false;
         }
         if (event == Event::CtrlC) {
             running.store(false);
             exitLoop();
+            return true;
+        }
+        if (interfaceState.outputsOpen) {
+            if ((event == Event::Escape || event == Event::Character('o')) &&
+                !interfaceState.outputSwitching) {
+                interfaceState.outputsOpen = false;
+                interfaceState.outputStatus.clear();
+                return true;
+            }
+            if (interfaceState.outputSwitching) {
+                return true;
+            }
+            const size_t choiceCount = interfaceState.outputDevices.size() + 1;
+            if (event == Event::ArrowUp || event == Event::ArrowDown) {
+                const int direction = event == Event::ArrowDown ? 1 : -1;
+                interfaceState.outputSelection = static_cast<size_t>(
+                    (static_cast<int>(interfaceState.outputSelection) +
+                        direction + static_cast<int>(choiceCount)) %
+                    static_cast<int>(choiceCount));
+                interfaceState.outputStatus.clear();
+                interfaceState.outputStatusError = false;
+                return true;
+            }
+            if (event == Event::Character('r')) {
+                requestOutputList();
+                return true;
+            }
+            if (event == Event::Return) {
+                const std::string nextOutput = selectedOutputRequest();
+                if (nextOutput == interfaceState.activeRequestedDeviceId) {
+                    interfaceState.outputStatus =
+                        "That output selection is already active.";
+                    interfaceState.outputStatusError = false;
+                } else {
+                    interfaceState.outputSwitching = true;
+                    interfaceState.outputStatus = "Switching output…";
+                    interfaceState.outputStatusError = false;
+                    outputSwitchRequestStore.publish({
+                        ++interfaceState.outputSwitchSerial,
+                        nextOutput,
+                    });
+                }
+                return true;
+            }
             return true;
         }
         if (interfaceState.profilesOpen) {
@@ -2639,6 +2960,13 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     return true;
                 }
             }
+            return true;
+        }
+        if (event == Event::Character('o') &&
+            !interfaceState.settingsOpen && !interfaceState.layoutEditing) {
+            interfaceState.outputsOpen = true;
+            selectOutputRequest(interfaceState.activeRequestedDeviceId);
+            requestOutputList();
             return true;
         }
         if (event == Event::Character('q')) {
