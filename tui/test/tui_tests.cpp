@@ -478,6 +478,20 @@ void testSettingsModelAndPersistence() {
         "settings should expose shallow category pages");
     Prism::Tui::TuiSettings adjusted;
     require(Prism::Tui::adjustSetting(
+        adjusted, Prism::Tui::SettingId::RefreshRate, 1) &&
+        adjusted.refreshRate == 120 &&
+        Prism::Tui::settingValue(
+            adjusted, Prism::Tui::SettingId::RefreshRate).find("experimental") !=
+            std::string::npos,
+        "refresh settings should expose an explicit experimental 120 FPS mode");
+    require(Prism::Tui::adjustSetting(
+        adjusted, Prism::Tui::SettingId::RefreshRate, 1) &&
+        adjusted.refreshRate == 30 &&
+        Prism::Tui::adjustSetting(
+            adjusted, Prism::Tui::SettingId::RefreshRate, -1) &&
+        adjusted.refreshRate == 120,
+        "refresh settings should cycle through 30, 60, and 120 FPS in both directions");
+    require(Prism::Tui::adjustSetting(
         adjusted, Prism::Tui::SettingId::InputTrim, 1) &&
         adjusted.inputTrimDb == 0.5f,
         "numeric settings should adjust by their documented step");

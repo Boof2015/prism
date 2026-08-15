@@ -19,7 +19,7 @@ const std::vector<SettingDescriptor> kAppearanceSettings = {
 
 const std::vector<SettingDescriptor> kGeneralSettings = {
     {SettingId::InputTrim, "Input trim", "Applies gain before every analyzer."},
-    {SettingId::RefreshRate, "Refresh rate", "Controls how often the terminal display is published."},
+    {SettingId::RefreshRate, "Refresh rate", "120 FPS is experimental and depends heavily on the terminal."},
 };
 
 const std::vector<SettingDescriptor> kSpectrumSettings = {
@@ -305,7 +305,9 @@ TuiSettings normalizeSettings(TuiSettings settings) {
         }), settings.themeId.end());
     if (settings.themeId.empty()) settings.themeId = "Default";
     settings.inputTrimDb = std::clamp(snap(settings.inputTrimDb, 0.5f), -12.0f, 12.0f);
-    settings.refreshRate = settings.refreshRate <= 30 ? 30 : 60;
+    settings.refreshRate = settings.refreshRate <= 30
+        ? 30
+        : settings.refreshRate <= 60 ? 60 : 120;
     settings.rackLayout = normalizeRackLayout(std::move(settings.rackLayout));
     settings.spectrumTiltDbPerOctave = std::clamp(
         snap(settings.spectrumTiltDbPerOctave, 0.1f), -2.0f, 8.0f);
@@ -430,7 +432,8 @@ std::string settingValue(const TuiSettings& settings, SettingId setting) {
             return (settings.inputTrimDb > 0.0f ? "+" : "") +
                 trimFloat(settings.inputTrimDb, 1) + " dB";
         case SettingId::RefreshRate:
-            return std::to_string(settings.refreshRate) + " FPS";
+            return std::to_string(settings.refreshRate) + " FPS" +
+                (settings.refreshRate == 120 ? " (experimental)" : "");
         case SettingId::SpectrumPeakReadout:
             return boolValue(settings.spectrumPeakReadout);
         case SettingId::SpectrumTilt:
@@ -503,7 +506,15 @@ bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
             settings.inputTrimDb += direction > 0 ? 0.5f : -0.5f;
             break;
         case SettingId::RefreshRate:
-            settings.refreshRate = settings.refreshRate == 60 ? 30 : 60;
+            if (direction > 0) {
+                settings.refreshRate = settings.refreshRate == 30
+                    ? 60
+                    : settings.refreshRate == 60 ? 120 : 30;
+            } else {
+                settings.refreshRate = settings.refreshRate == 120
+                    ? 60
+                    : settings.refreshRate == 60 ? 30 : 120;
+            }
             break;
         case SettingId::SpectrumPeakReadout:
             settings.spectrumPeakReadout = !settings.spectrumPeakReadout;
