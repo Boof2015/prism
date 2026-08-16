@@ -1895,6 +1895,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     autoHideMenuBar: true,
     title: `Prism ${SCOPE_LABELS[kind]}`,
     alwaysOnTop: getWindowStateStore().getPopoutAlwaysOnTop(kind),
+    ...(process.platform === 'darwin' ? { acceptFirstMouse: true } : {}),
     show: false,
     ...getStaticWindowIconOptions(),
     webPreferences: {

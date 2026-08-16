@@ -55,6 +55,7 @@ interface ScopeModuleProps {
   theme?: ScopeModuleTheme
   settings?: ScopeSettings[ScopeKind]
   frameScheduler?: FrameScheduler
+  onMeasurementActiveChange?: (active: boolean) => void
   dataSource?:
     | SpectrumAnalyzerDataSource
     | OscilloscopeDataSource
@@ -400,6 +401,7 @@ export default function ScopeModule({
   theme,
   settings,
   frameScheduler,
+  onMeasurementActiveChange,
   dataSource,
 }: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -447,6 +449,7 @@ export default function ScopeModule({
         ? visualizer as ScopeMeasurementSource
         : null
     },
+    onActiveChange: onMeasurementActiveChange,
   })
 
   useEffect(() => {

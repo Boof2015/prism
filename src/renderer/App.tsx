@@ -20,6 +20,7 @@ import { getRendererWindowCapabilities } from './windowCapabilities'
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
+  const [measurementActive, setMeasurementActive] = useState(false)
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
   const [trayReady, setTrayReady] = useState(false)
@@ -302,13 +303,13 @@ export default function App(): JSX.Element {
       onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
     >
       <div
-        className={`prism-toolbar-layer ${toolbarVisible ? 'is-visible' : ''}`.trim()}
+        className={`prism-toolbar-layer ${toolbarVisible && !measurementActive ? 'is-visible' : ''}`.trim()}
       >
         <Toolbar onOpenSettings={handleToggleSettings} settingsOpen={settingsOpen} />
       </div>
 
       <div className="prism-strip-region">
-        <Strip />
+        <Strip onMeasurementActiveChange={setMeasurementActive} />
       </div>
 
       <ScopePopoutBridge />

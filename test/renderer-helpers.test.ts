@@ -4212,6 +4212,38 @@ test('main and detached windows keep frameless Prism chrome while enabling snap-
   assert.doesNotMatch(nowPlayingSource, /WindowResizeOverlay/)
 })
 
+test('detached scope interactions accept the first macOS click and hide chrome during measurement', async () => {
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const scopeModuleSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ScopeModule.tsx'), 'utf8')
+  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const mainWindowFactorySource = mainSource.slice(
+    mainSource.indexOf('function createMainWindow'),
+    mainSource.indexOf('function createScopePopoutWindow'),
+  )
+
+  assert.match(mainSource, /function createScopePopoutWindow\([\s\S]*?process\.platform === 'darwin' \? \{ acceptFirstMouse: true \} : \{\}/)
+  assert.doesNotMatch(mainWindowFactorySource, /acceptFirstMouse/)
+  assert.match(scopeModuleSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
+  assert.match(scopeModuleSource, /onActiveChange: onMeasurementActiveChange/)
+  assert.match(popoutSource, /measurementActive \? 'is-measuring' : ''/)
+  assert.match(popoutSource, /onMeasurementActiveChange=\{setMeasurementActive\}/)
+  assert.match(stylesSource, /\.scope-popout__chrome:has\(:focus-visible\)/)
+  assert.doesNotMatch(stylesSource, /\.scope-popout__chrome:focus-within/)
+  assert.match(stylesSource, /\.scope-popout__viewport \.scope-popout__chrome\.is-measuring \{[\s\S]*?max-height: 0;[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;[\s\S]*?transform: translateY\(-8px\);[\s\S]*?\}/)
+})
+
+test('main window hides its toolbar while a docked scope measurement is active', async () => {
+  const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
+  const stripSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Strip.tsx'), 'utf8')
+
+  assert.match(stripSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
+  assert.match(stripSource, /onMeasurementActiveChange=\{onMeasurementActiveChange\}/)
+  assert.match(appSource, /const \[measurementActive, setMeasurementActive\] = useState\(false\)/)
+  assert.match(appSource, /toolbarVisible && !measurementActive \? 'is-visible' : ''/)
+  assert.match(appSource, /<Strip onMeasurementActiveChange=\{setMeasurementActive\} \/>/)
+})
+
 test('programmatic top/bottom reposition flushes fresh bounds through persistence channels', async () => {
   const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
 

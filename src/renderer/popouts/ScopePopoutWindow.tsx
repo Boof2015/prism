@@ -62,6 +62,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
   const [cursorInsideWindow, setCursorInsideWindow] = useState(false)
+  const [measurementActive, setMeasurementActive] = useState(false)
   const prevMiniSettingsOpenRef = useRef(false)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const miniSettingsOpen = useUiStore((s) => s.settingsOpen)
@@ -230,6 +231,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
             'scope-popout__chrome',
             miniSettingsOpen ? 'is-expanded' : '',
             cursorInsideWindow ? 'is-cursor-inside' : '',
+            measurementActive ? 'is-measuring' : '',
           ].join(' ').trim()}
         >
           <header className={`scope-popout__header ${useWindowManagerDragRegions ? 'is-native-drag' : ''}`.trim()}>
@@ -294,6 +296,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
               settings={effectiveSettings}
               frameScheduler={frameScheduler}
               dataSource={dataSource}
+              onMeasurementActiveChange={setMeasurementActive}
             />
           </div>
         </div>
