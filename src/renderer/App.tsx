@@ -6,6 +6,7 @@ import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import AppBanner from './components/AppBanner'
 import WindowResizeOverlay from './components/WindowResizeOverlay'
+import TrayControlBridge from './components/TrayControlBridge'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
 import { startAudioDeviceWatcher, useAudioStore } from './stores/audioStore'
@@ -14,12 +15,14 @@ import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
 import { useWindowBackgroundStore } from './stores/windowBackgroundStore'
 import { useUpdateStore } from './stores/updateStore'
+import { useDesktopIntegrationStore } from './stores/desktopIntegrationStore'
 import { getRendererWindowCapabilities } from './windowCapabilities'
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
+  const [trayReady, setTrayReady] = useState(false)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settingsOpenRef = useRef(false)
   const externalProfileOpenQueueRef = useRef(Promise.resolve())
@@ -43,6 +46,8 @@ export default function App(): JSX.Element {
   const initializeWindowBackground = useWindowBackgroundStore((s) => s.initialize)
   const windowBackgroundMode = useWindowBackgroundStore((s) => s.effective.mode)
   const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
+  const initializeDesktopIntegration = useDesktopIntegrationStore((s) => s.initialize)
+  const applyDesktopIntegrationSnapshot = useDesktopIntegrationStore((s) => s.applySnapshot)
 
   const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
     && (scopeOrder.includes('nowPlaying') || scopePopouts.nowPlaying?.poppedOut === true)
@@ -75,6 +80,7 @@ export default function App(): JSX.Element {
       await initializeProfiles()
       await initializeNowPlaying()
       if (!isDisposed) {
+        setTrayReady(true)
         window.electronAPI.notifyRendererReady()
       }
     })()
@@ -154,6 +160,11 @@ export default function App(): JSX.Element {
     showProfilesFolder,
     updateMainWindowBounds,
   ])
+
+  useEffect(() => {
+    void initializeDesktopIntegration()
+    return window.electronAPI.desktopIntegration.onChanged(applyDesktopIntegrationSnapshot)
+  }, [applyDesktopIntegrationSnapshot, initializeDesktopIntegration])
 
   useEffect(() => {
     void initializeNowPlaying()
@@ -301,6 +312,7 @@ export default function App(): JSX.Element {
       </div>
 
       <ScopePopoutBridge />
+      <TrayControlBridge ready={trayReady} />
 
       <AppBanner />
 

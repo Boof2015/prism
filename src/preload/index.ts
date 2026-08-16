@@ -33,6 +33,12 @@ import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
 import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
+import type {
+  DesktopIntegrationSnapshot,
+  LoginLaunchMode,
+  TrayRendererCommand,
+  TrayRendererState,
+} from '../types/desktopIntegration'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import { getCaptureBackendSupport } from './captureSupport'
@@ -52,6 +58,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppBuildInfo: () => ipcRenderer.invoke('app:get-build-info') as Promise<AppBuildInfo>,
   minimize: () => ipcRenderer.send('window:minimize'),
   close: () => ipcRenderer.send('window:close'),
+  desktopIntegration: {
+    get: () => ipcRenderer.invoke('desktop-integration:get') as Promise<DesktopIntegrationSnapshot>,
+    setCloseToTray: (enabled: boolean) => ipcRenderer.invoke(
+      'desktop-integration:set-close-to-tray',
+      enabled,
+    ) as Promise<DesktopIntegrationSnapshot>,
+    setOpenAtLogin: (enabled: boolean) => ipcRenderer.invoke(
+      'desktop-integration:set-open-at-login',
+      enabled,
+    ) as Promise<DesktopIntegrationSnapshot>,
+    setLoginLaunchMode: (mode: LoginLaunchMode) => ipcRenderer.invoke(
+      'desktop-integration:set-login-launch-mode',
+      mode,
+    ) as Promise<DesktopIntegrationSnapshot>,
+    onChanged: (callback: (snapshot: DesktopIntegrationSnapshot) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: DesktopIntegrationSnapshot): void => {
+        callback(snapshot)
+      }
+      ipcRenderer.on('desktop-integration:changed', handler)
+      return () => ipcRenderer.removeListener('desktop-integration:changed', handler)
+    },
+  },
+  trayControls: {
+    markReady: () => ipcRenderer.send('tray-controls:renderer-ready'),
+    markNotReady: () => ipcRenderer.send('tray-controls:renderer-not-ready'),
+    publishState: (state: TrayRendererState) => ipcRenderer.send('tray-controls:publish-state', state),
+    onCommand: (callback: (command: TrayRendererCommand) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, command: TrayRendererCommand): void => callback(command)
+      ipcRenderer.on('tray-controls:command', handler)
+      return () => ipcRenderer.removeListener('tray-controls:command', handler)
+    },
+  },
   startWindowMove: () => ipcRenderer.send('window:start-move'),
   stopWindowMove: () => ipcRenderer.send('window:stop-move'),
   startWindowResize: (edge: ResizeDirection) => ipcRenderer.send('window:start-resize', edge),

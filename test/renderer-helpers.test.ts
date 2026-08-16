@@ -3547,11 +3547,26 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(componentSource, /bottom-bar__theme-separator/)
   assert.match(componentSource, /bottom-bar__section-header/)
   assert.match(componentSource, /bottom-bar__theme-credit--link/)
-  assert.match(stylesSource, /\.bottom-bar__section--theme \{[\s\S]*min-width: 420px;/)
+  assert.match(stylesSource, /\.bottom-bar__section--theme \{[\s\S]*min-width: 480px;/)
+  assert.match(stylesSource, /\.bottom-bar__inline--theme \.settings-chip,[\s\S]*flex: 0 0 auto;/)
   assert.match(stylesSource, /\.bottom-bar__section-header \{/)
   assert.match(stylesSource, /\.bottom-bar__theme-metadata \{/)
   assert.match(stylesSource, /\.bottom-bar__theme-description \{/)
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
+})
+
+test('BottomBar keeps Window controls on one row', async () => {
+  const componentSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  const windowSection = componentSource.match(
+    /<section className="bottom-bar__section bottom-bar__section--window">([\s\S]*?)<div className="bottom-bar__divider" \/>/,
+  )?.[1]
+  assert.ok(windowSection)
+  assert.equal(windowSection.match(/bottom-bar__inline--window/g)?.length, 1)
+  assert.doesNotMatch(windowSection, /bottom-bar__inline--desktop-integration/)
+  assert.match(stylesSource, /\.bottom-bar__section--window \{[\s\S]*min-width: 880px;/)
+  assert.match(stylesSource, /\.bottom-bar__inline--window \{[\s\S]*gap: 8px;/)
 })
 
 test('BottomBar close button uses flat themed control backgrounds', async () => {

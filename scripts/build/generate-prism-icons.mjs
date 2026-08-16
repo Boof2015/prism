@@ -16,6 +16,7 @@ import { deflateSync, inflateSync } from 'node:zlib'
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDir, '../..')
 const resourcesDir = join(repoRoot, 'resources')
+const trayResourcesDir = join(resourcesDir, 'tray')
 const tempDir = mkdtempSync(join(tmpdir(), 'prism-icons-'))
 const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 const iconBackground = { r: 5, g: 7, b: 10 }
@@ -240,6 +241,28 @@ function restoreIconBackgroundAlpha(filePath) {
   writePngRgba(filePath, width, height, pixels)
 }
 
+function convertTemplateToAlphaMask(filePath) {
+  const image = readPngRgba(filePath)
+  const { width, height, pixels } = image
+
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    const originalAlpha = pixels[offset + 3]
+    const luminance = Math.round(
+      (pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3,
+    )
+
+    // Quick Look rasterizes SVG previews over white on some macOS versions.
+    // Template images need that white canvas removed so macOS can tint only
+    // the Prism mark for light/dark menu bars.
+    pixels[offset] = 0
+    pixels[offset + 1] = 0
+    pixels[offset + 2] = 0
+    pixels[offset + 3] = Math.round(originalAlpha * ((255 - luminance) / 255))
+  }
+
+  writePngRgba(filePath, width, height, pixels)
+}
+
 function writeIcoFile(outputPath, images) {
   const headerLength = 6
   const entryLength = 16
@@ -332,6 +355,47 @@ try {
     icoImages.push({ size, buffer: readFileSync(outputPath) })
   }
   writeIcoFile(join(resourcesDir, 'icon.ico'), icoImages)
+
+  mkdirSync(trayResourcesDir, { recursive: true })
+
+  const trayTemplateSvgPath = join(tempDir, 'prism-tray-template-source.svg')
+  writeFileSync(trayTemplateSvgPath, `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <g transform="translate(${symbolTranslateX} ${symbolTranslateY}) scale(${iconSymbolScale})">
+    <path d="${lowerPath}" fill="#000000" />
+    <path d="${upperPath}" fill="#000000" />
+  </g>
+</svg>
+`)
+  execFileSync('qlmanage', ['-t', '-s', '1024', '-o', tempDir, trayTemplateSvgPath], {
+    stdio: 'ignore',
+  })
+
+  const trayTemplateMaster = `${trayTemplateSvgPath}.png`
+  if (!existsSync(trayTemplateMaster)) {
+    throw new Error('Quick Look did not create the tray template PNG.')
+  }
+
+  const trayTemplatePath = join(trayResourcesDir, 'prismTrayTemplate.png')
+  const trayTemplate2xPath = join(trayResourcesDir, 'prismTrayTemplate@2x.png')
+  resizePng(trayTemplateMaster, trayTemplatePath, 16)
+  resizePng(trayTemplateMaster, trayTemplate2xPath, 32)
+  convertTemplateToAlphaMask(trayTemplatePath)
+  convertTemplateToAlphaMask(trayTemplate2xPath)
+  execFileSync('sips', ['-s', 'dpiWidth', '72', '-s', 'dpiHeight', '72', trayTemplatePath], {
+    stdio: 'ignore',
+  })
+  execFileSync('sips', ['-s', 'dpiWidth', '144', '-s', 'dpiHeight', '144', trayTemplate2xPath], {
+    stdio: 'ignore',
+  })
+
+  resizePng(resourcePngPath, join(trayResourcesDir, 'prism-tray.png'), 24)
+  const trayIcoImages = []
+  for (const size of [16, 20, 24, 32, 40, 48]) {
+    const outputPath = join(tempDir, `prism-tray-${size}.png`)
+    resizePng(resourcePngPath, outputPath, size)
+    trayIcoImages.push({ size, buffer: readFileSync(outputPath) })
+  }
+  writeIcoFile(join(trayResourcesDir, 'prism-tray.ico'), trayIcoImages)
 } finally {
   rmSync(tempDir, { recursive: true, force: true })
 }

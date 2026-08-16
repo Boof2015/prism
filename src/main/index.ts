@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, Tray } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
@@ -48,6 +48,31 @@ import { FileBackedWindowStateStore } from './windowStateStore'
 import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
 import type { NativeWindowsMediaAPI } from '../types/nativeWindowsMedia'
 import type { NativeWindowChromeAPI } from '../types/nativeWindowChrome'
+import {
+  DEFAULT_DESKTOP_INTEGRATION_PREFERENCES,
+  DEFAULT_TRAY_RENDERER_STATE,
+  type DesktopIntegrationPreferences,
+  type DesktopIntegrationSnapshot,
+  type LoginLaunchMode,
+  type TrayRendererCommand,
+  type TrayRendererState,
+} from '../types/desktopIntegration'
+import {
+  loadDesktopIntegrationPreferences,
+  normalizeDesktopIntegrationPreferences,
+  resolveMainWindowCloseDisposition,
+  resolveStartHiddenAtLogin,
+  saveDesktopIntegrationPreferences,
+  type MainWindowCloseDisposition,
+} from './services/desktopIntegrationPrefs'
+import { LoginItemService } from './services/loginItem'
+import {
+  buildTrayMenuModel,
+  createTrayMenuStateKey,
+  normalizeTrayRendererState,
+} from './services/trayMenu'
+import { TrayRendererCommandQueue } from './services/trayRendererCommandQueue'
+import { resolveTrayAssetPath } from './services/trayAssets'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
@@ -62,9 +87,18 @@ let mainWindowBoundsTimer: ReturnType<typeof setTimeout> | null = null
 let mainRendererReady = false
 let allowMainWindowClose = false
 let mainWindowClosePending = false
+let pendingMainWindowCloseDisposition: MainWindowCloseDisposition | null = null
 let suppressMainWindowSyncUntil = 0
 let mainWindowLogicalBounds: WindowBounds | null = null
 let windowRecreationPending = false
+let isAppQuitting = false
+let appHiddenToTray = false
+let appTray: Tray | null = null
+let latestTrayMenuStateKey: string | null = null
+let trayRendererReady = false
+let latestTrayRendererState: TrayRendererState = { ...DEFAULT_TRAY_RENDERER_STATE }
+const pendingTrayRendererCommands = new TrayRendererCommandQueue()
+const customDialogWindows = new Set<BrowserWindow>()
 
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
@@ -83,6 +117,16 @@ let windowStateStore: FileBackedWindowStateStore | null = null
 let secretVault: SecretVault | null = null
 let nativeWindowsMediaApi: NativeWindowsMediaAPI | null | undefined
 let nativeWindowChromeApi: NativeWindowChromeAPI | null | undefined
+let loginItemService: LoginItemService | null = null
+let desktopIntegrationPreferences: DesktopIntegrationPreferences = {
+  ...DEFAULT_DESKTOP_INTEGRATION_PREFERENCES,
+}
+let desktopIntegrationSnapshot: DesktopIntegrationSnapshot = {
+  ...DEFAULT_DESKTOP_INTEGRATION_PREFERENCES,
+  openAtLogin: false,
+  loginItemStatus: 'unavailable',
+  loginItemError: null,
+}
 
 const WINDOW_DEFAULTS = {
   width: 900,
@@ -106,6 +150,7 @@ const NOW_PLAYING_CONFIG_DEFAULTS = {
 }
 
 const STATIC_APP_ICON_FILENAME = 'icon.png'
+const DESKTOP_INTEGRATION_PREFS_FILENAME = 'desktop-integration.json'
 const MAIN_WINDOW_SYNC_SUPPRESSION_MS = 180
 const MAIN_WINDOW_VISIBLE_GRAB_MARGIN = 64
 const RESTORED_WINDOW_VISIBLE_MARGIN = 64
@@ -332,6 +377,414 @@ function applyStaticDockIcon(): void {
   app.dock?.setIcon(icon)
 }
 
+function getDesktopIntegrationPreferencesPath(): string {
+  return join(app.getPath('userData'), DESKTOP_INTEGRATION_PREFS_FILENAME)
+}
+
+function isTrayAvailable(): boolean {
+  return Boolean(appTray && !appTray.isDestroyed())
+}
+
+function isMainWindowPresented(): boolean {
+  return Boolean(
+    mainWindow
+    && !mainWindow.isDestroyed()
+    && mainWindow.isVisible()
+    && !mainWindow.isMinimized()
+    && !appHiddenToTray,
+  )
+}
+
+function broadcastDesktopIntegrationSnapshot(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue
+    window.webContents.send('desktop-integration:changed', desktopIntegrationSnapshot)
+  }
+}
+
+async function refreshDesktopIntegrationSnapshot(): Promise<DesktopIntegrationSnapshot> {
+  desktopIntegrationSnapshot = loginItemService
+    ? await loginItemService.getSnapshot(desktopIntegrationPreferences)
+    : {
+        ...desktopIntegrationPreferences,
+        openAtLogin: false,
+        loginItemStatus: 'unavailable',
+        loginItemError: null,
+      }
+  broadcastDesktopIntegrationSnapshot()
+  refreshTrayMenu()
+  return { ...desktopIntegrationSnapshot }
+}
+
+async function updateDesktopIntegrationPreferences(
+  patch: Partial<DesktopIntegrationPreferences>,
+): Promise<DesktopIntegrationSnapshot> {
+  desktopIntegrationPreferences = normalizeDesktopIntegrationPreferences({
+    ...desktopIntegrationPreferences,
+    ...patch,
+  })
+  desktopIntegrationPreferences = await saveDesktopIntegrationPreferences(
+    getDesktopIntegrationPreferencesPath(),
+    desktopIntegrationPreferences,
+  )
+  return refreshDesktopIntegrationSnapshot()
+}
+
+async function updateOpenAtLogin(enabled: boolean): Promise<DesktopIntegrationSnapshot> {
+  desktopIntegrationSnapshot = loginItemService
+    ? await loginItemService.setOpenAtLogin(enabled, desktopIntegrationPreferences)
+    : await refreshDesktopIntegrationSnapshot()
+  broadcastDesktopIntegrationSnapshot()
+  refreshTrayMenu()
+  return { ...desktopIntegrationSnapshot }
+}
+
+function hidePrismWindowsToTray(): void {
+  if (!isTrayAvailable()) return
+  appHiddenToTray = true
+  stopWindowMoveController()
+  stopWindowResizeController()
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && window.isVisible()) {
+      window.hide()
+    }
+  }
+  refreshTrayMenu()
+}
+
+function showPrismWindows(): void {
+  appHiddenToTray = false
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (!isAppQuitting && app.isReady()) {
+      createMainWindow()
+    }
+    return
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  mainWindow.show()
+
+  for (const window of scopePopoutWindows.values()) {
+    if (!window.isDestroyed()) window.show()
+  }
+  if (nowPlayingConfigWindow && !nowPlayingConfigWindow.isDestroyed()) {
+    nowPlayingConfigWindow.show()
+  }
+
+  const visibleDialogs = Array.from(customDialogWindows).filter((window) => !window.isDestroyed())
+  for (const window of visibleDialogs) {
+    window.show()
+  }
+
+  if (visibleDialogs.length > 0) {
+    visibleDialogs.at(-1)?.focus()
+  } else {
+    mainWindow.focus()
+    raiseMainWindowAboveNormalPopouts()
+  }
+  refreshTrayMenu()
+}
+
+function togglePrismWindowsFromTray(): void {
+  if (isMainWindowPresented()) {
+    hidePrismWindowsToTray()
+  } else {
+    showPrismWindows()
+  }
+}
+
+function executeMainWindowCloseDisposition(disposition: MainWindowCloseDisposition): void {
+  if (disposition === 'hide-to-tray') {
+    hidePrismWindowsToTray()
+    return
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  allowMainWindowClose = true
+  mainWindow.close()
+}
+
+function requestMainWindowDisposition(disposition: MainWindowCloseDisposition): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!mainRendererReady || mainWindow.webContents.isDestroyed()) {
+    executeMainWindowCloseDisposition(disposition)
+    return
+  }
+  if (mainWindowClosePending) return
+
+  mainWindowClosePending = true
+  pendingMainWindowCloseDisposition = disposition
+  mainWindow.webContents.send('window:close-requested')
+}
+
+function sendTrayRendererCommand(command: TrayRendererCommand, showMainWindow = false): void {
+  if (showMainWindow) {
+    showPrismWindows()
+  }
+  if (
+    trayRendererReady
+    && mainWindow
+    && !mainWindow.isDestroyed()
+    && !mainWindow.webContents.isDestroyed()
+  ) {
+    mainWindow.webContents.send('tray-controls:command', command)
+    return
+  }
+  pendingTrayRendererCommands.enqueue(command)
+}
+
+function flushPendingTrayRendererCommands(): void {
+  if (
+    !trayRendererReady
+    || !mainWindow
+    || mainWindow.isDestroyed()
+    || mainWindow.webContents.isDestroyed()
+  ) return
+
+  pendingTrayRendererCommands.flush((command) => {
+    mainWindow?.webContents.send('tray-controls:command', command)
+  })
+}
+
+function repositionWindowToEdge(targetWindow: BrowserWindow, position: 'top' | 'bottom'): void {
+  if (!supportsProgrammaticReposition() || targetWindow.isDestroyed()) return
+
+  const display = screen.getDisplayMatching(targetWindow.getBounds())
+  const workArea = display.workArea
+  if (isMainRendererWindow(targetWindow)) {
+    const logicalBounds = toLogicalBounds(targetWindow)
+    applyLogicalBounds(targetWindow, {
+      x: workArea.x,
+      y: position === 'top' ? workArea.y : workArea.y + workArea.height - logicalBounds.height,
+      width: workArea.width,
+      height: logicalBounds.height,
+    })
+    flushRepositionedWindowBounds(targetWindow)
+    return
+  }
+
+  const [, height] = targetWindow.getSize()
+  targetWindow.setPosition(workArea.x, position === 'top' ? workArea.y : workArea.y + workArea.height - height)
+  targetWindow.setSize(workArea.width, height)
+  flushRepositionedWindowBounds(targetWindow)
+}
+
+function loginItemStatusLabel(snapshot: DesktopIntegrationSnapshot): string | null {
+  if (snapshot.loginItemStatus === 'requires-approval') {
+    return 'Approval required in System Settings'
+  }
+  if (snapshot.loginItemStatus === 'blocked') {
+    return 'Disabled in system startup settings'
+  }
+  if (snapshot.loginItemStatus === 'unavailable') {
+    return app.isPackaged ? 'Open at login is unavailable' : 'Open at login is unavailable in development'
+  }
+  if (snapshot.loginItemStatus === 'error') {
+    return snapshot.loginItemError ?? 'Could not read login settings'
+  }
+  return null
+}
+
+function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Electron.Menu {
+  const profileItems: MenuItemConstructorOptions[] = model.rendererState.profiles.length > 0
+    ? model.rendererState.profiles.map((profile) => ({
+        label: profile.name,
+        type: 'radio',
+        checked: profile.id === model.rendererState.activeProfileId,
+        enabled: model.rendererReady,
+        click: () => sendTrayRendererCommand(
+          { type: 'load-profile', profileId: profile.id },
+          model.rendererState.hasUnsavedProfileChanges,
+        ),
+      }))
+    : [{ label: 'Profiles unavailable', enabled: false }]
+
+  const audioSourceItems: MenuItemConstructorOptions[] = [
+    { label: 'Output Devices', enabled: false },
+    ...model.rendererState.systemSources.map((source): MenuItemConstructorOptions => ({
+      label: source.isDefault && !source.label.toLowerCase().includes('default')
+        ? `${source.label} (Default)`
+        : source.label,
+      type: 'radio',
+      checked: model.rendererState.captureMode === 'system'
+        && source.id === model.rendererState.selectedSystemSourceId,
+      enabled: model.rendererReady,
+      click: () => sendTrayRendererCommand({ type: 'select-system-source', sourceId: source.id }),
+    })),
+    { type: 'separator' },
+    { label: 'Input Devices', enabled: false },
+    ...model.rendererState.inputSources.map((source): MenuItemConstructorOptions => ({
+      label: source.label,
+      type: 'radio',
+      checked: model.rendererState.captureMode === 'device'
+        && (source.id || null) === model.rendererState.selectedDeviceId,
+      enabled: model.rendererReady,
+      click: () => sendTrayRendererCommand({
+        type: 'select-input-source',
+        deviceId: source.id || null,
+      }),
+    })),
+  ]
+  if (model.rendererState.systemSources.length === 0) {
+    audioSourceItems.splice(1, 0, { label: 'No outputs available', enabled: false })
+  }
+  if (model.rendererState.inputSources.length === 0) {
+    audioSourceItems.push({ label: 'No inputs available', enabled: false })
+  }
+
+  const loginStatus = loginItemStatusLabel(model.desktopIntegration)
+  const windowItems: MenuItemConstructorOptions[] = [
+    {
+      label: 'Always on Top',
+      type: 'checkbox',
+      checked: model.alwaysOnTop,
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          setWindowAlwaysOnTop(mainWindow, !mainWindow.isAlwaysOnTop())
+          refreshTrayMenu()
+        }
+      },
+    },
+    {
+      label: 'Position',
+      enabled: model.supportsReposition,
+      submenu: [
+        {
+          label: 'Top',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) repositionWindowToEdge(mainWindow, 'top')
+          },
+        },
+        {
+          label: 'Bottom',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) repositionWindowToEdge(mainWindow, 'bottom')
+          },
+        },
+      ],
+    },
+    { type: 'separator' },
+    {
+      label: 'Close to Tray',
+      type: 'checkbox',
+      checked: model.desktopIntegration.closeToTray,
+      click: () => {
+        void updateDesktopIntegrationPreferences({
+          closeToTray: !model.desktopIntegration.closeToTray,
+        })
+      },
+    },
+    {
+      label: 'Open at Login',
+      type: 'checkbox',
+      checked: model.desktopIntegration.openAtLogin,
+      enabled: model.desktopIntegration.loginItemStatus !== 'unavailable',
+      click: () => {
+        void updateOpenAtLogin(!model.desktopIntegration.openAtLogin)
+      },
+    },
+    {
+      label: 'When Opened at Login',
+      enabled: model.desktopIntegration.openAtLogin,
+      submenu: [
+        {
+          label: 'Show Prism',
+          type: 'radio',
+          checked: model.desktopIntegration.loginLaunchMode === 'show',
+          click: () => void updateDesktopIntegrationPreferences({ loginLaunchMode: 'show' }),
+        },
+        {
+          label: 'Start in Tray',
+          type: 'radio',
+          checked: model.desktopIntegration.loginLaunchMode === 'tray',
+          click: () => void updateDesktopIntegrationPreferences({ loginLaunchMode: 'tray' }),
+        },
+      ],
+    },
+  ]
+  if (loginStatus) {
+    windowItems.push({ type: 'separator' }, { label: loginStatus, enabled: false })
+  }
+
+  return Menu.buildFromTemplate([
+    { label: model.statusLabel, enabled: false },
+    { label: model.mainWindowActionLabel, click: togglePrismWindowsFromTray },
+    { type: 'separator' },
+    { label: 'Profile', submenu: profileItems },
+    { label: 'Audio Source', submenu: audioSourceItems },
+    {
+      label: model.captureActionLabel,
+      enabled: model.captureActionEnabled,
+      click: () => sendTrayRendererCommand({
+        type: 'set-capture-running',
+        running: model.captureActionLabel === 'Start Capture',
+      }),
+    },
+    { label: 'Window', submenu: windowItems },
+    { type: 'separator' },
+    {
+      label: 'Settings…',
+      click: () => sendTrayRendererCommand({ type: 'open-settings' }, true),
+    },
+    {
+      label: 'Quit Prism',
+      click: () => {
+        isAppQuitting = true
+        app.quit()
+      },
+    },
+  ])
+}
+
+function refreshTrayMenu(): void {
+  if (!isTrayAvailable()) return
+  const model = buildTrayMenuModel({
+    mainWindowVisible: isMainWindowPresented(),
+    rendererReady: trayRendererReady,
+    rendererState: latestTrayRendererState,
+    desktopIntegration: desktopIntegrationSnapshot,
+    alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
+    supportsReposition: supportsProgrammaticReposition(),
+  })
+  const stateKey = createTrayMenuStateKey(model)
+  appTray!.setToolTip(model.tooltip)
+  if (stateKey !== latestTrayMenuStateKey) {
+    appTray!.setContextMenu(createNativeTrayMenu(model))
+    latestTrayMenuStateKey = stateKey
+  }
+}
+
+function createAppTray(): void {
+  if (isTrayAvailable()) {
+    refreshTrayMenu()
+    return
+  }
+  const image = nativeImage.createFromPath(resolveTrayAssetPath({
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  }))
+  if (image.isEmpty()) {
+    console.warn('Prism tray icon asset is unavailable.')
+    return
+  }
+  if (process.platform === 'darwin') image.setTemplateImage(true)
+  appTray = new Tray(image)
+  if (process.platform !== 'darwin') {
+    appTray.on('click', togglePrismWindowsFromTray)
+  }
+  refreshTrayMenu()
+}
+
+function destroyAppTray(): void {
+  if (appTray && !appTray.isDestroyed()) appTray.destroy()
+  appTray = null
+  latestTrayMenuStateKey = null
+}
+
 function broadcastNowPlayingState(state: NowPlayingState): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed() || window.webContents.isDestroyed()) continue
@@ -454,13 +907,7 @@ function extractProfilePathsFromArgv(argv: string[]): string[] {
 }
 
 function focusMainWindow(): void {
-  if (!mainWindow) return
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore()
-  }
-  mainWindow.show()
-  mainWindow.focus()
-  raiseMainWindowAboveNormalPopouts()
+  showPrismWindows()
 }
 
 function normalizeExternalHttpUrl(raw: string): string | null {
@@ -1132,6 +1579,7 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
         nodeIntegration: false,
       },
     })
+    customDialogWindows.add(win)
 
     win.center()
     loadRendererTarget(win, { mode: 'dialog' })
@@ -1146,10 +1594,11 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
 
     win.webContents.once('did-finish-load', () => {
       win.webContents.send('dialog:config', options)
-      win.show()
+      if (!appHiddenToTray) win.show()
     })
 
     win.once('closed', () => {
+      customDialogWindows.delete(win)
       ipcMain.removeListener('dialog:result', onResult)
       resolve({ buttonIndex: options.cancelId ?? options.buttons.length - 1 })
     })
@@ -1171,6 +1620,7 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
     resizable: true,
     maximizable: true,
     fullscreenable: true,
+    show: !appHiddenToTray,
     title: 'Prism',
     ...getStaticWindowIconOptions(),
     webPreferences: {
@@ -1189,19 +1639,20 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
   syncMainWindowLogicalBounds(mainWindow)
 
   mainWindow.on('close', (event) => {
-    if (allowMainWindowClose || !mainRendererReady || mainWindow?.webContents.isDestroyed()) {
+    if (allowMainWindowClose || isAppQuitting || mainWindow?.webContents.isDestroyed()) {
       allowMainWindowClose = false
       mainWindowClosePending = false
+      pendingMainWindowCloseDisposition = null
       return
     }
 
     event.preventDefault()
-    if (mainWindowClosePending) {
-      return
-    }
-
-    mainWindowClosePending = true
-    mainWindow?.webContents.send('window:close-requested')
+    requestMainWindowDisposition(resolveMainWindowCloseDisposition({
+      closeToTray: desktopIntegrationPreferences.closeToTray,
+      isAppQuitting,
+      trayAvailable: isTrayAvailable(),
+      windowRecreationPending,
+    }))
   })
 
   mainWindow.on('closed', () => {
@@ -1220,8 +1671,12 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
     mainWindowLogicalBounds = null
     suppressMainWindowSyncUntil = 0
     mainRendererReady = false
+    trayRendererReady = false
+    latestTrayRendererState = { ...DEFAULT_TRAY_RENDERER_STATE }
+    pendingTrayRendererCommands.clear()
     allowMainWindowClose = false
     mainWindowClosePending = false
+    pendingMainWindowCloseDisposition = null
     mainWindow = null
 
     for (const kind of SCOPE_KINDS) {
@@ -1230,6 +1685,7 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
     if (nowPlayingConfigWindow && !nowPlayingConfigWindow.isDestroyed()) {
       nowPlayingConfigWindow.close()
     }
+    refreshTrayMenu()
   })
 
   mainWindow.on('move', () => {
@@ -1248,6 +1704,14 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
   })
   mainWindow.on('focus', () => {
     raiseMainWindowAboveNormalPopouts()
+  })
+  mainWindow.on('show', refreshTrayMenu)
+  mainWindow.on('hide', refreshTrayMenu)
+  mainWindow.on('minimize', refreshTrayMenu)
+  mainWindow.on('restore', refreshTrayMenu)
+  mainWindow.webContents.on('did-start-loading', () => {
+    trayRendererReady = false
+    refreshTrayMenu()
   })
 
   loadRendererTarget(mainWindow, { window: 'main', ...getWindowBackgroundQuery(background) })
@@ -1405,7 +1869,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   scopePopoutWindows.set(kind, popoutWindow)
 
   popoutWindow.once('ready-to-show', () => {
-    if (!popoutWindow.isDestroyed()) {
+    if (!popoutWindow.isDestroyed() && !appHiddenToTray) {
       popoutWindow.show()
       raiseMainWindowAboveNormalPopouts()
     }
@@ -1574,7 +2038,7 @@ function createNowPlayingConfigWindow(): BrowserWindow {
   const configWindow = nowPlayingConfigWindow
 
   configWindow.once('ready-to-show', () => {
-    if (!configWindow.isDestroyed()) {
+    if (!configWindow.isDestroyed() && !appHiddenToTray) {
       configWindow.show()
       configWindow.focus()
     }
@@ -1719,13 +2183,13 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || !isMainRendererWindow(targetWindow)) return
 
+    const disposition = pendingMainWindowCloseDisposition ?? 'close'
     mainWindowClosePending = false
+    pendingMainWindowCloseDisposition = null
     if (!shouldClose) {
       return
     }
-
-    allowMainWindowClose = true
-    targetWindow.close()
+    executeMainWindowCloseDisposition(disposition)
   })
 
   ipcMain.on('window:toggle-always-on-top', (event) => {
@@ -2004,39 +2468,9 @@ function setupIPC(): void {
   })
 
   ipcMain.on('window:reposition', (event, position: 'top' | 'bottom') => {
-    if (!supportsProgrammaticReposition()) {
-      return
-    }
-
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return
-
-    const display = screen.getDisplayMatching(targetWindow.getBounds())
-    const workArea = display.workArea
-
-    if (isMainRendererWindow(targetWindow)) {
-      const logicalBounds = toLogicalBounds(targetWindow)
-      applyLogicalBounds(targetWindow, {
-        x: workArea.x,
-        y: position === 'top'
-          ? workArea.y
-          : workArea.y + workArea.height - logicalBounds.height,
-        width: workArea.width,
-        height: logicalBounds.height,
-      })
-      flushRepositionedWindowBounds(targetWindow)
-      return
-    }
-
-    const [, height] = targetWindow.getSize()
-
-    if (position === 'top') {
-      targetWindow.setPosition(workArea.x, workArea.y)
-    } else {
-      targetWindow.setPosition(workArea.x, workArea.y + workArea.height - height)
-    }
-    targetWindow.setSize(workArea.width, height)
-    flushRepositionedWindowBounds(targetWindow)
+    repositionWindowToEdge(targetWindow, position)
   })
 
   ipcMain.on('window:expand-settings', (event, panelHeight: number) => {
@@ -2058,6 +2492,46 @@ function setupIPC(): void {
     if (!targetWindow) return
 
     applySettingsHeight(targetWindow, panelHeight)
+  })
+
+  ipcMain.handle('desktop-integration:get', async () => {
+    return refreshDesktopIntegrationSnapshot()
+  })
+
+  ipcMain.handle('desktop-integration:set-close-to-tray', async (_event, enabled: unknown) => {
+    return updateDesktopIntegrationPreferences({ closeToTray: enabled === true })
+  })
+
+  ipcMain.handle('desktop-integration:set-open-at-login', async (_event, enabled: unknown) => {
+    return updateOpenAtLogin(enabled === true)
+  })
+
+  ipcMain.handle('desktop-integration:set-login-launch-mode', async (_event, mode: unknown) => {
+    const loginLaunchMode: LoginLaunchMode = mode === 'tray' ? 'tray' : 'show'
+    return updateDesktopIntegrationPreferences({ loginLaunchMode })
+  })
+
+  ipcMain.on('tray-controls:renderer-ready', (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow)) return
+    trayRendererReady = true
+    flushPendingTrayRendererCommands()
+    refreshTrayMenu()
+  })
+
+  ipcMain.on('tray-controls:renderer-not-ready', (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow)) return
+    trayRendererReady = false
+    latestTrayRendererState = { ...DEFAULT_TRAY_RENDERER_STATE }
+    refreshTrayMenu()
+  })
+
+  ipcMain.on('tray-controls:publish-state', (event, rawState: unknown) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!isMainRendererWindow(targetWindow)) return
+    latestTrayRendererState = normalizeTrayRendererState(rawState)
+    refreshTrayMenu()
   })
 
   ipcMain.on('renderer:ready', (event) => {
@@ -2127,15 +2601,36 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
+  queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
+
   app.whenReady().then(async () => {
     setupPermissions()
     void getNowPlayingManager().initialize()
     setupIPC()
     await getWindowStateStore().initialize()
+    desktopIntegrationPreferences = await loadDesktopIntegrationPreferences(
+      getDesktopIntegrationPreferencesPath(),
+    )
+    loginItemService = new LoginItemService({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      executablePath: process.execPath,
+      appImagePath: process.env.APPIMAGE,
+      configHome: process.env.XDG_CONFIG_HOME,
+      homePath: app.getPath('home'),
+      getNativeSettings: (options) => app.getLoginItemSettings(options),
+      setNativeSettings: (settings) => app.setLoginItemSettings(settings),
+    })
+    desktopIntegrationSnapshot = await loginItemService.getSnapshot(desktopIntegrationPreferences)
     await syncNativeThemeAppearance()
     applyStaticDockIcon()
+    createAppTray()
+    appHiddenToTray = isTrayAvailable() && resolveStartHiddenAtLogin({
+      isLoginLaunch: loginItemService.wasOpenedAtLogin(process.argv),
+      loginLaunchMode: desktopIntegrationPreferences.loginLaunchMode,
+      hasPendingFileOpen: pendingProfileOpenPaths.length > 0,
+    })
     createMainWindow()
-    queueProfileOpenPaths(extractProfilePathsFromArgv(process.argv))
     void processPendingProfileOpenPaths()
   })
 
@@ -2154,6 +2649,10 @@ if (!hasSingleInstanceLock) {
       void processPendingProfileOpenPaths()
     }
   })
+
+  app.on('activate', () => {
+    if (app.isReady()) showPrismWindows()
+  })
 }
 
 app.on('window-all-closed', () => {
@@ -2163,4 +2662,10 @@ app.on('window-all-closed', () => {
 
   void nowPlayingManager?.dispose()
   app.quit()
+})
+
+app.on('before-quit', () => {
+  isAppQuitting = true
+  destroyAppTray()
+  pendingTrayRendererCommands.clear()
 })

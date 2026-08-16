@@ -20,6 +20,7 @@
     "test:themes": "node scripts/run-theme-library-tests.mjs",
     "test:secret-vault": "node scripts/run-secret-vault-tests.mjs",
     "test:window-state": "node scripts/run-window-state-tests.mjs",
+    "test:desktop-integration": "node scripts/run-desktop-integration-tests.mjs",
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
     "test:spectrum-native": "node --test test/spectrum-native.test.mjs",
     "test:tui": "node scripts/build/build-tui.cjs --test",
@@ -99,6 +100,10 @@
       {
         "from": "resources/icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "resources/tray/",
+        "to": "tray/"
       },
       {
         "from": "plugin/dist-installer/",

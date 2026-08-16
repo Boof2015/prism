@@ -6,6 +6,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useUiStore } from '../stores/uiStore'
 import { useWindowBackgroundStore } from '../stores/windowBackgroundStore'
+import { useDesktopIntegrationStore } from '../stores/desktopIntegrationStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
@@ -184,6 +185,12 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     setInputGain,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
+  const desktopIntegration = useDesktopIntegrationStore((s) => s.snapshot)
+  const desktopIntegrationBusy = useDesktopIntegrationStore((s) => s.busy)
+  const desktopIntegrationError = useDesktopIntegrationStore((s) => s.error)
+  const setCloseToTray = useDesktopIntegrationStore((s) => s.setCloseToTray)
+  const setOpenAtLogin = useDesktopIntegrationStore((s) => s.setOpenAtLogin)
+  const setLoginLaunchMode = useDesktopIntegrationStore((s) => s.setLoginLaunchMode)
 
   useLayoutEffect(() => {
     if (!onHeightChange || !rootRef.current) return
@@ -389,6 +396,13 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const canUseDefaultSource = captureMode === 'system'
     ? selectedSystemSourceId !== defaultSystemSourceId
     : selectedDeviceId !== null
+  const loginItemStatusMessage = desktopIntegration.loginItemStatus === 'requires-approval'
+    ? 'Approval required in system login settings'
+    : desktopIntegration.loginItemStatus === 'blocked'
+      ? 'Disabled in system startup settings'
+      : desktopIntegration.loginItemStatus === 'unavailable'
+        ? 'Open at login is available in packaged builds'
+        : desktopIntegrationError
 
   return (
     <div className="bottom-bar" ref={rootRef}>
@@ -489,9 +503,24 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
           <section className="bottom-bar__section bottom-bar__section--window">
             <div className="bottom-bar__section-header">
               <div className="bottom-bar__section-title">Window</div>
-              {windowBackground.mode !== 'solid' ? (
-                <span className="bottom-bar__window-note">
-                  Window snapping is disabled in this mode
+              {windowBackground.mode !== 'solid' || loginItemStatusMessage ? (
+                <span className="bottom-bar__window-metadata">
+                  {windowBackground.mode !== 'solid' ? (
+                    <span className="bottom-bar__window-note">
+                      Window snapping is disabled in this mode
+                    </span>
+                  ) : null}
+                  {windowBackground.mode !== 'solid' && loginItemStatusMessage ? (
+                    <span className="bottom-bar__metadata-separator" aria-hidden="true">·</span>
+                  ) : null}
+                  {loginItemStatusMessage ? (
+                    <span
+                      className={`${desktopIntegrationError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__desktop-status`.trim()}
+                      role="status"
+                    >
+                      {loginItemStatusMessage}
+                    </span>
+                  ) : null}
                 </span>
               ) : null}
             </div>
@@ -536,6 +565,36 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   }}
                   title="How much of the desktop shows through"
                 />
+                <span className="bottom-bar__inline-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className={`settings-chip ${desktopIntegration.closeToTray ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy}
+                  onClick={() => void setCloseToTray(!desktopIntegration.closeToTray)}
+                  title="Closing Prism hides every Prism window; use the tray menu to quit"
+                >
+                  Close to tray
+                </button>
+                <button
+                  type="button"
+                  className={`settings-chip ${desktopIntegration.openAtLogin ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy || desktopIntegration.loginItemStatus === 'unavailable'}
+                  onClick={() => void setOpenAtLogin(!desktopIntegration.openAtLogin)}
+                >
+                  Open at login
+                </button>
+                <ThemedSelect
+                  value={desktopIntegration.loginLaunchMode}
+                  disabled={desktopIntegrationBusy || !desktopIntegration.openAtLogin}
+                  onChange={(event) => {
+                    void setLoginLaunchMode(event.target.value === 'tray' ? 'tray' : 'show')
+                  }}
+                  className="bottom-bar__login-select"
+                  title="What Prism should show when opened automatically at login"
+                >
+                  <option value="show">Login: Show Prism</option>
+                  <option value="tray">Login: Start in tray</option>
+                </ThemedSelect>
               </div>
             </div>
           </section>
