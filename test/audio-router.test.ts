@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { AudioRouter } from '../src/renderer/audio/AudioRouter'
+import './rolling-audio-buffer.test'
 
 function createChunk(value: number, length = 4): Float32Array {
   return new Float32Array(Array.from({ length }, () => value))

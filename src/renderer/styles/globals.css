@@ -687,6 +687,60 @@ button.toolbar__version:hover {
   box-shadow: inset 0 0 0 1px var(--glass-highlight);
 }
 
+.toolbar__clip-chip {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: grab;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.toolbar__clip-chip:hover:not(:disabled),
+.toolbar__clip-chip.is-ready {
+  color: var(--accent);
+  border-color: var(--control-border-active);
+  background: var(--control-bg-active);
+}
+
+.toolbar__clip-chip:active:not(:disabled) {
+  cursor: grabbing;
+}
+
+.toolbar__clip-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.toolbar__clip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 7px currentColor;
+}
+
+.toolbar__clip-chip.is-filling:not(:disabled) .toolbar__clip-dot {
+  animation: rollingCapturePulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rollingCapturePulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
 .toolbar__actions {
   display: flex;
   align-items: center;
@@ -753,6 +807,10 @@ button.toolbar__version:hover {
 
 @media (max-width: 520px) {
   .toolbar__version {
+    display: none;
+  }
+
+  .toolbar__clip-prefix {
     display: none;
   }
 }
@@ -1924,6 +1982,10 @@ button.toolbar__version:hover {
   min-width: 360px;
 }
 
+.bottom-bar__section--rolling-capture {
+  min-width: 500px;
+}
+
 .bottom-bar__section--performance {
   min-width: 328px;
 }
@@ -2355,6 +2417,7 @@ button.toolbar__version:hover {
 .toolbar__brand:focus-visible,
 .toolbar__profile-button:focus-visible,
 .toolbar__chip:focus-visible,
+.toolbar__clip-chip:focus-visible,
 .toolbar__icon-button:focus-visible,
 .scope-strip__reorder-button:focus-visible,
 .scope-strip__popout-button:focus-visible,
@@ -2371,6 +2434,10 @@ button.toolbar__version:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .toolbar__clip-chip.is-filling:not(:disabled) .toolbar__clip-dot {
+    animation: none !important;
+  }
+
   .toolbar__brand,
   .toolbar__brand-logo,
   .toolbar__brand-heart {

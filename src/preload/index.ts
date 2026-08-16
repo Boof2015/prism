@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppBuildInfo } from '../types/appBuildInfo'
+import type { AudioClipDragPayload } from '../types/audioClip'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
@@ -103,6 +104,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWindowBackground: (state: WindowBackgroundState) => ipcRenderer.invoke('window:set-background', state) as Promise<WindowBackgroundSnapshot>,
   isCursorInsideWindow: () => ipcRenderer.invoke('window:is-cursor-inside') as Promise<boolean>,
   getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
+  audioClips: {
+    startDrag: (payload: AudioClipDragPayload) => ipcRenderer.send('audio-clips:start-drag', payload),
+    revealFolder: () => ipcRenderer.invoke('audio-clips:reveal-folder') as Promise<void>,
+    onDragError: (callback: (message: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, message: string): void => callback(message)
+      ipcRenderer.on('audio-clips:drag-error', handler)
+      return () => ipcRenderer.removeListener('audio-clips:drag-error', handler)
+    },
+  },
   getNowPlayingState: () => ipcRenderer.invoke('now-playing:get-state') as Promise<NowPlayingState>,
   setNowPlayingConsumerActive: (active: boolean) => ipcRenderer.invoke('now-playing:set-active', active) as Promise<NowPlayingState>,
   saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => {

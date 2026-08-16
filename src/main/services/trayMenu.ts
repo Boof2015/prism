@@ -5,6 +5,7 @@ import {
   type TrayProfileOption,
   type TrayRendererState,
 } from '../../types/desktopIntegration'
+import { isRollingCaptureDuration } from '../../types/audioClip'
 
 const MAX_TRAY_ITEMS = 64
 const MAX_LABEL_LENGTH = 96
@@ -86,6 +87,9 @@ export function normalizeTrayRendererState(value: unknown): TrayRendererState {
       : null,
     selectedDeviceId: typeof candidate.selectedDeviceId === 'string'
       ? candidate.selectedDeviceId
+      : null,
+    rollingCaptureSeconds: isRollingCaptureDuration(candidate.rollingCaptureSeconds)
+      ? candidate.rollingCaptureSeconds
       : null,
     systemSources: normalizeSources(candidate.systemSources),
     inputSources: normalizeSources(candidate.inputSources),

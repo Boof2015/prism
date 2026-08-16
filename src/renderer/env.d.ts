@@ -2,6 +2,7 @@
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
 import type { AppBuildInfo } from '../types/appBuildInfo'
+import type { AudioClipDragPayload } from '../types/audioClip'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
@@ -79,6 +80,11 @@ declare global {
       setWindowBackground: (state: WindowBackgroundState) => Promise<WindowBackgroundSnapshot>
       isCursorInsideWindow: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
+      audioClips: {
+        startDrag: (payload: AudioClipDragPayload) => void
+        revealFolder: () => Promise<void>
+        onDragError: (callback: (message: string) => void) => () => void
+      }
       getNowPlayingState: () => Promise<NowPlayingState>
       setNowPlayingConsumerActive: (active: boolean) => Promise<NowPlayingState>
       saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => Promise<NowPlayingState>

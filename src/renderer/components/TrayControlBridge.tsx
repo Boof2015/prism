@@ -47,6 +47,10 @@ async function handleTrayCommand(command: TrayRendererCommand): Promise<void> {
     await useAudioStore.getState().startCapture()
     return
   }
+  if (command.type === 'set-rolling-capture') {
+    audio.setRollingCaptureSeconds(command.durationSeconds)
+    return
+  }
   if (command.type === 'set-capture-running') {
     if (command.running) {
       await audio.startCapture()
@@ -65,6 +69,7 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
   const captureMode = useAudioStore((state) => state.captureMode)
   const selectedSystemSourceId = useAudioStore((state) => state.selectedSystemSourceId)
   const selectedDeviceId = useAudioStore((state) => state.selectedDeviceId)
+  const rollingCaptureSeconds = useAudioStore((state) => state.rollingCaptureSeconds)
   const systemSources = useAudioStore((state) => state.systemSources)
   const devices = useAudioStore((state) => state.devices)
 
@@ -103,6 +108,7 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
       captureMode,
       selectedSystemSourceId,
       selectedDeviceId,
+      rollingCaptureSeconds,
       systemSources: visibleSystemSources.map((source) => ({
         id: source.id,
         label: source.label,
@@ -127,6 +133,7 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
     devices,
     hasUnsavedProfileChanges,
     profiles,
+    rollingCaptureSeconds,
     selectedDeviceId,
     selectedSystemSourceId,
     systemSources,

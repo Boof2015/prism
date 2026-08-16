@@ -3692,6 +3692,28 @@ test('toolbar uses the Prism logo support link and static package icons are conf
   }))
 })
 
+test('rolling capture exposes persisted duration controls and a native toolbar drag target', async () => {
+  const bottomBarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
+  const preloadSource = await readFile(join(process.cwd(), 'src', 'preload', 'index.ts'), 'utf8')
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const trayBridgeSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'TrayControlBridge.tsx'), 'utf8')
+
+  assert.match(bottomBarSource, /ROLLING_CAPTURE_DURATIONS\.map/)
+  assert.match(bottomBarSource, /setRollingCaptureSeconds\(null\)/)
+  assert.match(bottomBarSource, /revealRollingCaptureFolder/)
+  assert.match(toolbarSource, /className=\{`toolbar__clip-chip/)
+  assert.match(toolbarSource, /draggable=\{rollingCaptureStatus\.hasAudio\}/)
+  assert.match(toolbarSource, /onDragStart=\{handleAudioClipDragStart\}/)
+  assert.match(preloadSource, /ipcRenderer\.send\('audio-clips:start-drag', payload\)/)
+  assert.match(mainSource, /event\.sender\.startDrag/)
+  assert.match(mainSource, /Prism Captures/)
+  assert.match(mainSource, /label: 'Rolling Capture'/)
+  assert.match(mainSource, /type: 'set-rolling-capture'/)
+  assert.match(trayBridgeSource, /audio\.setRollingCaptureSeconds\(command\.durationSeconds\)/)
+  assert.match(trayBridgeSource, /rollingCaptureSeconds,/)
+})
+
 test('resolveWindowCapabilities detects native Wayland sessions on Linux', () => {
   assert.deepEqual(
     resolveWindowCapabilities({

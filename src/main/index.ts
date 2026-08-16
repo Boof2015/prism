@@ -4,6 +4,7 @@ import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { extname, join, resolve } from 'path'
 import type { AppBuildInfo } from '../types/appBuildInfo'
+import { ROLLING_CAPTURE_DURATIONS } from '../types/audioClip'
 import type { NowPlayingControlCommand, NowPlayingState } from '../types/nowPlaying'
 import type {
   ScopePopoutAudioBatch,
@@ -35,6 +36,7 @@ import {
 } from '../shared/windowGeometry'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
+import { AudioClipLibrary } from './audioClipLibrary'
 import { loadNativeWindowsMediaApi } from './nativeWindowsMedia'
 import { loadNativeWindowChromeApi } from './nativeWindowChrome'
 import { NowPlayingManager } from './services/nowPlayingManager'
@@ -118,6 +120,7 @@ let secretVault: SecretVault | null = null
 let nativeWindowsMediaApi: NativeWindowsMediaAPI | null | undefined
 let nativeWindowChromeApi: NativeWindowChromeAPI | null | undefined
 let loginItemService: LoginItemService | null = null
+let audioClipLibrary: AudioClipLibrary | null = null
 let desktopIntegrationPreferences: DesktopIntegrationPreferences = {
   ...DEFAULT_DESKTOP_INTEGRATION_PREFERENCES,
 }
@@ -344,6 +347,16 @@ function getWindowStateStore(): FileBackedWindowStateStore {
   return windowStateStore
 }
 
+function getAudioClipLibrary(): AudioClipLibrary {
+  if (!audioClipLibrary) {
+    audioClipLibrary = new AudioClipLibrary(
+      join(app.getPath('documents'), 'Prism Captures'),
+    )
+  }
+
+  return audioClipLibrary
+}
+
 function getStaticAppIconPath(): string | undefined {
   const candidates = app.isPackaged
     ? [join(process.resourcesPath, STATIC_APP_ICON_FILENAME)]
@@ -362,6 +375,22 @@ function getStaticWindowIconOptions(): Pick<BrowserWindowConstructorOptions, 'ic
 
   const icon = getStaticAppIconPath()
   return icon ? { icon } : {}
+}
+
+function getAudioClipDragIcon() {
+  const iconPath = getStaticAppIconPath()
+  if (iconPath) {
+    const icon = nativeImage.createFromPath(iconPath)
+    if (!icon.isEmpty()) return icon
+  }
+
+  const fallback = nativeImage.createFromDataURL(
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  )
+  if (fallback.isEmpty()) {
+    throw new Error('Prism could not create the audio clip drag icon.')
+  }
+  return fallback
 }
 
 function applyStaticDockIcon(): void {
@@ -635,6 +664,28 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
   }
 
   const loginStatus = loginItemStatusLabel(model.desktopIntegration)
+  const rollingCaptureItems: MenuItemConstructorOptions[] = [
+    {
+      label: 'Off',
+      type: 'radio',
+      checked: model.rendererState.rollingCaptureSeconds === null,
+      enabled: model.rendererReady,
+      click: () => sendTrayRendererCommand({
+        type: 'set-rolling-capture',
+        durationSeconds: null,
+      }),
+    },
+    ...ROLLING_CAPTURE_DURATIONS.map((duration): MenuItemConstructorOptions => ({
+      label: `${duration}s`,
+      type: 'radio',
+      checked: model.rendererState.rollingCaptureSeconds === duration,
+      enabled: model.rendererReady,
+      click: () => sendTrayRendererCommand({
+        type: 'set-rolling-capture',
+        durationSeconds: duration,
+      }),
+    })),
+  ]
   const windowItems: MenuItemConstructorOptions[] = [
     {
       label: 'Always on Top',
@@ -714,6 +765,7 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
     { type: 'separator' },
     { label: 'Profile', submenu: profileItems },
     { label: 'Audio Source', submenu: audioSourceItems },
+    { label: 'Rolling Capture', submenu: rollingCaptureItems },
     {
       label: model.captureActionLabel,
       enabled: model.captureActionEnabled,
@@ -2230,6 +2282,37 @@ function setupIPC(): void {
 
   ipcMain.handle('app:get-build-info', () => {
     return getAppBuildInfo()
+  })
+
+  ipcMain.on('audio-clips:start-drag', (event, rawPayload: unknown) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || !isMainRendererWindow(targetWindow)) return
+
+    try {
+      const filePath = getAudioClipLibrary().writeClip(rawPayload)
+      event.sender.startDrag({
+        file: filePath,
+        icon: getAudioClipDragIcon(),
+      })
+    } catch (error) {
+      const detail = error instanceof Error && error.message
+        ? error.message
+        : 'Unknown audio clip error.'
+      event.sender.send('audio-clips:drag-error', `Could not create the audio clip: ${detail}`)
+    }
+  })
+
+  ipcMain.handle('audio-clips:reveal-folder', async (event) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || !isMainRendererWindow(targetWindow)) {
+      throw new Error('The Prism Captures folder is unavailable from this window.')
+    }
+
+    const folderPath = getAudioClipLibrary().ensureDirectory()
+    const openResult = await shell.openPath(folderPath)
+    if (openResult) {
+      throw new Error(openResult)
+    }
   })
 
   ipcMain.handle('updates:check', async () => {

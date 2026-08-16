@@ -6,7 +6,13 @@
 
 import { audioRouter } from './AudioRouter'
 import { nativeVisualizerTransport } from './NativeVisualizerTransport'
+import { RollingAudioBuffer } from './RollingAudioBuffer'
 import { applyInputGainToStereoSamples, inputGainDbToLinear } from './inputGain'
+import type {
+  RollingAudioSnapshot,
+  RollingCaptureDurationSeconds,
+  RollingCaptureStatus,
+} from '../../types/audioClip'
 import type {
   CaptureBackendKind,
   CaptureBackendSupport,
@@ -149,6 +155,7 @@ export interface CaptureManagerStatus {
 }
 
 type StatusListener = (status: CaptureManagerStatus) => void
+type RollingCaptureStatusListener = (status: RollingCaptureStatus) => void
 
 const DEFAULT_SYSTEM_SOURCE_ID = '__default_system_output__'
 
@@ -641,6 +648,9 @@ class AudioCapture {
   private inputGainDb = 0
   private inputGainLinear = 1
   private statusListeners = new Set<StatusListener>()
+  private rollingCaptureSeconds: RollingCaptureDurationSeconds | null = null
+  private rollingAudioBuffer: RollingAudioBuffer | null = null
+  private rollingCaptureStatusListeners = new Set<RollingCaptureStatusListener>()
 
   constructor() {
     this.deviceInputBackend = new DeviceInputCaptureBackend(this.deviceInputRuntime)
@@ -660,6 +670,14 @@ class AudioCapture {
     listener(this.getStatus())
     return () => {
       this.statusListeners.delete(listener)
+    }
+  }
+
+  subscribeRollingCaptureStatus(listener: RollingCaptureStatusListener): () => void {
+    this.rollingCaptureStatusListeners.add(listener)
+    listener(this.getRollingCaptureStatus())
+    return () => {
+      this.rollingCaptureStatusListeners.delete(listener)
     }
   }
 
@@ -710,6 +728,10 @@ class AudioCapture {
       backendStatus.sampleRate,
       backendStatus.channelCount,
       backendStatus.kind,
+    )
+    this.beginRollingCaptureSession(
+      backendStatus.sampleRate,
+      backendStatus.channelCount,
     )
     nativeVisualizerTransport.reset(audioRouter.getSessionState())
     this.emitStatus()
@@ -786,6 +808,43 @@ class AudioCapture {
     }
   }
 
+  getRollingCaptureStatus(): RollingCaptureStatus {
+    const buffer = this.rollingAudioBuffer
+    return {
+      durationSeconds: this.rollingCaptureSeconds,
+      hasAudio: Boolean(buffer && buffer.frameCount > 0),
+      ready: Boolean(buffer?.isReady),
+      allocatedBytes: buffer?.allocatedBytes ?? 0,
+    }
+  }
+
+  setRollingCaptureSeconds(durationSeconds: RollingCaptureDurationSeconds | null): void {
+    if (durationSeconds === this.rollingCaptureSeconds) return
+
+    this.rollingCaptureSeconds = durationSeconds
+    if (durationSeconds === null) {
+      this.rollingAudioBuffer = null
+      this.emitRollingCaptureStatus()
+      return
+    }
+
+    if (this.rollingAudioBuffer) {
+      this.rollingAudioBuffer.resize(durationSeconds)
+    } else if (this.sessionId !== null && this.activeBackend) {
+      const status = this.activeBackend.getStatus()
+      this.rollingAudioBuffer = new RollingAudioBuffer(
+        durationSeconds,
+        status.sampleRate,
+        status.channelCount,
+      )
+    }
+    this.emitRollingCaptureStatus()
+  }
+
+  takeRollingCaptureSnapshot(): RollingAudioSnapshot | null {
+    return this.rollingAudioBuffer?.snapshot() ?? null
+  }
+
   private async ensureBackendSupport(): Promise<CaptureBackendSupport> {
     if (this.backendSupport) {
       return this.backendSupport
@@ -836,6 +895,11 @@ class AudioCapture {
   }
 
   private async stopActiveCapture(): Promise<void> {
+    if (this.rollingAudioBuffer) {
+      this.rollingAudioBuffer = null
+      this.emitRollingCaptureStatus()
+    }
+
     if (this.sessionId !== null) {
       audioRouter.endSession()
       nativeVisualizerTransport.reset(audioRouter.getSessionState())
@@ -864,6 +928,31 @@ class AudioCapture {
       capturedAt: chunk.capturedAt,
       sequence: chunk.sequence,
     })
+
+    let rollingAudioBuffer = this.rollingAudioBuffer
+    if (rollingAudioBuffer) {
+      const normalizedChannelCount = chunk.channelCount > 1 ? 2 : 1
+      if (rollingAudioBuffer.channelCount !== normalizedChannelCount) {
+        const sampleRate = this.activeBackend.getStatus().sampleRate
+        rollingAudioBuffer = new RollingAudioBuffer(
+          this.rollingCaptureSeconds!,
+          sampleRate,
+          normalizedChannelCount,
+        )
+        this.rollingAudioBuffer = rollingAudioBuffer
+        this.emitRollingCaptureStatus()
+      }
+
+      const hadAudio = rollingAudioBuffer.frameCount > 0
+      const wasReady = rollingAudioBuffer.isReady
+      rollingAudioBuffer.append(chunk.left, chunk.right, chunk.channelCount)
+      if (
+        hadAudio !== (rollingAudioBuffer.frameCount > 0)
+        || wasReady !== rollingAudioBuffer.isReady
+      ) {
+        this.emitRollingCaptureStatus()
+      }
+    }
   }
 
   setInputGain(db: number): void {
@@ -875,6 +964,20 @@ class AudioCapture {
   private emitStatus(): void {
     const status = this.getStatus()
     for (const listener of this.statusListeners) {
+      listener(status)
+    }
+  }
+
+  private beginRollingCaptureSession(sampleRate: number, channelCount: number): void {
+    this.rollingAudioBuffer = this.rollingCaptureSeconds === null
+      ? null
+      : new RollingAudioBuffer(this.rollingCaptureSeconds, sampleRate, channelCount)
+    this.emitRollingCaptureStatus()
+  }
+
+  private emitRollingCaptureStatus(): void {
+    const status = this.getRollingCaptureStatus()
+    for (const listener of this.rollingCaptureStatusListeners) {
       listener(status)
     }
   }

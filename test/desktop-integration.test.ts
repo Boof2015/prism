@@ -256,6 +256,7 @@ test('tray state validation and menu model expose capture, visibility, and check
     captureMode: 'system',
     selectedSystemSourceId: 'output-1',
     selectedDeviceId: null,
+    rollingCaptureSeconds: 30,
     systemSources: [{ id: 'output-1', label: 'Studio Output' }],
     inputSources: [{ id: '', label: 'Default Input' }],
   })
@@ -277,19 +278,27 @@ test('tray state validation and menu model expose capture, visibility, and check
   assert.equal(model.mainWindowActionLabel, 'Show Prism')
   assert.equal(model.captureActionLabel, 'Stop Capture')
   assert.equal(model.rendererState.hasUnsavedProfileChanges, true)
+  assert.equal(model.rendererState.rollingCaptureSeconds, 30)
 
-  assert.equal(normalizeTrayRendererState({ profiles: 'invalid', captureStatus: 'bad' }).captureStatus, 'idle')
+  const invalidState = normalizeTrayRendererState({
+    profiles: 'invalid',
+    captureStatus: 'bad',
+    rollingCaptureSeconds: 15,
+  })
+  assert.equal(invalidState.captureStatus, 'idle')
+  assert.equal(invalidState.rollingCaptureSeconds, null)
 })
 
 test('tray renderer commands remain queued until the renderer is ready', () => {
   const queue = new TrayRendererCommandQueue()
   const received: string[] = []
   queue.enqueue({ type: 'open-settings' })
+  queue.enqueue({ type: 'set-rolling-capture', durationSeconds: 10 })
   queue.enqueue({ type: 'set-capture-running', running: false })
   queue.flush((command) => received.push(command.type))
-  assert.deepEqual(received, ['open-settings', 'set-capture-running'])
+  assert.deepEqual(received, ['open-settings', 'set-rolling-capture', 'set-capture-running'])
   queue.flush((command) => received.push(command.type))
-  assert.deepEqual(received, ['open-settings', 'set-capture-running'])
+  assert.deepEqual(received, ['open-settings', 'set-rolling-capture', 'set-capture-running'])
 })
 
 test('tray assets resolve for development and packaged builds', () => {

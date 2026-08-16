@@ -1,8 +1,17 @@
-import { useState, useEffect, useCallback, useRef, type JSX, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type DragEvent as ReactDragEvent,
+  type JSX,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import type { AppBuildInfo } from '../../types/appBuildInfo'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUpdateStore } from '../stores/updateStore'
 import { useUiStore } from '../stores/uiStore'
+import { useAudioStore } from '../stores/audioStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import PrismLogo from './PrismLogo'
 
@@ -171,6 +180,9 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const latestTag = useUpdateStore((s) => s.latestTag)
   const releaseName = useUpdateStore((s) => s.releaseName)
   const openReleasesPage = useUpdateStore((s) => s.openReleasesPage)
+  const rollingCaptureSeconds = useAudioStore((s) => s.rollingCaptureSeconds)
+  const rollingCaptureStatus = useAudioStore((s) => s.rollingCaptureStatus)
+  const startRollingClipDrag = useAudioStore((s) => s.startRollingClipDrag)
   const [appBuildInfo, setAppBuildInfo] = useState<AppBuildInfo | null>(null)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
   const [showReposition, setShowReposition] = useState(false)
@@ -440,6 +452,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     })
   }, [activeProfileId, profiles])
 
+  const handleAudioClipDragStart = useCallback((event: ReactDragEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    startRollingClipDrag()
+  }, [startRollingClipDrag])
+
   const handleDragStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
     if (useNativeDragRegions || event.button !== 0) return
     event.preventDefault()
@@ -535,6 +552,25 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           <ChevronIcon />
         </button>
       </div>
+
+      {rollingCaptureSeconds !== null ? (
+        <button
+          type="button"
+          className={`toolbar__clip-chip ${rollingCaptureStatus.ready ? 'is-ready' : 'is-filling'}`.trim()}
+          draggable={rollingCaptureStatus.hasAudio}
+          disabled={!rollingCaptureStatus.hasAudio}
+          onDragStart={handleAudioClipDragStart}
+          title={rollingCaptureStatus.ready
+            ? `Drag the latest ${rollingCaptureSeconds} seconds as a WAV file`
+            : rollingCaptureStatus.hasAudio
+              ? `Buffer filling; drag the audio captured so far (up to ${rollingCaptureSeconds} seconds)`
+              : 'Waiting for captured audio'}
+          aria-label={`Drag the latest ${rollingCaptureSeconds} seconds as a WAV file`}
+        >
+          <span className="toolbar__clip-dot" aria-hidden="true" />
+          <span className="toolbar__clip-prefix">Clip </span>{rollingCaptureSeconds}s
+        </button>
+      ) : null}
 
       <div className="toolbar__spacer" />
 

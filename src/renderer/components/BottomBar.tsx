@@ -11,6 +11,7 @@ import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
+import { ROLLING_CAPTURE_DURATIONS } from '../../types/audioClip'
 import { SCOPE_KINDS } from '../../types/scope'
 import type { WindowBackgroundMode, WindowBackgroundState } from '../../types/windowState'
 import ThemedSelect from './ThemedSelect'
@@ -178,11 +179,15 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     captureError,
     captureNotice,
     inputGainDb,
+    rollingCaptureSeconds,
+    rollingCaptureStatus,
     clearCaptureNotice,
     selectSystemSource,
     selectDevice,
     startCapture,
     setInputGain,
+    setRollingCaptureSeconds,
+    revealRollingCaptureFolder,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
   const desktopIntegration = useDesktopIntegrationStore((s) => s.snapshot)
@@ -310,6 +315,18 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     }
   }
 
+  const handleRevealRollingCaptureFolder = async (): Promise<void> => {
+    try {
+      await revealRollingCaptureFolder()
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not open the Prism Captures folder.'),
+        actions: [],
+      })
+    }
+  }
+
   const handleReloadThemes = async (): Promise<void> => {
     if (isRefreshingThemes) {
       return
@@ -387,6 +404,13 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       .map((providerId) => nowPlayingState.definitions[providerId].label)
       .join(' → ')}`
   const captureMessage = captureError ?? captureNotice
+  const rollingCaptureStatusLabel = rollingCaptureSeconds === null
+    ? 'Off'
+    : rollingCaptureStatus.ready
+      ? 'Ready'
+      : rollingCaptureStatus.hasAudio
+        ? 'Filling'
+        : 'Waiting'
   const nowPlayingErrorMessage = currentNowPlayingProvider?.lastError ?? currentNowPlayingProvider?.lastControlError ?? null
   const nowPlayingDetail = nowPlayingErrorMessage
     ? `${currentNowPlayingProviderId ? `${nowPlayingState.definitions[currentNowPlayingProviderId].label} · ` : ''}${nowPlayingErrorMessage}`
@@ -719,6 +743,55 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   </div>
                 </>
               ) : null}
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--rolling-capture">
+            <div className="bottom-bar__section-title">Rolling Capture</div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--rolling-capture">
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
+                  <button
+                    type="button"
+                    className={`settings-chip ${rollingCaptureSeconds === null ? 'is-active' : ''}`.trim()}
+                    onClick={() => setRollingCaptureSeconds(null)}
+                  >
+                    Off
+                  </button>
+                  {ROLLING_CAPTURE_DURATIONS.map((duration) => (
+                    <button
+                      key={duration}
+                      type="button"
+                      className={`settings-chip ${rollingCaptureSeconds === duration ? 'is-active' : ''}`.trim()}
+                      onClick={() => setRollingCaptureSeconds(duration)}
+                    >
+                      {duration}s
+                    </button>
+                  ))}
+                </div>
+
+                <div
+                  className={`settings-status-pill ${rollingCaptureStatus.ready ? 'is-capturing' : ''}`.trim()}
+                  title={rollingCaptureSeconds === null
+                    ? 'Rolling capture uses no recorder memory while off'
+                    : `Keeps up to ${rollingCaptureSeconds} seconds in memory`}
+                >
+                  <span className="settings-status-pill__dot" />
+                  <span>{rollingCaptureStatusLabel}</span>
+                </div>
+
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void handleRevealRollingCaptureFolder()
+                  }}
+                >
+                  Folder
+                </button>
+              </div>
             </div>
           </section>
 
