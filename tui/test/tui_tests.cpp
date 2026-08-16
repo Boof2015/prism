@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "dashboard_layout.h"
 #include "display_model.h"
+#include "frame_pacing.h"
 #include "frame_rate_meter.h"
 #include "meter_display_model.h"
 #include "output_selection.h"
@@ -1119,6 +1120,52 @@ void testFrameRateMeter() {
         "render telemetry should recover safely from a regressing clock");
 }
 
+void testFramePacing() {
+    using Clock = std::chrono::steady_clock;
+    using namespace std::chrono_literals;
+
+    const Clock::time_point origin{};
+    const auto interval = 16ms;
+    require(Prism::Tui::advanceFrameDeadline(origin, origin, interval) ==
+        origin + interval,
+        "an on-time frame should preserve the original cadence");
+    require(Prism::Tui::advanceFrameDeadline(origin, origin + 1ms, interval) ==
+        origin + interval,
+        "a slightly late frame should not shift the original cadence");
+    require(Prism::Tui::advanceFrameDeadline(origin, origin + 51ms, interval) ==
+        origin + 64ms,
+        "a substantially late frame should skip every missed deadline");
+
+    const auto afterLongPause = Prism::Tui::advanceFrameDeadline(
+        origin, origin + 24h, interval);
+    require(afterLongPause > origin + 24h &&
+        afterLongPause <= origin + 24h + interval,
+        "a long pause should advance directly to the first future deadline");
+
+    const auto simulateCoarseWindowsTimer = [&](int framesPerSecond) {
+        const auto frameInterval = std::chrono::microseconds(
+            1000000 / framesPerSecond);
+        auto deadline = origin;
+        size_t frames = 0;
+        for (auto wakeAt = origin;
+             wakeAt < origin + 1s;
+             wakeAt += 15625us) {
+            if (wakeAt < deadline) continue;
+            ++frames;
+            deadline = Prism::Tui::advanceFrameDeadline(
+                deadline, wakeAt, frameInterval);
+        }
+        return frames;
+    };
+
+    require(simulateCoarseWindowsTimer(30) == 30,
+        "coarse Windows wakeups should preserve a 30 FPS cadence");
+    require(simulateCoarseWindowsTimer(60) == 60,
+        "coarse Windows wakeups should preserve a 60 FPS cadence");
+    require(simulateCoarseWindowsTimer(120) == 64,
+        "120 FPS should remain bounded by the available coarse wakeups");
+}
+
 }  // namespace
 
 int main() {
@@ -1134,6 +1181,7 @@ int main() {
     testPitchReadoutResponse();
     testScrollingHistory();
     testPipelineAndFakeCapture();
+    testFramePacing();
     testFrameRateMeter();
     testThreadSafeSnapshots();
     std::cout << "Prism TUI tests passed\n";

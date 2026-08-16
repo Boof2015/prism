@@ -3,6 +3,7 @@
 #include "analysis_pipeline.h"
 #include "dashboard_layout.h"
 #include "display_model.h"
+#include "frame_pacing.h"
 #include "frame_rate_meter.h"
 #include "meter_display_model.h"
 #include "output_selection.h"
@@ -14,6 +15,7 @@
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
+#include <ftxui/component/loop.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/canvas.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -23,12 +25,14 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <csignal>
 #include <cstdio>
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -2446,8 +2450,30 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     std::atomic<bool> resetRequested{false};
     std::atomic<bool> redrawQueued{false};
     std::atomic<uint64_t> outputListRequested{0};
+#if defined(_WIN32)
+    std::mutex screenWakeMutex;
+    std::condition_variable screenWakeCondition;
+    uint64_t screenWakeSerial = 0;
+#endif
     std::exception_ptr workerError;
     auto exitLoop = screen.ExitLoopClosure();
+#if defined(_WIN32)
+    const auto notifyScreenLoop = [&]() {
+        {
+            std::lock_guard<std::mutex> lock(screenWakeMutex);
+            ++screenWakeSerial;
+        }
+        screenWakeCondition.notify_one();
+    };
+#else
+    const auto notifyScreenLoop = []() {};
+#endif
+    const auto queueRedraw = [&]() {
+        if (running.load() && !redrawQueued.exchange(true)) {
+            screen.PostEvent(Event::Custom);
+            notifyScreenLoop();
+        }
+    };
 
     std::thread worker([&]() {
         try {
@@ -2475,6 +2501,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 if (signalRequested != 0) {
                     running.store(false);
                     exitLoop();
+                    notifyScreenLoop();
                     break;
                 }
                 const uint64_t requestedOutputListSerial =
@@ -2485,9 +2512,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                         requestedOutputListSerial,
                         capture->listOutputDevices(),
                     });
-                    if (running.load() && !redrawQueued.exchange(true)) {
-                        screen.PostEvent(Event::Custom);
-                    }
+                    queueRedraw();
                 }
 
                 const OutputSwitchRequest outputSwitchRequest =
@@ -2514,9 +2539,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                         outcome.started,
                         outcome.error,
                     });
-                    if (running.load() && !redrawQueued.exchange(true)) {
-                        screen.PostEvent(Event::Custom);
-                    }
+                    queueRedraw();
                     if (!outcome.captureRunning) {
                         throw std::runtime_error(outcome.error);
                     }
@@ -2581,13 +2604,13 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                         : activeStarted.deviceLabel;
                     next.captureOverrun = captureOverrun;
                     frameStore.publish(std::move(next));
-                    if (running.load() && !redrawQueued.exchange(true)) {
-                        screen.PostEvent(Event::Custom);
-                    }
-                    nextFrameAt = now +
+                    queueRedraw();
+                    nextFrameAt = advanceFrameDeadline(
+                        nextFrameAt,
+                        now,
                         displayFrameInterval(effectiveRefreshRate(
                             appliedSettings.refreshRate,
-                            appliedSettings.terminalCompatibility));
+                            appliedSettings.terminalCompatibility)));
                 }
                 std::this_thread::sleep_for(kCapturePollInterval);
             }
@@ -2595,6 +2618,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             workerError = std::current_exception();
             if (running.exchange(false)) {
                 exitLoop();
+                notifyScreenLoop();
             }
         }
     });
@@ -3528,7 +3552,26 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
 
     std::exception_ptr screenError;
     try {
+#if defined(_WIN32)
+        // FTXUI 7's blocking loop enforces its 60 FPS ceiling with sleep_for.
+        // The default Windows timer resolution rounds that sleep to about 31 ms,
+        // capping redraws near 32 FPS. The capture worker already paces and
+        // coalesces redraws, so park this loop until that worker queues one.
+        Loop loop(&screen, component);
+        uint64_t handledWakeSerial = 0;
+        while (!loop.HasQuitted()) {
+            loop.RunOnce();
+            if (loop.HasQuitted()) break;
+
+            std::unique_lock<std::mutex> lock(screenWakeMutex);
+            screenWakeCondition.wait(lock, [&]() {
+                return screenWakeSerial != handledWakeSerial || !running.load();
+            });
+            handledWakeSerial = screenWakeSerial;
+        }
+#else
         screen.Loop(component);
+#endif
     } catch (...) {
         screenError = std::current_exception();
     }

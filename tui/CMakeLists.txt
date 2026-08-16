@@ -33,6 +33,7 @@ add_library(prism_tui_analysis STATIC
     src/cli.cpp
     src/dashboard_layout.cpp
     src/display_model.cpp
+    src/frame_pacing.cpp
     src/frame_rate_meter.cpp
     src/meter_display_model.cpp
     src/output_selection.cpp
