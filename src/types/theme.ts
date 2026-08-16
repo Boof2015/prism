@@ -90,6 +90,8 @@ export interface ThemeSpectrogramTokens {
   heatLow?: string
   heatMid?: string
   heatHigh?: string
+  guides?: string
+  labels?: string
 }
 
 export interface ThemeVUMeterTokens {
@@ -279,6 +281,8 @@ export interface ResolvedSpectrogramTheme {
   mono: string
   background: string
   heatColors: [string, string, string]
+  guides: string
+  labels: string
 }
 
 export interface ResolvedVUMeterTheme {

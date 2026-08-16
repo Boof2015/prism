@@ -121,6 +121,9 @@ jobs:
       - name: Test native spectrum and capture exports
         run: npm run test:spectrum-native
 
+      - name: Test native spectrogram accuracy
+        run: npm run test:spectrogram-native
+
       - name: Build and test Prism TUI
         run: npm run test:tui
 

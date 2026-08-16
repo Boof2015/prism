@@ -18,10 +18,10 @@ Prism taps into your system audio and runs it through a rack of real-time scopes
 
 Seven visualizers driven by a native C++ analysis engine:
 
-- **Spectrum Analyzer** — FFT frequency display with heatmap and fill modes, configurable FFT size, spectral tilt, and log or linear scaling
+- **Spectrum Analyzer** — FFT frequency display with heatmap and fill modes, configurable FFT size, spectral tilt, Log/Mel/Linear scaling, and Extended (default, 10 Hz–up to 24 kHz) or Audible (20 Hz–20 kHz) ranges
 - **Oscilloscope** — Time-domain waveform with a pitch-lock mode that syncs the display to the fundamental frequency
 - **Vectorscope** — Stereo phase visualization in five display modes (Lissajous, polar, linear) with optional multiband RGB split
-- **Spectrogram** — Scrolling frequency-over-time display with mel, log, and linear scale modes
+- **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, Extended (default) or Audible ranges, optional adaptive frequency guides, stereo-energy analysis, a legacy-style Focused mode, and detail-preserving frequency reassignment in Sharp/Sharper modes
 - **VU Meter** — Classic loudness metering in needle or bar style, horizontal or vertical
 - **Loudness Meter** — Compact LUFS metering following ITU-R BS.1770 with fast stereo peak activity
 - **Waveform** — Scrolling time-domain view with mono, stereo, and multiband modes

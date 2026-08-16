@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { isTransformableScopeKind, type ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import { nominalFrequencyBoundsForRange } from '../../types/frequencyScale'
 import type { ScopeDisplayRotation } from '../../types/scopeTransform'
 import type {
   PrismResolvedTheme,
@@ -168,6 +169,7 @@ export function scopeSettingsToOptions(
     case 'spectrum': {
       const s = settings as ScopeSettings['spectrum']
       const t = theme as ResolvedSpectrumTheme
+      const range = nominalFrequencyBoundsForRange(s.frequencyRangeMode)
       return {
         lineColor: t.line,
         secondaryLineColor: t.sideLine,
@@ -177,6 +179,9 @@ export function scopeSettingsToOptions(
         backgroundColor: t.background,
         gridColor: t.guides,
         labelColor: t.labels,
+        scaleType: s.scaleMode,
+        minFrequency: range.minFrequency,
+        maxFrequency: range.maxFrequency,
         fftSize: s.fftSize,
         tiltDbPerOctave: s.tiltDbPerOctave,
         heatmapFill: s.heatmap,
@@ -227,16 +232,22 @@ export function scopeSettingsToOptions(
     case 'spectrogram': {
       const s = settings as ScopeSettings['spectrogram']
       const t = theme as ResolvedSpectrogramTheme
+      const range = nominalFrequencyBoundsForRange(s.frequencyRangeMode)
       return {
         lineColor: t.mono,
         heatColors: t.heatColors,
         backgroundColor: t.background,
+        gridColor: t.guides,
+        labelColor: t.labels,
+        minFrequency: range.minFrequency,
+        maxFrequency: range.maxFrequency,
         fftSize: s.fftSize,
         tiltDbPerOctave: s.tiltDbPerOctave,
         scrollSpeed: s.scrollSpeed,
         contrast: s.contrast,
         clarityMode: s.clarityMode,
         scaleMode: s.scaleMode,
+        showGrid: s.showGrid,
         orientation: 'horizontal',
         colorScheme: s.colorScheme,
       }

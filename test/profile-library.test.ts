@@ -50,7 +50,13 @@ function createProfile(name: string): Profile {
   profile.windowBounds = { x: 10, y: 20, width: 840, height: 180 }
   profile.scopeSettings.spectrum.showSideLine = true
   profile.scopeSettings.spectrum.heatmapSmoothing = 0.67
+  profile.scopeSettings.spectrum.scaleMode = 'mel'
+  profile.scopeSettings.spectrum.frequencyRangeMode = 'audible'
   profile.scopeSettings.spectrogram.colorScheme = 'mono'
+  profile.scopeSettings.spectrogram.clarityMode = 'focused'
+  profile.scopeSettings.spectrogram.scaleMode = 'linear'
+  profile.scopeSettings.spectrogram.frequencyRangeMode = 'extended'
+  profile.scopeSettings.spectrogram.showGrid = true
   profile.scopeSettings.spectrogram.rotation = 90
   profile.scopeSettings.spectrogram.mirrorHorizontal = true
   return profile
@@ -68,6 +74,12 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(JSON.stringify(file).includes('inputGainDb'), false)
   assert.deepEqual(file.scopePopouts.spectrum, { poppedOut: true })
   assert.equal(file.scopeSettings.spectrum.heatmapSmoothing, 0.67)
+  assert.equal(file.scopeSettings.spectrum.scaleMode, 'mel')
+  assert.equal(file.scopeSettings.spectrum.frequencyRangeMode, 'audible')
+  assert.equal(file.scopeSettings.spectrogram.scaleMode, 'linear')
+  assert.equal(file.scopeSettings.spectrogram.clarityMode, 'focused')
+  assert.equal(file.scopeSettings.spectrogram.frequencyRangeMode, 'extended')
+  assert.equal(file.scopeSettings.spectrogram.showGrid, true)
   assert.equal(file.scopeSettings.spectrogram.rotation, 90)
   assert.equal(file.scopeSettings.spectrogram.mirrorHorizontal, true)
   assert.equal('orientation' in file.scopeSettings.spectrogram, false)
@@ -80,7 +92,13 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.deepEqual(restored.scopePopouts.spectrum.windowBounds, profile.scopePopouts.spectrum.windowBounds)
   assert.equal(restored.scopeSettings.spectrum.showSideLine, true)
   assert.equal(restored.scopeSettings.spectrum.heatmapSmoothing, 0.67)
+  assert.equal(restored.scopeSettings.spectrum.scaleMode, 'mel')
+  assert.equal(restored.scopeSettings.spectrum.frequencyRangeMode, 'audible')
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
+  assert.equal(restored.scopeSettings.spectrogram.clarityMode, 'focused')
+  assert.equal(restored.scopeSettings.spectrogram.scaleMode, 'linear')
+  assert.equal(restored.scopeSettings.spectrogram.frequencyRangeMode, 'extended')
+  assert.equal(restored.scopeSettings.spectrogram.showGrid, true)
   assert.equal(restored.scopeSettings.spectrogram.rotation, 90)
   assert.equal(restored.scopeSettings.spectrogram.mirrorHorizontal, true)
   assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
@@ -182,6 +200,60 @@ test('mergeScopeSettings defaults missing or invalid VU needle channel settings 
   assert.equal(combined.vumeter.needleChannels, 'combined')
   assert.equal(invalid.vumeter.needleChannels, 'stereo')
   assert.equal(missing.vumeter.needleChannels, 'stereo')
+})
+
+test('mergeScopeSettings normalizes frequency scales, ranges, clarity, and supported spectrogram speeds', () => {
+  const valid = mergeScopeSettings({
+    spectrum: { scaleMode: 'mel', frequencyRangeMode: 'extended' },
+    spectrogram: {
+      scaleMode: 'linear',
+      frequencyRangeMode: 'audible',
+      clarityMode: 'focused',
+      showGrid: true,
+      scrollSpeed: 8,
+    },
+  })
+  const invalid = mergeScopeSettings({
+    spectrum: { scaleMode: 'bark', frequencyRangeMode: 'full' },
+    spectrogram: {
+      scaleMode: 42,
+      frequencyRangeMode: 12,
+      clarityMode: 'etched',
+      showGrid: 'yes',
+      scrollSpeed: 99,
+    },
+  })
+  const legacy = mergeScopeSettings({
+    spectrogram: { scrollSpeed: 0.5 },
+  })
+  const missing = mergeScopeSettings({})
+
+  assert.equal(valid.spectrum.scaleMode, 'mel')
+  assert.equal(valid.spectrum.frequencyRangeMode, 'extended')
+  assert.equal(valid.spectrogram.scaleMode, 'linear')
+  assert.equal(valid.spectrogram.frequencyRangeMode, 'audible')
+  assert.equal(valid.spectrogram.clarityMode, 'focused')
+  assert.equal(valid.spectrogram.showGrid, true)
+  assert.equal(valid.spectrogram.scrollSpeed, 8)
+  assert.equal(invalid.spectrum.scaleMode, 'log')
+  assert.equal(invalid.spectrum.frequencyRangeMode, 'extended')
+  assert.equal(invalid.spectrogram.scaleMode, 'log')
+  assert.equal(invalid.spectrogram.frequencyRangeMode, 'extended')
+  assert.equal(invalid.spectrogram.clarityMode, 'sharper')
+  assert.equal(invalid.spectrogram.showGrid, false)
+  assert.equal(invalid.spectrogram.scrollSpeed, 8)
+  assert.equal(legacy.spectrogram.scrollSpeed, 0.5)
+  assert.equal(missing.spectrum.scaleMode, 'log')
+  assert.equal(missing.spectrum.frequencyRangeMode, 'extended')
+  assert.equal(missing.spectrogram.scaleMode, 'log')
+  assert.equal(missing.spectrogram.frequencyRangeMode, 'extended')
+  assert.equal(missing.spectrogram.clarityMode, 'sharper')
+  assert.equal(missing.spectrogram.showGrid, false)
+
+  const newProfile = createDefaultProfile('New')
+  assert.equal(newProfile.scopeSettings.spectrum.frequencyRangeMode, 'extended')
+  assert.equal(newProfile.scopeSettings.spectrogram.frequencyRangeMode, 'extended')
+  assert.equal(newProfile.scopeSettings.spectrogram.showGrid, true)
 })
 
 test('library saves, renames, deletes, and resolves filename collisions', async () => {

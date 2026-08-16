@@ -248,6 +248,7 @@ export const spectrum: SpectrumNativeAnalyzer = {
 export interface SpectrogramNativeAnalyzer {
   configure(options: SpectrogramNativeOptions): void
   process(audioData: Float32Array): SpectrogramNativeResult | null
+  processStereo?: (leftChannel: Float32Array, rightChannel: Float32Array) => SpectrogramNativeResult | null
   reset(): void
   isAvailable?: () => boolean
 }
@@ -299,6 +300,13 @@ export const spectrogram: SpectrogramNativeAnalyzer = {
   process: (audioData: Float32Array): SpectrogramNativeResult | null => {
     if (!nativeModule?.spectrogram) return null
     return nativeModule.spectrogram.process(audioData)
+  },
+
+  processStereo: (leftChannel: Float32Array, rightChannel: Float32Array): SpectrogramNativeResult | null => {
+    if (!nativeModule?.spectrogram) return null
+    return typeof nativeModule.spectrogram.processStereo === 'function'
+      ? nativeModule.spectrogram.processStereo(leftChannel, rightChannel)
+      : nativeModule.spectrogram.process(leftChannel)
   },
 
   reset: (): void => {

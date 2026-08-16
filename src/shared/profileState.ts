@@ -16,7 +16,16 @@ import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } fr
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 import { isLUFSMeterReadout } from '../types/lufsmeter'
 import { normalizeSpectrumPeakInfoMode } from '../types/spectrum'
-import { clampSpectrogramTiltDbPerOctave } from '../types/spectrogram'
+import {
+  normalizeFrequencyRangeMode,
+  normalizeFrequencyScaleMode,
+} from '../types/frequencyScale'
+import {
+  clampSpectrogramScrollSpeed,
+  clampSpectrogramTiltDbPerOctave,
+  DEFAULT_SPECTROGRAM_CLARITY_MODE,
+  isSpectrogramClarityMode,
+} from '../types/spectrogram'
 import { isVUMeterNeedleChannels, sanitizeVUReferenceDbfs } from '../types/vumeter'
 import { clampWaveformScrollSpeed } from '../types/waveform'
 import {
@@ -198,6 +207,8 @@ export function mergeScopeSettings(
       ...DEFAULT_SCOPE_SETTINGS.spectrum,
       ...rawSpectrum,
       ...normalizeDisplayTransform(rawSpectrum),
+      scaleMode: normalizeFrequencyScaleMode(rawSpectrum.scaleMode),
+      frequencyRangeMode: normalizeFrequencyRangeMode(rawSpectrum.frequencyRangeMode),
       peakInfoMode: normalizeSpectrumPeakInfoMode(rawSpectrum.peakInfoMode),
     },
     oscilloscope: {
@@ -210,6 +221,15 @@ export function mergeScopeSettings(
       ...DEFAULT_SCOPE_SETTINGS.spectrogram,
       ...rawSpectrogramSettings,
       ...normalizeDisplayTransform(rawSpectrogram, legacySpectrogramRotation),
+      clarityMode: isSpectrogramClarityMode(rawSpectrogram.clarityMode)
+        ? rawSpectrogram.clarityMode
+        : DEFAULT_SPECTROGRAM_CLARITY_MODE,
+      scaleMode: normalizeFrequencyScaleMode(rawSpectrogram.scaleMode),
+      frequencyRangeMode: normalizeFrequencyRangeMode(rawSpectrogram.frequencyRangeMode),
+      showGrid: typeof rawSpectrogram.showGrid === 'boolean' ? rawSpectrogram.showGrid : false,
+      scrollSpeed: clampSpectrogramScrollSpeed(
+        rawSpectrogram.scrollSpeed ?? DEFAULT_SCOPE_SETTINGS.spectrogram.scrollSpeed
+      ),
       tiltDbPerOctave: clampSpectrogramTiltDbPerOctave(
         rawSpectrogram.tiltDbPerOctave ?? DEFAULT_SCOPE_SETTINGS.spectrogram.tiltDbPerOctave
       ),

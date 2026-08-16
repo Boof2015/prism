@@ -39,7 +39,7 @@ function flushScopeAudioBatch(kind: AudioScopeKind, scopeSettings: ScopeSettings
     case 'vectorscope':
       return audioRouter.flushPendingVectorscopeSamples()
     case 'spectrogram':
-      return audioRouter.flushPendingSpectrogramSamples()
+      return audioRouter.flushPendingSpectrogramStereoSamples()
     case 'vumeter':
       return audioRouter.flushPendingVUMeterSamples()
     case 'lufsmeter':

@@ -24,6 +24,12 @@ import {
   type ScopeMeasurement,
 } from '../scopeMeasurement'
 import type { NormalizedScopePoint } from '../scopeCanvasTransform'
+import {
+  buildFrequencyGuides,
+  clampFrequencyRangeToNyquist,
+  frequencyAtNormalizedPosition,
+  type FrequencyScaleMode,
+} from '../../types/frequencyScale'
 
 type SpectrumStereoChunk = {
   left: Float32Array
@@ -48,7 +54,7 @@ export interface SpectrumAnalyzerOptions {
   backgroundColor?: string
   showGrid?: boolean
   gridColor?: string
-  scaleType?: 'linear' | 'log'
+  scaleType?: FrequencyScaleMode
   smoothing?: number
   minDecibels?: number
   maxDecibels?: number
@@ -200,8 +206,8 @@ const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
   smoothing: 0.9,
   minDecibels: -90,
   maxDecibels: -10,
-  minFrequency: 20,
-  maxFrequency: 20000,
+  minFrequency: 10,
+  maxFrequency: 24000,
   tiltDbPerOctave: DEFAULT_SPECTRUM_TILT_DB_PER_OCTAVE,
   heatmapTiltDbPerOctave: DEFAULT_SPECTRUM_HEATMAP_TILT_DB_PER_OCTAVE,
   tiltReferenceHz: 1000,
@@ -500,12 +506,7 @@ export class SpectrumAnalyzer {
   }
 
   private frequencyAtPosition(t: number, minFrequency: number, maxFrequency: number): number {
-    if (this.options.scaleType === 'log') {
-      const logMin = Math.log10(minFrequency)
-      const logMax = Math.log10(maxFrequency)
-      return Math.pow(10, logMin + t * (logMax - logMin))
-    }
-    return minFrequency + t * (maxFrequency - minFrequency)
+    return frequencyAtNormalizedPosition(t, minFrequency, maxFrequency, this.options.scaleType)
   }
 
   private resolvePeakInRange(
@@ -1032,8 +1033,8 @@ export class SpectrumAnalyzer {
     this.updateSampleRateIfNeeded()
 
     const nyquist = this.sampleRate / 2
-    const minFrequency = Math.max(1, Math.min(options.minFrequency, nyquist))
-    const maxFrequency = Math.max(minFrequency + 1, Math.min(options.maxFrequency, nyquist))
+    const range = clampFrequencyRangeToNyquist(this.sampleRate, options.minFrequency, options.maxFrequency)
+    const { minFrequency, maxFrequency } = range
 
     if (!this.dataSource.isPlaying()) {
       this.clearPendingSpectrumQueues()
@@ -1224,29 +1225,27 @@ export class SpectrumAnalyzer {
 
     ctx.fillStyle = options.gridColor
     ctx.font = `${10 * dpr}px monospace`
-    const freqSteps = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+    const guides = buildFrequencyGuides(
+      minFrequency,
+      maxFrequency,
+      options.scaleType,
+      width,
+    )
     ctx.textAlign = 'center'
 
-    for (const freq of freqSteps) {
-      if (freq < minFrequency || freq > maxFrequency) continue
-
-      let x: number
-      if (options.scaleType === 'log') {
-        const logMin = Math.log10(minFrequency)
-        const logMax = Math.log10(maxFrequency)
-        const logFreq = Math.log10(freq)
-        x = ((logFreq - logMin) / (logMax - logMin)) * width
-      } else {
-        x = ((freq - minFrequency) / (maxFrequency - minFrequency)) * width
-      }
+    for (const guide of guides) {
+      const x = guide.normalizedPosition * width
 
       ctx.beginPath()
       ctx.moveTo(x, 0)
       ctx.lineTo(x, height)
+      ctx.globalAlpha = guide.kind === 'minor' ? 0.38 : 1
       ctx.stroke()
+      ctx.globalAlpha = 1
 
-      const label = freq >= 1000 ? `${freq / 1000}k` : `${freq}`
-      ctx.fillText(label, x, height - 4 * dpr)
+      if (guide.label) {
+        ctx.fillText(guide.label, x, height - 4 * dpr)
+      }
     }
   }
 

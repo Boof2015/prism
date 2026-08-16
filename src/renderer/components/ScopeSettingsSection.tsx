@@ -2,9 +2,11 @@ import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS, isTransformableScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import { frequencyRangeLabel } from '../../types/frequencyScale'
 import { SCOPE_DISPLAY_ROTATIONS, type ScopeDisplayRotation } from '../../types/scopeTransform'
 import {
   MAX_SPECTROGRAM_CONTRAST,
+  MAX_SPECTROGRAM_SCROLL_SPEED,
   MAX_SPECTROGRAM_TILT_DB_PER_OCTAVE,
   MIN_SPECTROGRAM_CONTRAST,
   MIN_SPECTROGRAM_TILT_DB_PER_OCTAVE,
@@ -76,7 +78,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
   switch (kind) {
     case 'spectrum': {
       const scopeSettings = settings as ScopeSettings['spectrum']
-      const summary = `${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
+      const summary = `${scopeSettings.scaleMode.toUpperCase()} · ${frequencyRangeLabel(scopeSettings.frequencyRangeMode)} · ${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
       const parts = [summary]
       if (scopeSettings.showSideLine) {
         parts.push('Side')
@@ -107,6 +109,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       return [
         `${scopeSettings.rotation}°`,
         scopeSettings.scaleMode.toUpperCase(),
+        frequencyRangeLabel(scopeSettings.frequencyRangeMode),
         scopeSettings.clarityMode,
         ...(scopeSettings.mirrorHorizontal ? ['Mirror'] : []),
       ].join(' · ')
@@ -334,6 +337,29 @@ export default function ScopeSettingsSection({
               </SelectControl>
 
               <SelectControl
+                label="Scale"
+                value={current.scaleMode}
+                onChange={(value) => onUpdate('spectrum', {
+                  scaleMode: value as ScopeSettings['spectrum']['scaleMode'],
+                })}
+              >
+                <option value="log">Log</option>
+                <option value="mel">Mel</option>
+                <option value="linear">Linear</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Range"
+                value={current.frequencyRangeMode}
+                onChange={(value) => onUpdate('spectrum', {
+                  frequencyRangeMode: value as ScopeSettings['spectrum']['frequencyRangeMode'],
+                })}
+              >
+                <option value="extended">Extended (10 Hz–up to 24 kHz)</option>
+                <option value="audible">Audible (20 Hz–20 kHz)</option>
+              </SelectControl>
+
+              <SelectControl
                 label="Peak"
                 value={current.peakInfoMode}
                 onChange={(value) => onUpdate('spectrum', {
@@ -539,8 +565,20 @@ export default function ScopeSettingsSection({
                 onChange={(value) => onUpdate('spectrogram', { clarityMode: value as ScopeSettings['spectrogram']['clarityMode'] })}
               >
                 <option value="classic">Classic</option>
+                <option value="focused">Focused</option>
                 <option value="sharp">Sharp</option>
                 <option value="sharper">Sharper</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Range"
+                value={current.frequencyRangeMode}
+                onChange={(value) => onUpdate('spectrogram', {
+                  frequencyRangeMode: value as ScopeSettings['spectrogram']['frequencyRangeMode'],
+                })}
+              >
+                <option value="extended">Extended (10 Hz–up to 24 kHz)</option>
+                <option value="audible">Audible (20 Hz–20 kHz)</option>
               </SelectControl>
 
               <SelectControl
@@ -552,12 +590,20 @@ export default function ScopeSettingsSection({
                 <option value="mono">Solid</option>
               </SelectControl>
 
+              <ToggleGroup label="Overlay">
+                <ToggleChip
+                  label="Frequency Grid"
+                  active={current.showGrid}
+                  onClick={() => onUpdate('spectrogram', { showGrid: !current.showGrid })}
+                />
+              </ToggleGroup>
+
               <RangeControl
                 label="Speed"
                 value={current.scrollSpeed}
                 valueLabel={`x${current.scrollSpeed.toFixed(0)}`}
                 min={1}
-                max={8}
+                max={MAX_SPECTROGRAM_SCROLL_SPEED}
                 step={1}
                 fullWidth={false}
                 onChange={(value) => onUpdate('spectrogram', { scrollSpeed: value })}

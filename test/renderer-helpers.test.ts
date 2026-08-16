@@ -117,6 +117,8 @@ import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/
 import { BridgeSpectrumAnalyzer } from '../src/plugin-ui/BridgeSpectrumAnalyzer'
 import { decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
 import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
+import { spectrogramSettingsToOptions } from '../src/plugin-ui/spectrogramOptions'
+import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
 import { Waveform } from '../src/renderer/visualizers/Waveform'
@@ -145,6 +147,14 @@ import {
   type Profile,
 } from '../src/types/profile'
 import type { WindowCapabilities } from '../src/types/windowCapabilities'
+import {
+  buildFrequencyGuides,
+  clampFrequencyRangeToNyquist,
+  frequencyBoundsForRange,
+  normalizeFrequencyScaleMode,
+  normalizedPositionAtFrequency,
+  type FrequencyScaleMode,
+} from '../src/types/frequencyScale'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
 type FakeElectronAPI = {
@@ -1720,6 +1730,29 @@ test('scope measurement helpers resolve MiniMeters-style cursor axis values', ()
   assert.deepEqual(spectrum.values.slice(0, 2), ['-50.00dB', '1.00kHz'])
   assert.match(spectrum.values[2] ?? '', /^B5 /)
 
+  const slaneyOneKhz = 1000 / (200 / 3)
+  const slaneyMin = 20 / (200 / 3)
+  const slaneyMax = slaneyOneKhz + Math.log(20) / (Math.log(6.4) / 27)
+  const oneKhzPositions = new Map<FrequencyScaleMode, number>([
+    ['log', spectrumX],
+    ['mel', (slaneyOneKhz - slaneyMin) / (slaneyMax - slaneyMin)],
+    ['linear', (1000 - 20) / (20000 - 20)],
+  ])
+  for (const [scaleType, x] of oneKhzPositions) {
+    const scaleMeasurement = resolveSpectrumMeasurement(
+      { x, y: 0.5 },
+      {
+        sampleRate: 48000,
+        minFrequency: 20,
+        maxFrequency: 20000,
+        minDecibels: -90,
+        maxDecibels: -10,
+        scaleType,
+      },
+    )
+    assert.equal(scaleMeasurement.values[1], '1.00kHz')
+  }
+
   const nyquistLimited = resolveSpectrumMeasurement(
     { x: 1, y: 0 },
     {
@@ -1773,6 +1806,98 @@ test('spectrogram measurement follows scale mode and rendered history speed', ()
     },
   )
   assert.deepEqual(measurement.values.slice(0, 2), ['266.67ms ago', '20.00kHz'])
+
+  const expectedHistory = new Map([
+    [1, '1.28s ago'],
+    [2, '640.00ms ago'],
+    [4, '320.00ms ago'],
+    [8, '160.00ms ago'],
+  ])
+  for (const [scrollSpeed, expectedTime] of expectedHistory) {
+    const historyMeasurement = resolveSpectrogramMeasurement(
+      { x: 0, y: 1 },
+      {
+        sampleRate: 48000,
+        minFrequency: 20,
+        maxFrequency: 20000,
+        scaleMode: 'linear',
+        fftSize: 4096,
+        scrollSpeed,
+        canvasPixelWidth: 121,
+      },
+    )
+    assert.deepEqual(historyMeasurement.values.slice(0, 2), [expectedTime, '20.00Hz'])
+  }
+})
+
+test('frequency scale transforms are monotonic, invertible, and Nyquist-safe', () => {
+  const minFrequency = 20
+  const maxFrequency = 20000
+  const positions = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+
+  for (const scaleMode of ['log', 'mel', 'linear'] as const) {
+    const frequencies = positions.map((position) => (
+      frequencyAtNormalizedPosition(position, minFrequency, maxFrequency, scaleMode)
+    ))
+    assertAlmostEqual(frequencies[0], minFrequency, 1e-12, `${scaleMode} minimum`)
+    assertAlmostEqual(frequencies.at(-1) ?? 0, maxFrequency, 1e-9, `${scaleMode} maximum`)
+    for (let index = 1; index < frequencies.length; index += 1) {
+      assert.ok(frequencies[index] > frequencies[index - 1], `${scaleMode} should be monotonic`)
+      assertAlmostEqual(
+        normalizedPositionAtFrequency(frequencies[index], minFrequency, maxFrequency, scaleMode),
+        positions[index],
+        1e-12,
+        `${scaleMode} inverse at ${positions[index]}`,
+      )
+    }
+  }
+
+  const slaneyMelAtOneKhz = 1000 / (200 / 3)
+  const slaneyMelAtTwentyKhz = 15 + Math.log(20) / (Math.log(6.4) / 27)
+  const expectedOneKhzPosition = (
+    slaneyMelAtOneKhz - (20 / (200 / 3))
+  ) / (
+    slaneyMelAtTwentyKhz - (20 / (200 / 3))
+  )
+  assertAlmostEqual(
+    normalizedPositionAtFrequency(1000, 20, 20000, 'mel'),
+    expectedOneKhzPosition,
+    1e-12,
+    'Slaney mel 1kHz anchor',
+  )
+
+  assert.deepEqual(clampFrequencyRangeToNyquist(32000, 20, 20000), {
+    minFrequency: 20,
+    maxFrequency: 16000,
+  })
+  assert.equal(normalizeFrequencyScaleMode('bark'), 'log')
+})
+
+test('frequency ranges and adaptive guides cover extended audio without crowding compact scopes', () => {
+  assert.deepEqual(frequencyBoundsForRange('extended', 44100), {
+    minFrequency: 10,
+    maxFrequency: 22050,
+  })
+  assert.deepEqual(frequencyBoundsForRange('extended', 96000), {
+    minFrequency: 10,
+    maxFrequency: 24000,
+  })
+  assert.deepEqual(frequencyBoundsForRange('audible', 48000), {
+    minFrequency: 20,
+    maxFrequency: 20000,
+  })
+
+  const wideGuides = buildFrequencyGuides(10, 24000, 'log', 1500)
+  assert.ok(wideGuides.some(({ frequencyHz, kind }) => frequencyHz === 30 && kind === 'minor'))
+  assert.ok(wideGuides.some(({ frequencyHz, kind, label }) => (
+    frequencyHz === 1000 && kind === 'major' && label === '1k'
+  )))
+
+  const compactGuides = buildFrequencyGuides(10, 24000, 'log', 320)
+  assert.equal(compactGuides.some(({ kind }) => kind === 'minor'), false)
+  assert.ok(compactGuides.every((guide, index) => (
+    index === 0 || guide.normalizedPosition > compactGuides[index - 1].normalizedPosition
+  )))
 })
 
 test('measurement readout flips and clamps at viewport edges', () => {
@@ -1794,10 +1919,15 @@ test('measurement readout flips and clamps at viewport edges', () => {
   )
 })
 
-test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer options', () => {
+test('scopeSettingsToOptions wires frequency ranges and overlays into desktop and plugin options', () => {
   const profile = createDefaultProfile('Default')
   profile.scopeSettings.spectrum.showSideLine = true
   profile.scopeSettings.spectrum.heatmapSmoothing = 0.64
+  profile.scopeSettings.spectrum.scaleMode = 'mel'
+  profile.scopeSettings.spectrum.frequencyRangeMode = 'audible'
+  profile.scopeSettings.spectrogram.frequencyRangeMode = 'extended'
+  profile.scopeSettings.spectrogram.clarityMode = 'focused'
+  profile.scopeSettings.spectrogram.showGrid = true
   const theme = resolveTheme(createDefaultTheme())
 
   const options = scopeSettingsToOptions('spectrum', profile.scopeSettings.spectrum, theme.spectrum)
@@ -1808,10 +1938,37 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.lineColor, theme.spectrum.line)
   assert.equal(options.backgroundColor, theme.spectrum.background)
   assert.equal(options.gridColor, theme.spectrum.guides)
+  assert.equal(options.scaleType, 'mel')
+  assert.equal(options.minFrequency, 20)
+  assert.equal(options.maxFrequency, 20000)
+
+  const pluginOptions = spectrumSettingsToOptions(profile.scopeSettings.spectrum, theme.spectrum)
+  assert.equal(pluginOptions.scaleType, 'mel')
+  assert.equal(pluginOptions.minFrequency, 20)
+  assert.equal(pluginOptions.maxFrequency, 20000)
+
+  const spectrogramOptions = scopeSettingsToOptions(
+    'spectrogram',
+    profile.scopeSettings.spectrogram,
+    theme.spectrogram,
+  )
+  assert.equal(spectrogramOptions.minFrequency, 10)
+  assert.equal(spectrogramOptions.maxFrequency, 24000)
+  assert.equal(spectrogramOptions.clarityMode, 'focused')
+  assert.equal(spectrogramOptions.showGrid, true)
+
+  const pluginSpectrogramOptions = spectrogramSettingsToOptions(
+    profile.scopeSettings.spectrogram,
+    theme.spectrogram,
+  )
+  assert.equal(pluginSpectrogramOptions.minFrequency, 10)
+  assert.equal(pluginSpectrogramOptions.maxFrequency, 24000)
+  assert.equal(pluginSpectrogramOptions.clarityMode, 'focused')
+  assert.equal(pluginSpectrogramOptions.showGrid, true)
 })
 
 test('SpectrumAnalyzer grid only draws frequency guides when enabled', () => {
-  const renderGrid = (showGrid: boolean): FakeCanvasRecorder => {
+  const renderGrid = (showGrid: boolean, scaleType: FrequencyScaleMode = 'log'): FakeCanvasRecorder => {
     const recorder = createFakeCanvasRecorder()
     const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
     const dataSource = {
@@ -1823,6 +1980,7 @@ test('SpectrumAnalyzer grid only draws frequency guides when enabled', () => {
     }
     const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
       showGrid,
+      scaleType,
       dataSource,
       nativeAnalyzer: null,
     })
@@ -1857,6 +2015,62 @@ test('SpectrumAnalyzer grid only draws frequency guides when enabled', () => {
   const disabled = renderGrid(false)
   assert.deepEqual(disabled.fillTexts, [])
   assert.deepEqual(disabled.lineStrokes, [])
+
+  for (const scaleType of ['log', 'mel', 'linear'] as const) {
+    const recorder = renderGrid(true, scaleType)
+    const oneKhz = recorder.fillTexts.find(({ text }) => text === '1k')
+    assert.ok(oneKhz)
+    assertAlmostEqual(
+      oneKhz.x,
+      normalizedPositionAtFrequency(1000, 20, 20000, scaleType) * 320,
+      1e-9,
+      `${scaleType} 1kHz grid position`,
+    )
+  }
+})
+
+test('SpectrumAnalyzer applies frequency scale changes without recreation', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showGrid: true,
+    scaleType: 'log',
+    dataSource,
+    nativeAnalyzer: null,
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      ensureStaticLayer: (minFrequency: number, maxFrequency: number) => void
+    }
+    state.ensureStaticLayer(20, 20000)
+    const logPosition = recorder.fillTexts.find(({ text }) => text === '1k')?.x
+    assert.notEqual(logPosition, undefined)
+
+    analyzer.setOptions({ scaleType: 'linear' })
+    state.ensureStaticLayer(20, 20000)
+    const oneKhzLabels = recorder.fillTexts.filter(({ text }) => text === '1k')
+    assert.equal(oneKhzLabels.length, 2)
+    const linearPosition = oneKhzLabels.at(-1)?.x
+    assert.notEqual(linearPosition, undefined)
+    assert.notEqual(linearPosition, logPosition)
+    assertAlmostEqual(
+      linearPosition ?? 0,
+      normalizedPositionAtFrequency(1000, 20, 20000, 'linear') * 320,
+      1e-9,
+      'live linear 1kHz grid position',
+    )
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
 })
 
 test('SpectrumAnalyzer applies and restores transient measurement smoothing without resetting', () => {
@@ -2282,6 +2496,53 @@ test('Spectrogram vertical orientation shifts existing rows upward with copy com
   assert.equal(drawCall?.args[2], -1)
 })
 
+test('Spectrogram draws adaptive frequency guides in the selected scale', () => {
+  const renderGrid = (showGrid: boolean, scaleMode: FrequencyScaleMode): FakeCanvasRecorder => {
+    const recorder = createFakeCanvasRecorder()
+    const dom = installFakeCanvasDom(() => createFakeCanvas(recorder, 320, 600))
+    const spectrogram = new Spectrogram(createFakeCanvas(recorder, 320, 600), {
+      showGrid,
+      scaleMode,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      dataSource: {
+        getPendingSpectrogramSamples: () => [],
+        getPendingSpectrogramStereoSamples: () => [],
+        getSampleRate: () => 48000,
+        isPlaying: () => false,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: null,
+    })
+
+    try {
+      const state = spectrogram as unknown as { drawFrame: () => void }
+      state.drawFrame()
+      return recorder
+    } finally {
+      spectrogram.dispose()
+      dom.restore()
+    }
+  }
+
+  const enabled = renderGrid(true, 'mel')
+  const oneKhz = enabled.fillTexts.find(({ text }) => text === '1k')
+  assert.ok(oneKhz)
+  assertAlmostEqual(
+    oneKhz.y,
+    600 - (normalizedPositionAtFrequency(1000, 20, 20000, 'mel') * 600) - 2,
+    1e-9,
+    'Mel spectrogram 1kHz grid position',
+  )
+
+  const wideLog = renderGrid(true, 'log')
+  assert.ok(wideLog.lineStrokes.length > wideLog.fillTexts.length)
+
+  const disabled = renderGrid(false, 'log')
+  assert.deepEqual(disabled.fillTexts, [])
+  assert.deepEqual(disabled.lineStrokes, [])
+})
+
 test('Spectrogram paints multiple native analyzer columns in order', () => {
   const recorder = createFakeCanvasRecorder()
   const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
@@ -2323,6 +2584,59 @@ test('Spectrogram paints multiple native analyzer columns in order', () => {
     assert.equal(writes.length, 2)
     assert.deepEqual(writes[0].data.slice(0, 8), [10, 20, 30, 64, 10, 20, 30, 128])
     assert.deepEqual(writes[1].data.slice(0, 8), [10, 20, 30, 191, 10, 20, 30, 255])
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
+test('Spectrogram forwards stereo channels without a cancellation-prone mono downmix', () => {
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas(null, 4, 2)
+  const left = Float32Array.from([0.5, 0, -0.5, 0])
+  const right = Float32Array.from([-0.5, 0, 0.5, 0])
+  let pending = [{ left, right }]
+  let processedLeft: Float32Array | null = null
+  let processedRight: Float32Array | null = null
+  const dataSource = {
+    getPendingSpectrogramSamples: (): Float32Array[] => assert.fail('stereo input must not be downmixed'),
+    getPendingSpectrogramStereoSamples: () => {
+      const chunks = pending
+      pending = []
+      return chunks
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const emptyResult = (): SpectrogramNativeResult => ({
+    display: new Float32Array(0),
+    heat: new Float32Array(0),
+    columnCount: 0,
+    rowCount: 2,
+  })
+  const nativeAnalyzer: SpectrogramNativeAnalyzer = {
+    isAvailable: () => true,
+    configure: () => {},
+    process: () => assert.fail('stereo input must use processStereo'),
+    processStereo: (nextLeft, nextRight) => {
+      processedLeft = nextLeft
+      processedRight = nextRight
+      return emptyResult()
+    },
+    reset: () => {},
+  }
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    nativeAnalyzer,
+    showGrid: false,
+  })
+
+  try {
+    const state = spectrogram as unknown as { drawFrame: () => void }
+    state.drawFrame()
+    assert.equal(processedLeft, left)
+    assert.equal(processedRight, right)
   } finally {
     spectrogram.dispose()
     dom.restore()
@@ -2378,6 +2692,11 @@ test('Spectrogram forwards orientation and row count to the native analyzer', ()
     assert.equal(capturedConfig?.scrollSpeed, 4)
     assert.equal(capturedConfig?.tiltDbPerOctave, 5.5)
     assert.equal(capturedConfig?.sampleRate, 44100)
+
+    spectrogram.setOptions({ scaleMode: 'mel' })
+    pending = [Float32Array.from([0, 0])]
+    state.drawFrame()
+    assert.equal(capturedConfig?.scaleMode, 'mel')
   } finally {
     spectrogram.dispose()
     dom.restore()
@@ -2590,6 +2909,8 @@ test('SpectrumAnalyzer keeps a left-only Mid curve while reporting the left chan
     fillGradient: false,
     smoothing: 0,
     tiltDbPerOctave: 0,
+    minFrequency: 20,
+    maxFrequency: 20000,
     fftSize,
     dataSource: {
       getPendingSpectrumSamples: () => assert.fail('peak capture must preserve stereo channel data'),
@@ -3333,27 +3654,35 @@ test('scopeSummary includes loudness readout source', () => {
 test('scopeSummary includes spectrum peak mode when enabled', () => {
   const profile = createDefaultProfile('Default')
 
-  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048')
+
+  profile.scopeSettings.spectrum.scaleMode = 'mel'
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'MEL · Extended · Fill · FFT 2048')
+  profile.scopeSettings.spectrum.scaleMode = 'log'
 
   profile.scopeSettings.spectrum.peakInfoMode = 'on'
-  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048 · Peak')
 
   profile.scopeSettings.spectrum.peakInfoMode = 'following'
-  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak Follow')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048 · Peak Follow')
 })
 
 test('scopeSummary includes visual-scope rotation and mirroring', () => {
   const profile = createDefaultProfile('Default')
 
-  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '0° · LOG · sharper')
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '0° · LOG · Extended · sharper')
+
+  profile.scopeSettings.spectrogram.clarityMode = 'focused'
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '0° · LOG · Extended · focused')
+  profile.scopeSettings.spectrogram.clarityMode = 'sharper'
 
   profile.scopeSettings.spectrogram.rotation = 270
   profile.scopeSettings.spectrogram.mirrorHorizontal = true
-  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '270° · LOG · sharper · Mirror')
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '270° · LOG · Extended · sharper · Mirror')
 
   profile.scopeSettings.spectrum.rotation = 90
   profile.scopeSettings.spectrum.mirrorHorizontal = true
-  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · R90° · Mirror')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048 · R90° · Mirror')
 })
 
 test('scopeSummary summarizes now playing field visibility', () => {
@@ -3385,6 +3714,20 @@ test('ScopePopoutDataSource switches waveform batches between mono and stereo qu
   dataSource.pushAudioBatch([nextMonoChunk])
   assert.equal(dataSource.getPendingWaveformStereoSamples().length, 0)
   assert.equal(dataSource.getPendingWaveformSamples()[0], nextMonoChunk)
+})
+
+test('ScopePopoutDataSource preserves spectrogram stereo batches', () => {
+  const dataSource = new ScopePopoutDataSource('spectrogram')
+  const left = new Float32Array([0.5, -0.5])
+  const right = new Float32Array([-0.5, 0.5])
+
+  dataSource.pushAudioBatch([{ left, right }])
+
+  assert.equal(dataSource.getPendingSpectrogramSamples().length, 0)
+  const batch = dataSource.getPendingSpectrogramStereoSamples()
+  assert.equal(batch.length, 1)
+  assert.equal(batch[0]?.left, left)
+  assert.equal(batch[0]?.right, right)
 })
 
 test('applying a profile snapshot does not change the machine-local frame target', () => {

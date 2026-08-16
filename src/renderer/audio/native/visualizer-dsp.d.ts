@@ -121,6 +121,7 @@ export interface SpectrumModule {
 export interface SpectrogramModule {
   configure(options: SpectrogramNativeOptions): void;
   process(audioData: Float32Array): SpectrogramNativeResult;
+  processStereo(leftChannel: Float32Array, rightChannel: Float32Array): SpectrogramNativeResult;
   reset(): void;
 }
 

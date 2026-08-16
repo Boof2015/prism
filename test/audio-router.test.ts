@@ -82,6 +82,36 @@ test('spectrum keeps stereo chunks for the side overlay path and still exposes m
   assert.equal(router.flushPendingSpectrumStereoSamples().length, 0)
 })
 
+test('spectrogram preserves stereo chunks so out-of-phase content cannot cancel before analysis', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'native-macos')
+  router.setVisualizerConsumerDemand('test-consumer', { spectrogram: true })
+
+  router.ingestChunk(createChunk(0.5), createChunk(-0.5), {
+    sessionId,
+    channelCount: 2,
+    sequence: 1,
+    capturedAt: performance.now() - 5,
+  })
+
+  const stereoChunks = router.flushPendingSpectrogramStereoSamples()
+  assert.equal(stereoChunks.length, 1)
+  assert.deepEqual(Array.from(stereoChunks[0]?.left ?? []), [0.5, 0.5, 0.5, 0.5])
+  assert.deepEqual(Array.from(stereoChunks[0]?.right ?? []), [-0.5, -0.5, -0.5, -0.5])
+  assert.equal(router.flushPendingSpectrogramSamples().length, 0)
+
+  router.ingestChunk(createChunk(2), createChunk(4), {
+    sessionId,
+    channelCount: 2,
+    sequence: 2,
+    capturedAt: performance.now() - 5,
+  })
+
+  const compatibilityMono = router.flushPendingSpectrogramSamples()
+  assert.deepEqual(Array.from(compatibilityMono[0] ?? []), [3, 3, 3, 3])
+  assert.equal(router.flushPendingSpectrogramStereoSamples().length, 0)
+})
+
 test('waveform keeps stereo chunks for stereo mode while mono flushes still expose the left channel', () => {
   const router = new AudioRouter()
   const sessionId = router.beginSession(48000, 2, 'native-macos')

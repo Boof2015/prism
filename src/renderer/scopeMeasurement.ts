@@ -4,6 +4,11 @@ import {
   resolveSpectrumPitchInfo,
 } from '../types/spectrum'
 import type { SpectrogramScaleMode } from '../types/spectrogram'
+import {
+  clampFrequencyRangeToNyquist,
+  frequencyAtNormalizedPosition,
+  type FrequencyScaleMode,
+} from '../types/frequencyScale'
 import type { WaveformMode } from '../types/waveform'
 import {
   inverseTransformNormalizedScopePoint,
@@ -36,58 +41,7 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
-function clampFrequencyRange(
-  sampleRate: number,
-  minFrequency: number,
-  maxFrequency: number,
-): { minFrequency: number; maxFrequency: number } {
-  const nyquist = Math.max(1, sampleRate) / 2
-  const min = Math.max(1, Math.min(minFrequency, nyquist))
-  return {
-    minFrequency: min,
-    maxFrequency: Math.max(min + 1, Math.min(maxFrequency, nyquist)),
-  }
-}
-
-function hzToMelSlaney(frequencyHz: number): number {
-  const fSp = 200 / 3
-  const minLogHz = 1000
-  const minLogMel = minLogHz / fSp
-  const logStep = Math.log(6.4) / 27
-  return frequencyHz < minLogHz
-    ? frequencyHz / fSp
-    : minLogMel + (Math.log(frequencyHz / minLogHz) / logStep)
-}
-
-function melToHzSlaney(mel: number): number {
-  const fSp = 200 / 3
-  const minLogHz = 1000
-  const minLogMel = minLogHz / fSp
-  const logStep = Math.log(6.4) / 27
-  return mel < minLogMel
-    ? mel * fSp
-    : minLogHz * Math.exp(logStep * (mel - minLogMel))
-}
-
-export function frequencyAtNormalizedPosition(
-  position: number,
-  minFrequency: number,
-  maxFrequency: number,
-  scaleMode: 'linear' | 'log' | 'mel',
-): number {
-  const t = clamp01(position)
-  if (scaleMode === 'linear') {
-    return minFrequency + t * (maxFrequency - minFrequency)
-  }
-  if (scaleMode === 'mel') {
-    const melMin = hzToMelSlaney(minFrequency)
-    const melMax = hzToMelSlaney(maxFrequency)
-    return melToHzSlaney(melMin + t * (melMax - melMin))
-  }
-  const logMin = Math.log10(minFrequency)
-  const logMax = Math.log10(maxFrequency)
-  return 10 ** (logMin + t * (logMax - logMin))
-}
+export { frequencyAtNormalizedPosition } from '../types/frequencyScale'
 
 export function formatMeasurementFrequency(frequencyHz: number): string {
   if (!Number.isFinite(frequencyHz) || frequencyHz <= 0) return '--'
@@ -133,10 +87,10 @@ export function resolveSpectrumMeasurement(
     maxFrequency: number
     minDecibels: number
     maxDecibels: number
-    scaleType: 'linear' | 'log'
+    scaleType: FrequencyScaleMode
   },
 ): ScopeMeasurement {
-  const range = clampFrequencyRange(options.sampleRate, options.minFrequency, options.maxFrequency)
+  const range = clampFrequencyRangeToNyquist(options.sampleRate, options.minFrequency, options.maxFrequency)
   const frequencyHz = frequencyAtNormalizedPosition(
     point.x,
     range.minFrequency,
@@ -165,7 +119,7 @@ export function resolveSpectrogramMeasurement(
     canvasPixelWidth: number
   },
 ): ScopeMeasurement {
-  const range = clampFrequencyRange(options.sampleRate, options.minFrequency, options.maxFrequency)
+  const range = clampFrequencyRangeToNyquist(options.sampleRate, options.minFrequency, options.maxFrequency)
   const frequencyHz = frequencyAtNormalizedPosition(
     1 - point.y,
     range.minFrequency,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dsp_utils.h"
+#include <cstdint>
 #include <complex>
 #include <memory>
 #include <string>
@@ -37,13 +38,15 @@ public:
 
     void configure(const SpectrogramConfig& config);
     SpectrogramProcessResult process(const float* samples, size_t length);
+    SpectrogramProcessResult processStereo(const float* left, const float* right, size_t length);
     void reset();
 
 private:
     struct ClarityProfile {
         float gamma;
-        float sharpness;
-        float lineWidth;
+        float displayShoulder;
+        float heatShoulder;
+        bool useReassignment;
     };
 
     SpectrogramConfig config_;
@@ -51,16 +54,23 @@ private:
     size_t paddedSize_;
     size_t frameFill_;
     bool haveLastPhase_;
+    float magnitudeScale_;
 
     std::unique_ptr<DSP::FFT> fft_;
     std::vector<float> frameBuffer_;
+    std::vector<float> rightFrameBuffer_;
     std::vector<float> window_;
     std::vector<float> windowedInput_;
+    std::vector<float> rightWindowedInput_;
     std::vector<std::complex<float>> fftOutput_;
+    std::vector<std::complex<float>> rightFftOutput_;
     std::vector<float> magnitudesDb_;
     std::vector<float> magnitudesLinear_;
     std::vector<float> phases_;
     std::vector<float> lastPhases_;
+    std::vector<float> rightPhases_;
+    std::vector<float> rightLastPhases_;
+    std::vector<uint8_t> dominantRight_;
 
     std::vector<float> rowCenterBins_;
     std::vector<float> rowBandStartBins_;
@@ -69,8 +79,9 @@ private:
     std::vector<float> standardRaw_;
     std::vector<float> standardHeat_;
     std::vector<float> reassignedPower_;
-    std::vector<float> blendedRaw_;
-    std::vector<float> blendedHeat_;
+    std::vector<float> focusedPower_;
+    std::vector<float> sourceRaw_;
+    std::vector<float> sourceHeat_;
     std::vector<float> shapedDisplay_;
     std::vector<float> shapedHeat_;
     std::vector<float> strokedDisplay_;
@@ -81,9 +92,12 @@ private:
     void processFrame(std::vector<float>& display, std::vector<float>& heat);
     void computeStandardSpectrum();
     void computeReassignedSpectrum();
-    void blendAndShapeColumn(std::vector<float>& display, std::vector<float>& heat);
+    void computeFocusedSpectrum();
+    void shapeColumn(std::vector<float>& display, std::vector<float>& heat);
+    void shapeFocusedColumn(std::vector<float>& display, std::vector<float>& heat);
     size_t resolveHopSize() const;
     float sampleDbAtBin(float bin) const;
+    float samplePeakDbInBand(float startBin, float endBin, float& peakBin) const;
     float frequencyFromScale(float normalizedPosition) const;
     float frequencyToRow(float frequency) const;
     float applyDisplayTilt(float db, float frequency) const;
