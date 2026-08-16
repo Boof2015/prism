@@ -92,6 +92,7 @@ public:
     bool load(std::string* warning = nullptr);
     const std::vector<TuiTheme>& themes() const { return themes_; }
     const TuiTheme* find(const std::string& id) const;
+    const TuiTheme* findSelector(const std::string& nameOrId) const;
     const TuiTheme& resolve(const std::string& id) const;
     std::string adjacentId(const std::string& id, int direction) const;
     const std::filesystem::path& directory() const { return directory_; }

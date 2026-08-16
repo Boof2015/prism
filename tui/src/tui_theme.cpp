@@ -826,6 +826,24 @@ const TuiTheme* IroThemeLibrary::find(const std::string& id) const {
     return found == themes_.end() ? nullptr : &*found;
 }
 
+const TuiTheme* IroThemeLibrary::findSelector(
+    const std::string& nameOrId) const {
+    if (const auto* exactId = find(nameOrId)) return exactId;
+    const auto exactName = std::find_if(
+        themes_.begin(), themes_.end(), [&](const TuiTheme& theme) {
+            return theme.name == nameOrId;
+        });
+    if (exactName != themes_.end()) return &*exactName;
+
+    const std::string expected = normalizeKey(nameOrId);
+    const auto insensitive = std::find_if(
+        themes_.begin(), themes_.end(), [&](const TuiTheme& theme) {
+            return normalizeKey(theme.id) == expected ||
+                normalizeKey(theme.name) == expected;
+        });
+    return insensitive == themes_.end() ? nullptr : &*insensitive;
+}
+
 const TuiTheme& IroThemeLibrary::resolve(const std::string& id) const {
     if (const auto* theme = find(id)) return *theme;
     if (!themes_.empty()) return themes_.front();

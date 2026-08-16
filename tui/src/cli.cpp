@@ -40,6 +40,20 @@ ParseResult parseArguments(const std::vector<std::string>& arguments) {
             result.options.deviceId = arguments[++index];
             continue;
         }
+        if (argument == "--profile" || argument == "--theme") {
+            if (index + 1 >= arguments.size() || arguments[index + 1].empty() ||
+                arguments[index + 1][0] == '-') {
+                return {false, {}, argument + " requires a non-empty name or ID."};
+            }
+            std::string& selector = argument == "--profile"
+                ? result.options.profileSelector
+                : result.options.themeSelector;
+            if (!selector.empty()) {
+                return {false, {}, argument + " may only be specified once."};
+            }
+            selector = arguments[++index];
+            continue;
+        }
         return {false, {}, "Unknown argument: " + argument};
     }
 
@@ -48,7 +62,7 @@ ParseResult parseArguments(const std::vector<std::string>& arguments) {
 
 std::string usageText() {
     return
-        "Usage: prism-tui [--output <id>]\n"
+        "Usage: prism-tui [--output <id>] [--profile <name>] [--theme <name>]\n"
         "       prism-tui --list-outputs\n"
         "       prism-tui --help\n"
         "       prism-tui --version\n\n"
@@ -57,6 +71,8 @@ std::string usageText() {
         "  --list-outputs    List available system output devices.\n"
         "  --device <id>     Alias for --output.\n"
         "  --list-devices    Alias for --list-outputs.\n"
+        "  --profile <name>  Start with a saved profile (name or ID).\n"
+        "  --theme <name>    Start with a Prism .iro theme (name or ID).\n"
         "  -h, --help        Show this help.\n"
         "  -V, --version     Show the Prism TUI version.\n\n"
         "Controls:\n"

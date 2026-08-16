@@ -27,8 +27,11 @@ public:
     const std::vector<TuiProfile>& profiles() const { return profiles_; }
     const std::string& activeProfileId() const { return activeProfileId_; }
     const TuiProfile* find(const std::string& id) const;
+    const TuiProfile* findSelector(const std::string& nameOrId) const;
 
     bool activate(const std::string& id, std::string* error = nullptr);
+    bool selectForSession(const std::string& id,
+                          std::string* error = nullptr);
     bool saveNew(const std::string& name,
                  const TuiSettings& settings,
                  std::string* createdId = nullptr,

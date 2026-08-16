@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <exception>
 #include <iomanip>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -2359,12 +2360,13 @@ bool stdinAndStdoutAreTerminals() {
 int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                    const Prism::Capture::StartResult& started,
                    std::string requestedDeviceId,
-                   std::vector<Prism::Capture::OutputDevice> outputDevices) {
+                   std::vector<Prism::Capture::OutputDevice> outputDevices,
+                   std::string startupProfileSelector,
+                   std::string startupThemeSelector) {
     using namespace ftxui;
     signalRequested = 0;
     SignalHandlerGuard signalHandlerGuard;
 
-    ScreenInteractive screen = ScreenInteractive::Fullscreen();
     SnapshotStore<DisplayFrame> frameStore;
     SnapshotStore<TuiSettings> settingsStore;
     SnapshotStore<OutputSwitchRequest> outputSwitchRequestStore;
@@ -2382,22 +2384,56 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
     } else if (!themeLoadWarning.empty()) {
         interfaceState.settingsStatus = themeLoadWarning;
     }
-    if (!themeLibrary.find(interfaceState.settings.themeId)) {
-        interfaceState.settings.themeId = "Default";
-    }
-    interfaceState.theme = themeLibrary.resolve(interfaceState.settings.themeId);
     TuiProfileLibrary profileLibrary(
         defaultProfileDirectory(), defaultProfileStatePath());
     std::string profileLoadError;
-    if (!profileLibrary.load(&profileLoadError)) {
+    const bool profilesLoaded = profileLibrary.load(&profileLoadError);
+    if (!profilesLoaded) {
         interfaceState.profileStatus =
             "Could not load profiles: " + profileLoadError;
         interfaceState.profileStatusError = true;
     }
+    if (!startupProfileSelector.empty()) {
+        if (!profilesLoaded) {
+            std::cerr << "prism-tui: could not load profiles: "
+                      << profileLoadError << '\n';
+            return 1;
+        }
+        const TuiProfile* profile =
+            profileLibrary.findSelector(startupProfileSelector);
+        if (!profile) {
+            std::cerr << "prism-tui: profile not found: "
+                      << startupProfileSelector << '\n';
+            return 2;
+        }
+        interfaceState.settings = applyProfileSettings(
+            profile->settings, interfaceState.settings);
+        std::string selectionError;
+        if (!profileLibrary.selectForSession(profile->id, &selectionError)) {
+            std::cerr << "prism-tui: could not select profile: "
+                      << selectionError << '\n';
+            return 1;
+        }
+    }
+    if (!startupThemeSelector.empty()) {
+        const TuiTheme* theme = themeLibrary.findSelector(startupThemeSelector);
+        if (!theme) {
+            std::cerr << "prism-tui: theme not found: "
+                      << startupThemeSelector << '\n';
+            return 2;
+        }
+        interfaceState.settings.themeId = theme->id;
+    }
+    if (!themeLibrary.find(interfaceState.settings.themeId)) {
+        interfaceState.settings.themeId = "Default";
+    }
+    interfaceState.theme = themeLibrary.resolve(interfaceState.settings.themeId);
     interfaceState.profiles = profileLibrary.profiles();
     interfaceState.activeProfileId = profileLibrary.activeProfileId();
     interfaceState.profileDirty =
         calculateUnsavedProfileChanges(interfaceState);
+
+    ScreenInteractive screen = ScreenInteractive::Fullscreen();
     settingsStore.publish(interfaceState.settings);
     DisplayFrame initial;
     initial.magnitudes.assign(kDefaultFftSize / 2, -100.0f);

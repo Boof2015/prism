@@ -251,6 +251,24 @@ const TuiProfile* TuiProfileLibrary::find(const std::string& id) const {
     return managed ? &managed->profile : nullptr;
 }
 
+const TuiProfile* TuiProfileLibrary::findSelector(
+    const std::string& nameOrId) const {
+    if (const auto* exactId = find(nameOrId)) return exactId;
+    const auto exactName = std::find_if(
+        managed_.begin(), managed_.end(), [&](const auto& entry) {
+            return entry.profile.name == nameOrId;
+        });
+    if (exactName != managed_.end()) return &exactName->profile;
+
+    const std::string expected = lowercaseAscii(trimName(nameOrId));
+    const auto insensitive = std::find_if(
+        managed_.begin(), managed_.end(), [&](const auto& entry) {
+            return lowercaseAscii(entry.profile.id) == expected ||
+                lowercaseAscii(entry.profile.name) == expected;
+        });
+    return insensitive == managed_.end() ? nullptr : &insensitive->profile;
+}
+
 TuiProfileLibrary::ManagedProfile* TuiProfileLibrary::findManaged(
     const std::string& id) {
     const auto found = std::find_if(
@@ -275,12 +293,19 @@ bool TuiProfileLibrary::writeActiveState(std::string* error) const {
 }
 
 bool TuiProfileLibrary::activate(const std::string& id, std::string* error) {
+    if (!selectForSession(id, error)) return false;
+    return writeActiveState(error);
+}
+
+bool TuiProfileLibrary::selectForSession(
+    const std::string& id,
+    std::string* error) {
     if (!findManaged(id)) {
         if (error) *error = "profile was not found";
         return false;
     }
     activeProfileId_ = id;
-    return writeActiveState(error);
+    return true;
 }
 
 bool TuiProfileLibrary::nameIsAvailable(

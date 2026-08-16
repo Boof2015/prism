@@ -139,6 +139,15 @@ void testCli() {
         "the output alias should retain its output ID");
     require(Prism::Tui::parseArguments({"--list-outputs"}).options.command ==
         Prism::Tui::Command::ListDevices, "the output-list alias should parse");
+    auto startup = Prism::Tui::parseArguments({
+        "--profile", "Studio Wide",
+        "--theme", "Alpha Centauri",
+        "--output", "output-id",
+    });
+    require(startup.ok && startup.options.profileSelector == "Studio Wide" &&
+        startup.options.themeSelector == "Alpha Centauri" &&
+        startup.options.deviceId == "output-id",
+        "profile, theme, and output startup selections should combine");
     require(!Prism::Tui::parseArguments({"--device"}).ok, "missing device ID should fail");
     require(!Prism::Tui::parseArguments({"--device", "--help"}).ok,
         "an option should not be accepted as a device ID");
@@ -147,6 +156,14 @@ void testCli() {
         "duplicate device options should fail");
     require(!Prism::Tui::parseArguments({"--device", "fake", "--output", "fake"}).ok,
         "mixed output aliases should still be rejected as duplicates");
+    require(!Prism::Tui::parseArguments({"--profile"}).ok &&
+        !Prism::Tui::parseArguments({"--theme", "--output"}).ok,
+        "startup selectors should require a value");
+    require(!Prism::Tui::parseArguments({
+            "--profile", "one", "--profile", "two"}).ok &&
+        !Prism::Tui::parseArguments({
+            "--theme", "one", "--theme", "two"}).ok,
+        "startup selectors should reject duplicate values");
     require(!Prism::Tui::parseArguments({"--help", "--version"}).ok,
         "exclusive commands should not combine");
     require(Prism::Tui::usageText().find("Tab / Shift-Tab") != std::string::npos,
@@ -158,6 +175,9 @@ void testCli() {
     require(Prism::Tui::usageText().find("--list-outputs") != std::string::npos &&
         Prism::Tui::usageText().find("Choose the system output") != std::string::npos,
         "help should describe output aliases and the in-app picker");
+    require(Prism::Tui::usageText().find("--profile <name>") != std::string::npos &&
+        Prism::Tui::usageText().find("--theme <name>") != std::string::npos,
+        "help should describe profile and theme startup selection");
 }
 
 void testOutputSwitching() {
@@ -529,6 +549,11 @@ line = 22, 23, 24
     require(library.find("Redshift")->spectrumLine ==
         Prism::Tui::ThemeColor{1, 2, 3},
         "managed .iro files should override bundled themes with the same filename stem");
+    require(library.findSelector("alpha-centauri") &&
+        library.findSelector("alpha-centauri")->id == "Alpha Centauri" &&
+        library.findSelector("TEST THEME") &&
+        !library.findSelector("Not A Theme"),
+        "theme startup selectors should accept visible names and normalized IDs");
     const std::string nextTheme = library.adjacentId("Default", 1);
     require(!warning.empty() && nextTheme != "Default" &&
         library.find(nextTheme) && library.adjacentId(nextTheme, -1) == "Default",
@@ -688,6 +713,21 @@ void testProfileLibrary() {
         Prism::Tui::profileSettingsEqual(
             library.find(profileId)->settings, settings),
         "saving a profile should activate and preserve its scoped settings");
+    require(library.findSelector("studio wide") &&
+        library.findSelector("studio wide")->id == profileId &&
+        library.findSelector(profileId) &&
+        !library.findSelector("Missing Profile"),
+        "profile startup selectors should accept names and internal IDs");
+    require(library.activate(Prism::Tui::kDefaultTuiProfileId, &error) &&
+        library.selectForSession(profileId, &error) &&
+        library.activeProfileId() == profileId,
+        "startup profile selection should update the active session");
+    Prism::Tui::TuiProfileLibrary sessionReload(profilesPath, statePath);
+    require(sessionReload.load(&error) &&
+        sessionReload.activeProfileId() == Prism::Tui::kDefaultTuiProfileId,
+        "startup profile selection should not rewrite the persisted active profile");
+    require(library.activate(profileId, &error),
+        "profile fixtures should restore their persisted active selection");
 
     bool foundProfileFile = false;
     for (const auto& entry : std::filesystem::directory_iterator(profilesPath)) {

@@ -72,7 +72,9 @@ int run(const std::vector<std::string>& arguments) {
         std::move(capture),
         started,
         parsed.options.deviceId,
-        outputDevices);
+        outputDevices,
+        parsed.options.profileSelector,
+        parsed.options.themeSelector);
 }
 
 }  // namespace

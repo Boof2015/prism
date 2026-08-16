@@ -15,6 +15,8 @@ enum class Command {
 struct Options {
     Command command = Command::Run;
     std::string deviceId;
+    std::string profileSelector;
+    std::string themeSelector;
 };
 
 struct ParseResult {
