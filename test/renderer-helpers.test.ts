@@ -588,6 +588,10 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
 interface FakeCanvasRecorder {
   fillRects: Array<{ x: number; y: number; width: number; height: number; fillStyle: string }>
   fillTexts: Array<{ text: string; x: number; y: number; fillStyle: string; font: string }>
+  lineStrokes: Array<{
+    commands: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }>
+    strokeStyle: string
+  }>
   strokeRects: Array<{ x: number; y: number; width: number; height: number; lineDash: number[] }>
   arcs: Array<{
     x: number
@@ -607,6 +611,7 @@ function createFakeCanvasRecorder(): FakeCanvasRecorder {
   return {
     fillRects: [],
     fillTexts: [],
+    lineStrokes: [],
     strokeRects: [],
     arcs: [],
     lineDashes: [],
@@ -621,6 +626,7 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
   let currentStrokeStyle = ''
   let currentFont = ''
   let currentCompositeOperation: GlobalCompositeOperation = 'source-over'
+  let currentPath: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }> = []
 
   const context = {
     clearRect() {},
@@ -630,12 +636,22 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     fillText(text: string, x: number, y: number) {
       recorder?.fillTexts.push({ text: String(text), x, y, fillStyle: currentFillStyle, font: currentFont })
     },
-    beginPath() {},
+    beginPath() {
+      currentPath = []
+    },
     closePath() {},
     fill() {},
-    moveTo() {},
-    lineTo() {},
-    stroke() {},
+    moveTo(x: number, y: number) {
+      currentPath.push({ kind: 'moveTo', x, y })
+    },
+    lineTo(x: number, y: number) {
+      currentPath.push({ kind: 'lineTo', x, y })
+    },
+    stroke() {
+      if (currentPath.length > 0) {
+        recorder?.lineStrokes.push({ commands: [...currentPath], strokeStyle: currentStrokeStyle })
+      }
+    },
     strokeRect(x: number, y: number, width: number, height: number) {
       recorder?.strokeRects.push({ x, y, width, height, lineDash: [...currentLineDash] })
     },
@@ -1792,6 +1808,55 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.lineColor, theme.spectrum.line)
   assert.equal(options.backgroundColor, theme.spectrum.background)
   assert.equal(options.gridColor, theme.spectrum.guides)
+})
+
+test('SpectrumAnalyzer grid only draws frequency guides when enabled', () => {
+  const renderGrid = (showGrid: boolean): FakeCanvasRecorder => {
+    const recorder = createFakeCanvasRecorder()
+    const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+    const dataSource = {
+      getPendingSpectrumSamples: () => [],
+      getPendingSpectrumStereoSamples: () => [],
+      getSampleRate: () => 48000,
+      isPlaying: () => false,
+      subscribeToSessionChanges: () => () => {},
+    }
+    const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+      showGrid,
+      dataSource,
+      nativeAnalyzer: null,
+    })
+
+    try {
+      const state = analyzer as unknown as {
+        ensureStaticLayer: (minFrequency: number, maxFrequency: number) => void
+      }
+      state.ensureStaticLayer(20, 20000)
+      return recorder
+    } finally {
+      analyzer.dispose()
+      dom.restore()
+    }
+  }
+
+  const enabled = renderGrid(true)
+  assert.deepEqual(
+    enabled.fillTexts.map(({ text }) => text),
+    ['50', '100', '200', '500', '1k', '2k', '5k', '10k'],
+  )
+  assert.equal(enabled.fillTexts.some(({ text }) => text.endsWith('dB')), false)
+  assert.equal(enabled.lineStrokes.length, 8)
+  for (const stroke of enabled.lineStrokes) {
+    assert.deepEqual(stroke.commands.map(({ kind }) => kind), ['moveTo', 'lineTo'])
+    const [start, end] = stroke.commands
+    assert.equal(start.x, end.x)
+    assert.equal(start.y, 0)
+    assert.equal(end.y, 180)
+  }
+
+  const disabled = renderGrid(false)
+  assert.deepEqual(disabled.fillTexts, [])
+  assert.deepEqual(disabled.lineStrokes, [])
 })
 
 test('SpectrumAnalyzer applies and restores transient measurement smoothing without resetting', () => {

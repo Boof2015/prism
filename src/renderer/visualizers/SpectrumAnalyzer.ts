@@ -1189,8 +1189,6 @@ export class SpectrumAnalyzer {
       options.showGrid,
       options.gridColor,
       options.scaleType,
-      options.minDecibels,
-      options.maxDecibels,
       minFrequency,
       maxFrequency,
     ].join(':')
@@ -1224,23 +1222,8 @@ export class SpectrumAnalyzer {
     ctx.strokeStyle = options.gridColor
     ctx.lineWidth = dpr
 
-    const dbSteps = [-80, -60, -40, -20, 0]
     ctx.fillStyle = options.gridColor
     ctx.font = `${10 * dpr}px monospace`
-    ctx.textAlign = 'left'
-
-    for (const db of dbSteps) {
-      const normalized = (db - options.minDecibels) / (options.maxDecibels - options.minDecibels)
-      const y = height - normalized * height
-
-      ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(width, y)
-      ctx.stroke()
-
-      ctx.fillText(`${db}dB`, 4 * dpr, y - 2 * dpr)
-    }
-
     const freqSteps = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
     ctx.textAlign = 'center'
 
