@@ -155,7 +155,7 @@ Prism does not require Astra and works as a standalone application.
 
 ## Support
 
-If you find Prism useful and want to support development:
+If you find Prism useful and want to support a broke college student, consider supporting development:
 
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi\&logoColor=white)](https://ko-fi.com/boof2015)
 
