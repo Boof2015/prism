@@ -73,6 +73,7 @@ Prism also includes `prism-tui`, a native terminal interface built on the same c
 ![Prism TUI](assets/prism-tui-demo-readme.gif)
 
 It provides real-time spectrum, metering, loudness, and other monitoring tools without needing to run the desktop interface.
+`prism-tui` is lightweight, typically using around 35 MB of RAM.
 
 ```bash
 prism-tui
