@@ -2,7 +2,7 @@
 
 <img src="assets/prism-badge.png" alt="Prism" width="440">
 
-A free, open-source audio visualizer and meter rack for your desktop and your DAW.
+**Real-time audio analysis and metering, wherever you work.**
 
 ![code size](https://img.shields.io/github/languages/code-size/Boof2015/prism)
 ![GitHub Release](https://img.shields.io/github/v/release/Boof2015/prism?include_prereleases)
@@ -12,95 +12,114 @@ A free, open-source audio visualizer and meter rack for your desktop and your DA
 
 </div>
 
-Prism taps into your system audio and runs it through a rack of real-time scopes and meters. It grew out of the visualization engine in [Astra](https://github.com/Boof2015/astra), rebuilt as a standalone tool. Whether you're mixing a track, tuning a room, or just like watching your music, Prism gives you a window into what you're hearing.
+Prism is a free, open-source audio analyzer and meter rack for Windows, macOS, and Linux.
+
+Monitor system audio or an input with a configurable set of real-time scopes and meters, arrange them however you like, and save the setup as a profile. The same analyzers are also available as VST3/AU plugins, and Prism includes a native terminal interface for lightweight monitoring.
+
+![Prism scopes](assets/prism-demo-readme-optimized.gif)
 
 ## Scopes
 
-Seven visualizers driven by a native C++ analysis engine:
+Prism includes seven scopes and meters:
 
-- **Spectrum Analyzer** — FFT frequency display with heatmap and fill modes, configurable FFT size, spectral tilt, Log/Mel/Linear scaling, and Extended (default, 10 Hz–up to 24 kHz) or Audible (20 Hz–20 kHz) ranges
-- **Oscilloscope** — Time-domain waveform with a pitch-lock mode that syncs the display to the fundamental frequency
-- **Vectorscope** — Stereo phase visualization in XY, folded/bipolar Polar, and folded/bipolar M/S Linear modes, with manual dB zoom and optional multiband RGB split
-- **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, Extended (default) or Audible ranges, optional adaptive frequency guides, stereo-energy analysis, a legacy-style Focused mode, and detail-preserving frequency reassignment in Sharp/Sharper modes
-- **VU Meter** — Classic loudness metering in needle or bar style, horizontal or vertical
-- **Loudness Meter** — Compact LUFS metering following ITU-R BS.1770 with fast stereo peak activity
-- **Waveform** — Scrolling time-domain view with mono, stereo, and multiband modes
+* **Spectrum Analyzer** — Frequency spectrum with heatmap and fill modes, configurable FFT size, spectral tilt, multiple frequency scales, and peak information
+* **Oscilloscope** — Time-domain waveform with an optional pitch-lock mode that follows the fundamental frequency
+* **Vectorscope** — Stereo image and phase visualization with XY, Polar, and M/S Linear views, adjustable zoom, and an optional multiband RGB split
+* **Spectrogram** — Scrolling frequency-over-time display with Log, Mel, and Linear scales and several detail modes
+* **VU Meter** — Classic VU metering with needle and bar styles in horizontal or vertical layouts
+* **Loudness Meter** — LUFS metering following ITU-R BS.1770 alongside stereo peak activity
+* **Waveform** — Scrolling waveform view with mono, stereo, and multiband modes
 
-![Prism scopes](assets/prism-demo-12fps.gif)
+Every scope can be configured independently. Resize and rearrange them into a rack, rotate them, pop individual scopes into their own windows, or pin them on top of other applications.
 
-Every scope is independently configurable. Drag and resize them into whatever layout makes sense, pop any scope out into its own window, and pin windows on top so they stay visible while you work.
+Compatible scopes also include an interactive measurement overlay for inspecting the display directly.
 
-Vectorscope boundaries use exact per-channel sample-peak references in XY (square) and M/S Linear (diamond). Polar retains Prism's classic amplitude-compressed radial scaling so quieter stereo structure stays readable; its circle is labeled as a radial reference instead of a per-channel dBFS limit. Zoom changes the relevant labeled reference without changing the underlying samples. Folded modes rotate negative-Mid samples into the upper half instead of discarding them. The subtly shaded regions beyond the L/R channel guides show instantaneous Side-dominant samples; use the VU or Loudness Meter correlation reading to judge sustained mono compatibility.
+## Desktop
+
+Prism can capture system output directly through CoreAudio on macOS, WASAPI on Windows, and PulseAudio on Linux. It can also switch to an input device when you want to analyze a microphone, interface, or line input.
+
+No virtual audio cable is required for normal system capture.
+
+The main rack and scope popouts can use solid, blurred, or clear backgrounds, making Prism usable as a normal desktop application or as a set of unobtrusive overlays.
+
+Prism can also live in the system tray, start automatically with your computer, and launch either normally or out of the way when you want it running all the time.
+
+## Rolling Capture
+
+Prism can continuously keep the last **5, 10, 30, or 60 seconds** of audio in memory.
+
+When you hear something you want to keep, drag the buffered audio out of Prism as a WAV file. There is no need to start recording beforehand.
 
 ## DAW Plugins
 
-Every Prism scope also ships as a DAW plugin. Drop a **Spectrum**, **Oscilloscope**, **Vectorscope**, **Spectrogram**, **VU Meter**, **Loudness Meter**, or **Waveform** onto any track and it analyzes that track's audio in real time, the same analysis engine and the same interface as the desktop app.
+Every Prism scope is also available as a DAW plugin.
 
-- **VST3** on Windows, macOS, and Linux, plus **AU** on macOS.
-- Each instance is fully configurable, and its settings save with your project.
-- Plugins follow your active Prism theme and profile, so they match the desktop app out of the box.
-- Audio passes through untouched. No DSP runs on the realtime audio thread.
+Drop a **Spectrum**, **Oscilloscope**, **Vectorscope**, **Spectrogram**, **VU Meter**, **Loudness Meter**, or **Waveform** onto a track and analyze it using the same interface and analysis engine as the desktop app.
 
-Tested in Ableton Live, FL Studio, and Reaper. The plugins install alongside the desktop app, so there's no separate download.
+* **VST3** on Windows, macOS, and Linux
+* **AU** on macOS
+* Settings are stored with your project
+* Plugins follow your Prism themes and profiles
+* Audio passes through untouched
 
-## Audio Capture
+Tested in Ableton Live, FL Studio, and Reaper.
 
-Prism pulls audio at the OS level, straight from CoreAudio on macOS, WASAPI on Windows, or PulseAudio on Linux. No virtual cables or routing hacks. Flip on device input mode when you want to analyze a mic or a line-in instead. 
-
-Capture-to-display latency measures under 8ms. When tested at 120fps, measured latency was 0ms. What you see is what you hear.
+The plugins install alongside Prism, so there is no separate download.
 
 ## Terminal UI
 
-Installable Prism packages also provide `prism-tui`, a native terminal frontend
-for the shared C++ capture and analysis engine. It shows a responsive spectrum,
-stereo VU meters, and momentary, short-term, and integrated LUFS readings.
+Prism also includes `prism-tui`, a native terminal interface built on the same capture and analysis code.
+
+It provides real-time spectrum, metering, loudness, and other monitoring tools without needing to run the desktop interface.
 
 ```bash
-prism-tui                    # Capture the default system output
-prism-tui --list-devices     # Print output device IDs; no TTY required
-prism-tui --device <id>      # Capture a specific output device
+prism-tui
+prism-tui --list-outputs
+prism-tui --output <id>
+prism-tui --profile <name>
+prism-tui --theme <name>
 prism-tui --help
-prism-tui --version
 ```
 
-Press `r` to reset the analyzers and integrated loudness, or `q`, Escape, or
-Ctrl-C to quit. Interactive mode requires a terminal of at least 44 by 12 cells.
-Quote a device ID if it contains spaces. Successful help, version, listing, and
-interactive exits return `0`; usage errors return `2`; capture and runtime
-failures return `1`.
+Profiles and `.iro` themes can be used from the TUI as well, and output devices can be changed without leaving it.
 
-The v0 TUI captures system output only. Microphone/device-input capture, Prism
-profiles and themes, file/stdin analysis, and the other visualizers remain GUI
-features for now. CoreAudio process tapping requires macOS 14.2 or newer.
+`prism-tui --help` lists the available controls and launch options.
 
 ## Profiles
 
-Save the whole rack as a profile. What's visible, how it's laid out, per-scope settings, popout window positions as a `.prsm` file. Keep separate profiles for different workflows and share them with others.
+A profile stores your Prism workspace: which scopes are visible, how they are laid out, their individual settings, and window state.
+
+Keep different profiles for different setups or workflows and switch between them when needed.
+
+Profiles are stored as `.prsm` files and can be shared with other Prism users.
 
 ## Themes
 
-The whole interface is themeable through editable `.iro` files. Themes control everything, build your own in an editor and drop it into the `Prism Themes` folder, or download one from [the community](https://discord.gg/hsKK8Kr9Nj).
+Prism's interface is themeable through editable `.iro` files.
+
+Themes control the colors used throughout the application and its scopes. You can edit your own, drop them into the `Prism Themes` folder, or download themes made by the community.
 
 ![Prism themes](assets/themes.png)
 
+Prism also includes chroma-key-friendly themes for using scopes as overlays in OBS or other video software.
 
-Prism also includes Chroma key friendly themes by default, so you can key out your scopes in OBS and drop them directly into your stream as transparent overlays.
-
-![Prism themes](assets/chroma.png)
+![Prism chroma themes](assets/chroma.png)
 
 ## Download
 
-Prebuilt binaries for Windows, macOS, and Linux are available on the [Releases](https://github.com/Boof2015/prism/releases) page.
+Prebuilt versions of Prism for Windows, macOS, and Linux are available on the [Releases](https://github.com/Boof2015/prism/releases) page.
+
+Installable packages include the desktop application and the components supported by that package, including DAW plugins and `prism-tui` where applicable.
 
 ## Building from Source
 
 **Prerequisites:** Node.js 18+, npm, CMake 3.22+, and a C++ compiler toolchain.
 
-| Platform | Toolchain |
-|----------|-----------|
-| macOS | Xcode Command Line Tools |
-| Windows | Visual Studio Build Tools |
-| Linux | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev` |
+| Platform | Toolchain                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------- |
+| macOS    | Xcode Command Line Tools                                                                                |
+| Windows  | Visual Studio Build Tools                                                                               |
+| Linux    | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev` |
 
 ```bash
 git clone https://github.com/Boof2015/prism.git
@@ -114,58 +133,32 @@ The `postinstall` script compiles the native C++ module for your platform.
 npm run dev              # Development
 npm run build            # Build application assets
 npm run configure:tui    # Configure the standalone CMake project
-npm run build:tui        # Build prism-tui into tui/build/bin
+npm run build:tui        # Build prism-tui
 npm run test:tui         # Build and run native TUI tests
-npm run dist             # Package for current platform, including prism-tui
-npm run dist:mac         # macOS (PKG + ZIP)
-npm run dist:win         # Windows (NSIS + Portable)
-npm run dist:linux       # Linux (AppImage + DEB + RPM + tar.gz)
+npm run dist             # Package for current platform
+npm run dist:mac         # macOS
+npm run dist:win         # Windows
+npm run dist:linux       # Linux
 ```
 
-The TUI build downloads the pinned FTXUI 7.0.1 source through CMake. On Linux it
-also requires the PulseAudio development package (`libpulse-dev` on Debian and
-Ubuntu). The executable is at `tui/build/bin/prism-tui` on macOS/Linux and
-typically `tui/build/bin/Release/prism-tui.exe` with a multi-config Windows
-generator.
+The TUI build downloads the pinned FTXUI source through CMake. Linux also requires the PulseAudio development package.
 
-The macOS PKG links `prism-tui` into `/usr/local/bin`, the Windows NSIS installer
-adds Prism's TUI resource directory to the machine `PATH`, and Linux `.deb` and
-`.rpm` packages link it into `/usr/bin`. Uninstallers remove only the Prism-owned
-PATH entry or link. ZIP, portable Windows, and Linux `tar.gz` archives may carry
-the executable under the app's resources but do not modify `PATH`.
-
-Linux `.deb` and `.rpm` releases also install the seven Prism VST3 plugins to
-`/usr/lib/vst3`. The Linux `tar.gz` release includes a
-`resources/plugins/install-vst3.sh` helper that installs them to `$HOME/.vst3`
-by default. The AppImage remains GUI-only: it carries neither installable DAW
-plugin resources nor `prism-tui`. DAWs commonly scan `$HOME/.vst3`,
-`/usr/lib/vst3`, and `/usr/local/lib/vst3`.
-
-The DAW plugins build with CMake from the [`plugin/`](plugin/) directory. See
-[`plugin/README.md`](plugin/README.md) for the per-platform build and install steps.
+The DAW plugins build with CMake from the [`plugin/`](plugin/) directory. See [`plugin/README.md`](plugin/README.md) for per-platform build and installation details.
 
 ## Astra Integration
 
-If you use [Astra](https://github.com/Boof2015/astra), Prism can connect to its local API to show what's playing, cover art, track info, and playback controls,  alongside your scopes.
+Prism can optionally connect to [Astra](https://github.com/Boof2015/astra) through its local API to show currently playing music, cover art, track information, and playback controls alongside your scopes.
+
+Prism does not require Astra and works as a standalone application.
 
 ## Support
 
-If you find Prism useful and want to support a broke college student, consider supporting development:
+If you find Prism useful and want to support development:
 
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/boof2015)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi\&logoColor=white)](https://ko-fi.com/boof2015)
 
 ## License
 
-This project is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html). See [LICENSE](LICENSE) for the full text.
-Third-party license notices, including FTXUI's MIT license, are recorded in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Prism is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html). See [LICENSE](LICENSE) for the full text.
 
-## Star History
-
-<a href="https://www.star-history.com/#Boof2015/prism&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Boof2015/prism&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Boof2015/prism&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Boof2015/prism&type=date&legend=top-left" />
- </picture>
-</a>
+Third-party license notices are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
