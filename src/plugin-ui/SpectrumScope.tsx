@@ -6,10 +6,16 @@ import type { SpectrumPeakInfo } from '../types/spectrum'
 import type { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import type { PluginWebViewDataSource } from './PluginWebViewDataSource'
 import { spectrumSettingsToOptions } from './spectrumOptions'
+import { getScopeCanvasTransformStyle } from '../renderer/scopeCanvasTransform'
+import { applyPluginScopeCanvasLayout } from './scopeCanvasLayout'
 import {
-  formatSpectrumPeakDb,
+  ScopeMeasurementOverlay,
+  useScopeMeasurement,
+} from '../renderer/components/ScopeMeasurementOverlay'
+import { emitToHost } from './juceBridge'
+import {
+  formatSpectrumPeakDbfs,
   formatSpectrumPeakFrequency,
-  measureCanvasResizeState,
   resolveFollowingPeakOverlayStyle,
   type CanvasResizeState,
   type SizeMeasurement,
@@ -32,11 +38,24 @@ export default function SpectrumScope({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const analyzerRef = useRef<SpectrumAnalyzer | null>(null)
   const resizeStateRef = useRef<CanvasResizeState | null>(null)
+  const rotationRef = useRef(settings.rotation)
+  const applySizeRef = useRef<(() => void) | null>(null)
   const peakOverlayRef = useRef<HTMLDivElement | null>(null)
   const [peak, setPeak] = useState<SpectrumPeakInfo | null>(null)
   const [overlaySize, setOverlaySize] = useState<SizeMeasurement | null>(null)
 
   const peakMode = settings.peakInfoMode
+  rotationRef.current = settings.rotation
+  const measurementController = useScopeMeasurement({
+    containerRef,
+    enabled: true,
+    rotation: settings.rotation,
+    mirrorHorizontal: settings.mirrorHorizontal,
+    getSource: () => analyzerRef.current,
+    onActiveChange: (active) => {
+      emitToHost('prismScopeMeasurement', { active })
+    },
+  })
 
   // Create the analyzer once per data source / shim.
   useEffect(() => {
@@ -54,14 +73,13 @@ export default function SpectrumScope({
     analyzerRef.current = analyzer
 
     const applySize = (): void => {
-      const state = measureCanvasResizeState(container)
-      resizeStateRef.current = state
-      if (canvas.width !== state.pixelWidth || canvas.height !== state.pixelHeight) {
-        canvas.width = state.pixelWidth
-        canvas.height = state.pixelHeight
+      const { changed, layout } = applyPluginScopeCanvasLayout(container, canvas, rotationRef.current)
+      resizeStateRef.current = layout
+      if (changed) {
         analyzer.resize()
       }
     }
+    applySizeRef.current = applySize
 
     applySize()
     analyzer.start()
@@ -70,6 +88,7 @@ export default function SpectrumScope({
 
     return () => {
       observer.disconnect()
+      applySizeRef.current = null
       analyzer.dispose()
       analyzerRef.current = null
     }
@@ -86,6 +105,10 @@ export default function SpectrumScope({
       onPeakInfo: setPeak,
     })
   }, [settings, theme])
+
+  useLayoutEffect(() => {
+    applySizeRef.current?.()
+  }, [settings.rotation])
 
   // Measure the overlay so "following" placement can avoid the screen edges.
   useLayoutEffect(() => {
@@ -107,19 +130,37 @@ export default function SpectrumScope({
   const showPeak = peakMode !== 'off' && peak !== null
   const overlayStyle: CSSProperties | undefined =
     peakMode === 'following' && peak
-      ? resolveFollowingPeakOverlayStyle(peak, resizeStateRef.current, overlaySize)
+      ? resolveFollowingPeakOverlayStyle(
+          peak,
+          resizeStateRef.current,
+          overlaySize,
+          settings.rotation,
+          settings.mirrorHorizontal,
+        )
       : undefined
 
   return (
-    <div ref={containerRef} className="spectrum-scope">
-      <canvas ref={canvasRef} className="spectrum-scope__canvas" />
-      {showPeak && peak && (
+    <div
+      ref={containerRef}
+      className={`spectrum-scope scope-measurement-surface ${measurementController.active ? 'is-measuring' : ''}`.trim()}
+      {...measurementController.pointerBindings}
+    >
+      <canvas
+        ref={canvasRef}
+        className="spectrum-scope__canvas"
+        style={getScopeCanvasTransformStyle(settings.rotation, settings.mirrorHorizontal)}
+      />
+      <ScopeMeasurementOverlay
+        containerRef={containerRef}
+        measurement={measurementController.measurement}
+      />
+      {!measurementController.active && showPeak && peak && (
         <div
           ref={peakMode === 'following' ? peakOverlayRef : null}
           className={['scope-module__peak-info', peakMode === 'following' ? 'is-following' : 'is-corner'].join(' ')}
           style={overlayStyle}
         >
-          <span className="scope-module__peak-info-value">{formatSpectrumPeakDb(peak.db)}</span>
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakDbfs(peak.dbfs)}</span>
           <span className="scope-module__peak-info-separator">/</span>
           <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(peak.frequencyHz)}</span>
           <span className="scope-module__peak-info-separator">/</span>

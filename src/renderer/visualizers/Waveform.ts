@@ -11,6 +11,13 @@ import {
   type WaveformMode,
 } from '../../types/waveform'
 import { MultibandSplitter, createMultibandChunk, type MultibandChunk } from './multibandSplitter'
+import {
+  WAVEFORM_BASE_PIXELS_PER_SECOND,
+  WAVEFORM_DISPLAY_MARGIN,
+  resolveWaveformMeasurement,
+  type ScopeMeasurement,
+} from '../scopeMeasurement'
+import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 
 export interface WaveformStereoChunk {
   left: Float32Array
@@ -62,9 +69,6 @@ const MULTIBAND_DOMINANCE_SENSITIVITY = 5
 const MULTIBAND_FOCUSED_BLEND = 0.68
 const MULTIBAND_FILL_ALPHA = 0.72
 const MULTIBAND_EDGE_ALPHA = 1.0
-const BASE_PIXELS_PER_SECOND = 128
-const DISPLAY_MARGIN = 0.95
-
 const defaultWaveformDataSource: WaveformDataSource = {
   getPendingWaveformSamples: () => audioRouter.flushPendingWaveformSamples(),
   getPendingWaveformStereoSamples: () => audioRouter.flushPendingWaveformStereoSamples(),
@@ -168,7 +172,7 @@ export class Waveform {
 
   private recomputeSamplesPerColumn(): void {
     const sampleRate = Math.max(1, this.dataSource.getSampleRate())
-    const pixelsPerSecond = BASE_PIXELS_PER_SECOND * this.options.scrollSpeed
+    const pixelsPerSecond = WAVEFORM_BASE_PIXELS_PER_SECOND * this.options.scrollSpeed
     const next = Math.max(1, Math.round(sampleRate / pixelsPerSecond))
     if (next !== this.samplesPerColumn) {
       this.samplesPerColumn = next
@@ -249,6 +253,14 @@ export class Waveform {
   resize(): void {
     this.staticLayerKey = ''
     this.invalidate()
+  }
+
+  getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
+    return resolveWaveformMeasurement(point, {
+      mode: this.options.mode,
+      scrollSpeed: this.options.scrollSpeed,
+      canvasPixelWidth: this.canvas.width,
+    })
   }
 
   private computeMinMax(samples: Float32Array): { min: number; max: number } {
@@ -388,7 +400,7 @@ export class Waveform {
     const scaledMin = Math.max(-1, Math.min(1, min))
     const scaledMax = Math.max(-1, Math.min(1, max))
     const centerY = laneTop + (laneHeight / 2)
-    const displayHalfHeight = (laneHeight / 2) * DISPLAY_MARGIN
+    const displayHalfHeight = (laneHeight / 2) * WAVEFORM_DISPLAY_MARGIN
     const yTop = Math.round(centerY - scaledMax * displayHalfHeight)
     const yBottom = Math.round(centerY - scaledMin * displayHalfHeight)
     const lineHeight = Math.max(1, yBottom - yTop)

@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "version": "0.2.0-beta",
+  "version": "0.3.0-beta",
   "description": "Open-source audio metering and visualization tool",
   "main": "./out/main/index.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "build:icons": "node scripts/build/generate-prism-icons.mjs",
     "test:audio-router": "node scripts/run-audio-router-tests.mjs",
+    "test:audio-clips": "node scripts/run-audio-clip-tests.mjs",
     "test:audio-store": "node scripts/run-audio-store-tests.mjs",
     "test:astra": "node scripts/run-astra-integration-tests.mjs",
     "test:capture-support": "node scripts/run-capture-support-tests.mjs",
@@ -20,20 +21,28 @@
     "test:themes": "node scripts/run-theme-library-tests.mjs",
     "test:secret-vault": "node scripts/run-secret-vault-tests.mjs",
     "test:window-state": "node scripts/run-window-state-tests.mjs",
+    "test:desktop-integration": "node scripts/run-desktop-integration-tests.mjs",
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
+    "test:spectrum-native": "node --test test/spectrum-native.test.mjs",
+    "test:spectrogram-native": "node --test test/spectrogram-native.test.mjs",
+    "test:vectorscope-native": "node --test test/vectorscope-native.test.mjs",
+    "test:tui": "node scripts/build/build-tui.cjs --test",
     "test:build-metadata": "node scripts/run-build-metadata-tests.mjs",
     "test:updates": "node scripts/run-update-tests.mjs",
     "plugin-ui:dev": "vite --config vite.plugin-ui.config.ts",
     "plugin-ui:build": "vite build --config vite.plugin-ui.config.ts",
     "build:native": "cd native && node-gyp rebuild",
+    "configure:tui": "node scripts/build/build-tui.cjs --configure-only",
+    "build:tui": "node scripts/build/build-tui.cjs",
+    "stage:tui": "node scripts/build/build-tui.cjs --stage",
     "rebuild:native": "node -e \"const e=require('electron/package.json').version;const a=process.arch;const{execSync}=require('child_process');execSync('node-gyp rebuild --target='+e+' --arch='+a+' --dist-url=https://electronjs.org/headers',{stdio:'inherit',cwd:'native'})\"",
     "postinstall": "node scripts/build/postinstall-native.cjs",
-    "dist": "npm run build && electron-builder --publish never",
-    "dist:mac": "npm run build && electron-builder --mac --publish never",
-    "dist:win": "npm run build && electron-builder --win --publish never",
-    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm tar.gz --publish never",
-    "dist:linux:appimage": "npm run build && electron-builder --linux AppImage --publish never",
-    "dist:linux:packages": "electron-builder --linux deb rpm tar.gz --publish never"
+    "dist": "node scripts/build/dist-current.cjs",
+    "dist:mac": "npm run stage:tui && npm run build && electron-builder --mac --publish never",
+    "dist:win": "npm run stage:tui && npm run build && electron-builder --win --publish never",
+    "dist:linux": "npm run dist:linux:appimage && npm run stage:tui && electron-builder --linux deb rpm tar.gz --publish never",
+    "dist:linux:appimage": "npm run build && electron-builder --config electron-builder.appimage.cjs --linux AppImage --publish never",
+    "dist:linux:packages": "npm run stage:tui && electron-builder --linux deb rpm tar.gz --publish never"
   },
   "repository": {
     "type": "git",
@@ -96,8 +105,20 @@
         "to": "icon.png"
       },
       {
+        "from": "resources/tray/",
+        "to": "tray/"
+      },
+      {
         "from": "plugin/dist-installer/",
         "to": "plugins/"
+      },
+      {
+        "from": "tui/dist-installer/",
+        "to": "tui/"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
       }
     ],
     "mac": {
@@ -143,6 +164,7 @@
         "libatspi2.0-0",
         "libuuid1",
         "libsecret-1-0",
+        "libpulse0",
         "libwebkit2gtk-4.1-0"
       ]
     },
@@ -159,6 +181,7 @@
         "at-spi2-core",
         "libuuid",
         "libsecret",
+        "pulseaudio-libs",
         "webkit2gtk4.1"
       ]
     }

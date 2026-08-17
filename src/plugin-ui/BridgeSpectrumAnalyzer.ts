@@ -20,15 +20,17 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
   private sampleRate = 48000
   private magnitudes: Float32Array
   private sideMagnitudes: Float32Array
+  private channelMaxMagnitudes: Float32Array
 
   constructor(fftSize = 2048) {
     this.fftSize = fftSize
     this.magnitudes = new Float32Array(fftSize / 2).fill(FFT_SILENCE_DB)
     this.sideMagnitudes = new Float32Array(fftSize / 2).fill(FFT_SILENCE_DB)
+    this.channelMaxMagnitudes = new Float32Array(fftSize / 2).fill(FFT_SILENCE_DB)
   }
 
   /** Called by the bridge whenever the host emits a new frame. */
-  setMagnitudes(magnitudes: Float32Array, side?: Float32Array): void {
+  setMagnitudes(magnitudes: Float32Array, side?: Float32Array, channelMax?: Float32Array): void {
     if (magnitudes.length !== this.magnitudes.length) {
       this.magnitudes = new Float32Array(magnitudes.length)
     }
@@ -40,6 +42,12 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
       }
       this.sideMagnitudes.set(side)
     }
+
+    const resolvedChannelMax = channelMax && channelMax.length > 0 ? channelMax : magnitudes
+    if (resolvedChannelMax.length !== this.channelMaxMagnitudes.length) {
+      this.channelMaxMagnitudes = new Float32Array(resolvedChannelMax.length)
+    }
+    this.channelMaxMagnitudes.set(resolvedChannelMax)
   }
 
   isAvailable(): boolean {
@@ -51,6 +59,7 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
       this.fftSize = size
       this.magnitudes = new Float32Array(size / 2).fill(FFT_SILENCE_DB)
       this.sideMagnitudes = new Float32Array(size / 2).fill(FFT_SILENCE_DB)
+      this.channelMaxMagnitudes = new Float32Array(size / 2).fill(FFT_SILENCE_DB)
     }
   }
 
@@ -91,6 +100,14 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
     return count
   }
 
+  fillChannelMaxMagnitudes(output: Float32Array): number {
+    const count = Math.min(output.length, this.channelMaxMagnitudes.length)
+    if (count > 0) {
+      output.set(this.channelMaxMagnitudes.subarray(0, count), 0)
+    }
+    return count
+  }
+
   getMagnitudes(): Float32Array {
     return this.magnitudes
   }
@@ -101,6 +118,10 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
 
   getSideMagnitudes(): Float32Array {
     return this.sideMagnitudes
+  }
+
+  getChannelMaxMagnitudes(): Float32Array {
+    return this.channelMaxMagnitudes
   }
 
   process(_audioData: Float32Array): Float32Array {
@@ -114,5 +135,6 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
   reset(): void {
     this.magnitudes.fill(FFT_SILENCE_DB)
     this.sideMagnitudes.fill(FFT_SILENCE_DB)
+    this.channelMaxMagnitudes.fill(FFT_SILENCE_DB)
   }
 }

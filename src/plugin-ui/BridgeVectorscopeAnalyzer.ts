@@ -3,7 +3,7 @@ import type { VectorscopeNativeAnalyzer, VectorscopeMultibandPointsResult } from
 /**
  * Drop-in `VectorscopeNativeAnalyzer` for the plugin webview.
  *
- * The vectorscope DSP (channel lowpass + 3-band split, circular buffers) runs in
+ * The vectorscope DSP (full-band channels + 3-band split, circular buffers) runs in
  * the C++ plugin, which pushes the most recent display points each frame — either
  * a standard X/Y cloud or a multiband (6 floats/point: lowL,lowR,midL,midR,highL,
  * highR) cloud, depending on the active mode. This shim caches whichever arrived

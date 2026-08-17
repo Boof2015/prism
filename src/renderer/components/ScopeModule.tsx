@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
-import type { ScopeKind } from '../../types/scope'
+import { isTransformableScopeKind, type ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import { nominalFrequencyBoundsForRange } from '../../types/frequencyScale'
+import type { ScopeDisplayRotation } from '../../types/scopeTransform'
 import type {
   PrismResolvedTheme,
   ResolvedAstraTheme,
@@ -15,6 +17,7 @@ import type {
 import type { SpectrumPeakInfo } from '../../types/spectrum'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useWindowBackgroundAlpha } from '../stores/windowBackgroundStore'
 import AstraScopeModule from './AstraScopeModule'
 import { SpectrumAnalyzer, type SpectrumAnalyzerDataSource } from '../visualizers/SpectrumAnalyzer'
 import { Oscilloscope, type OscilloscopeDataSource } from '../visualizers/Oscilloscope'
@@ -24,6 +27,18 @@ import { VUMeter, type VUMeterDataSource } from '../visualizers/VUMeter'
 import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
 import type { FrameScheduler } from '../visualizers/frameScheduler'
+import {
+  ScopeMeasurementOverlay,
+  useScopeMeasurement,
+} from './ScopeMeasurementOverlay'
+import type { ScopeMeasurementSource } from '../scopeMeasurement'
+import {
+  getScopeCanvasTransformStyle,
+  isSameScopeCanvasLayout,
+  measureScopeCanvasLayout,
+  transformNormalizedScopePoint,
+  type ScopeCanvasLayout,
+} from '../scopeCanvasTransform'
 
 type ScopeModuleTheme =
   | ResolvedSpectrumTheme
@@ -40,6 +55,7 @@ interface ScopeModuleProps {
   theme?: ScopeModuleTheme
   settings?: ScopeSettings[ScopeKind]
   frameScheduler?: FrameScheduler
+  onMeasurementActiveChange?: (active: boolean) => void
   dataSource?:
     | SpectrumAnalyzerDataSource
     | OscilloscopeDataSource
@@ -56,14 +72,8 @@ interface Visualizer {
   dispose(): void
   resize(): void
   setOptions(options: Record<string, unknown>): void
-}
-
-interface CanvasResizeState {
-  cssWidth: number
-  cssHeight: number
-  pixelWidth: number
-  pixelHeight: number
-  dpr: number
+  getMeasurementAt?: ScopeMeasurementSource['getMeasurementAt']
+  setMeasurementActive?: ScopeMeasurementSource['setMeasurementActive']
 }
 
 const SPECTRUM_PEAK_OVERLAY_MARGIN_PX = 10
@@ -83,12 +93,12 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-function formatSpectrumPeakDb(value: number): string {
+function formatSpectrumPeakDbfs(value: number): string {
   if (!Number.isFinite(value)) {
     return '--'
   }
 
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dB`
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dBFS`
 }
 
 function formatSpectrumPeakFrequency(value: number): string {
@@ -105,8 +115,10 @@ function formatSpectrumPeakFrequency(value: number): string {
 
 function resolveFollowingPeakOverlayStyle(
   peakInfo: SpectrumPeakInfo,
-  resizeState: CanvasResizeState | null,
+  resizeState: ScopeCanvasLayout | null,
   overlaySize: SizeMeasurement | null,
+  rotation: ScopeDisplayRotation,
+  mirrorHorizontal: boolean,
 ): CSSProperties {
   if (!resizeState) {
     return {
@@ -115,12 +127,17 @@ function resolveFollowingPeakOverlayStyle(
     }
   }
 
-  const width = resizeState.cssWidth
-  const height = resizeState.cssHeight
+  const width = resizeState.viewportCssWidth
+  const height = resizeState.viewportCssHeight
   const overlayWidth = overlaySize?.width ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_WIDTH_PX
   const overlayHeight = overlaySize?.height ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_HEIGHT_PX
-  const peakX = peakInfo.normalizedX * width
-  const peakY = peakInfo.normalizedY * height
+  const transformedPeak = transformNormalizedScopePoint(
+    { x: peakInfo.normalizedX, y: peakInfo.normalizedY },
+    rotation,
+    mirrorHorizontal,
+  )
+  const peakX = transformedPeak.x * width
+  const peakY = transformedPeak.y * height
   const maxLeft = Math.max(
     SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
     width - overlayWidth - SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
@@ -144,36 +161,6 @@ function resolveFollowingPeakOverlayStyle(
   }
 }
 
-function measureCanvasResizeState(container: HTMLDivElement): CanvasResizeState {
-  const rect = container.getBoundingClientRect()
-  const cssWidth = Math.max(1, Math.floor(rect.width))
-  const cssHeight = Math.max(1, Math.floor(rect.height))
-  const dpr = window.devicePixelRatio || 1
-
-  return {
-    cssWidth,
-    cssHeight,
-    pixelWidth: Math.max(1, Math.floor(cssWidth * dpr)),
-    pixelHeight: Math.max(1, Math.floor(cssHeight * dpr)),
-    dpr,
-  }
-}
-
-function isSameCanvasResizeState(
-  left: CanvasResizeState | null,
-  right: CanvasResizeState | null,
-): boolean {
-  if (!left || !right) {
-    return false
-  }
-
-  return left.cssWidth === right.cssWidth
-    && left.cssHeight === right.cssHeight
-    && left.pixelWidth === right.pixelWidth
-    && left.pixelHeight === right.pixelHeight
-    && left.dpr === right.dpr
-}
-
 export function scopeSettingsToOptions(
   kind: ScopeKind,
   settings: ScopeSettings[ScopeKind],
@@ -183,6 +170,7 @@ export function scopeSettingsToOptions(
     case 'spectrum': {
       const s = settings as ScopeSettings['spectrum']
       const t = theme as ResolvedSpectrumTheme
+      const range = nominalFrequencyBoundsForRange(s.frequencyRangeMode)
       return {
         lineColor: t.line,
         secondaryLineColor: t.sideLine,
@@ -192,6 +180,9 @@ export function scopeSettingsToOptions(
         backgroundColor: t.background,
         gridColor: t.guides,
         labelColor: t.labels,
+        scaleType: s.scaleMode,
+        minFrequency: range.minFrequency,
+        maxFrequency: range.maxFrequency,
         fftSize: s.fftSize,
         tiltDbPerOctave: s.tiltDbPerOctave,
         heatmapFill: s.heatmap,
@@ -227,12 +218,14 @@ export function scopeSettingsToOptions(
         gridMajorColor: t.guides,
         gridMinorColor: t.guidesSecondary,
         labelColor: t.labels,
+        phaseRiskColor: t.phaseRisk,
         bandColors: {
           low: t.bandLow,
           mid: t.bandMid,
           high: t.bandHigh,
         },
         mode: s.mode,
+        zoomDb: s.zoomDb,
         multiband: s.multiband,
         showGrid: s.showGrid,
         persistence: s.persistence,
@@ -242,17 +235,23 @@ export function scopeSettingsToOptions(
     case 'spectrogram': {
       const s = settings as ScopeSettings['spectrogram']
       const t = theme as ResolvedSpectrogramTheme
+      const range = nominalFrequencyBoundsForRange(s.frequencyRangeMode)
       return {
         lineColor: t.mono,
         heatColors: t.heatColors,
         backgroundColor: t.background,
+        gridColor: t.guides,
+        labelColor: t.labels,
+        minFrequency: range.minFrequency,
+        maxFrequency: range.maxFrequency,
         fftSize: s.fftSize,
         tiltDbPerOctave: s.tiltDbPerOctave,
         scrollSpeed: s.scrollSpeed,
         contrast: s.contrast,
         clarityMode: s.clarityMode,
         scaleMode: s.scaleMode,
-        orientation: s.orientation,
+        showGrid: s.showGrid,
+        orientation: 'horizontal',
         colorScheme: s.colorScheme,
       }
     }
@@ -315,6 +314,27 @@ export function scopeSettingsToOptions(
   }
 }
 
+// In blurred/clear window modes the see-through tint lives in CSS (a stable
+// compositor layer on .scope-strip); the canvas paints no background at all so
+// per-frame redraws never race the OS backdrop. Traces stay fully opaque.
+export function applyWindowBackgroundAlphaToOptions(
+  options: Record<string, unknown>,
+  windowBgAlpha: number,
+): Record<string, unknown> {
+  if (
+    windowBgAlpha >= 1
+    || typeof options.backgroundColor !== 'string'
+    || options.backgroundColor === 'transparent'
+  ) {
+    return options
+  }
+
+  return {
+    ...options,
+    backgroundColor: 'transparent',
+  }
+}
+
 function createVisualizer(
   scopeKind: ScopeKind,
   canvas: HTMLCanvasElement,
@@ -324,8 +344,15 @@ function createVisualizer(
   dataSource?: ScopeModuleProps['dataSource'],
   onSpectrumPeakInfo?: (peakInfo: SpectrumPeakInfo | null) => void,
   captureSpectrumPeakInfo = false,
+  windowBgAlpha = 1,
 ): Visualizer | null {
-  const opts = { ...scopeSettingsToOptions(scopeKind, mySettings, theme), frameScheduler }
+  const opts = {
+    ...applyWindowBackgroundAlphaToOptions(
+      scopeSettingsToOptions(scopeKind, mySettings, theme),
+      windowBgAlpha,
+    ),
+    frameScheduler,
+  }
   switch (scopeKind) {
     case 'spectrum':
       return new SpectrumAnalyzer(canvas, {
@@ -376,14 +403,15 @@ export default function ScopeModule({
   theme,
   settings,
   frameScheduler,
+  onMeasurementActiveChange,
   dataSource,
 }: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visualizerRef = useRef<Visualizer | null>(null)
   const initializedRef = useRef(false)
-  const pendingResizeRef = useRef<CanvasResizeState | null>(null)
-  const appliedResizeRef = useRef<CanvasResizeState | null>(null)
+  const pendingResizeRef = useRef<ScopeCanvasLayout | null>(null)
+  const appliedResizeRef = useRef<ScopeCanvasLayout | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
   const snapshotCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const peakOverlayRef = useRef<HTMLDivElement | null>(null)
@@ -392,8 +420,15 @@ export default function ScopeModule({
 
   const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
   const activeTheme = useThemeStore((s) => s.activeTheme)
+  const windowBgAlpha = useWindowBackgroundAlpha()
   const mySettings = settings ?? storeSettings
   const myTheme = theme ?? getScopeTheme(activeTheme, scopeKind)
+  const rotation: ScopeDisplayRotation = isTransformableScopeKind(scopeKind)
+    ? (mySettings as ScopeSettings[typeof scopeKind]).rotation
+    : 0
+  const mirrorHorizontal = isTransformableScopeKind(scopeKind)
+    ? (mySettings as ScopeSettings[typeof scopeKind]).mirrorHorizontal
+    : false
   const spectrumPeakMode = scopeKind === 'spectrum'
     ? (mySettings as ScopeSettings['spectrum']).peakInfoMode
     : 'off'
@@ -401,6 +436,23 @@ export default function ScopeModule({
   const handleSpectrumPeakInfo = useCallback((nextPeakInfo: SpectrumPeakInfo | null): void => {
     setSpectrumPeakInfo(nextPeakInfo)
   }, [])
+  const measurementEnabled = scopeKind === 'spectrum'
+    || scopeKind === 'spectrogram'
+    || scopeKind === 'oscilloscope'
+    || scopeKind === 'waveform'
+  const measurementController = useScopeMeasurement({
+    containerRef,
+    enabled: measurementEnabled,
+    rotation,
+    mirrorHorizontal,
+    getSource: () => {
+      const visualizer = visualizerRef.current
+      return visualizer?.getMeasurementAt
+        ? visualizer as ScopeMeasurementSource
+        : null
+    },
+    onActiveChange: onMeasurementActiveChange,
+  })
 
   useEffect(() => {
     if (!captureSpectrumPeakInfo) {
@@ -469,6 +521,7 @@ export default function ScopeModule({
       dataSource,
       handleSpectrumPeakInfo,
       captureSpectrumPeakInfo,
+      windowBgAlpha,
     )
     if (!viz) return
 
@@ -485,12 +538,17 @@ export default function ScopeModule({
       initializedRef.current = false
       setSpectrumPeakInfo(null)
     }
-  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, myTheme, mySettings, scopeKind])
+    // Settings and theme changes are applied live by the setOptions effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataSource, frameScheduler, handleSpectrumPeakInfo, scopeKind])
 
   useEffect(() => {
     if (!visualizerRef.current || !initializedRef.current) return
     const opts = {
-      ...scopeSettingsToOptions(scopeKind, mySettings, myTheme),
+      ...applyWindowBackgroundAlphaToOptions(
+        scopeSettingsToOptions(scopeKind, mySettings, myTheme),
+        windowBgAlpha,
+      ),
       frameScheduler,
       ...(scopeKind === 'spectrum'
         ? {
@@ -501,9 +559,9 @@ export default function ScopeModule({
       ...(dataSource ? { dataSource } : {}),
     }
     visualizerRef.current.setOptions(opts)
-  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind])
+  }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind, windowBgAlpha])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = containerRef.current
     const canvas = canvasRef.current
     if (!container || !canvas) return
@@ -518,7 +576,7 @@ export default function ScopeModule({
     const applyResize = (): void => {
       resizeFrameRef.current = null
       const nextResize = pendingResizeRef.current
-      if (!nextResize || isSameCanvasResizeState(appliedResizeRef.current, nextResize)) {
+      if (!nextResize || isSameScopeCanvasLayout(appliedResizeRef.current, nextResize)) {
         return
       }
 
@@ -559,7 +617,7 @@ export default function ScopeModule({
     }
 
     const scheduleResize = (): void => {
-      pendingResizeRef.current = measureCanvasResizeState(container)
+      pendingResizeRef.current = measureScopeCanvasLayout(container, rotation)
       if (resizeFrameRef.current !== null) {
         return
       }
@@ -569,7 +627,7 @@ export default function ScopeModule({
       })
     }
 
-    pendingResizeRef.current = measureCanvasResizeState(container)
+    pendingResizeRef.current = measureScopeCanvasLayout(container, rotation)
     applyResize()
 
     const observer = new ResizeObserver(() => {
@@ -587,18 +645,29 @@ export default function ScopeModule({
       appliedResizeRef.current = null
       snapshotCanvasRef.current = null
     }
-  }, [])
+  }, [rotation])
 
   const spectrumPeakOverlayStyle = scopeKind === 'spectrum'
     && spectrumPeakMode === 'following'
     && spectrumPeakInfo
-    ? resolveFollowingPeakOverlayStyle(spectrumPeakInfo, appliedResizeRef.current, peakOverlaySize)
+    ? resolveFollowingPeakOverlayStyle(
+        spectrumPeakInfo,
+        appliedResizeRef.current,
+        peakOverlaySize,
+        rotation,
+        mirrorHorizontal,
+      )
     : undefined
 
   return (
     <div
-      className="scope-module"
+      className={[
+        'scope-module',
+        measurementEnabled ? 'scope-measurement-surface' : '',
+        measurementController.active ? 'is-measuring' : '',
+      ].filter(Boolean).join(' ')}
       ref={containerRef}
+      {...measurementController.pointerBindings}
       style={{
         minWidth: 0,
         height: '100%',
@@ -609,14 +678,14 @@ export default function ScopeModule({
       <canvas
         ref={canvasRef}
         style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
+          ...getScopeCanvasTransformStyle(rotation, mirrorHorizontal),
         }}
       />
-      {scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
+      <ScopeMeasurementOverlay
+        containerRef={containerRef}
+        measurement={measurementController.measurement}
+      />
+      {!measurementController.active && scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
         <div
           ref={spectrumPeakMode === 'following' ? peakOverlayRef : null}
           className={[
@@ -625,7 +694,7 @@ export default function ScopeModule({
           ].join(' ')}
           style={spectrumPeakOverlayStyle}
         >
-          <span className="scope-module__peak-info-value">{formatSpectrumPeakDb(spectrumPeakInfo.db)}</span>
+          <span className="scope-module__peak-info-value">{formatSpectrumPeakDbfs(spectrumPeakInfo.dbfs)}</span>
           <span className="scope-module__peak-info-separator">/</span>
           <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(spectrumPeakInfo.frequencyHz)}</span>
           <span className="scope-module__peak-info-separator">/</span>

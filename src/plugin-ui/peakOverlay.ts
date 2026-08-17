@@ -1,5 +1,11 @@
 import type { CSSProperties } from 'react'
 import type { SpectrumPeakInfo } from '../types/spectrum'
+import type { ScopeDisplayRotation } from '../types/scopeTransform'
+import {
+  measureScopeCanvasLayout,
+  transformNormalizedScopePoint,
+  type ScopeCanvasLayout,
+} from '../renderer/scopeCanvasTransform'
 
 /**
  * Peak-overlay positioning + formatting, mirroring ScopeModule.tsx so the plugin's
@@ -7,13 +13,7 @@ import type { SpectrumPeakInfo } from '../types/spectrum'
  * copy (pure functions) so the plugin doesn't import the heavy ScopeModule.
  */
 
-export interface CanvasResizeState {
-  cssWidth: number
-  cssHeight: number
-  pixelWidth: number
-  pixelHeight: number
-  dpr: number
-}
+export type CanvasResizeState = ScopeCanvasLayout
 
 export interface SizeMeasurement {
   width: number
@@ -28,11 +28,11 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-export function formatSpectrumPeakDb(value: number): string {
+export function formatSpectrumPeakDbfs(value: number): string {
   if (!Number.isFinite(value)) {
     return '--'
   }
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dB`
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}dBFS`
 }
 
 export function formatSpectrumPeakFrequency(value: number): string {
@@ -45,25 +45,19 @@ export function formatSpectrumPeakFrequency(value: number): string {
   return `${value.toFixed(2)}Hz`
 }
 
-export function measureCanvasResizeState(container: HTMLElement): CanvasResizeState {
-  const rect = container.getBoundingClientRect()
-  const cssWidth = Math.max(1, Math.floor(rect.width))
-  const cssHeight = Math.max(1, Math.floor(rect.height))
-  const dpr = window.devicePixelRatio || 1
-
-  return {
-    cssWidth,
-    cssHeight,
-    pixelWidth: Math.max(1, Math.floor(cssWidth * dpr)),
-    pixelHeight: Math.max(1, Math.floor(cssHeight * dpr)),
-    dpr,
-  }
+export function measureCanvasResizeState(
+  container: HTMLElement,
+  rotation: ScopeDisplayRotation = 0,
+): CanvasResizeState {
+  return measureScopeCanvasLayout(container, rotation)
 }
 
 export function resolveFollowingPeakOverlayStyle(
   peakInfo: SpectrumPeakInfo,
   resizeState: CanvasResizeState | null,
   overlaySize: SizeMeasurement | null,
+  rotation: ScopeDisplayRotation = 0,
+  mirrorHorizontal = false,
 ): CSSProperties {
   if (!resizeState) {
     return {
@@ -72,12 +66,17 @@ export function resolveFollowingPeakOverlayStyle(
     }
   }
 
-  const width = resizeState.cssWidth
-  const height = resizeState.cssHeight
+  const width = resizeState.viewportCssWidth
+  const height = resizeState.viewportCssHeight
   const overlayWidth = overlaySize?.width ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_WIDTH_PX
   const overlayHeight = overlaySize?.height ?? SPECTRUM_PEAK_OVERLAY_FALLBACK_HEIGHT_PX
-  const peakX = peakInfo.normalizedX * width
-  const peakY = peakInfo.normalizedY * height
+  const transformedPeak = transformNormalizedScopePoint(
+    { x: peakInfo.normalizedX, y: peakInfo.normalizedY },
+    rotation,
+    mirrorHorizontal,
+  )
+  const peakX = transformedPeak.x * width
+  const peakY = transformedPeak.y * height
   const maxLeft = Math.max(
     SPECTRUM_PEAK_OVERLAY_MARGIN_PX,
     width - overlayWidth - SPECTRUM_PEAK_OVERLAY_MARGIN_PX,

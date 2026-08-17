@@ -1,5 +1,10 @@
 import { create } from 'zustand'
 import { audioCapture, type CaptureManagerStatus } from '../audio/AudioCapture'
+import {
+  isRollingCaptureDuration,
+  type RollingCaptureDurationSeconds,
+  type RollingCaptureStatus,
+} from '../../types/audioClip'
 import type {
   CaptureBackendKind,
   CaptureBackendSupport,
@@ -20,6 +25,7 @@ export interface PersistedAudioState {
   captureMode: CaptureMode
   selectedSystemSourceId: string
   selectedDeviceId: string | null
+  rollingCaptureSeconds: RollingCaptureDurationSeconds | null
 }
 
 interface RefreshSourceOptions {
@@ -48,7 +54,12 @@ interface AudioState {
   activeSourceId: string | null
   activeSourceLabel: string | null
   inputGainDb: number
+  rollingCaptureSeconds: RollingCaptureDurationSeconds | null
+  rollingCaptureStatus: RollingCaptureStatus
   setInputGain: (db: number) => void
+  setRollingCaptureSeconds: (duration: RollingCaptureDurationSeconds | null) => void
+  startRollingClipDrag: () => boolean
+  revealRollingCaptureFolder: () => Promise<void>
   clearCaptureNotice: () => void
   refreshSystemSources: (options?: RefreshSourceOptions) => Promise<void>
   refreshDevices: (options?: RefreshSourceOptions) => Promise<void>
@@ -193,6 +204,12 @@ function normalizeDeviceId(raw: unknown): string | null {
     : null
 }
 
+export function normalizeRollingCaptureSeconds(
+  raw: unknown,
+): RollingCaptureDurationSeconds | null {
+  return isRollingCaptureDuration(raw) ? raw : null
+}
+
 export function normalizeAudioPreferences(raw: unknown): PersistedAudioState {
   const parsed = typeof raw === 'object' && raw !== null
     ? raw as Partial<PersistedAudioState>
@@ -203,6 +220,7 @@ export function normalizeAudioPreferences(raw: unknown): PersistedAudioState {
     captureMode: normalizeCaptureMode(parsed.captureMode),
     selectedSystemSourceId: normalizeSystemSourceId(parsed.selectedSystemSourceId),
     selectedDeviceId: normalizeDeviceId(parsed.selectedDeviceId),
+    rollingCaptureSeconds: normalizeRollingCaptureSeconds(parsed.rollingCaptureSeconds),
   }
 }
 
@@ -211,12 +229,14 @@ function buildAudioPreferences(
   captureMode: CaptureMode,
   selectedSystemSourceId: string | null,
   selectedDeviceId: string | null,
+  rollingCaptureSeconds: RollingCaptureDurationSeconds | null,
 ): PersistedAudioState {
   return normalizeAudioPreferences({
     inputGainDb,
     captureMode,
     selectedSystemSourceId,
     selectedDeviceId,
+    rollingCaptureSeconds,
   })
 }
 
@@ -252,6 +272,7 @@ audioCapture.setInputGain(storedPreferences.inputGainDb)
 audioCapture.setSelectedSystemSourceId(storedPreferences.selectedSystemSourceId)
 audioCapture.setSelectedDeviceId(storedPreferences.selectedDeviceId)
 audioCapture.setCaptureMode(storedPreferences.captureMode)
+audioCapture.setRollingCaptureSeconds(storedPreferences.rollingCaptureSeconds)
 
 export const useAudioStore = create<AudioState>((set, get) => ({
   systemSources: [],
@@ -270,6 +291,8 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   activeSourceId: null,
   activeSourceLabel: null,
   inputGainDb: storedPreferences.inputGainDb,
+  rollingCaptureSeconds: storedPreferences.rollingCaptureSeconds,
+  rollingCaptureStatus: audioCapture.getRollingCaptureStatus(),
 
   setInputGain: (db: number) => {
     const nextInputGainDb = normalizeInputGainDb(db)
@@ -283,9 +306,54 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.captureMode,
       currentState.selectedSystemSourceId,
       currentState.selectedDeviceId,
+      currentState.rollingCaptureSeconds,
     ))
     audioCapture.setInputGain(nextInputGainDb)
     set({ inputGainDb: nextInputGainDb })
+  },
+
+  setRollingCaptureSeconds: (duration) => {
+    const nextDuration = normalizeRollingCaptureSeconds(duration)
+    const currentState = get()
+    if (currentState.rollingCaptureSeconds === nextDuration) return
+
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      currentState.captureMode,
+      currentState.selectedSystemSourceId,
+      currentState.selectedDeviceId,
+      nextDuration,
+    ))
+    audioCapture.setRollingCaptureSeconds(nextDuration)
+    set({
+      rollingCaptureSeconds: nextDuration,
+      rollingCaptureStatus: audioCapture.getRollingCaptureStatus(),
+    })
+  },
+
+  startRollingClipDrag: () => {
+    if (typeof window === 'undefined' || !window.electronAPI?.audioClips) return false
+    const snapshot = audioCapture.takeRollingCaptureSnapshot()
+    if (!snapshot) return false
+
+    window.electronAPI.audioClips.startDrag({
+      pcmBytes: new Uint8Array(
+        snapshot.pcmSamples.buffer,
+        snapshot.pcmSamples.byteOffset,
+        snapshot.pcmSamples.byteLength,
+      ),
+      sampleRate: snapshot.sampleRate,
+      channelCount: snapshot.channelCount,
+      frameCount: snapshot.frameCount,
+    })
+    return true
+  },
+
+  revealRollingCaptureFolder: async () => {
+    if (typeof window === 'undefined' || !window.electronAPI?.audioClips) {
+      throw new Error('The Prism Captures folder is unavailable.')
+    }
+    await window.electronAPI.audioClips.revealFolder()
   },
 
   clearCaptureNotice: () => {
@@ -320,6 +388,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         currentState.captureMode,
         nextSelectedSystemSourceId,
         currentState.selectedDeviceId,
+        currentState.rollingCaptureSeconds,
       ))
     }
 
@@ -388,6 +457,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         currentState.captureMode,
         currentState.selectedSystemSourceId,
         nextSelectedDeviceId,
+        currentState.rollingCaptureSeconds,
       ))
     }
 
@@ -445,6 +515,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       'system',
       nextSelectedSystemSourceId,
       currentState.selectedDeviceId,
+      currentState.rollingCaptureSeconds,
     ))
     set({
       selectedSystemSourceId: nextSelectedSystemSourceId,
@@ -463,6 +534,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       'device',
       currentState.selectedSystemSourceId,
       deviceId,
+      currentState.rollingCaptureSeconds,
     ))
     set({
       selectedDeviceId: deviceId,
@@ -480,6 +552,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       mode,
       currentState.selectedSystemSourceId,
       currentState.selectedDeviceId,
+      currentState.rollingCaptureSeconds,
     ))
     set({ captureMode: mode })
   },
@@ -506,6 +579,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
           'device',
           currentState.selectedSystemSourceId,
           null,
+          currentState.rollingCaptureSeconds,
         ))
         set({
           selectedDeviceId: null,
@@ -676,3 +750,17 @@ audioCapture.subscribeStatus((status) => {
     ...applyCaptureStatus(status),
   }))
 })
+
+audioCapture.subscribeRollingCaptureStatus((rollingCaptureStatus) => {
+  useAudioStore.setState({ rollingCaptureStatus })
+})
+
+if (typeof window !== 'undefined' && window.electronAPI?.audioClips) {
+  window.electronAPI.audioClips.onDragError((message) => {
+    useUiStore.getState().showBanner({
+      tone: 'error',
+      message,
+      actions: [],
+    })
+  })
+}

@@ -28,6 +28,89 @@
 
 namespace {
 
+// Undocumented but long-stable user32 API used for accent-policy acrylic.
+// Unlike DWMWA_SYSTEMBACKDROP_TYPE acrylic, this blur stays active while the
+// window is unfocused and renders on borderless transparent windows, which is
+// exactly what an always-visible visualizer overlay needs.
+struct AccentPolicy {
+    int32_t AccentState;
+    int32_t AccentFlags;
+    uint32_t GradientColor;  // AABBGGRR
+    int32_t AnimationId;
+};
+
+struct WindowCompositionAttribData {
+    int32_t Attrib;
+    void* pvData;
+    SIZE_T cbData;
+};
+
+using SetWindowCompositionAttributeFn = BOOL(WINAPI*)(HWND, WindowCompositionAttribData*);
+
+constexpr int32_t kAccentDisabled = 0;
+constexpr int32_t kAccentEnableAcrylicBlurBehind = 4;
+constexpr int32_t kWcaAccentPolicy = 19;
+// A barely-visible tint keeps some Windows builds from optimizing the blur
+// away entirely when the requested tint alpha is zero.
+constexpr uint32_t kNearTransparentTint = 0x01000000u;
+
+HWND ReadWindowHandle(const Napi::CallbackInfo& info, Napi::Env env) {
+    if (info.Length() < 1 || !info[0].IsBuffer()) {
+        Napi::TypeError::New(env, "Expected native window handle Buffer")
+            .ThrowAsJavaScriptException();
+        return nullptr;
+    }
+
+    Napi::Buffer<uint8_t> handle = info[0].As<Napi::Buffer<uint8_t>>();
+    if (handle.Length() < sizeof(HWND)) {
+        Napi::TypeError::New(env, "Window handle Buffer is too small")
+            .ThrowAsJavaScriptException();
+        return nullptr;
+    }
+
+    HWND hwnd = *reinterpret_cast<HWND*>(handle.Data());
+    if (hwnd == nullptr || !IsWindow(hwnd)) {
+        return nullptr;
+    }
+    return hwnd;
+}
+
+Napi::Value SetAcrylicBlurBehind(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    HWND hwnd = ReadWindowHandle(info, env);
+    if (env.IsExceptionPending() || hwnd == nullptr) {
+        return env.IsExceptionPending() ? env.Undefined() : Napi::Boolean::New(env, false);
+    }
+
+    const bool enable = info.Length() > 1 && info[1].IsBoolean()
+        ? info[1].As<Napi::Boolean>().Value()
+        : true;
+
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32 == nullptr) {
+        return Napi::Boolean::New(env, false);
+    }
+
+    auto setWindowCompositionAttribute = reinterpret_cast<SetWindowCompositionAttributeFn>(
+        GetProcAddress(user32, "SetWindowCompositionAttribute"));
+    if (setWindowCompositionAttribute == nullptr) {
+        return Napi::Boolean::New(env, false);
+    }
+
+    AccentPolicy policy = {};
+    policy.AccentState = enable ? kAccentEnableAcrylicBlurBehind : kAccentDisabled;
+    policy.AccentFlags = 0;
+    policy.GradientColor = enable ? kNearTransparentTint : 0u;
+    policy.AnimationId = 0;
+
+    WindowCompositionAttribData data = {};
+    data.Attrib = kWcaAccentPolicy;
+    data.pvData = &policy;
+    data.cbData = sizeof(policy);
+
+    return Napi::Boolean::New(env, setWindowCompositionAttribute(hwnd, &data) != FALSE);
+}
+
 Napi::Value ApplyFlatFrame(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsBuffer()) {
@@ -74,6 +157,7 @@ Napi::Value ApplyFlatFrame(const Napi::CallbackInfo& info) {
 void RegisterWindowChrome(Napi::Env env, Napi::Object exports) {
     Napi::Object chrome = Napi::Object::New(env);
     chrome.Set("applyFlatFrame", Napi::Function::New(env, ApplyFlatFrame));
+    chrome.Set("setAcrylicBlurBehind", Napi::Function::New(env, SetAcrylicBlurBehind));
     exports.Set("windowChrome", chrome);
 }
 
@@ -90,6 +174,7 @@ Napi::Value ApplyFlatFrameNoop(const Napi::CallbackInfo& info) {
 void RegisterWindowChrome(Napi::Env env, Napi::Object exports) {
     Napi::Object chrome = Napi::Object::New(env);
     chrome.Set("applyFlatFrame", Napi::Function::New(env, ApplyFlatFrameNoop));
+    chrome.Set("setAcrylicBlurBehind", Napi::Function::New(env, ApplyFlatFrameNoop));
     exports.Set("windowChrome", chrome);
 }
 

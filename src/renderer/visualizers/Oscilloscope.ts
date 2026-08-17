@@ -9,6 +9,11 @@ import { colorToRgbChannels, multiplyColorAlpha } from '../utils/color'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
+import {
+  resolveOscilloscopeMeasurement,
+  type ScopeMeasurement,
+} from '../scopeMeasurement'
+import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 
 export interface OscilloscopeDataSource extends VisualizerSessionSource {
   getPendingOscilloscopeSamples: () => Float32Array[]
@@ -185,6 +190,15 @@ export class Oscilloscope {
   resize(): void {
     this.staticLayerKey = ''
     this.invalidate()
+  }
+
+  getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
+    const sampleRate = Math.max(1, this.dataSource.getSampleRate())
+    return resolveOscilloscopeMeasurement(
+      point,
+      sampleRate,
+      getNormalizedOscilloscopeDisplaySamples(sampleRate),
+    )
   }
 
   private ensureRenderBuffer(size: number): Float32Array {

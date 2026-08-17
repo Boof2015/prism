@@ -41,6 +41,9 @@ public:
      */
     virtual void configureNative(const juce::var&) {}
 
+    /** Temporary UI interaction state. Most scopes do not need DSP changes. */
+    virtual void setMeasurementActive(bool) {}
+
     /** Feed audio (called off the realtime thread). numSamples may be 0. */
     virtual void process(const float* left, const float* right, int numSamples) = 0;
 

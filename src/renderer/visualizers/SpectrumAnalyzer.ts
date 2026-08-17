@@ -18,6 +18,18 @@ import {
   HEAT_MID_DB,
   normalizeHeatDb,
 } from './heatScale'
+import {
+  SPECTRUM_MEASUREMENT_SMOOTHING,
+  resolveSpectrumMeasurement,
+  type ScopeMeasurement,
+} from '../scopeMeasurement'
+import type { NormalizedScopePoint } from '../scopeCanvasTransform'
+import {
+  buildFrequencyGuides,
+  clampFrequencyRangeToNyquist,
+  frequencyAtNormalizedPosition,
+  type FrequencyScaleMode,
+} from '../../types/frequencyScale'
 
 type SpectrumStereoChunk = {
   left: Float32Array
@@ -42,7 +54,7 @@ export interface SpectrumAnalyzerOptions {
   backgroundColor?: string
   showGrid?: boolean
   gridColor?: string
-  scaleType?: 'linear' | 'log'
+  scaleType?: FrequencyScaleMode
   smoothing?: number
   minDecibels?: number
   maxDecibels?: number
@@ -194,8 +206,8 @@ const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
   smoothing: 0.9,
   minDecibels: -90,
   maxDecibels: -10,
-  minFrequency: 20,
-  maxFrequency: 20000,
+  minFrequency: 10,
+  maxFrequency: 24000,
   tiltDbPerOctave: DEFAULT_SPECTRUM_TILT_DB_PER_OCTAVE,
   heatmapTiltDbPerOctave: DEFAULT_SPECTRUM_HEATMAP_TILT_DB_PER_OCTAVE,
   tiltReferenceHz: 1000,
@@ -230,6 +242,7 @@ export class SpectrumAnalyzer {
   private nativeMagnitudeBuffer = new Float32Array(0)
   private nativeRawMagnitudeBuffer = new Float32Array(0)
   private nativeSideMagnitudeBuffer = new Float32Array(0)
+  private nativeChannelMaxMagnitudeBuffer = new Float32Array(0)
   private heatmapMagnitudeBuffer = new Float32Array(0)
   private nativeBufferedSamples = 0
   private nativeHasSpectrumData = false
@@ -242,8 +255,10 @@ export class SpectrumAnalyzer {
   private secondaryPointX = new Float32Array(0)
   private secondaryPointY = new Float32Array(0)
   private primaryPointDb = new Float32Array(0)
+  private primaryPointDbfs = new Float32Array(0)
   private primaryPointFrequency = new Float32Array(0)
   private lastSelectedPeakInfo: SpectrumPeakInfo | null = null
+  private measurementActive = false
 
   constructor(canvas: HTMLCanvasElement, options: SpectrumAnalyzerOptions = {}) {
     this.canvas = canvas
@@ -316,6 +331,9 @@ export class SpectrumAnalyzer {
     if (this.nativeSideMagnitudeBuffer.length !== length) {
       this.nativeSideMagnitudeBuffer = new Float32Array(length)
     }
+    if (this.nativeChannelMaxMagnitudeBuffer.length !== length) {
+      this.nativeChannelMaxMagnitudeBuffer = new Float32Array(length)
+    }
     if (this.heatmapMagnitudeBuffer.length !== length) {
       this.heatmapMagnitudeBuffer = new Float32Array(length)
     }
@@ -326,6 +344,7 @@ export class SpectrumAnalyzer {
     this.nativeMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.nativeRawMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.nativeSideMagnitudeBuffer.fill(FFT_SILENCE_DB)
+    this.nativeChannelMaxMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.heatmapMagnitudeBuffer.fill(FFT_SILENCE_DB)
     this.nativeBufferedSamples = 0
     this.nativeHasSpectrumData = false
@@ -351,7 +370,29 @@ export class SpectrumAnalyzer {
   private getNativeSmoothing(): number {
     const base = clampSmoothing(this.options.smoothing)
     const fftRatio = Math.max(0.5, this.options.fftSize / 2048)
-    return clampSmoothing(Math.pow(base, fftRatio))
+    const configured = clampSmoothing(Math.pow(base, fftRatio))
+    return this.measurementActive
+      ? Math.max(configured, SPECTRUM_MEASUREMENT_SMOOTHING)
+      : configured
+  }
+
+  getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
+    return resolveSpectrumMeasurement(point, {
+      sampleRate: this.sampleRate,
+      minFrequency: this.options.minFrequency,
+      maxFrequency: this.options.maxFrequency,
+      minDecibels: this.options.minDecibels,
+      maxDecibels: this.options.maxDecibels,
+      scaleType: this.options.scaleType,
+    })
+  }
+
+  setMeasurementActive(active: boolean): void {
+    if (this.measurementActive === active) return
+    this.measurementActive = active
+    if (this.isNativeAvailable()) {
+      this.nativeAnalyzer?.setSmoothing(this.getNativeSmoothing())
+    }
   }
 
   private resetState(): void {
@@ -379,6 +420,7 @@ export class SpectrumAnalyzer {
       || optionUpdates.smoothing !== undefined
       || optionUpdates.heatmapSmoothing !== undefined
       || optionUpdates.showSideLine !== undefined
+      || optionUpdates.capturePeakInfo !== undefined
     )
 
     this.options = nextOptions
@@ -448,13 +490,23 @@ export class SpectrumAnalyzer {
     return this.lerp(data[i0], data[i1], t)
   }
 
-  private frequencyAtPosition(t: number, minFrequency: number, maxFrequency: number): number {
-    if (this.options.scaleType === 'log') {
-      const logMin = Math.log10(minFrequency)
-      const logMax = Math.log10(maxFrequency)
-      return Math.pow(10, logMin + t * (logMax - logMin))
+  private getQuadraticInterpolatedValue(data: Float32Array, index: number): number {
+    const center = Math.round(index)
+    if (center <= 0 || center >= data.length - 1) {
+      return this.getInterpolatedValue(data, index)
     }
-    return minFrequency + t * (maxFrequency - minFrequency)
+
+    const offset = index - center
+    const previous = data[center - 1]
+    const current = data[center]
+    const next = data[center + 1]
+    return current + 0.5 * offset * (
+      next - previous + offset * (previous - (2 * current) + next)
+    )
+  }
+
+  private frequencyAtPosition(t: number, minFrequency: number, maxFrequency: number): number {
+    return frequencyAtNormalizedPosition(t, minFrequency, maxFrequency, this.options.scaleType)
   }
 
   private resolvePeakInRange(
@@ -522,6 +574,7 @@ export class SpectrumAnalyzer {
       this.secondaryPointX = new Float32Array(pointCount)
       this.secondaryPointY = new Float32Array(pointCount)
       this.primaryPointDb = new Float32Array(pointCount)
+      this.primaryPointDbfs = new Float32Array(pointCount)
       this.primaryPointFrequency = new Float32Array(pointCount)
     }
   }
@@ -668,6 +721,7 @@ export class SpectrumAnalyzer {
     yOut: Float32Array,
     heatmapIntensityOut: Float32Array | null,
     capturePeakInfo = false,
+    peakDbfsData: Float32Array | null = null,
   ): SpectrumPointFillResult {
     const bufferLength = Math.min(dataLength, frequencyData.length)
     if (bufferLength <= 0) {
@@ -706,8 +760,16 @@ export class SpectrumAnalyzer {
       }
 
       if (capturePeakInfo) {
+        const peakFrequencyHz = resolvedPeak?.frequencyHz ?? centerFrequency
         this.primaryPointDb[index] = db
-        this.primaryPointFrequency[index] = resolvedPeak?.frequencyHz ?? centerFrequency
+        this.primaryPointFrequency[index] = peakFrequencyHz
+        const peakDbfsBin = Math.min(
+          Math.max(0, peakFrequencyHz / binWidth),
+          Math.max(0, (peakDbfsData?.length ?? 1) - 1),
+        )
+        this.primaryPointDbfs[index] = peakDbfsData && peakDbfsData.length > 0
+          ? this.getQuadraticInterpolatedValue(peakDbfsData, peakDbfsBin)
+          : rawDb
       }
     }
 
@@ -724,14 +786,15 @@ export class SpectrumAnalyzer {
       || index >= this.primaryPointFrequency.length
       || index >= this.primaryPointX.length
       || index >= this.primaryPointY.length
+      || index >= this.primaryPointDbfs.length
     ) {
       return null
     }
 
     const frequencyHz = this.primaryPointFrequency[index]
-    const db = this.primaryPointDb[index]
+    const dbfs = this.primaryPointDbfs[index]
     return {
-      db,
+      dbfs,
       frequencyHz,
       normalizedX: this.primaryPointX[index] / Math.max(1, this.canvas.width),
       normalizedY: this.primaryPointY[index] / Math.max(1, height),
@@ -970,8 +1033,8 @@ export class SpectrumAnalyzer {
     this.updateSampleRateIfNeeded()
 
     const nyquist = this.sampleRate / 2
-    const minFrequency = Math.max(1, Math.min(options.minFrequency, nyquist))
-    const maxFrequency = Math.max(minFrequency + 1, Math.min(options.maxFrequency, nyquist))
+    const range = clampFrequencyRangeToNyquist(this.sampleRate, options.minFrequency, options.maxFrequency)
+    const { minFrequency, maxFrequency } = range
 
     if (!this.dataSource.isPlaying()) {
       this.clearPendingSpectrumQueues()
@@ -990,6 +1053,7 @@ export class SpectrumAnalyzer {
     let primaryDataLength = 0
     let heatmapDataLength = 0
     let secondaryDataLength = 0
+    let channelMaxDataLength = 0
 
     if (!this.isNativeAvailable()) {
       this.clearPendingSpectrumQueues()
@@ -999,13 +1063,14 @@ export class SpectrumAnalyzer {
       return
     }
 
-    const receivedNativeSamples = options.showSideLine
+    const receivedNativeSamples = options.showSideLine || options.capturePeakInfo
       ? this.pushPendingSpectrumStereoChunks(this.dataSource.getPendingSpectrumStereoSamples())
       : this.pushPendingSpectrumChunks(this.dataSource.getPendingSpectrumSamples())
 
     this.ensureMagnitudeBufferSize()
     primaryData = this.nativeMagnitudeBuffer
     primaryDataLength = this.nativeAnalyzer?.fillMagnitudes(this.nativeMagnitudeBuffer) ?? 0
+    channelMaxDataLength = this.nativeAnalyzer?.fillChannelMaxMagnitudes(this.nativeChannelMaxMagnitudeBuffer) ?? 0
 
     if (receivedNativeSamples > 0 || !this.nativeHasSpectrumData) {
       heatmapDataLength = this.nativeAnalyzer?.fillRawMagnitudes(this.nativeRawMagnitudeBuffer) ?? 0
@@ -1051,6 +1116,7 @@ export class SpectrumAnalyzer {
       this.primaryPointY,
       null,
       options.capturePeakInfo,
+      channelMaxDataLength > 0 ? this.nativeChannelMaxMagnitudeBuffer : primaryData,
     )
     const heatmapRender = heatmapData && heatmapDataLength > 0
       ? this.fillSpectrumPoints(
@@ -1124,8 +1190,6 @@ export class SpectrumAnalyzer {
       options.showGrid,
       options.gridColor,
       options.scaleType,
-      options.minDecibels,
-      options.maxDecibels,
       minFrequency,
       maxFrequency,
     ].join(':')
@@ -1159,46 +1223,29 @@ export class SpectrumAnalyzer {
     ctx.strokeStyle = options.gridColor
     ctx.lineWidth = dpr
 
-    const dbSteps = [-80, -60, -40, -20, 0]
     ctx.fillStyle = options.gridColor
     ctx.font = `${10 * dpr}px monospace`
-    ctx.textAlign = 'left'
-
-    for (const db of dbSteps) {
-      const normalized = (db - options.minDecibels) / (options.maxDecibels - options.minDecibels)
-      const y = height - normalized * height
-
-      ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(width, y)
-      ctx.stroke()
-
-      ctx.fillText(`${db}dB`, 4 * dpr, y - 2 * dpr)
-    }
-
-    const freqSteps = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+    const guides = buildFrequencyGuides(
+      minFrequency,
+      maxFrequency,
+      options.scaleType,
+      width,
+    )
     ctx.textAlign = 'center'
 
-    for (const freq of freqSteps) {
-      if (freq < minFrequency || freq > maxFrequency) continue
-
-      let x: number
-      if (options.scaleType === 'log') {
-        const logMin = Math.log10(minFrequency)
-        const logMax = Math.log10(maxFrequency)
-        const logFreq = Math.log10(freq)
-        x = ((logFreq - logMin) / (logMax - logMin)) * width
-      } else {
-        x = ((freq - minFrequency) / (maxFrequency - minFrequency)) * width
-      }
+    for (const guide of guides) {
+      const x = guide.normalizedPosition * width
 
       ctx.beginPath()
       ctx.moveTo(x, 0)
       ctx.lineTo(x, height)
+      ctx.globalAlpha = guide.kind === 'minor' ? 0.38 : 1
       ctx.stroke()
+      ctx.globalAlpha = 1
 
-      const label = freq >= 1000 ? `${freq / 1000}k` : `${freq}`
-      ctx.fillText(label, x, height - 4 * dpr)
+      if (guide.label) {
+        ctx.fillText(guide.label, x, height - 4 * dpr)
+      }
     }
   }
 
@@ -1215,6 +1262,7 @@ export class SpectrumAnalyzer {
     }
     this.resetAnalyzerBuffers()
     this.lastSampleRate = 0
+    this.measurementActive = false
     this.emitPeakInfo(null)
   }
 }

@@ -5,8 +5,10 @@ import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings
 import { applyResolvedThemeToDocument, createDefaultTheme, resolveTheme } from '../../shared/themeState'
 import ScopeModule from '../components/ScopeModule'
 import ScopeSettingsSection from '../components/ScopeSettingsSection'
+import WindowResizeOverlay from '../components/WindowResizeOverlay'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { useUiStore } from '../stores/uiStore'
+import { useWindowBackgroundStore } from '../stores/windowBackgroundStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
@@ -60,6 +62,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   const [snapshot, setSnapshot] = useState<ScopePopoutSnapshot<ScopeKind> | null>(null)
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false)
   const [cursorInsideWindow, setCursorInsideWindow] = useState(false)
+  const [measurementActive, setMeasurementActive] = useState(false)
   const prevMiniSettingsOpenRef = useRef(false)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const miniSettingsOpen = useUiStore((s) => s.settingsOpen)
@@ -68,11 +71,18 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   const dataSource = useMemo(() => new ScopePopoutDataSource(scopeKind), [scopeKind])
   const useWindowManagerDragRegions = getRendererWindowCapabilities().useNativeDragRegions
 
+  const initializeWindowBackground = useWindowBackgroundStore((s) => s.initialize)
+  const windowBackgroundMode = useWindowBackgroundStore((s) => s.effective.mode)
+
   useEffect(() => {
     void window.electronAPI.isAlwaysOnTop().then(setIsAlwaysOnTop)
     const unsubscribe = window.electronAPI.onAlwaysOnTopChanged(setIsAlwaysOnTop)
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    void initializeWindowBackground()
+  }, [initializeWindowBackground])
 
   useEffect(() => {
     frameScheduler.setFrameTarget(frameTarget)
@@ -221,6 +231,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
             'scope-popout__chrome',
             miniSettingsOpen ? 'is-expanded' : '',
             cursorInsideWindow ? 'is-cursor-inside' : '',
+            measurementActive ? 'is-measuring' : '',
           ].join(' ').trim()}
         >
           <header className={`scope-popout__header ${useWindowManagerDragRegions ? 'is-native-drag' : ''}`.trim()}>
@@ -248,10 +259,11 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
             <div className="scope-popout__actions">
               <button
                 type="button"
-                className={`scope-popout__button ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
+                className={`scope-popout__button scope-popout__button--pin ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
                 onClick={() => window.electronAPI.toggleAlwaysOnTop()}
                 aria-label={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
                 title={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
+                aria-pressed={isAlwaysOnTop}
               >
                 <PinIcon />
               </button>
@@ -285,6 +297,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
               settings={effectiveSettings}
               frameScheduler={frameScheduler}
               dataSource={dataSource}
+              onMeasurementActiveChange={setMeasurementActive}
             />
           </div>
         </div>
@@ -304,6 +317,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
           </div>
         </div>
       )}
+
+      {windowBackgroundMode !== 'solid' && <WindowResizeOverlay />}
     </div>
   )
 }

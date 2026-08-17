@@ -3,21 +3,13 @@ import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../types/settings'
 import type { ScopeKind } from '../types/scope'
 import type { PrismResolvedTheme } from '../types/theme'
 import { createBundledThemes, createDefaultTheme, parseThemeFileContent, resolveTheme } from '../shared/themeState'
+import { mergeScopeSettings as normalizeAllScopeSettings } from '../shared/profileState'
 import { emitToHost, onHostEvent } from './juceBridge'
 
 const DEFAULT_THEME = resolveTheme(createDefaultTheme())
 
 function mergeScopeSettings<K extends ScopeKind>(kind: K, raw: unknown): ScopeSettings[K] {
-  const defaults = DEFAULT_SCOPE_SETTINGS[kind] as Record<string, unknown>
-  if (typeof raw !== 'object' || raw === null) return { ...defaults } as ScopeSettings[K]
-  const parsed = raw as Record<string, unknown>
-  const next: Record<string, unknown> = { ...defaults }
-  for (const key of Object.keys(defaults)) {
-    if (key in parsed && typeof parsed[key] === typeof defaults[key]) {
-      next[key] = parsed[key]
-    }
-  }
-  return next as ScopeSettings[K]
+  return normalizeAllScopeSettings({ [kind]: raw })[kind]
 }
 
 function resolveAppTheme(themeId: string, themeFile: string): PrismResolvedTheme {

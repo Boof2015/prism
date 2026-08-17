@@ -49,9 +49,11 @@ export interface SpectrumNativeAnalyzer {
   fillRawMagnitudes(output: Float32Array): number
   fillMagnitudes(output: Float32Array): number
   fillSideMagnitudes(output: Float32Array): number
+  fillChannelMaxMagnitudes(output: Float32Array): number
   getRawMagnitudes(): Float32Array | null
   getMagnitudes(): Float32Array | null
   getSideMagnitudes(): Float32Array | null
+  getChannelMaxMagnitudes(): Float32Array | null
   process(audioData: Float32Array): Float32Array | null
   binToFrequency(bin: number): number
   reset(): void
@@ -193,6 +195,19 @@ export const spectrum: SpectrumNativeAnalyzer = {
     return count
   },
 
+  fillChannelMaxMagnitudes: (output: Float32Array): number => {
+    if (!nativeModule) return 0
+    const getter = nativeModule.spectrum.getChannelMaxMagnitudes
+    const magnitudes = typeof getter === 'function'
+      ? nativeModule.spectrum.getChannelMaxMagnitudes()
+      : nativeModule.spectrum.getMagnitudes()
+    const count = Math.min(output.length, magnitudes.length)
+    if (count > 0) {
+      output.set(magnitudes.subarray(0, count), 0)
+    }
+    return count
+  },
+
   getMagnitudes: (): Float32Array | null => {
     if (!nativeModule) return null
     return nativeModule.spectrum.getMagnitudes()
@@ -206,6 +221,14 @@ export const spectrum: SpectrumNativeAnalyzer = {
   getSideMagnitudes: (): Float32Array | null => {
     if (!nativeModule) return null
     return nativeModule.spectrum.getSideMagnitudes()
+  },
+
+  getChannelMaxMagnitudes: (): Float32Array | null => {
+    if (!nativeModule) return null
+    const getter = nativeModule.spectrum.getChannelMaxMagnitudes
+    return typeof getter === 'function'
+      ? nativeModule.spectrum.getChannelMaxMagnitudes()
+      : nativeModule.spectrum.getMagnitudes()
   },
 
   process: (audioData: Float32Array): Float32Array | null => {
@@ -225,6 +248,7 @@ export const spectrum: SpectrumNativeAnalyzer = {
 export interface SpectrogramNativeAnalyzer {
   configure(options: SpectrogramNativeOptions): void
   process(audioData: Float32Array): SpectrogramNativeResult | null
+  processStereo?: (leftChannel: Float32Array, rightChannel: Float32Array) => SpectrogramNativeResult | null
   reset(): void
   isAvailable?: () => boolean
 }
@@ -276,6 +300,13 @@ export const spectrogram: SpectrogramNativeAnalyzer = {
   process: (audioData: Float32Array): SpectrogramNativeResult | null => {
     if (!nativeModule?.spectrogram) return null
     return nativeModule.spectrogram.process(audioData)
+  },
+
+  processStereo: (leftChannel: Float32Array, rightChannel: Float32Array): SpectrogramNativeResult | null => {
+    if (!nativeModule?.spectrogram) return null
+    return typeof nativeModule.spectrogram.processStereo === 'function'
+      ? nativeModule.spectrogram.processStereo(leftChannel, rightChannel)
+      : nativeModule.spectrogram.process(leftChannel)
   },
 
   reset: (): void => {

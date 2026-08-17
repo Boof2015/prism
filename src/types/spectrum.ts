@@ -17,7 +17,7 @@ export interface SpectrumPitchInfo {
 }
 
 export interface SpectrumPeakInfo {
-  db: number
+  dbfs: number
   frequencyHz: number
   normalizedX: number
   normalizedY: number

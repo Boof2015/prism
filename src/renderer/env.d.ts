@@ -2,6 +2,7 @@
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
 import type { AppBuildInfo } from '../types/appBuildInfo'
+import type { AudioClipDragPayload } from '../types/audioClip'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
@@ -35,6 +36,13 @@ import type { DialogOptions, DialogResult } from '../types/dialog'
 import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
+import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
+import type {
+  DesktopIntegrationSnapshot,
+  LoginLaunchMode,
+  TrayRendererCommand,
+  TrayRendererState,
+} from '../types/desktopIntegration'
 
 declare global {
   interface Window {
@@ -46,6 +54,19 @@ declare global {
       getAppBuildInfo: () => Promise<AppBuildInfo>
       minimize: () => void
       close: () => void
+      desktopIntegration: {
+        get: () => Promise<DesktopIntegrationSnapshot>
+        setCloseToTray: (enabled: boolean) => Promise<DesktopIntegrationSnapshot>
+        setOpenAtLogin: (enabled: boolean) => Promise<DesktopIntegrationSnapshot>
+        setLoginLaunchMode: (mode: LoginLaunchMode) => Promise<DesktopIntegrationSnapshot>
+        onChanged: (callback: (snapshot: DesktopIntegrationSnapshot) => void) => () => void
+      }
+      trayControls: {
+        markReady: () => void
+        markNotReady: () => void
+        publishState: (state: TrayRendererState) => void
+        onCommand: (callback: (command: TrayRendererCommand) => void) => () => void
+      }
       startWindowMove: () => void
       stopWindowMove: () => void
       startWindowResize: (edge: ResizeDirection) => void
@@ -55,8 +76,15 @@ declare global {
       repositionWindow: (position: 'top' | 'bottom') => void
       toggleAlwaysOnTop: () => void
       isAlwaysOnTop: () => Promise<boolean>
+      getWindowBackground: () => Promise<WindowBackgroundSnapshot>
+      setWindowBackground: (state: WindowBackgroundState) => Promise<WindowBackgroundSnapshot>
       isCursorInsideWindow: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
+      audioClips: {
+        startDrag: (payload: AudioClipDragPayload) => void
+        revealFolder: () => Promise<void>
+        onDragError: (callback: (message: string) => void) => () => void
+      }
       getNowPlayingState: () => Promise<NowPlayingState>
       setNowPlayingConsumerActive: (active: boolean) => Promise<NowPlayingState>
       saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => Promise<NowPlayingState>
@@ -102,6 +130,7 @@ declare global {
       requestScopePopIn: (kind: ScopeKind) => void
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
+      onWindowBackgroundChanged: (callback: (snapshot: WindowBackgroundSnapshot) => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
       onNowPlayingStateChanged: (callback: (state: NowPlayingState) => void) => () => void
       onMainCloseRequested: (callback: () => void) => () => void

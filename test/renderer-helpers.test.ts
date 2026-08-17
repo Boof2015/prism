@@ -18,9 +18,13 @@ import {
   resolveMainWindowSettingsPanelHeight,
 } from '../src/renderer/mainWindowSettings'
 import {
-  LOCKED_LOUDNESS_METER_WIDTH_PX,
   buildAnalyzerGridTemplateColumns,
 } from '../src/renderer/analyzerLayout'
+import {
+  DEFAULT_SCOPE_POPOUT_MIN_WIDTH_PX,
+  MIN_LOUDNESS_METER_WIDTH_PX,
+  getScopePopoutMinWidth,
+} from '../src/shared/scopeSizing'
 import {
   formatAstraTime,
   getAstraPlaybackProgress,
@@ -28,7 +32,10 @@ import {
 import {
   createDefaultProfile,
 } from '../src/shared/profileState'
-import { resolveWindowCapabilities } from '../src/shared/windowCapabilities'
+import {
+  resolveMacWindowBlurMaterial,
+  resolveWindowCapabilities,
+} from '../src/shared/windowCapabilities'
 import {
   clampDraggedMainWindowBounds,
   clampRestoredWindowBounds,
@@ -48,6 +55,20 @@ import { useThemeStore } from '../src/renderer/stores/themeStore'
 import { resolveThemeCreditDetails, resolveThemeOptionLabel } from '../src/renderer/components/BottomBar'
 import { scopeSettingsToOptions } from '../src/renderer/components/ScopeModule'
 import { scopeSummary } from '../src/renderer/components/ScopeSettingsSection'
+import {
+  inverseTransformNormalizedScopePoint,
+  resolveScopeCanvasLayout,
+  transformNormalizedScopePoint,
+} from '../src/renderer/scopeCanvasTransform'
+import {
+  SPECTRUM_MEASUREMENT_SMOOTHING,
+  frequencyAtNormalizedPosition,
+  resolveMeasurementReadoutPosition,
+  resolveOscilloscopeMeasurement,
+  resolveSpectrogramMeasurement,
+  resolveSpectrumMeasurement,
+  resolveWaveformMeasurement,
+} from '../src/renderer/scopeMeasurement'
 import {
   applyInputGainToStereoSamples,
   inputGainDbToLinear,
@@ -97,6 +118,12 @@ import {
 import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
+import { BridgeSpectrumAnalyzer } from '../src/plugin-ui/BridgeSpectrumAnalyzer'
+import { decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
+import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
+import { spectrogramSettingsToOptions } from '../src/plugin-ui/spectrogramOptions'
+import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
+import { vectorscopeSettingsToOptions } from '../src/plugin-ui/vectorscopeOptions'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
 import { Waveform } from '../src/renderer/visualizers/Waveform'
@@ -113,6 +140,8 @@ import {
 import {
   drawVectorscopeGridForMode,
   getVectorscopeLayout,
+  isVectorscopePhaseRisk,
+  transformPoint,
 } from '../src/renderer/visualizers/vectorscopeGrids'
 import {
   MultibandBuffer,
@@ -125,6 +154,19 @@ import {
   type Profile,
 } from '../src/types/profile'
 import type { WindowCapabilities } from '../src/types/windowCapabilities'
+import {
+  buildFrequencyGuides,
+  clampFrequencyRangeToNyquist,
+  frequencyBoundsForRange,
+  normalizeFrequencyScaleMode,
+  normalizedPositionAtFrequency,
+  type FrequencyScaleMode,
+} from '../src/types/frequencyScale'
+import {
+  formatVectorscopeReferenceDbfs,
+  normalizeVectorscopeZoomDb,
+  vectorscopeZoomDbToGain,
+} from '../src/types/vectorscope'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
 type FakeElectronAPI = {
@@ -197,6 +239,7 @@ function installFakeTimeouts(hidden = false): {
 
   globalWithWindow.window = {
     ...globalThis,
+    localStorage: (globalThis as GlobalWithStorage).localStorage,
     electronAPI: {
       platform: 'darwin',
       windowCapabilities: resolveWindowCapabilities({ platform: 'darwin' }),
@@ -342,9 +385,9 @@ function installFakeLocalStorage(): {
   const storage = new Map<string, string>()
   let setCount = 0
   const globalWithStorage = globalThis as GlobalWithStorage
-  const previousLocalStorage = globalWithStorage.localStorage
+  const previousLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalWithStorage, 'localStorage')
 
-  globalWithStorage.localStorage = {
+  const fakeLocalStorage = {
     getItem(key: string): string | null {
       return storage.get(key) ?? null
     },
@@ -365,6 +408,12 @@ function installFakeLocalStorage(): {
       return storage.size
     },
   } as Storage
+  Object.defineProperty(globalWithStorage, 'localStorage', {
+    configurable: true,
+    enumerable: true,
+    value: fakeLocalStorage,
+    writable: true,
+  })
 
   return {
     getSetCount: () => setCount,
@@ -375,12 +424,12 @@ function installFakeLocalStorage(): {
       storage.set(key, value)
     },
     restore(): void {
-      if (previousLocalStorage === undefined) {
+      if (!previousLocalStorageDescriptor) {
         delete globalWithStorage.localStorage
         return
       }
 
-      globalWithStorage.localStorage = previousLocalStorage
+      Object.defineProperty(globalWithStorage, 'localStorage', previousLocalStorageDescriptor)
     },
   }
 }
@@ -561,6 +610,11 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
 interface FakeCanvasRecorder {
   fillRects: Array<{ x: number; y: number; width: number; height: number; fillStyle: string }>
   fillTexts: Array<{ text: string; x: number; y: number; fillStyle: string; font: string }>
+  lineStrokes: Array<{
+    commands: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }>
+    strokeStyle: string
+    lineWidth: number
+  }>
   strokeRects: Array<{ x: number; y: number; width: number; height: number; lineDash: number[] }>
   arcs: Array<{
     x: number
@@ -572,6 +626,10 @@ interface FakeCanvasRecorder {
     lineDash: number[]
   }>
   lineDashes: number[][]
+  fills: Array<{
+    commands: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }>
+    fillStyle: string
+  }>
   imageDataWrites: Array<{ x: number; y: number; width: number; height: number; data: number[] }>
   drawImageCalls: Array<{ compositeOperation: GlobalCompositeOperation; args: unknown[] }>
 }
@@ -580,9 +638,11 @@ function createFakeCanvasRecorder(): FakeCanvasRecorder {
   return {
     fillRects: [],
     fillTexts: [],
+    lineStrokes: [],
     strokeRects: [],
     arcs: [],
     lineDashes: [],
+    fills: [],
     imageDataWrites: [],
     drawImageCalls: [],
   }
@@ -592,8 +652,10 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
   let currentLineDash: number[] = []
   let currentFillStyle = ''
   let currentStrokeStyle = ''
+  let currentLineWidth = 1
   let currentFont = ''
   let currentCompositeOperation: GlobalCompositeOperation = 'source-over'
+  let currentPath: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }> = []
 
   const context = {
     clearRect() {},
@@ -603,18 +665,35 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     fillText(text: string, x: number, y: number) {
       recorder?.fillTexts.push({ text: String(text), x, y, fillStyle: currentFillStyle, font: currentFont })
     },
-    beginPath() {},
+    beginPath() {
+      currentPath = []
+    },
     closePath() {},
-    fill() {},
-    moveTo() {},
-    lineTo() {},
-    stroke() {},
+    fill() {
+      recorder?.fills.push({ commands: [...currentPath], fillStyle: currentFillStyle })
+    },
+    moveTo(x: number, y: number) {
+      currentPath.push({ kind: 'moveTo', x, y })
+    },
+    lineTo(x: number, y: number) {
+      currentPath.push({ kind: 'lineTo', x, y })
+    },
+    stroke() {
+      if (currentPath.length > 0) {
+        recorder?.lineStrokes.push({
+          commands: [...currentPath],
+          strokeStyle: currentStrokeStyle,
+          lineWidth: currentLineWidth,
+        })
+      }
+    },
     strokeRect(x: number, y: number, width: number, height: number) {
       recorder?.strokeRects.push({ x, y, width, height, lineDash: [...currentLineDash] })
     },
     arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, anticlockwise = false) {
       recorder?.arcs.push({ x, y, radius, startAngle, endAngle, anticlockwise, lineDash: [...currentLineDash] })
     },
+    ellipse() {},
     drawImage(...args: unknown[]) {
       recorder?.drawImageCalls.push({ compositeOperation: currentCompositeOperation, args })
     },
@@ -642,7 +721,12 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
       const fontSize = fontSizeMatch ? Number(fontSizeMatch[1]) : 12
       return { width: String(text).length * fontSize * 0.62 } as TextMetrics
     },
-    lineWidth: 1,
+    get lineWidth() {
+      return currentLineWidth
+    },
+    set lineWidth(value: number) {
+      currentLineWidth = value
+    },
     get font() {
       return currentFont
     },
@@ -689,6 +773,27 @@ function createFakeCanvas(
     height,
     getContext: (kind: string) => kind === '2d' ? context : null,
   } as unknown as HTMLCanvasElement
+}
+
+function createFakeCssSizedCanvas(
+  recorder: FakeCanvasRecorder,
+  cssWidth: number,
+  cssHeight: number,
+  pixelRatio = 1,
+): HTMLCanvasElement {
+  const canvas = createFakeCanvas(
+    recorder,
+    Math.round(cssWidth * pixelRatio),
+    Math.round(cssHeight * pixelRatio),
+  )
+  Object.defineProperty(canvas, 'style', {
+    configurable: true,
+    value: {
+      width: `${cssWidth}px`,
+      height: `${cssHeight}px`,
+    },
+  })
+  return canvas
 }
 
 function installFakeCanvasDom(createCanvas: () => HTMLCanvasElement = () => createFakeCanvas()): {
@@ -781,7 +886,9 @@ interface FakeSpectrumNativeAnalyzer extends SpectrumNativeAnalyzer {
     fillMagnitudes: number
     fillRawMagnitudes: number
     fillSideMagnitudes: number
+    fillChannelMaxMagnitudes: number
     resets: number
+    smoothingValues: number[]
   }
 }
 
@@ -847,11 +954,19 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
   let rawMagnitudes = new Float32Array(fftSize / 2)
   let magnitudes = new Float32Array(fftSize / 2)
   let sideMagnitudes = new Float32Array(fftSize / 2)
+  let leftMagnitudes = new Float32Array(fftSize / 2)
+  let rightMagnitudes = new Float32Array(fftSize / 2)
+  let channelMaxMagnitudes = new Float32Array(fftSize / 2)
+  let leftHistory = new Float32Array(fftSize)
+  let rightHistory = new Float32Array(fftSize)
   let re = new Float32Array(fftSize)
   let im = new Float32Array(fftSize)
   rawMagnitudes.fill(-100)
   magnitudes.fill(-100)
   sideMagnitudes.fill(-100)
+  leftMagnitudes.fill(-100)
+  rightMagnitudes.fill(-100)
+  channelMaxMagnitudes.fill(-100)
 
   const calls: FakeSpectrumNativeAnalyzer['calls'] = {
     monoPushes: [],
@@ -859,7 +974,9 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     fillMagnitudes: 0,
     fillRawMagnitudes: 0,
     fillSideMagnitudes: 0,
+    fillChannelMaxMagnitudes: 0,
     resets: 0,
+    smoothingValues: [],
   }
 
   const resize = (size: number): void => {
@@ -870,11 +987,19 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     rawMagnitudes = new Float32Array(fftSize / 2)
     magnitudes = new Float32Array(fftSize / 2)
     sideMagnitudes = new Float32Array(fftSize / 2)
+    leftMagnitudes = new Float32Array(fftSize / 2)
+    rightMagnitudes = new Float32Array(fftSize / 2)
+    channelMaxMagnitudes = new Float32Array(fftSize / 2)
+    leftHistory = new Float32Array(fftSize)
+    rightHistory = new Float32Array(fftSize)
     re = new Float32Array(fftSize)
     im = new Float32Array(fftSize)
     rawMagnitudes.fill(-100)
     magnitudes.fill(-100)
     sideMagnitudes.fill(-100)
+    leftMagnitudes.fill(-100)
+    rightMagnitudes.fill(-100)
+    channelMaxMagnitudes.fill(-100)
   }
 
   const updateMagnitudes = (source: Float32Array, output: Float32Array, rawOutput: Float32Array | null): void => {
@@ -888,8 +1013,8 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     const scale = 2 / fftSize
     for (let index = 0; index < output.length; index += 1) {
       const magnitude = Math.hypot(re[index], im[index]) * scale
-      let db = 20 * Math.log10(Math.max(magnitude, 1e-10))
-      db += 6
+      const coherentGain = fftSize <= 1 ? 1 : (fftSize - 1) / (2 * fftSize)
+      let db = 20 * Math.log10(Math.max(magnitude, 1e-10)) - 20 * Math.log10(coherentGain)
       db = Math.min(12, Math.max(-120, db))
       if (rawOutput) {
         rawOutput[index] = db
@@ -946,6 +1071,20 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     return count
   }
 
+  const updateAllMagnitudes = (): void => {
+    updateMagnitudes(history, magnitudes, rawMagnitudes)
+    updateMagnitudes(sideHistory, sideMagnitudes, null)
+    for (let index = 0; index < fftSize; index += 1) {
+      leftHistory[index] = history[index] + sideHistory[index]
+      rightHistory[index] = history[index] - sideHistory[index]
+    }
+    updateMagnitudes(leftHistory, leftMagnitudes, null)
+    updateMagnitudes(rightHistory, rightMagnitudes, null)
+    for (let index = 0; index < channelMaxMagnitudes.length; index += 1) {
+      channelMaxMagnitudes[index] = Math.max(leftMagnitudes[index], rightMagnitudes[index])
+    }
+  }
+
   const analyzer: FakeSpectrumNativeAnalyzer = {
     calls,
     isAvailable: () => true,
@@ -960,12 +1099,12 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
     },
     setSmoothing: (nextSmoothing) => {
       smoothing = Math.min(0.99, Math.max(0, nextSmoothing))
+      calls.smoothingValues.push(nextSmoothing)
     },
     pushSamples: (audioData) => {
       calls.monoPushes.push(new Float32Array(audioData))
       pushMonoHistory(audioData)
-      updateMagnitudes(history, magnitudes, rawMagnitudes)
-      updateMagnitudes(sideHistory, sideMagnitudes, null)
+      updateAllMagnitudes()
     },
     pushStereoSamples: (leftChannel, rightChannel) => {
       calls.stereoPushes.push({
@@ -973,8 +1112,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
         right: new Float32Array(rightChannel),
       })
       pushStereoHistory(leftChannel, rightChannel)
-      updateMagnitudes(history, magnitudes, rawMagnitudes)
-      updateMagnitudes(sideHistory, sideMagnitudes, null)
+      updateAllMagnitudes()
     },
     fillRawMagnitudes: (output) => {
       calls.fillRawMagnitudes += 1
@@ -988,9 +1126,14 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
       calls.fillSideMagnitudes += 1
       return copyInto(sideMagnitudes, output)
     },
+    fillChannelMaxMagnitudes: (output) => {
+      calls.fillChannelMaxMagnitudes += 1
+      return copyInto(channelMaxMagnitudes, output)
+    },
     getRawMagnitudes: () => rawMagnitudes,
     getMagnitudes: () => magnitudes,
     getSideMagnitudes: () => sideMagnitudes,
+    getChannelMaxMagnitudes: () => channelMaxMagnitudes,
     process: (audioData) => {
       analyzer.pushSamples(audioData)
       return magnitudes
@@ -1003,6 +1146,9 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
       rawMagnitudes.fill(-100)
       magnitudes.fill(-100)
       sideMagnitudes.fill(-100)
+      leftMagnitudes.fill(-100)
+      rightMagnitudes.fill(-100)
+      channelMaxMagnitudes.fill(-100)
       bufferedSamples = 0
     },
   }
@@ -1215,10 +1361,16 @@ function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, valu
   try {
     const state = spectrogram as unknown as {
       ensureColumnBuffers: (height: number) => void
-      shiftAndPaintColumn: (values: Float32Array) => void
+      shiftAndPaintColumns: (
+        display: Float32Array,
+        heat: Float32Array,
+        columnCount: number,
+        rowCount: number,
+      ) => void
     }
     state.ensureColumnBuffers(values.length)
-    state.shiftAndPaintColumn(Float32Array.from(values))
+    const column = Float32Array.from(values)
+    state.shiftAndPaintColumns(column, column, 1, values.length)
     return recorder.imageDataWrites.at(-1)?.data ?? []
   } finally {
     spectrogram.dispose()
@@ -1251,10 +1403,16 @@ function renderSpectrogramShift(
   try {
     const state = spectrogram as unknown as {
       ensureColumnBuffers: (height: number) => void
-      shiftAndPaintColumn: (values: Float32Array) => void
+      shiftAndPaintColumns: (
+        display: Float32Array,
+        heat: Float32Array,
+        columnCount: number,
+        rowCount: number,
+      ) => void
     }
     state.ensureColumnBuffers(values.length)
-    state.shiftAndPaintColumn(Float32Array.from(values))
+    const column = Float32Array.from(values)
+    state.shiftAndPaintColumns(column, column, 1, values.length)
     return recorder
   } finally {
     spectrogram.dispose()
@@ -1544,23 +1702,295 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
   ])
 })
 
-test('analyzer layout locks the loudness meter width', () => {
+test('analyzer layout lets the loudness meter follow its width weight down to its supported minimum', () => {
   const columns = buildAnalyzerGridTemplateColumns(
     ['spectrum', 'lufsmeter', 'waveform'],
     { spectrum: 1, lufsmeter: 0.15, waveform: 1 },
   )
 
-  assert.equal(LOCKED_LOUDNESS_METER_WIDTH_PX, 150)
+  assert.equal(MIN_LOUDNESS_METER_WIDTH_PX, 112)
   assert.equal(
     columns,
-    `minmax(0, 1fr) minmax(${LOCKED_LOUDNESS_METER_WIDTH_PX}px, ${LOCKED_LOUDNESS_METER_WIDTH_PX}px) minmax(0, 1fr)`,
+    `minmax(0, 1fr) minmax(${MIN_LOUDNESS_METER_WIDTH_PX}px, 0.15fr) minmax(0, 1fr)`,
   )
 })
 
-test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer options', () => {
+test('scope popout sizing permits compact LUFS windows without changing other scope minimums', () => {
+  assert.equal(getScopePopoutMinWidth('lufsmeter'), MIN_LOUDNESS_METER_WIDTH_PX)
+  assert.equal(MIN_LOUDNESS_METER_WIDTH_PX, 112)
+  assert.equal(DEFAULT_SCOPE_POPOUT_MIN_WIDTH_PX, 220)
+
+  for (const kind of SCOPE_KINDS) {
+    if (kind === 'lufsmeter') continue
+    assert.equal(getScopePopoutMinWidth(kind), DEFAULT_SCOPE_POPOUT_MIN_WIDTH_PX)
+  }
+})
+
+test('scope canvas layout swaps logical dimensions for quarter-turn rotations', () => {
+  const horizontal = resolveScopeCanvasLayout(640, 360, 2, 0)
+  assert.deepEqual(horizontal, {
+    viewportCssWidth: 640,
+    viewportCssHeight: 360,
+    cssWidth: 640,
+    cssHeight: 360,
+    pixelWidth: 1280,
+    pixelHeight: 720,
+    dpr: 2,
+  })
+
+  const vertical = resolveScopeCanvasLayout(640, 360, 2, 90)
+  assert.deepEqual(vertical, {
+    viewportCssWidth: 640,
+    viewportCssHeight: 360,
+    cssWidth: 360,
+    cssHeight: 640,
+    pixelWidth: 720,
+    pixelHeight: 1280,
+    dpr: 2,
+  })
+  assert.deepEqual(resolveScopeCanvasLayout(640, 360, 2, 270), vertical)
+})
+
+test('scope point transforms mirror the source axis before clockwise rotation', () => {
+  const point = { x: 0.2, y: 0.3 }
+
+  assert.deepEqual(transformNormalizedScopePoint(point, 0, false), { x: 0.2, y: 0.3 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 90, false), { x: 0.7, y: 0.2 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 180, false), { x: 0.8, y: 0.7 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 270, false), { x: 0.3, y: 0.8 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 0, true), { x: 0.8, y: 0.3 })
+  assert.deepEqual(transformNormalizedScopePoint(point, 90, true), { x: 0.7, y: 0.8 })
+  const mirrored270 = transformNormalizedScopePoint(point, 270, true)
+  assert.equal(mirrored270.x, 0.3)
+  assertAlmostEqual(mirrored270.y, 0.2, 1e-12, 'mirrored 270-degree y coordinate')
+})
+
+test('scope point inverse transforms round-trip every rotation and mirror state', () => {
+  const point = { x: 0.217, y: 0.683 }
+  for (const rotation of [0, 90, 180, 270] as const) {
+    for (const mirrorHorizontal of [false, true]) {
+      const viewportPoint = transformNormalizedScopePoint(point, rotation, mirrorHorizontal)
+      const restored = inverseTransformNormalizedScopePoint(viewportPoint, rotation, mirrorHorizontal)
+      assertAlmostEqual(restored.x, point.x, 1e-12, `${rotation}° mirror=${mirrorHorizontal} x`)
+      assertAlmostEqual(restored.y, point.y, 1e-12, `${rotation}° mirror=${mirrorHorizontal} y`)
+    }
+  }
+})
+
+test('scope measurement helpers resolve MiniMeters-style cursor axis values', () => {
+  const spectrumX = Math.log10(1000 / 20) / Math.log10(20000 / 20)
+  const spectrum = resolveSpectrumMeasurement(
+    { x: spectrumX, y: 0.5 },
+    {
+      sampleRate: 48000,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      minDecibels: -90,
+      maxDecibels: -10,
+      scaleType: 'log',
+    },
+  )
+  assert.deepEqual(spectrum.values.slice(0, 2), ['-50.00dB', '1.00kHz'])
+  assert.match(spectrum.values[2] ?? '', /^B5 /)
+
+  const slaneyOneKhz = 1000 / (200 / 3)
+  const slaneyMin = 20 / (200 / 3)
+  const slaneyMax = slaneyOneKhz + Math.log(20) / (Math.log(6.4) / 27)
+  const oneKhzPositions = new Map<FrequencyScaleMode, number>([
+    ['log', spectrumX],
+    ['mel', (slaneyOneKhz - slaneyMin) / (slaneyMax - slaneyMin)],
+    ['linear', (1000 - 20) / (20000 - 20)],
+  ])
+  for (const [scaleType, x] of oneKhzPositions) {
+    const scaleMeasurement = resolveSpectrumMeasurement(
+      { x, y: 0.5 },
+      {
+        sampleRate: 48000,
+        minFrequency: 20,
+        maxFrequency: 20000,
+        minDecibels: -90,
+        maxDecibels: -10,
+        scaleType,
+      },
+    )
+    assert.equal(scaleMeasurement.values[1], '1.00kHz')
+  }
+
+  const nyquistLimited = resolveSpectrumMeasurement(
+    { x: 1, y: 0 },
+    {
+      sampleRate: 8000,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      minDecibels: -90,
+      maxDecibels: -10,
+      scaleType: 'log',
+    },
+  )
+  assert.equal(nyquistLimited.values[1], '4.00kHz')
+
+  const oscilloscope = resolveOscilloscopeMeasurement({ x: 0.5, y: 0.25 }, 48000, 2048)
+  assert.deepEqual(oscilloscope.values, ['21.32ms', '+0.500', '-6.02dBFS'])
+
+  const waveform = resolveWaveformMeasurement(
+    { x: 0, y: 0.025 },
+    { mode: 'mono', scrollSpeed: 1, canvasPixelWidth: 129 },
+  )
+  assert.deepEqual(waveform.values, ['1.00s ago', '+1.000', '+0.00dBFS'])
+
+  const stereoWaveform = resolveWaveformMeasurement(
+    { x: 1, y: 0.75 },
+    { mode: 'stereo', scrollSpeed: 1, canvasPixelWidth: 129 },
+  )
+  assert.deepEqual(stereoWaveform.values, ['R', '0.00ms ago', '+0.000', '-∞dBFS'])
+})
+
+test('spectrogram measurement follows scale mode and rendered history speed', () => {
+  assert.equal(frequencyAtNormalizedPosition(0.5, 20, 20000, 'linear'), 10010)
+  assertAlmostEqual(
+    frequencyAtNormalizedPosition(0.5, 20, 20000, 'log'),
+    Math.sqrt(20 * 20000),
+    1e-9,
+    'log midpoint',
+  )
+  const melMidpoint = frequencyAtNormalizedPosition(0.5, 20, 20000, 'mel')
+  assert.ok(melMidpoint > 1000 && melMidpoint < 10000)
+
+  const measurement = resolveSpectrogramMeasurement(
+    { x: 0.5, y: 0 },
+    {
+      sampleRate: 48000,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      scaleMode: 'log',
+      fftSize: 4096,
+      scrollSpeed: 2,
+      canvasPixelWidth: 101,
+    },
+  )
+  assert.deepEqual(measurement.values.slice(0, 2), ['266.67ms ago', '20.00kHz'])
+
+  const expectedHistory = new Map([
+    [1, '1.28s ago'],
+    [2, '640.00ms ago'],
+    [4, '320.00ms ago'],
+    [8, '160.00ms ago'],
+  ])
+  for (const [scrollSpeed, expectedTime] of expectedHistory) {
+    const historyMeasurement = resolveSpectrogramMeasurement(
+      { x: 0, y: 1 },
+      {
+        sampleRate: 48000,
+        minFrequency: 20,
+        maxFrequency: 20000,
+        scaleMode: 'linear',
+        fftSize: 4096,
+        scrollSpeed,
+        canvasPixelWidth: 121,
+      },
+    )
+    assert.deepEqual(historyMeasurement.values.slice(0, 2), [expectedTime, '20.00Hz'])
+  }
+})
+
+test('frequency scale transforms are monotonic, invertible, and Nyquist-safe', () => {
+  const minFrequency = 20
+  const maxFrequency = 20000
+  const positions = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+
+  for (const scaleMode of ['log', 'mel', 'linear'] as const) {
+    const frequencies = positions.map((position) => (
+      frequencyAtNormalizedPosition(position, minFrequency, maxFrequency, scaleMode)
+    ))
+    assertAlmostEqual(frequencies[0], minFrequency, 1e-12, `${scaleMode} minimum`)
+    assertAlmostEqual(frequencies.at(-1) ?? 0, maxFrequency, 1e-9, `${scaleMode} maximum`)
+    for (let index = 1; index < frequencies.length; index += 1) {
+      assert.ok(frequencies[index] > frequencies[index - 1], `${scaleMode} should be monotonic`)
+      assertAlmostEqual(
+        normalizedPositionAtFrequency(frequencies[index], minFrequency, maxFrequency, scaleMode),
+        positions[index],
+        1e-12,
+        `${scaleMode} inverse at ${positions[index]}`,
+      )
+    }
+  }
+
+  const slaneyMelAtOneKhz = 1000 / (200 / 3)
+  const slaneyMelAtTwentyKhz = 15 + Math.log(20) / (Math.log(6.4) / 27)
+  const expectedOneKhzPosition = (
+    slaneyMelAtOneKhz - (20 / (200 / 3))
+  ) / (
+    slaneyMelAtTwentyKhz - (20 / (200 / 3))
+  )
+  assertAlmostEqual(
+    normalizedPositionAtFrequency(1000, 20, 20000, 'mel'),
+    expectedOneKhzPosition,
+    1e-12,
+    'Slaney mel 1kHz anchor',
+  )
+
+  assert.deepEqual(clampFrequencyRangeToNyquist(32000, 20, 20000), {
+    minFrequency: 20,
+    maxFrequency: 16000,
+  })
+  assert.equal(normalizeFrequencyScaleMode('bark'), 'log')
+})
+
+test('frequency ranges and adaptive guides cover extended audio without crowding compact scopes', () => {
+  assert.deepEqual(frequencyBoundsForRange('extended', 44100), {
+    minFrequency: 10,
+    maxFrequency: 22050,
+  })
+  assert.deepEqual(frequencyBoundsForRange('extended', 96000), {
+    minFrequency: 10,
+    maxFrequency: 24000,
+  })
+  assert.deepEqual(frequencyBoundsForRange('audible', 48000), {
+    minFrequency: 20,
+    maxFrequency: 20000,
+  })
+
+  const wideGuides = buildFrequencyGuides(10, 24000, 'log', 1500)
+  assert.ok(wideGuides.some(({ frequencyHz, kind }) => frequencyHz === 30 && kind === 'minor'))
+  assert.ok(wideGuides.some(({ frequencyHz, kind, label }) => (
+    frequencyHz === 1000 && kind === 'major' && label === '1k'
+  )))
+
+  const compactGuides = buildFrequencyGuides(10, 24000, 'log', 320)
+  assert.equal(compactGuides.some(({ kind }) => kind === 'minor'), false)
+  assert.ok(compactGuides.every((guide, index) => (
+    index === 0 || guide.normalizedPosition > compactGuides[index - 1].normalizedPosition
+  )))
+})
+
+test('measurement readout flips and clamps at viewport edges', () => {
+  assert.deepEqual(
+    resolveMeasurementReadoutPosition(
+      { x: 190, y: 90 },
+      { width: 200, height: 100 },
+      { width: 80, height: 24 },
+    ),
+    { left: 98, top: 54 },
+  )
+  assert.deepEqual(
+    resolveMeasurementReadoutPosition(
+      { x: 2, y: 2 },
+      { width: 60, height: 30 },
+      { width: 80, height: 40 },
+    ),
+    { left: 8, top: 8 },
+  )
+})
+
+test('scopeSettingsToOptions wires frequency ranges and overlays into desktop and plugin options', () => {
   const profile = createDefaultProfile('Default')
   profile.scopeSettings.spectrum.showSideLine = true
   profile.scopeSettings.spectrum.heatmapSmoothing = 0.64
+  profile.scopeSettings.spectrum.scaleMode = 'mel'
+  profile.scopeSettings.spectrum.frequencyRangeMode = 'audible'
+  profile.scopeSettings.spectrogram.frequencyRangeMode = 'extended'
+  profile.scopeSettings.spectrogram.clarityMode = 'focused'
+  profile.scopeSettings.spectrogram.showGrid = true
   const theme = resolveTheme(createDefaultTheme())
 
   const options = scopeSettingsToOptions('spectrum', profile.scopeSettings.spectrum, theme.spectrum)
@@ -1571,6 +2001,183 @@ test('scopeSettingsToOptions wires spectrum side overlay settings into analyzer 
   assert.equal(options.lineColor, theme.spectrum.line)
   assert.equal(options.backgroundColor, theme.spectrum.background)
   assert.equal(options.gridColor, theme.spectrum.guides)
+  assert.equal(options.scaleType, 'mel')
+  assert.equal(options.minFrequency, 20)
+  assert.equal(options.maxFrequency, 20000)
+
+  const pluginOptions = spectrumSettingsToOptions(profile.scopeSettings.spectrum, theme.spectrum)
+  assert.equal(pluginOptions.scaleType, 'mel')
+  assert.equal(pluginOptions.minFrequency, 20)
+  assert.equal(pluginOptions.maxFrequency, 20000)
+
+  const spectrogramOptions = scopeSettingsToOptions(
+    'spectrogram',
+    profile.scopeSettings.spectrogram,
+    theme.spectrogram,
+  )
+  assert.equal(spectrogramOptions.minFrequency, 10)
+  assert.equal(spectrogramOptions.maxFrequency, 24000)
+  assert.equal(spectrogramOptions.clarityMode, 'focused')
+  assert.equal(spectrogramOptions.showGrid, true)
+
+  const pluginSpectrogramOptions = spectrogramSettingsToOptions(
+    profile.scopeSettings.spectrogram,
+    theme.spectrogram,
+  )
+  assert.equal(pluginSpectrogramOptions.minFrequency, 10)
+  assert.equal(pluginSpectrogramOptions.maxFrequency, 24000)
+  assert.equal(pluginSpectrogramOptions.clarityMode, 'focused')
+  assert.equal(pluginSpectrogramOptions.showGrid, true)
+})
+
+test('SpectrumAnalyzer grid only draws frequency guides when enabled', () => {
+  const renderGrid = (showGrid: boolean, scaleType: FrequencyScaleMode = 'log'): FakeCanvasRecorder => {
+    const recorder = createFakeCanvasRecorder()
+    const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+    const dataSource = {
+      getPendingSpectrumSamples: () => [],
+      getPendingSpectrumStereoSamples: () => [],
+      getSampleRate: () => 48000,
+      isPlaying: () => false,
+      subscribeToSessionChanges: () => () => {},
+    }
+    const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+      showGrid,
+      scaleType,
+      dataSource,
+      nativeAnalyzer: null,
+    })
+
+    try {
+      const state = analyzer as unknown as {
+        ensureStaticLayer: (minFrequency: number, maxFrequency: number) => void
+      }
+      state.ensureStaticLayer(20, 20000)
+      return recorder
+    } finally {
+      analyzer.dispose()
+      dom.restore()
+    }
+  }
+
+  const enabled = renderGrid(true)
+  assert.deepEqual(
+    enabled.fillTexts.map(({ text }) => text),
+    ['50', '100', '200', '500', '1k', '2k', '5k', '10k'],
+  )
+  assert.equal(enabled.fillTexts.some(({ text }) => text.endsWith('dB')), false)
+  assert.equal(enabled.lineStrokes.length, 8)
+  for (const stroke of enabled.lineStrokes) {
+    assert.deepEqual(stroke.commands.map(({ kind }) => kind), ['moveTo', 'lineTo'])
+    const [start, end] = stroke.commands
+    assert.equal(start.x, end.x)
+    assert.equal(start.y, 0)
+    assert.equal(end.y, 180)
+  }
+
+  const disabled = renderGrid(false)
+  assert.deepEqual(disabled.fillTexts, [])
+  assert.deepEqual(disabled.lineStrokes, [])
+
+  for (const scaleType of ['log', 'mel', 'linear'] as const) {
+    const recorder = renderGrid(true, scaleType)
+    const oneKhz = recorder.fillTexts.find(({ text }) => text === '1k')
+    assert.ok(oneKhz)
+    assertAlmostEqual(
+      oneKhz.x,
+      normalizedPositionAtFrequency(1000, 20, 20000, scaleType) * 320,
+      1e-9,
+      `${scaleType} 1kHz grid position`,
+    )
+  }
+})
+
+test('SpectrumAnalyzer applies frequency scale changes without recreation', () => {
+  const recorder = createFakeCanvasRecorder()
+  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showGrid: true,
+    scaleType: 'log',
+    dataSource,
+    nativeAnalyzer: null,
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      ensureStaticLayer: (minFrequency: number, maxFrequency: number) => void
+    }
+    state.ensureStaticLayer(20, 20000)
+    const logPosition = recorder.fillTexts.find(({ text }) => text === '1k')?.x
+    assert.notEqual(logPosition, undefined)
+
+    analyzer.setOptions({ scaleType: 'linear' })
+    state.ensureStaticLayer(20, 20000)
+    const oneKhzLabels = recorder.fillTexts.filter(({ text }) => text === '1k')
+    assert.equal(oneKhzLabels.length, 2)
+    const linearPosition = oneKhzLabels.at(-1)?.x
+    assert.notEqual(linearPosition, undefined)
+    assert.notEqual(linearPosition, logPosition)
+    assertAlmostEqual(
+      linearPosition ?? 0,
+      normalizedPositionAtFrequency(1000, 20, 20000, 'linear') * 320,
+      1e-9,
+      'live linear 1kHz grid position',
+    )
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer applies and restores transient measurement smoothing without resetting', () => {
+  const dom = installFakeCanvasDom()
+  const nativeAnalyzer = createFakeSpectrumNativeAnalyzer()
+  const dataSource = {
+    getPendingSpectrumSamples: () => [],
+    getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    smoothing: 0.9,
+    dataSource,
+    nativeAnalyzer,
+  })
+
+  try {
+    const resetsBeforeMeasurement = nativeAnalyzer.calls.resets
+    analyzer.setMeasurementActive(true)
+    assert.equal(nativeAnalyzer.calls.smoothingValues.at(-1), SPECTRUM_MEASUREMENT_SMOOTHING)
+    assert.equal(nativeAnalyzer.calls.resets, resetsBeforeMeasurement)
+
+    analyzer.setMeasurementActive(false)
+    assertAlmostEqual(
+      nativeAnalyzer.calls.smoothingValues.at(-1) ?? 0,
+      0.9,
+      1e-12,
+      'configured smoothing should be restored',
+    )
+
+    analyzer.setOptions({ smoothing: 0.99 })
+    analyzer.setMeasurementActive(true)
+    assertAlmostEqual(
+      nativeAnalyzer.calls.smoothingValues.at(-1) ?? 0,
+      0.99,
+      1e-12,
+      'higher user smoothing should be preserved',
+    )
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
 })
 
 test('SpectrumAnalyzer side line uses native stereo spectrum without draining mono samples', () => {
@@ -1952,6 +2559,53 @@ test('Spectrogram vertical orientation shifts existing rows upward with copy com
   assert.equal(drawCall?.args[2], -1)
 })
 
+test('Spectrogram draws adaptive frequency guides in the selected scale', () => {
+  const renderGrid = (showGrid: boolean, scaleMode: FrequencyScaleMode): FakeCanvasRecorder => {
+    const recorder = createFakeCanvasRecorder()
+    const dom = installFakeCanvasDom(() => createFakeCanvas(recorder, 320, 600))
+    const spectrogram = new Spectrogram(createFakeCanvas(recorder, 320, 600), {
+      showGrid,
+      scaleMode,
+      minFrequency: 20,
+      maxFrequency: 20000,
+      dataSource: {
+        getPendingSpectrogramSamples: () => [],
+        getPendingSpectrogramStereoSamples: () => [],
+        getSampleRate: () => 48000,
+        isPlaying: () => false,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: null,
+    })
+
+    try {
+      const state = spectrogram as unknown as { drawFrame: () => void }
+      state.drawFrame()
+      return recorder
+    } finally {
+      spectrogram.dispose()
+      dom.restore()
+    }
+  }
+
+  const enabled = renderGrid(true, 'mel')
+  const oneKhz = enabled.fillTexts.find(({ text }) => text === '1k')
+  assert.ok(oneKhz)
+  assertAlmostEqual(
+    oneKhz.y,
+    600 - (normalizedPositionAtFrequency(1000, 20, 20000, 'mel') * 600) - 2,
+    1e-9,
+    'Mel spectrogram 1kHz grid position',
+  )
+
+  const wideLog = renderGrid(true, 'log')
+  assert.ok(wideLog.lineStrokes.length > wideLog.fillTexts.length)
+
+  const disabled = renderGrid(false, 'log')
+  assert.deepEqual(disabled.fillTexts, [])
+  assert.deepEqual(disabled.lineStrokes, [])
+})
+
 test('Spectrogram paints multiple native analyzer columns in order', () => {
   const recorder = createFakeCanvasRecorder()
   const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
@@ -1993,6 +2647,59 @@ test('Spectrogram paints multiple native analyzer columns in order', () => {
     assert.equal(writes.length, 2)
     assert.deepEqual(writes[0].data.slice(0, 8), [10, 20, 30, 64, 10, 20, 30, 128])
     assert.deepEqual(writes[1].data.slice(0, 8), [10, 20, 30, 191, 10, 20, 30, 255])
+  } finally {
+    spectrogram.dispose()
+    dom.restore()
+  }
+})
+
+test('Spectrogram forwards stereo channels without a cancellation-prone mono downmix', () => {
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas(null, 4, 2)
+  const left = Float32Array.from([0.5, 0, -0.5, 0])
+  const right = Float32Array.from([-0.5, 0, 0.5, 0])
+  let pending = [{ left, right }]
+  let processedLeft: Float32Array | null = null
+  let processedRight: Float32Array | null = null
+  const dataSource = {
+    getPendingSpectrogramSamples: (): Float32Array[] => assert.fail('stereo input must not be downmixed'),
+    getPendingSpectrogramStereoSamples: () => {
+      const chunks = pending
+      pending = []
+      return chunks
+    },
+    getSampleRate: () => 48000,
+    isPlaying: () => true,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const emptyResult = (): SpectrogramNativeResult => ({
+    display: new Float32Array(0),
+    heat: new Float32Array(0),
+    columnCount: 0,
+    rowCount: 2,
+  })
+  const nativeAnalyzer: SpectrogramNativeAnalyzer = {
+    isAvailable: () => true,
+    configure: () => {},
+    process: () => assert.fail('stereo input must use processStereo'),
+    processStereo: (nextLeft, nextRight) => {
+      processedLeft = nextLeft
+      processedRight = nextRight
+      return emptyResult()
+    },
+    reset: () => {},
+  }
+  const spectrogram = new Spectrogram(canvas, {
+    dataSource,
+    nativeAnalyzer,
+    showGrid: false,
+  })
+
+  try {
+    const state = spectrogram as unknown as { drawFrame: () => void }
+    state.drawFrame()
+    assert.equal(processedLeft, left)
+    assert.equal(processedRight, right)
   } finally {
     spectrogram.dispose()
     dom.restore()
@@ -2048,6 +2755,11 @@ test('Spectrogram forwards orientation and row count to the native analyzer', ()
     assert.equal(capturedConfig?.scrollSpeed, 4)
     assert.equal(capturedConfig?.tiltDbPerOctave, 5.5)
     assert.equal(capturedConfig?.sampleRate, 44100)
+
+    spectrogram.setOptions({ scaleMode: 'mel' })
+    pending = [Float32Array.from([0, 0])]
+    state.drawFrame()
+    assert.equal(capturedConfig?.scaleMode, 'mel')
   } finally {
     spectrogram.dispose()
     dom.restore()
@@ -2139,7 +2851,7 @@ test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () =>
     assert.ok(peakInfo, 'expected peak info to be reported')
     assert.ok(peakInfo.frequencyHz > 437 && peakInfo.frequencyHz < 443, `expected peak frequency near 440 Hz, got ${peakInfo.frequencyHz}`)
     assert.match(peakInfo.key, /^A4 [+-]?\d+c$/)
-    assert.ok(peakInfo.db > -20, `expected an audible peak dB, got ${peakInfo.db}`)
+    assert.ok(peakInfo.dbfs > -20, `expected an audible peak dBFS, got ${peakInfo.dbfs}`)
     assert.ok(peakInfo.normalizedX >= 0 && peakInfo.normalizedX <= 1, 'peak x should be normalized')
     assert.ok(peakInfo.normalizedY >= 0 && peakInfo.normalizedY <= 1, 'peak y should be normalized')
 
@@ -2168,6 +2880,235 @@ test('SpectrumAnalyzer reports peak info from the visible spectrum curve', () =>
     analyzer.dispose()
     dom.restore()
   }
+})
+
+test('SpectrumAnalyzer reports louder-channel dBFS without applying visual tilt', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const fftSize = 4096
+  const frequencyHz = 21 * sampleRate / fftSize
+  const frame = createCompositeStereoChunk([
+    { frequencyHz, amplitude: 0.2 },
+  ], sampleRate, fftSize)
+
+  const renderWithTilt = (tiltDbPerOctave: number): {
+    peak: SpectrumPeakInfo
+    visibleDb: number
+  } => {
+    let peakInfo: SpectrumPeakInfo | null = null
+    const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+      showSideLine: true,
+      showGrid: false,
+      fillGradient: false,
+      smoothing: 0,
+      tiltDbPerOctave,
+      fftSize,
+      dataSource: {
+        getPendingSpectrumSamples: () => [],
+        getPendingSpectrumStereoSamples: () => [frame],
+        getSampleRate: () => sampleRate,
+        isPlaying: () => true,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
+      capturePeakInfo: true,
+      onPeakInfo: (nextPeakInfo) => {
+        peakInfo = nextPeakInfo
+      },
+    })
+
+    try {
+      const state = analyzer as unknown as {
+        drawFrame: () => void
+        primaryPointDb: Float32Array
+        primaryPointFrequency: Float32Array
+      }
+      state.drawFrame()
+      assert.ok(peakInfo)
+      let closestIndex = 0
+      for (let index = 1; index < state.primaryPointFrequency.length; index += 1) {
+        if (
+          Math.abs(state.primaryPointFrequency[index] - peakInfo.frequencyHz)
+          < Math.abs(state.primaryPointFrequency[closestIndex] - peakInfo.frequencyHz)
+        ) {
+          closestIndex = index
+        }
+      }
+      return { peak: peakInfo, visibleDb: state.primaryPointDb[closestIndex] }
+    } finally {
+      analyzer.dispose()
+    }
+  }
+
+  try {
+    const flat = renderWithTilt(0)
+    const tilted = renderWithTilt(6)
+    assertAlmostEqual(flat.peak.dbfs, 20 * Math.log10(0.2), 0.3, 'flat dBFS')
+    assertAlmostEqual(tilted.peak.dbfs, flat.peak.dbfs, 1e-5, 'tilt-independent dBFS')
+    assertAlmostEqual(tilted.peak.frequencyHz, flat.peak.frequencyHz, 0.1, 'visible peak frequency')
+    assertAlmostEqual(
+      tilted.visibleDb - flat.visibleDb,
+      6 * Math.log2(frequencyHz / 1000),
+      0.6,
+      'visual curve tilt',
+    )
+  } finally {
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer keeps a left-only Mid curve while reporting the left channel near 0 dBFS', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const fftSize = 4096
+  const frequencyHz = 85 * sampleRate / fftSize
+  const left = createCompositeStereoChunk([{ frequencyHz, amplitude: 1 }], sampleRate, fftSize).left
+  const right = new Float32Array(fftSize)
+  let peakInfo: SpectrumPeakInfo | null = null
+  let stereoDrains = 0
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+    showSideLine: false,
+    showGrid: false,
+    fillGradient: false,
+    smoothing: 0,
+    tiltDbPerOctave: 0,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    fftSize,
+    dataSource: {
+      getPendingSpectrumSamples: () => assert.fail('peak capture must preserve stereo channel data'),
+      getPendingSpectrumStereoSamples: () => {
+        stereoDrains += 1
+        return [{ left, right }]
+      },
+      getSampleRate: () => sampleRate,
+      isPlaying: () => true,
+      subscribeToSessionChanges: () => () => {},
+    },
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
+    capturePeakInfo: true,
+    onPeakInfo: (nextPeakInfo) => {
+      peakInfo = nextPeakInfo
+    },
+  })
+
+  try {
+    const state = analyzer as unknown as {
+      drawFrame: () => void
+      primaryPointDb: Float32Array
+      primaryPointFrequency: Float32Array
+    }
+    state.drawFrame()
+    assert.ok(peakInfo)
+    assert.equal(stereoDrains, 1)
+    assertAlmostEqual(peakInfo.dbfs, 0, 0.3, 'left-channel dBFS')
+
+    let closestIndex = 0
+    for (let index = 1; index < state.primaryPointFrequency.length; index += 1) {
+      if (
+        Math.abs(state.primaryPointFrequency[index] - peakInfo.frequencyHz)
+        < Math.abs(state.primaryPointFrequency[closestIndex] - peakInfo.frequencyHz)
+      ) {
+        closestIndex = index
+      }
+    }
+    assertAlmostEqual(state.primaryPointDb[closestIndex], -6.0206, 0.3, 'left-only Mid curve')
+  } finally {
+    analyzer.dispose()
+    dom.restore()
+  }
+})
+
+test('SpectrumAnalyzer tilt can change the visible peak while each readout stays un-tilted', () => {
+  const dom = installFakeCanvasDom()
+  const sampleRate = 48000
+  const fftSize = 4096
+
+  const captureWithTilt = (tiltDbPerOctave: number): SpectrumPeakInfo => {
+    const frame = createCompositeStereoChunk([
+      { frequencyHz: 250, amplitude: 0.3 },
+      { frequencyHz: 4000, amplitude: 0.15 },
+    ], sampleRate, fftSize)
+    let peakInfo: SpectrumPeakInfo | null = null
+    const analyzer = new SpectrumAnalyzer(createFakeCanvas(), {
+      showSideLine: true,
+      showGrid: false,
+      fillGradient: false,
+      smoothing: 0,
+      tiltDbPerOctave,
+      fftSize,
+      dataSource: {
+        getPendingSpectrumSamples: () => [],
+        getPendingSpectrumStereoSamples: () => [frame],
+        getSampleRate: () => sampleRate,
+        isPlaying: () => true,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
+      capturePeakInfo: true,
+      onPeakInfo: (nextPeakInfo) => {
+        peakInfo = nextPeakInfo
+      },
+    })
+    try {
+      ;(analyzer as unknown as { drawFrame: () => void }).drawFrame()
+      assert.ok(peakInfo)
+      return peakInfo
+    } finally {
+      analyzer.dispose()
+    }
+  }
+
+  try {
+    const flat = captureWithTilt(0)
+    const tilted = captureWithTilt(6)
+    assert.ok(flat.frequencyHz > 240 && flat.frequencyHz < 260)
+    assert.ok(tilted.frequencyHz > 3900 && tilted.frequencyHz < 4100)
+    assertAlmostEqual(flat.dbfs, 20 * Math.log10(0.3), 0.3, 'low peak dBFS')
+    assertAlmostEqual(tilted.dbfs, 20 * Math.log10(0.15), 0.3, 'high peak dBFS')
+  } finally {
+    dom.restore()
+  }
+})
+
+test('spectrum plugin bridge carries channel-max data and falls back for legacy frames', () => {
+  const encode = (values: Float32Array): string => Buffer.from(
+    values.buffer,
+    values.byteOffset,
+    values.byteLength,
+  ).toString('base64')
+  const magnitudes = Float32Array.from([-30, -20, -10])
+  const side = Float32Array.from([-50, -40, -30])
+  const channelMax = Float32Array.from([-24, -14, -4])
+
+  const decoded = decodeSpectrumFrame({
+    sampleRate: 96000,
+    magnitudes: encode(magnitudes),
+    side: encode(side),
+    channelMax: encode(channelMax),
+  })
+  assert.ok(decoded)
+  assert.equal(decoded.sampleRate, 96000)
+  assert.deepEqual(Array.from(decoded.channelMax), Array.from(channelMax))
+
+  const legacy = decodeSpectrumFrame({ magnitudes: encode(magnitudes) })
+  assert.ok(legacy)
+  assert.deepEqual(Array.from(legacy.channelMax), Array.from(magnitudes))
+
+  const analyzer = new BridgeSpectrumAnalyzer(6)
+  analyzer.setMagnitudes(magnitudes, side, channelMax)
+  const output = new Float32Array(3)
+  assert.equal(analyzer.fillChannelMaxMagnitudes(output), 3)
+  assert.deepEqual(Array.from(output), Array.from(channelMax))
+
+  analyzer.setMagnitudes(magnitudes, side)
+  assert.deepEqual(Array.from(analyzer.getChannelMaxMagnitudes()), Array.from(magnitudes))
+  analyzer.setFFTSize(8)
+  assert.deepEqual(Array.from(analyzer.getChannelMaxMagnitudes()), [-100, -100, -100, -100])
+  analyzer.reset()
+  assert.deepEqual(Array.from(analyzer.getChannelMaxMagnitudes()), [-100, -100, -100, -100])
+  assert.equal(formatSpectrumPeakDbfs(-6.0206), '-6.02dBFS')
+  assert.equal(formatSpectrumPeakDbfs(0), '+0.00dBFS')
 })
 
 test('SpectrumAnalyzer smooths peak selection without smoothing the reported position', () => {
@@ -2443,9 +3384,11 @@ test('scopeSettingsToOptions wires waveform stereo mode into analyzer options', 
 
 test('scopeSettingsToOptions forwards shared scope background and guides to oscilloscope and vectorscope', () => {
   const profile = createDefaultProfile('Default')
+  profile.scopeSettings.vectorscope.zoomDb = 6
   const authoredTheme = createDefaultTheme()
   authoredTheme.scopes.background = 'rgb(3, 4, 5)'
   authoredTheme.scopes.guides = 'rgba(120, 130, 140, 0.2)'
+  authoredTheme.vectorscope.phaseRisk = 'rgb(200, 100, 50)'
   const theme = resolveTheme(authoredTheme)
 
   const oscilloscope = scopeSettingsToOptions('oscilloscope', profile.scopeSettings.oscilloscope, theme.oscilloscope)
@@ -2458,6 +3401,12 @@ test('scopeSettingsToOptions forwards shared scope background and guides to osci
   assert.equal(vectorscope.gridMajorColor, theme.vectorscope.guides)
   assert.equal(vectorscope.gridMinorColor, theme.vectorscope.guidesSecondary)
   assert.equal(vectorscope.labelColor, theme.vectorscope.labels)
+  assert.equal(vectorscope.phaseRiskColor, 'rgb(200, 100, 50)')
+  assert.equal(vectorscope.zoomDb, 6)
+
+  const pluginVectorscope = vectorscopeSettingsToOptions(profile.scopeSettings.vectorscope, theme.vectorscope)
+  assert.equal(pluginVectorscope.phaseRiskColor, vectorscope.phaseRiskColor)
+  assert.equal(pluginVectorscope.zoomDb, vectorscope.zoomDb)
 })
 
 test('Oscilloscope projects raw sample amplitude without renderer gain', () => {
@@ -2507,7 +3456,34 @@ test('Vectorscope uses the base layout radius for projection scale', () => {
   }
 })
 
-test('vectorscope adds a subtle dashed outer boundary without changing the base graph', () => {
+test('Vectorscope centers width-constrained unipolar artwork vertically', () => {
+  for (const mode of ['polar-unipolar', 'linear-unipolar'] as const) {
+    const layout = getVectorscopeLayout(120, 300, mode)
+    const artworkTop = layout.centerY - layout.radius
+    const artworkBottom = layout.centerY
+
+    assertAlmostEqual(
+      (artworkTop + artworkBottom) / 2,
+      150,
+      1e-12,
+      `${mode} artwork should center in a narrow canvas`,
+    )
+  }
+})
+
+test('Vectorscope preserves height-limited and bipolar layout behavior', () => {
+  const wideUnipolar = getVectorscopeLayout(600, 200, 'polar-unipolar')
+  assertAlmostEqual(wideUnipolar.centerY, 192, 1e-12, 'wide unipolar layout should remain bottom-aligned')
+  assertAlmostEqual(wideUnipolar.radius, 192 * 0.88, 1e-12, 'wide unipolar radius should remain height-limited')
+
+  for (const mode of ['lissajous', 'polar-bipolar', 'linear-bipolar'] as const) {
+    const layout = getVectorscopeLayout(120, 300, mode)
+    assertAlmostEqual(layout.centerY, 150, 1e-12, `${mode} should remain centered`)
+    assertAlmostEqual(layout.radius, 54, 1e-12, `${mode} radius should remain unchanged`)
+  }
+})
+
+test('vectorscope grids use calibrated boundaries, phase-risk shading, and honest labels', () => {
   const lissajousRecorder = createFakeCanvasRecorder()
   drawVectorscopeGridForMode(
     createFakeCanvasContext(lissajousRecorder),
@@ -2517,12 +3493,24 @@ test('vectorscope adds a subtle dashed outer boundary without changing the base 
     'rgba(255, 255, 255, 0.05)',
     'rgba(255, 255, 255, 0.2)',
     'lissajous',
+    'rgb(255, 191, 0)',
+    6,
   )
   assert.equal(
     lissajousRecorder.lineDashes.some((segments) => segments.length > 0),
     false,
-    'lissajous should not render an outer headroom boundary',
+    'XY should not render an arbitrary overflow boundary',
   )
+  assert.equal(lissajousRecorder.strokeRects.length, 1)
+  assert.equal(lissajousRecorder.strokeRects[0]?.width, getVectorscopeLayout(320, 180, 'lissajous').radius * 2)
+  assert.equal(
+    lissajousRecorder.fillRects.filter(({ fillStyle }) => fillStyle === 'rgba(255, 191, 0, 0.08)').length,
+    2,
+    'XY should shade its two opposite-sign quadrants',
+  )
+  assert.equal(lissajousRecorder.fillTexts.some(({ text }) => text === '-6 dBFS'), true)
+  assert.equal(lissajousRecorder.fillTexts.some(({ text }) => text === 'M'), true)
+  assert.equal(lissajousRecorder.fillTexts.some(({ text }) => text === 'S'), true)
 
   const linearRecorder = createFakeCanvasRecorder()
   drawVectorscopeGridForMode(
@@ -2533,12 +3521,18 @@ test('vectorscope adds a subtle dashed outer boundary without changing the base 
     'rgba(255, 255, 255, 0.05)',
     'rgba(255, 255, 255, 0.2)',
     'linear-bipolar',
+    'rgb(255, 191, 0)',
   )
   assert.equal(
     linearRecorder.lineDashes.some((segments) => segments.length > 0),
-    true,
-    'linear mode should render a dashed outer max boundary',
+    false,
+    'linear mode should only use its exact outer diamond',
   )
+  assert.equal(linearRecorder.fills.filter(({ fillStyle }) => fillStyle === 'rgba(255, 191, 0, 0.08)').length, 2)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'M+'), true)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'M−'), true)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'S−'), true)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'S+'), true)
 
   const polarRecorder = createFakeCanvasRecorder()
   drawVectorscopeGridForMode(
@@ -2549,31 +3543,115 @@ test('vectorscope adds a subtle dashed outer boundary without changing the base 
     'rgba(255, 255, 255, 0.05)',
     'rgba(255, 255, 255, 0.2)',
     'polar-bipolar',
+    'rgb(255, 191, 0)',
   )
   const polarLayout = getVectorscopeLayout(320, 180, 'polar-bipolar')
-  const dashedPolarArc = polarRecorder.arcs.find((arc) => arc.lineDash.length > 0)
-  const expectedPolarOverflowRadius = Math.min(
-    Math.min(polarLayout.centerX, 320 - polarLayout.centerX, polarLayout.centerY, 180 - polarLayout.centerY) * 0.98,
-    polarLayout.radius * 1.25,
-  )
   assert.equal(
     polarRecorder.lineDashes.some((segments) => segments.length > 0),
-    true,
-    'polar mode should render a dashed outer boundary',
-  )
-  assert.ok(
-    dashedPolarArc && dashedPolarArc.radius > polarLayout.radius,
-    'polar dashed boundary should sit outside the existing graph',
+    false,
+    'polar mode should not render an arbitrary overflow circle',
   )
   assertAlmostEqual(
-    dashedPolarArc?.radius ?? 0,
-    expectedPolarOverflowRadius,
+    Math.max(...polarRecorder.arcs.map(({ radius }) => radius)),
+    polarLayout.radius,
     1e-6,
-    'polar dashed boundary should follow the next relative grid step, clamped to the canvas',
+    'the outer radial-reference circle should equal the layout radius',
   )
+  assert.equal(polarRecorder.fills.filter(({ fillStyle }) => fillStyle === 'rgba(255, 191, 0, 0.08)').length, 2)
+  assert.equal(polarRecorder.fillTexts.some(({ text }) => text === '0 dB radial'), true)
 })
 
-test('Vectorscope keeps the original linear projection behavior', () => {
+test('vectorscope projections calibrate XY and M/S Linear while preserving classic Polar shaping', () => {
+  const assertPoint = (
+    actual: { dx: number; dy: number },
+    expected: { dx: number; dy: number },
+    message: string,
+  ): void => {
+    assertAlmostEqual(actual.dx, expected.dx, 1e-9, `${message} x`)
+    assertAlmostEqual(actual.dy, expected.dy, 1e-9, `${message} y`)
+  }
+
+  assertPoint(transformPoint(0.5, -0.25, 'lissajous'), { dx: -0.25, dy: 0.5 }, 'XY')
+  assertPoint(transformPoint(1, 1, 'linear-bipolar'), { dx: 0, dy: 1 }, 'linear mono')
+  assertPoint(transformPoint(1, 0, 'linear-bipolar'), { dx: -0.5, dy: 0.5 }, 'linear left-only')
+  assertPoint(transformPoint(0, 1, 'linear-bipolar'), { dx: 0.5, dy: 0.5 }, 'linear right-only')
+  assertPoint(transformPoint(1, -1, 'linear-bipolar'), { dx: -1, dy: 0 }, 'linear anti-phase')
+  assertPoint(transformPoint(-1, -1, 'linear-bipolar'), { dx: 0, dy: -1 }, 'linear inverted mono')
+  assertPoint(transformPoint(0.75, -0.25, 'linear-bipolar'), { dx: -0.5, dy: 0.25 }, 'linear unequal')
+
+  const polarLeft = transformPoint(1, 0, 'polar-bipolar')
+  assertAlmostEqual(polarLeft.dx, -Math.SQRT1_2, 1e-9, 'polar left-only x')
+  assertAlmostEqual(polarLeft.dy, Math.SQRT1_2, 1e-9, 'polar left-only y')
+  assertAlmostEqual(Math.hypot(polarLeft.dx, polarLeft.dy), 1, 1e-9, 'polar left-only radius')
+  const polarUnequal = transformPoint(0.75, -0.25, 'polar-bipolar')
+  assertAlmostEqual(
+    Math.hypot(polarUnequal.dx, polarUnequal.dy),
+    Math.pow(Math.hypot(0.75, -0.25), 0.35),
+    1e-9,
+    'polar unequal radius retains classic shaping',
+  )
+
+  for (const amplitude of [0.25, 0.5, 1]) {
+    const xy = transformPoint(amplitude, amplitude, 'lissajous')
+    const linear = transformPoint(amplitude, amplitude, 'linear-bipolar')
+    const polar = transformPoint(amplitude, amplitude, 'polar-bipolar')
+    assertAlmostEqual(Math.max(Math.abs(xy.dx), Math.abs(xy.dy)), amplitude, 1e-9, `XY amplitude ${amplitude}`)
+    assertAlmostEqual(Math.abs(linear.dx) + Math.abs(linear.dy), amplitude, 1e-9, `linear amplitude ${amplitude}`)
+    assertAlmostEqual(
+      Math.hypot(polar.dx, polar.dy),
+      Math.pow(Math.hypot(amplitude, amplitude), 0.35),
+      1e-9,
+      `classic polar amplitude ${amplitude}`,
+    )
+  }
+
+  for (const mode of ['polar-unipolar', 'linear-unipolar'] as const) {
+    assertPoint(
+      transformPoint(-0.8, -0.2, mode),
+      transformPoint(0.8, 0.2, mode),
+      `${mode} antipodal fold`,
+    )
+  }
+})
+
+test('vectorscope zoom maps the labeled per-channel and Polar radial references', () => {
+  for (const zoomDb of [-12, 0, 24]) {
+    const inputReference = 10 ** (-zoomDb / 20)
+    assertAlmostEqual(vectorscopeZoomDbToGain(zoomDb) * inputReference, 1, 1e-12, `zoom ${zoomDb}`)
+
+    for (const mode of ['lissajous', 'linear-unipolar', 'linear-bipolar'] as const) {
+      const point = transformPoint(inputReference, inputReference, mode, zoomDb)
+      const boundaryValue = mode === 'lissajous'
+        ? Math.max(Math.abs(point.dx), Math.abs(point.dy))
+        : Math.abs(point.dx) + Math.abs(point.dy)
+      assertAlmostEqual(boundaryValue, 1, 1e-9, `${mode} at zoom ${zoomDb}`)
+    }
+
+    for (const mode of ['polar-unipolar', 'polar-bipolar'] as const) {
+      const point = transformPoint(inputReference, 0, mode, zoomDb)
+      assertAlmostEqual(Math.hypot(point.dx, point.dy), 1, 1e-9, `${mode} radial reference at zoom ${zoomDb}`)
+    }
+  }
+
+  assert.equal(normalizeVectorscopeZoomDb(6.49), 6)
+  assert.equal(normalizeVectorscopeZoomDb(6.5), 7)
+  assert.equal(normalizeVectorscopeZoomDb(-99), -12)
+  assert.equal(normalizeVectorscopeZoomDb(99), 24)
+  assert.equal(normalizeVectorscopeZoomDb('invalid'), 0)
+  assert.equal(formatVectorscopeReferenceDbfs(6), '-6 dBFS')
+  assert.equal(formatVectorscopeReferenceDbfs(-6), '+6 dBFS')
+})
+
+test('vectorscope phase-risk classification treats channel guides as safe boundaries', () => {
+  assert.equal(isVectorscopePhaseRisk(1, 1), false)
+  assert.equal(isVectorscopePhaseRisk(-1, -1), false)
+  assert.equal(isVectorscopePhaseRisk(1, -1), true)
+  assert.equal(isVectorscopePhaseRisk(-0.25, 0.75), true)
+  assert.equal(isVectorscopePhaseRisk(1, 0), false)
+  assert.equal(isVectorscopePhaseRisk(0, -1), false)
+})
+
+test('native and JavaScript vectorscope paths project identical channel samples', () => {
   const dom = installFakeCanvasDom()
   const dataSource = {
     getPendingVectorscopeSamples: () => [],
@@ -2581,7 +3659,71 @@ test('Vectorscope keeps the original linear projection behavior', () => {
     isPlaying: () => false,
     subscribeToSessionChanges: () => () => {},
   }
-  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource })
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource, nativeAnalyzer: null, zoomDb: 3 })
+
+  try {
+    const state = vectorscope as unknown as {
+      drawPoints: (
+        ctx: CanvasRenderingContext2D,
+        x: Float32Array,
+        y: Float32Array,
+        count: number,
+        centerX: number,
+        centerY: number,
+        scale: number,
+      ) => void
+      drawFallbackPoints: (
+        ctx: CanvasRenderingContext2D,
+        samples: Array<{ left: Float32Array; right: Float32Array }>,
+        centerX: number,
+        centerY: number,
+        scale: number,
+      ) => void
+      options: { mode: 'polar-unipolar' }
+    }
+    state.options.mode = 'polar-unipolar'
+    const left = -0.8
+    const right = -0.2
+    const nativeRecorder = createFakeCanvasRecorder()
+    const fallbackRecorder = createFakeCanvasRecorder()
+
+    state.drawPoints(
+      createFakeCanvasContext(nativeRecorder),
+      new Float32Array([right]),
+      new Float32Array([left]),
+      1,
+      100,
+      100,
+      80,
+    )
+    state.drawFallbackPoints(
+      createFakeCanvasContext(fallbackRecorder),
+      [{ left: new Float32Array([left]), right: new Float32Array([right]) }],
+      100,
+      100,
+      80,
+    )
+
+    assert.equal(nativeRecorder.fillRects.length, 1)
+    assert.equal(fallbackRecorder.fillRects.length, 1)
+    assertAlmostEqual(nativeRecorder.fillRects[0]?.x ?? 0, fallbackRecorder.fillRects[0]?.x ?? 0, 1e-6, 'path parity x')
+    assertAlmostEqual(nativeRecorder.fillRects[0]?.y ?? 0, fallbackRecorder.fillRects[0]?.y ?? 0, 1e-6, 'path parity y')
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
+})
+
+test('Vectorscope applies live calibrated zoom and clears the previous projection', () => {
+  const dom = installFakeCanvasDom()
+  const nativeAnalyzer = createFakeVectorscopeNativeAnalyzer()
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource, nativeAnalyzer })
 
   try {
     const state = vectorscope as unknown as {
@@ -2596,12 +3738,16 @@ test('Vectorscope keeps the original linear projection behavior', () => {
         dotSize: number,
       ) => void
       getProjectionScale: (radius: number) => number
+      options: { zoomDb: number }
     }
     const layout = getVectorscopeLayout(320, 180, 'linear-bipolar')
     const recorder = createFakeCanvasRecorder()
     const ctx = createFakeCanvasContext(recorder)
     const scale = state.getProjectionScale(layout.radius)
 
+    vectorscope.setOptions({ zoomDb: 6.4 })
+    assert.equal(state.options.zoomDb, 6)
+    assert.equal(nativeAnalyzer.resetCount, 1)
     state.drawProjectedDot(ctx, -1, 1, 'linear-bipolar', layout.centerX, layout.centerY, scale, 2)
 
     assert.equal(recorder.fillRects.length, 1)
@@ -2610,15 +3756,15 @@ test('Vectorscope keeps the original linear projection behavior', () => {
     const projectedCenterY = rect.y + rect.height / 2
     assertAlmostEqual(
       projectedCenterX,
-      layout.centerX + layout.radius * Math.SQRT2,
+      layout.centerX + layout.radius * vectorscopeZoomDbToGain(6),
       1e-6,
-      'linear projection should preserve the original unscaled mapping',
+      'linear projection should apply the normalized zoom gain',
     )
     assertAlmostEqual(
       projectedCenterY,
       layout.centerY,
       1e-6,
-      'linear overs peak should stay on the side axis',
+      'anti-phase projection should stay on the Side axis',
     )
   } finally {
     vectorscope.dispose()
@@ -2628,7 +3774,7 @@ test('Vectorscope keeps the original linear projection behavior', () => {
 
 test('scopeSettingsToOptions forwards themed backgrounds and track colors to spectrogram, VU, and LUFS modules', () => {
   const profile = createDefaultProfile('Default')
-  profile.scopeSettings.spectrogram.orientation = 'vertical'
+  profile.scopeSettings.spectrogram.rotation = 90
   profile.scopeSettings.spectrogram.tiltDbPerOctave = 5.2
   profile.scopeSettings.lufsmeter.readout = 'shortTerm'
   profile.scopeSettings.vumeter.needleChannels = 'combined'
@@ -2644,7 +3790,7 @@ test('scopeSettingsToOptions forwards themed backgrounds and track colors to spe
 
   const spectrogram = scopeSettingsToOptions('spectrogram', profile.scopeSettings.spectrogram, theme.spectrogram)
   assert.equal(spectrogram.backgroundColor, 'rgb(6, 7, 8)')
-  assert.equal(spectrogram.orientation, 'vertical')
+  assert.equal(spectrogram.orientation, 'horizontal')
   assert.equal(spectrogram.tiltDbPerOctave, 5.2)
 
   const vumeter = scopeSettingsToOptions('vumeter', profile.scopeSettings.vumeter, theme.vumeter)
@@ -2688,12 +3834,125 @@ test('VUMeter needle face layout stays fixed instead of scaling up', () => {
   const retinaWide = resolveVUNeedleFaceLayout(2400, 1000, 2)
   assert.equal(retinaWide.width, VU_NEEDLE_FACE_WIDTH_CSS_PX * 2)
   assert.equal(retinaWide.height, VU_NEEDLE_FACE_HEIGHT_CSS_PX * 2)
+  assert.equal(retinaWide.y, 1000 - VU_NEEDLE_FACE_HEIGHT_CSS_PX * 2)
   assert.equal(retinaWide.scale, 1)
 
   const small = resolveVUNeedleFaceLayout(280, 180)
   assert.equal(small.width, 280)
   assert.equal(small.height, 180)
   assertAlmostEqual(small.scale, 0.5, 1e-12, 'fixed face should only shrink when the canvas is smaller')
+
+  const narrow = resolveVUNeedleFaceLayout(280, 360)
+  assert.equal(narrow.width, 280)
+  assert.equal(narrow.height, 180)
+  assert.equal(narrow.y, 90)
+
+  const retinaNarrow = resolveVUNeedleFaceLayout(560, 720, 2)
+  assert.equal(retinaNarrow.width, 560)
+  assert.equal(retinaNarrow.height, 360)
+  assert.equal(retinaNarrow.y, 180)
+})
+
+test('VUMeter needle face renders a readable primary scale without redundant inner percentages', () => {
+  const dataSource = {
+    getPendingVUMeterSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const renderNeedleFace = (
+    width: number,
+    height: number,
+    needleChannels: 'stereo' | 'combined',
+  ): FakeCanvasRecorder => {
+    const recorder = createFakeCanvasRecorder()
+    const meter = new VUMeter(createFakeCanvas(recorder, width, height), {
+      mode: 'needle',
+      needleChannels,
+      dataSource,
+      nativeAnalyzer: null,
+      labelColor: 'rgb(180, 200, 220)',
+      scaleColor: 'rgb(90, 100, 110)',
+      clipColor: 'rgb(250, 80, 70)',
+    })
+
+    try {
+      ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+    } finally {
+      meter.dispose()
+    }
+    return recorder
+  }
+
+  const full = renderNeedleFace(560, 360, 'stereo')
+  const fullColdEndpoint = full.fillTexts.find((text) => text.text === '20' && text.font.startsWith('700 '))
+  const fullMajor = full.fillTexts.find((text) => text.text === '+3')
+  const fullIntermediate = full.fillTexts.find((text) => text.text === '5')
+  const fullLeftLabel = full.fillTexts.find((text) => text.text === 'L')
+  const fullRightLabel = full.fillTexts.find((text) => text.text === 'R')
+  const fullReadoutValue = full.fillTexts.find((text) => text.text === '-∞')
+  const fullReadoutUnit = full.fillTexts.find((text) => text.text === 'dB')
+
+  assert.equal(fullMajor?.font, '700 26px "JetBrains Mono", monospace')
+  assert.equal(fullMajor?.fillStyle, 'rgba(250, 80, 70, 1)')
+  assert.equal(fullIntermediate?.font, '600 23.92px "JetBrains Mono", monospace')
+  assert.equal(fullIntermediate?.fillStyle, 'rgba(180, 200, 220, 1)')
+  assert.equal(fullLeftLabel?.font, '700 13.5px "JetBrains Mono", monospace')
+  assert.equal(fullRightLabel?.font, '700 13.5px "JetBrains Mono", monospace')
+  assert.equal(fullReadoutValue?.font, '600 19.5px "JetBrains Mono", monospace')
+  assert.equal(fullReadoutUnit?.font, '600 11.5px "JetBrains Mono", monospace')
+  assert.equal(full.fillTexts.some((text) => ['40', '60', '80', '100'].includes(text.text)), false)
+  assert.equal(full.fillTexts.some((text) => text.font.startsWith('500 ')), false)
+  assert.equal(
+    full.fillRects.filter((rect) => rect.fillStyle === 'rgba(180, 200, 220, 0.055)').length,
+    2,
+  )
+  assert.ok(full.arcs.some((arc) => arc.radius > 5))
+
+  const fullScaleTicks = full.lineStrokes.slice(0, 12)
+  const fullColdTickStart = fullScaleTicks[0]?.commands[0]
+  const fullHotTickStart = fullScaleTicks[11]?.commands[0]
+  assert.equal(fullColdTickStart?.kind, 'moveTo')
+  assert.equal(fullHotTickStart?.kind, 'moveTo')
+  assert.ok((fullColdEndpoint?.x ?? Number.POSITIVE_INFINITY) < (fullColdTickStart?.x ?? Number.NEGATIVE_INFINITY))
+  assert.ok((fullMajor?.x ?? Number.NEGATIVE_INFINITY) > (fullHotTickStart?.x ?? Number.POSITIVE_INFINITY))
+
+  const majorTick = full.lineStrokes.find((stroke) => stroke.strokeStyle === 'rgba(90, 100, 110, 0.96)')
+  const minorTick = full.lineStrokes.find((stroke) => stroke.strokeStyle === 'rgba(90, 100, 110, 0.82)')
+  assert.ok(majorTick)
+  assert.ok(minorTick)
+  assert.ok(majorTick.lineWidth > minorTick.lineWidth)
+
+  const compact = renderNeedleFace(280, 180, 'combined')
+  const compactColdEndpoint = compact.fillTexts.find((text) => text.text === '20' && text.font.startsWith('700 '))
+  const compactMajor = compact.fillTexts.find((text) => text.text === '+3')
+  const compactIntermediate = compact.fillTexts.find((text) => text.text === '5')
+  const compactReadoutValue = compact.fillTexts.find((text) => text.text === '-∞')
+  const compactReadoutUnit = compact.fillTexts.find((text) => text.text === 'dB')
+  const compactPrimaryLabels = compact.fillTexts.filter((text) => (
+    text.font === '700 13px "JetBrains Mono", monospace'
+    || text.font === '600 11.96px "JetBrains Mono", monospace'
+  ))
+
+  assert.equal(compactMajor?.font, '700 13px "JetBrains Mono", monospace')
+  assert.equal(compactIntermediate?.font, '600 11.96px "JetBrains Mono", monospace')
+  assert.equal(compactReadoutValue?.font, '600 9.75px "JetBrains Mono", monospace')
+  assert.equal(compactReadoutUnit?.font, '600 5.75px "JetBrains Mono", monospace')
+  assert.equal(compact.fillTexts.some((text) => ['40', '60', '80', '100'].includes(text.text)), false)
+  assert.equal(compactPrimaryLabels.length, 9)
+  for (const label of compactPrimaryLabels) {
+    const fontSize = Number(label.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 0)
+    const halfLabelWidth = label.text.length * fontSize * 0.62 / 2
+    assert.ok(label.x - halfLabelWidth >= 5.5)
+    assert.ok(label.x + halfLabelWidth <= 274.5)
+    assert.ok(label.y >= 0 && label.y <= 180)
+  }
+
+  const compactScaleTicks = compact.lineStrokes.slice(0, 12)
+  const compactColdTickStart = compactScaleTicks[0]?.commands[0]
+  const compactHotTickStart = compactScaleTicks[11]?.commands[0]
+  assert.ok((compactColdEndpoint?.x ?? Number.POSITIVE_INFINITY) < (compactColdTickStart?.x ?? Number.NEGATIVE_INFINITY))
+  assert.ok((compactMajor?.x ?? Number.NEGATIVE_INFINITY) > (compactHotTickStart?.x ?? Number.POSITIVE_INFINITY))
 })
 
 test('VUMeter shared needle helpers switch between stereo needles and combined RMS', () => {
@@ -2761,6 +4020,26 @@ test('scopeSummary includes only waveform display modes', () => {
   assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), 'Stereo · RGB')
 })
 
+test('scopeSummary exposes explicit vectorscope geometry and zoom names', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(scopeSummary('vectorscope', profile.scopeSettings.vectorscope), 'XY (L/R)')
+
+  profile.scopeSettings.vectorscope.mode = 'polar-unipolar'
+  profile.scopeSettings.vectorscope.zoomDb = 6
+  profile.scopeSettings.vectorscope.multiband = true
+  assert.equal(
+    scopeSummary('vectorscope', profile.scopeSettings.vectorscope),
+    'Polar (Folded) · Zoom +6 dB · RGB',
+  )
+
+  profile.scopeSettings.vectorscope.mode = 'linear-bipolar'
+  assert.equal(
+    scopeSummary('vectorscope', profile.scopeSettings.vectorscope),
+    'M/S Linear (Bipolar) · Zoom +6 dB · RGB',
+  )
+})
+
 test('scopeSummary includes loudness readout source', () => {
   const profile = createDefaultProfile('Default')
 
@@ -2776,22 +4055,35 @@ test('scopeSummary includes loudness readout source', () => {
 test('scopeSummary includes spectrum peak mode when enabled', () => {
   const profile = createDefaultProfile('Default')
 
-  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048')
+
+  profile.scopeSettings.spectrum.scaleMode = 'mel'
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'MEL · Extended · Fill · FFT 2048')
+  profile.scopeSettings.spectrum.scaleMode = 'log'
 
   profile.scopeSettings.spectrum.peakInfoMode = 'on'
-  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048 · Peak')
 
   profile.scopeSettings.spectrum.peakInfoMode = 'following'
-  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'Fill · FFT 2048 · Peak Follow')
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048 · Peak Follow')
 })
 
-test('scopeSummary includes spectrogram orientation', () => {
+test('scopeSummary includes visual-scope rotation and mirroring', () => {
   const profile = createDefaultProfile('Default')
 
-  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), 'HORIZONTAL · LOG · sharper')
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '0° · LOG · Extended · sharper')
 
-  profile.scopeSettings.spectrogram.orientation = 'vertical'
-  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), 'VERTICAL · LOG · sharper')
+  profile.scopeSettings.spectrogram.clarityMode = 'focused'
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '0° · LOG · Extended · focused')
+  profile.scopeSettings.spectrogram.clarityMode = 'sharper'
+
+  profile.scopeSettings.spectrogram.rotation = 270
+  profile.scopeSettings.spectrogram.mirrorHorizontal = true
+  assert.equal(scopeSummary('spectrogram', profile.scopeSettings.spectrogram), '270° · LOG · Extended · sharper · Mirror')
+
+  profile.scopeSettings.spectrum.rotation = 90
+  profile.scopeSettings.spectrum.mirrorHorizontal = true
+  assert.equal(scopeSummary('spectrum', profile.scopeSettings.spectrum), 'LOG · Extended · Fill · FFT 2048 · R90° · Mirror')
 })
 
 test('scopeSummary summarizes now playing field visibility', () => {
@@ -2823,6 +4115,20 @@ test('ScopePopoutDataSource switches waveform batches between mono and stereo qu
   dataSource.pushAudioBatch([nextMonoChunk])
   assert.equal(dataSource.getPendingWaveformStereoSamples().length, 0)
   assert.equal(dataSource.getPendingWaveformSamples()[0], nextMonoChunk)
+})
+
+test('ScopePopoutDataSource preserves spectrogram stereo batches', () => {
+  const dataSource = new ScopePopoutDataSource('spectrogram')
+  const left = new Float32Array([0.5, -0.5])
+  const right = new Float32Array([-0.5, 0.5])
+
+  dataSource.pushAudioBatch([{ left, right }])
+
+  assert.equal(dataSource.getPendingSpectrogramSamples().length, 0)
+  const batch = dataSource.getPendingSpectrogramStereoSamples()
+  assert.equal(batch.length, 1)
+  assert.equal(batch[0]?.left, left)
+  assert.equal(batch[0]?.right, right)
 })
 
 test('applying a profile snapshot does not change the machine-local frame target', () => {
@@ -3050,11 +4356,26 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(componentSource, /bottom-bar__theme-separator/)
   assert.match(componentSource, /bottom-bar__section-header/)
   assert.match(componentSource, /bottom-bar__theme-credit--link/)
-  assert.match(stylesSource, /\.bottom-bar__section--theme \{[\s\S]*min-width: 420px;/)
+  assert.match(stylesSource, /\.bottom-bar__section--theme \{[\s\S]*min-width: 480px;/)
+  assert.match(stylesSource, /\.bottom-bar__inline--theme \.settings-chip,[\s\S]*flex: 0 0 auto;/)
   assert.match(stylesSource, /\.bottom-bar__section-header \{/)
   assert.match(stylesSource, /\.bottom-bar__theme-metadata \{/)
   assert.match(stylesSource, /\.bottom-bar__theme-description \{/)
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
+})
+
+test('BottomBar keeps Window controls on one row', async () => {
+  const componentSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  const windowSection = componentSource.match(
+    /<section className="bottom-bar__section bottom-bar__section--window">([\s\S]*?)<div className="bottom-bar__divider" \/>/,
+  )?.[1]
+  assert.ok(windowSection)
+  assert.equal(windowSection.match(/bottom-bar__inline--window/g)?.length, 1)
+  assert.doesNotMatch(windowSection, /bottom-bar__inline--desktop-integration/)
+  assert.match(stylesSource, /\.bottom-bar__section--window \{[\s\S]*min-width: 880px;/)
+  assert.match(stylesSource, /\.bottom-bar__inline--window \{[\s\S]*gap: 8px;/)
 })
 
 test('BottomBar close button uses flat themed control backgrounds', async () => {
@@ -3070,6 +4391,40 @@ test('BottomBar close button uses flat themed control backgrounds', async () => 
   assert.match(closeHoverBlock, /background: var\(--control-bg-hover\);/)
   assert.doesNotMatch(closeBlock, /linear-gradient/)
   assert.doesNotMatch(closeHoverBlock, /linear-gradient/)
+})
+
+test('pin buttons use a persistent filled active state distinct from inactive hover', async () => {
+  const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
+  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const toolbarHoverBlock = stylesSource.match(
+    /\.toolbar__icon-button--pin:hover:not\(:disabled\):not\(\.is-active\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+  const toolbarActiveBlock = stylesSource.match(
+    /\.toolbar__icon-button--pin\.is-active,\n\.toolbar__icon-button--pin\.is-active:hover:not\(:disabled\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+  const popoutHoverBlock = stylesSource.match(
+    /\.scope-popout__button--pin:hover:not\(:disabled\):not\(\.is-active\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+  const popoutActiveBlock = stylesSource.match(
+    /\.scope-popout__button--pin\.is-active,\n\.scope-popout__button--pin\.is-active:hover:not\(:disabled\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+
+  assert.match(toolbarSource, /toolbar__icon-button toolbar__icon-button--pin/)
+  assert.match(toolbarSource, /aria-pressed=\{isAlwaysOnTop\}/)
+  assert.match(popoutSource, /scope-popout__button scope-popout__button--pin/)
+  assert.match(popoutSource, /aria-pressed=\{isAlwaysOnTop\}/)
+  assert.ok(toolbarHoverBlock)
+  assert.ok(toolbarActiveBlock)
+  assert.ok(popoutHoverBlock)
+  assert.ok(popoutActiveBlock)
+
+  assert.match(toolbarHoverBlock, /background: var\(--control-bg\);/)
+  assert.match(popoutHoverBlock, /background: var\(--control-bg\);/)
+  assert.match(toolbarActiveBlock, /border-color: var\(--accent\);/)
+  assert.match(popoutActiveBlock, /border-color: var\(--accent\);/)
+  assert.match(stylesSource, /\.toolbar__icon-button--pin\.is-active svg path \{\n  fill: currentColor;/)
+  assert.match(stylesSource, /\.scope-popout__button--pin\.is-active svg path \{\n  fill: currentColor;/)
 })
 
 test('toolbar uses the Prism logo support link and static package icons are configured', async () => {
@@ -3115,6 +4470,28 @@ test('toolbar uses the Prism logo support link and static package icons are conf
   }))
 })
 
+test('rolling capture exposes persisted duration controls and a native toolbar drag target', async () => {
+  const bottomBarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
+  const preloadSource = await readFile(join(process.cwd(), 'src', 'preload', 'index.ts'), 'utf8')
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const trayBridgeSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'TrayControlBridge.tsx'), 'utf8')
+
+  assert.match(bottomBarSource, /ROLLING_CAPTURE_DURATIONS\.map/)
+  assert.match(bottomBarSource, /setRollingCaptureSeconds\(null\)/)
+  assert.match(bottomBarSource, /revealRollingCaptureFolder/)
+  assert.match(toolbarSource, /className=\{`toolbar__clip-chip/)
+  assert.match(toolbarSource, /draggable=\{rollingCaptureStatus\.hasAudio\}/)
+  assert.match(toolbarSource, /onDragStart=\{handleAudioClipDragStart\}/)
+  assert.match(preloadSource, /ipcRenderer\.send\('audio-clips:start-drag', payload\)/)
+  assert.match(mainSource, /event\.sender\.startDrag/)
+  assert.match(mainSource, /Prism Captures/)
+  assert.match(mainSource, /label: 'Rolling Capture'/)
+  assert.match(mainSource, /type: 'set-rolling-capture'/)
+  assert.match(trayBridgeSource, /audio\.setRollingCaptureSeconds\(command\.durationSeconds\)/)
+  assert.match(trayBridgeSource, /rollingCaptureSeconds,/)
+})
+
 test('resolveWindowCapabilities detects native Wayland sessions on Linux', () => {
   assert.deepEqual(
     resolveWindowCapabilities({
@@ -3130,6 +4507,7 @@ test('resolveWindowCapabilities detects native Wayland sessions on Linux', () =>
       useNativeDragRegions: true,
       supportsProgrammaticReposition: false,
       supportsGeometryPersistence: false,
+      supportsBlurredBackground: false,
     },
   )
 })
@@ -3150,6 +4528,7 @@ test('resolveWindowCapabilities respects --ozone-platform=x11 in a Wayland sessi
       useNativeDragRegions: false,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: false,
     },
   )
 })
@@ -3169,6 +4548,7 @@ test('resolveWindowCapabilities detects X11 sessions on Linux', () => {
       useNativeDragRegions: false,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: false,
     },
   )
 })
@@ -3185,6 +4565,7 @@ test('resolveWindowCapabilities uses native drag regions on macOS while preservi
       useNativeDragRegions: true,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: true,
     },
   )
 })
@@ -3201,8 +4582,29 @@ test('resolveWindowCapabilities uses native drag regions on Windows while preser
       useNativeDragRegions: true,
       supportsProgrammaticReposition: true,
       supportsGeometryPersistence: true,
+      supportsBlurredBackground: false,
     },
   )
+})
+
+test('resolveWindowCapabilities gates blurred backgrounds on the Windows 11 22H2 build', () => {
+  const resolveForBuild = (osVersion?: string) => resolveWindowCapabilities({
+    platform: 'win32',
+    argv: [],
+    env: {},
+    osVersion,
+  }).supportsBlurredBackground
+
+  assert.equal(resolveForBuild('10.0.22621'), true)
+  assert.equal(resolveForBuild('10.0.26200'), true)
+  assert.equal(resolveForBuild('10.0.19045'), false)
+  assert.equal(resolveForBuild(undefined), false)
+  assert.equal(resolveForBuild('not-a-version'), false)
+})
+
+test('resolveMacWindowBlurMaterial selects neutral theme-aware macOS materials', () => {
+  assert.equal(resolveMacWindowBlurMaterial(true), 'hud')
+  assert.equal(resolveMacWindowBlurMaterial(false), 'content')
 })
 
 test('Wayland window controls use native drag regions and omit unsupported reposition/geometry paths', async () => {
@@ -3228,15 +4630,53 @@ test('main and detached windows keep frameless Prism chrome while enabling snap-
   const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
   const nowPlayingSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'NowPlayingConfigWindow.tsx'), 'utf8')
 
-  assert.match(mainSource, /function getSnapCapableFramelessWindowOptions\(\): Pick<[\s\S]*?return \{[\s\S]*?frame: false,[\s\S]*?roundedCorners: false,[\s\S]*?hasShadow: false,[\s\S]*?thickFrame: true,[\s\S]*?resizable: true,[\s\S]*?maximizable: true,[\s\S]*?fullscreenable: true,[\s\S]*?skipTaskbar: false,[\s\S]*?\}/)
-  assert.match(mainSource, /function createMainWindow\(\): void \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
-  assert.match(mainSource, /function createScopePopoutWindow\(kind: ScopeKind, rawBounds\?: WindowBounds\): BrowserWindow \| null \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
-  assert.match(mainSource, /function createNowPlayingConfigWindow\(\): BrowserWindow \{[\s\S]*?\.\.\.getSnapCapableFramelessWindowOptions\(\),/)
+  assert.match(mainSource, /function getFramelessWindowOptions\([\s\S]*?return \{[\s\S]*?frame: false,[\s\S]*?transparent: background\.mode === 'clear' \|\| transparentOnWindows,[\s\S]*?roundedCorners: false,[\s\S]*?hasShadow: false,[\s\S]*?thickFrame: background\.mode === 'solid',[\s\S]*?backgroundMaterial: 'none'[\s\S]*?resizable: true,[\s\S]*?maximizable: true,[\s\S]*?fullscreenable: true,[\s\S]*?skipTaskbar: false,[\s\S]*?\}/)
+  assert.match(mainSource, /process\.platform === 'darwin' && background\.mode === 'blurred'[\s\S]*?vibrancy: resolveMacWindowBlurMaterial\(nativeTheme\.shouldUseDarkColors\),[\s\S]*?visualEffectState: 'active'/)
+  assert.match(mainSource, /function applyNativeThemeSnapshot\([\s\S]*?nativeTheme\.themeSource = resolveNativeThemeSource\(activeTheme\)[\s\S]*?refreshMacBlurVibrancy\(\)/)
+  assert.match(mainSource, /function refreshMacBlurVibrancy\(\): void \{[\s\S]*?process\.platform !== 'darwin'[\s\S]*?getEffectiveWindowBackground\(\)\.mode !== 'blurred'[\s\S]*?resolveMacWindowBlurMaterial\(nativeTheme\.shouldUseDarkColors\)[\s\S]*?getBackgroundCapableWindows\(\)[\s\S]*?window\.setVibrancy\(material\)/)
+  assert.match(mainSource, /function createMainWindow\(restoreBounds\?: WindowBounds\): void \{[\s\S]*?\.\.\.getFramelessWindowOptions\(background\),/)
+  assert.match(mainSource, /function createScopePopoutWindow\(kind: ScopeKind, rawBounds\?: WindowBounds\): BrowserWindow \| null \{[\s\S]*?\.\.\.getFramelessWindowOptions\(background\),/)
+  assert.match(mainSource, /function createNowPlayingConfigWindow\(\): BrowserWindow \{[\s\S]*?\.\.\.getFramelessWindowOptions\(\),/)
   assert.match(popoutSource, /useWindowManagerDragRegions = getRendererWindowCapabilities\(\)\.useNativeDragRegions/)
   assert.match(nowPlayingSource, /useWindowManagerDragRegions = getRendererWindowCapabilities\(\)\.useNativeDragRegions/)
-  assert.doesNotMatch(appSource, /WindowResizeOverlay/)
-  assert.doesNotMatch(popoutSource, /WindowResizeOverlay/)
+  // Blurred and clear windows drop the native thick frame on Windows, so the
+  // JS resize overlay mounts for both; the now-playing config window always
+  // keeps native semantics.
+  assert.match(appSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
+  assert.match(popoutSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
   assert.doesNotMatch(nowPlayingSource, /WindowResizeOverlay/)
+})
+
+test('detached scope interactions accept the first macOS click and hide chrome during measurement', async () => {
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const scopeModuleSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ScopeModule.tsx'), 'utf8')
+  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const mainWindowFactorySource = mainSource.slice(
+    mainSource.indexOf('function createMainWindow'),
+    mainSource.indexOf('function createScopePopoutWindow'),
+  )
+
+  assert.match(mainSource, /function createScopePopoutWindow\([\s\S]*?process\.platform === 'darwin' \? \{ acceptFirstMouse: true \} : \{\}/)
+  assert.doesNotMatch(mainWindowFactorySource, /acceptFirstMouse/)
+  assert.match(scopeModuleSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
+  assert.match(scopeModuleSource, /onActiveChange: onMeasurementActiveChange/)
+  assert.match(popoutSource, /measurementActive \? 'is-measuring' : ''/)
+  assert.match(popoutSource, /onMeasurementActiveChange=\{setMeasurementActive\}/)
+  assert.match(stylesSource, /\.scope-popout__chrome:has\(:focus-visible\)/)
+  assert.doesNotMatch(stylesSource, /\.scope-popout__chrome:focus-within/)
+  assert.match(stylesSource, /\.scope-popout__viewport \.scope-popout__chrome\.is-measuring \{[\s\S]*?max-height: 0;[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;[\s\S]*?transform: translateY\(-8px\);[\s\S]*?\}/)
+})
+
+test('main window hides its toolbar while a docked scope measurement is active', async () => {
+  const appSource = await readFile(join(process.cwd(), 'src', 'renderer', 'App.tsx'), 'utf8')
+  const stripSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Strip.tsx'), 'utf8')
+
+  assert.match(stripSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
+  assert.match(stripSource, /onMeasurementActiveChange=\{onMeasurementActiveChange\}/)
+  assert.match(appSource, /const \[measurementActive, setMeasurementActive\] = useState\(false\)/)
+  assert.match(appSource, /toolbarVisible && !measurementActive \? 'is-visible' : ''/)
+  assert.match(appSource, /<Strip onMeasurementActiveChange=\{setMeasurementActive\} \/>/)
 })
 
 test('programmatic top/bottom reposition flushes fresh bounds through persistence channels', async () => {
@@ -3487,6 +4927,58 @@ test('initializeProfiles restores persisted dirty window bounds while keeping th
     assert.deepEqual(state.savedProfileBaseline?.windowBounds, profile.windowBounds)
     assert.equal(state.hasUnsavedProfileChanges, true)
     assert.deepEqual(restoredBounds, [dirtyBounds])
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+    fakeWindow.restore()
+    fakeStorage.restore()
+  }
+})
+
+test('initializeProfiles migrates legacy spectrogram working state without discarding it', async () => {
+  const previousSettingsState = useSettingsStore.getState()
+  const fakeStorage = installFakeLocalStorage()
+  const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+  profile.scopeSettings.spectrogram.rotation = 90
+  const fakeWindow = installFakeElectronWindow({
+    getProfileSnapshot: async () => ({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: { [DEFAULT_PROFILE_ID]: profile },
+    }),
+    getWindowBounds: async () => null,
+  })
+
+  try {
+    useSettingsStore.getState().applyExternalProfileSnapshot({
+      activeProfileId: DEFAULT_PROFILE_ID,
+      profiles: { [DEFAULT_PROFILE_ID]: profile },
+    })
+    const rawStored = fakeStorage.getItem('prism:settings')
+    assert.ok(rawStored)
+    const stored = JSON.parse(rawStored) as Record<string, unknown>
+    const signature = JSON.parse(stored.profileBaselineSignature as string) as Record<string, unknown>
+    const signatureSettings = signature.scopeSettings as Record<string, Record<string, unknown>>
+    const workingSettings = stored.scopeSettings as Record<string, Record<string, unknown>>
+
+    delete signatureSettings.spectrogram.rotation
+    delete signatureSettings.spectrogram.mirrorHorizontal
+    signatureSettings.spectrogram.orientation = 'vertical'
+    delete workingSettings.spectrogram.rotation
+    delete workingSettings.spectrogram.mirrorHorizontal
+    workingSettings.spectrogram.orientation = 'horizontal'
+    fakeStorage.setItem('prism:settings', JSON.stringify({
+      ...stored,
+      profileBaselineSignature: JSON.stringify(signature),
+      scopeSettings: workingSettings,
+    }))
+    useSettingsStore.setState(previousSettingsState)
+
+    await useSettingsStore.getState().initializeProfiles()
+
+    const state = useSettingsStore.getState()
+    assert.equal(state.savedProfileBaseline?.scopeSettings.spectrogram.rotation, 90)
+    assert.equal(state.scopeSettings.spectrogram.rotation, 0)
+    assert.equal(state.scopeSettings.spectrogram.mirrorHorizontal, false)
+    assert.equal(state.hasUnsavedProfileChanges, true)
   } finally {
     useSettingsStore.setState(previousSettingsState)
     fakeWindow.restore()
@@ -4954,6 +6446,172 @@ test('LUFSMeter fits readout text inside narrow tags', () => {
     assert.equal(estimatedTextWidth <= tagRect.width - 8, true)
   } finally {
     meter.dispose()
+    dom.restore()
+  }
+})
+
+test('LUFSMeter centers wide layouts in a bounded viewport', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const canvas = createFakeCssSizedCanvas(recorder, 522, 196)
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7 })
+  const meter = new LUFSMeter(canvas, {
+    dataSource: {
+      getPendingLUFSMeterSamples: () => [],
+      getSampleRate: () => 48000,
+      isPlaying: () => true,
+      subscribeToSessionChanges: () => () => {},
+    },
+    nativeAnalyzer,
+    lineColor: '#123456',
+    trackColor: '#111111',
+    targetColor: '#222222',
+    scaleColor: '#333333',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    const tracks = recorder.fillRects.filter((rect) => rect.fillStyle === '#111111')
+    const target = recorder.fillRects.find((rect) => rect.fillStyle === '#222222')
+    const tag = recorder.fillRects.find((rect) => rect.fillStyle === '#123456' && rect.height <= 22)
+    const readout = recorder.fillTexts[recorder.fillTexts.length - 1]
+    const viewportLeft = (canvas.width - 240) / 2
+    const viewportRight = viewportLeft + 240
+
+    assert.equal(tracks.length, 3)
+    assert.ok(target)
+    assert.ok(tag)
+    assert.equal(tracks[0]?.x, 174)
+    assert.equal(tracks[0]?.width, tracks[1]?.width)
+    assert.ok(Math.abs((tracks[2]?.width ?? 0) - (tracks[0]?.width ?? 0) * 2) <= 3)
+    assert.equal(target.x, tracks[0]?.x)
+    assert.equal(target.x + target.width, (tracks[2]?.x ?? 0) + (tracks[2]?.width ?? 0))
+    assert.equal(readout?.text, '-8.7LUFS')
+
+    for (const rect of recorder.fillRects) {
+      assert.ok(rect.x >= viewportLeft, `rectangle starts left of LUFS viewport: ${JSON.stringify(rect)}`)
+      assert.ok(rect.x + rect.width <= viewportRight, `rectangle exceeds LUFS viewport: ${JSON.stringify(rect)}`)
+    }
+  } finally {
+    meter.dispose()
+    dom.restore()
+  }
+})
+
+test('LUFSMeter keeps minimum-width layout and compact readout inside canvas bounds', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const canvas = createFakeCssSizedCanvas(recorder, 112, 196)
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7 })
+  const meter = new LUFSMeter(canvas, {
+    dataSource: {
+      getPendingLUFSMeterSamples: () => [],
+      getSampleRate: () => 48000,
+      isPlaying: () => true,
+      subscribeToSessionChanges: () => () => {},
+    },
+    nativeAnalyzer,
+    lineColor: '#123456',
+    trackColor: '#111111',
+    targetColor: '#222222',
+    scaleColor: '#333333',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    const tracks = recorder.fillRects.filter((rect) => rect.fillStyle === '#111111')
+    const tag = recorder.fillRects.find((rect) => (
+      rect.fillStyle === '#123456'
+      && rect.height > 2
+      && rect.height <= 22
+    ))
+    const readout = recorder.fillTexts[recorder.fillTexts.length - 1]
+
+    assert.deepEqual(tracks.map((rect) => rect.width), [6, 6, 12])
+    assert.ok(tag)
+    assert.equal(readout?.text, '-8.7')
+
+    for (const rect of recorder.fillRects) {
+      assert.ok(rect.x >= 0, `rectangle starts before canvas: ${JSON.stringify(rect)}`)
+      assert.ok(rect.y >= 0, `rectangle starts above canvas: ${JSON.stringify(rect)}`)
+      assert.ok(rect.width > 0, `rectangle has non-positive width: ${JSON.stringify(rect)}`)
+      assert.ok(rect.height > 0, `rectangle has non-positive height: ${JSON.stringify(rect)}`)
+      assert.ok(rect.x + rect.width <= canvas.width, `rectangle exceeds canvas width: ${JSON.stringify(rect)}`)
+      assert.ok(rect.y + rect.height <= canvas.height, `rectangle exceeds canvas height: ${JSON.stringify(rect)}`)
+    }
+
+    const fontSize = Number(readout?.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 0)
+    const estimatedTextWidth = (readout?.text.length ?? 0) * fontSize * 0.62
+    assert.ok((readout?.x ?? 0) >= tag.x)
+    assert.ok((readout?.x ?? 0) + estimatedTextWidth <= tag.x + tag.width)
+  } finally {
+    meter.dispose()
+    dom.restore()
+  }
+})
+
+test('LUFSMeter keeps equivalent CSS geometry across canvas backing ratios', () => {
+  const dom = installFakeCanvasDom()
+
+  const renderAtRatio = (pixelRatio: number): {
+    tracks: FakeCanvasRecorder['fillRects']
+    tag: FakeCanvasRecorder['fillRects'][number]
+  } => {
+    const recorder = createFakeCanvasRecorder()
+    const canvas = createFakeCssSizedCanvas(recorder, 522, 196, pixelRatio)
+    const meter = new LUFSMeter(canvas, {
+      dataSource: {
+        getPendingLUFSMeterSamples: () => [],
+        getSampleRate: () => 48000,
+        isPlaying: () => true,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7 }),
+      lineColor: '#123456',
+      trackColor: '#111111',
+      targetColor: '#222222',
+      scaleColor: '#333333',
+    })
+
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+    meter.dispose()
+
+    const tracks = recorder.fillRects
+      .filter((rect) => rect.fillStyle === '#111111')
+      .map((rect) => ({
+        ...rect,
+        x: rect.x / pixelRatio,
+        y: rect.y / pixelRatio,
+        width: rect.width / pixelRatio,
+        height: rect.height / pixelRatio,
+      }))
+    const rawTag = recorder.fillRects.find((rect) => rect.fillStyle === '#123456' && rect.height <= 22 * pixelRatio)
+    assert.ok(rawTag)
+    const tag = {
+      ...rawTag,
+      x: rawTag.x / pixelRatio,
+      y: rawTag.y / pixelRatio,
+      width: rawTag.width / pixelRatio,
+      height: rawTag.height / pixelRatio,
+    }
+    return { tracks, tag }
+  }
+
+  try {
+    const baseline = renderAtRatio(1)
+    for (const pixelRatio of [1.25, 2]) {
+      const result = renderAtRatio(pixelRatio)
+      assert.equal(result.tracks.length, baseline.tracks.length)
+      for (let index = 0; index < baseline.tracks.length; index += 1) {
+        assertAlmostEqual(result.tracks[index]?.x ?? 0, baseline.tracks[index]?.x ?? 0, 2, `track ${index} x at ${pixelRatio}x`)
+        assertAlmostEqual(result.tracks[index]?.width ?? 0, baseline.tracks[index]?.width ?? 0, 2, `track ${index} width at ${pixelRatio}x`)
+      }
+      assertAlmostEqual(result.tag.x, baseline.tag.x, 2, `readout tag x at ${pixelRatio}x`)
+      assertAlmostEqual(result.tag.width, baseline.tag.width, 2, `readout tag width at ${pixelRatio}x`)
+    }
+  } finally {
     dom.restore()
   }
 })

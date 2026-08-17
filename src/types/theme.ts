@@ -77,6 +77,7 @@ export interface ThemeOscilloscopeTokens {
 export interface ThemeVectorscopeTokens {
   background?: string
   trace?: string
+  phaseRisk?: string
   bandLow?: string
   bandMid?: string
   bandHigh?: string
@@ -90,6 +91,8 @@ export interface ThemeSpectrogramTokens {
   heatLow?: string
   heatMid?: string
   heatHigh?: string
+  guides?: string
+  labels?: string
 }
 
 export interface ThemeVUMeterTokens {
@@ -266,6 +269,7 @@ export interface ResolvedOscilloscopeTheme {
 
 export interface ResolvedVectorscopeTheme {
   trace: string
+  phaseRisk: string
   guides: string
   guidesSecondary: string
   labels: string
@@ -279,6 +283,8 @@ export interface ResolvedSpectrogramTheme {
   mono: string
   background: string
   heatColors: [string, string, string]
+  guides: string
+  labels: string
 }
 
 export interface ResolvedVUMeterTheme {

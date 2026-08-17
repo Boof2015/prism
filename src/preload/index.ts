@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppBuildInfo } from '../types/appBuildInfo'
+import type { AudioClipDragPayload } from '../types/audioClip'
 import type { CaptureBackendSupport } from '../types/capture'
 import type { NativeCaptureAPI } from '../types/nativeCapture'
 import type {
@@ -32,6 +33,13 @@ import type { DialogOptions, DialogResult } from '../types/dialog'
 import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
+import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
+import type {
+  DesktopIntegrationSnapshot,
+  LoginLaunchMode,
+  TrayRendererCommand,
+  TrayRendererState,
+} from '../types/desktopIntegration'
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import { getCaptureBackendSupport } from './captureSupport'
@@ -41,6 +49,7 @@ const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
   platform: process.platform,
   argv: process.argv,
   env: process.env,
+  osVersion: process.getSystemVersion(),
 })
 
 // Expose Electron API to renderer
@@ -50,6 +59,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppBuildInfo: () => ipcRenderer.invoke('app:get-build-info') as Promise<AppBuildInfo>,
   minimize: () => ipcRenderer.send('window:minimize'),
   close: () => ipcRenderer.send('window:close'),
+  desktopIntegration: {
+    get: () => ipcRenderer.invoke('desktop-integration:get') as Promise<DesktopIntegrationSnapshot>,
+    setCloseToTray: (enabled: boolean) => ipcRenderer.invoke(
+      'desktop-integration:set-close-to-tray',
+      enabled,
+    ) as Promise<DesktopIntegrationSnapshot>,
+    setOpenAtLogin: (enabled: boolean) => ipcRenderer.invoke(
+      'desktop-integration:set-open-at-login',
+      enabled,
+    ) as Promise<DesktopIntegrationSnapshot>,
+    setLoginLaunchMode: (mode: LoginLaunchMode) => ipcRenderer.invoke(
+      'desktop-integration:set-login-launch-mode',
+      mode,
+    ) as Promise<DesktopIntegrationSnapshot>,
+    onChanged: (callback: (snapshot: DesktopIntegrationSnapshot) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: DesktopIntegrationSnapshot): void => {
+        callback(snapshot)
+      }
+      ipcRenderer.on('desktop-integration:changed', handler)
+      return () => ipcRenderer.removeListener('desktop-integration:changed', handler)
+    },
+  },
+  trayControls: {
+    markReady: () => ipcRenderer.send('tray-controls:renderer-ready'),
+    markNotReady: () => ipcRenderer.send('tray-controls:renderer-not-ready'),
+    publishState: (state: TrayRendererState) => ipcRenderer.send('tray-controls:publish-state', state),
+    onCommand: (callback: (command: TrayRendererCommand) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, command: TrayRendererCommand): void => callback(command)
+      ipcRenderer.on('tray-controls:command', handler)
+      return () => ipcRenderer.removeListener('tray-controls:command', handler)
+    },
+  },
   startWindowMove: () => ipcRenderer.send('window:start-move'),
   stopWindowMove: () => ipcRenderer.send('window:stop-move'),
   startWindowResize: (edge: ResizeDirection) => ipcRenderer.send('window:start-resize', edge),
@@ -59,8 +100,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   repositionWindow: (position: 'top' | 'bottom') => ipcRenderer.send('window:reposition', position),
   toggleAlwaysOnTop: () => ipcRenderer.send('window:toggle-always-on-top'),
   isAlwaysOnTop: () => ipcRenderer.invoke('window:is-always-on-top'),
+  getWindowBackground: () => ipcRenderer.invoke('window:get-background') as Promise<WindowBackgroundSnapshot>,
+  setWindowBackground: (state: WindowBackgroundState) => ipcRenderer.invoke('window:set-background', state) as Promise<WindowBackgroundSnapshot>,
   isCursorInsideWindow: () => ipcRenderer.invoke('window:is-cursor-inside') as Promise<boolean>,
   getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
+  audioClips: {
+    startDrag: (payload: AudioClipDragPayload) => ipcRenderer.send('audio-clips:start-drag', payload),
+    revealFolder: () => ipcRenderer.invoke('audio-clips:reveal-folder') as Promise<void>,
+    onDragError: (callback: (message: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, message: string): void => callback(message)
+      ipcRenderer.on('audio-clips:drag-error', handler)
+      return () => ipcRenderer.removeListener('audio-clips:drag-error', handler)
+    },
+  },
   getNowPlayingState: () => ipcRenderer.invoke('now-playing:get-state') as Promise<NowPlayingState>,
   setNowPlayingConsumerActive: (active: boolean) => ipcRenderer.invoke('now-playing:set-active', active) as Promise<NowPlayingState>,
   saveNowPlayingProviderConfig: <K extends NowPlayingProviderId>(providerId: K, config: NowPlayingProviderConfigMutationMap[K]) => {
@@ -119,6 +171,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: Electron.IpcRendererEvent, isOnTop: boolean): void => callback(isOnTop)
     ipcRenderer.on('window:always-on-top-changed', handler)
     return () => ipcRenderer.removeListener('window:always-on-top-changed', handler)
+  },
+  onWindowBackgroundChanged: (callback: (snapshot: WindowBackgroundSnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: WindowBackgroundSnapshot): void => callback(snapshot)
+    ipcRenderer.on('window:background-changed', handler)
+    return () => ipcRenderer.removeListener('window:background-changed', handler)
   },
   onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, bounds: WindowBounds): void => callback(bounds)

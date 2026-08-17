@@ -1,5 +1,8 @@
 import { StrictMode, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
+import '@fontsource/jetbrains-mono/latin-400.css'
+import '@fontsource/jetbrains-mono/latin-600.css'
+import '@fontsource/jetbrains-mono/latin-700.css'
 import '../renderer/styles/globals.css'
 import './styles.css'
 import ScopeApp from './ScopeApp'
@@ -185,7 +188,7 @@ function buildApp(): JSX.Element {
   const analyzer = new BridgeSpectrumAnalyzer(2048)
   connectSpectrumBridge({
     onFrame: (frame) => {
-      analyzer.setMagnitudes(frame.magnitudes, frame.side)
+      analyzer.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax)
       dataSource.setSampleRate(frame.sampleRate)
       dataSource.setPlaying(true)
     },

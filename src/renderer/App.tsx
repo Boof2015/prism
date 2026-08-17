@@ -5,19 +5,25 @@ import SettingsPanel from './components/SettingsPanel'
 import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import AppBanner from './components/AppBanner'
+import WindowResizeOverlay from './components/WindowResizeOverlay'
+import TrayControlBridge from './components/TrayControlBridge'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
 import { startAudioDeviceWatcher, useAudioStore } from './stores/audioStore'
 import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
+import { useWindowBackgroundStore } from './stores/windowBackgroundStore'
 import { useUpdateStore } from './stores/updateStore'
+import { useDesktopIntegrationStore } from './stores/desktopIntegrationStore'
 import { getRendererWindowCapabilities } from './windowCapabilities'
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
+  const [measurementActive, setMeasurementActive] = useState(false)
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
+  const [trayReady, setTrayReady] = useState(false)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settingsOpenRef = useRef(false)
   const externalProfileOpenQueueRef = useRef(Promise.resolve())
@@ -38,7 +44,11 @@ export default function App(): JSX.Element {
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const showBanner = useUiStore((s) => s.showBanner)
+  const initializeWindowBackground = useWindowBackgroundStore((s) => s.initialize)
+  const windowBackgroundMode = useWindowBackgroundStore((s) => s.effective.mode)
   const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
+  const initializeDesktopIntegration = useDesktopIntegrationStore((s) => s.initialize)
+  const applyDesktopIntegrationSnapshot = useDesktopIntegrationStore((s) => s.applySnapshot)
 
   const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
     && (scopeOrder.includes('nowPlaying') || scopePopouts.nowPlaying?.poppedOut === true)
@@ -60,6 +70,10 @@ export default function App(): JSX.Element {
   }, [])
 
   useEffect(() => {
+    void initializeWindowBackground()
+  }, [initializeWindowBackground])
+
+  useEffect(() => {
     let isDisposed = false
 
     void (async () => {
@@ -67,6 +81,7 @@ export default function App(): JSX.Element {
       await initializeProfiles()
       await initializeNowPlaying()
       if (!isDisposed) {
+        setTrayReady(true)
         window.electronAPI.notifyRendererReady()
       }
     })()
@@ -146,6 +161,11 @@ export default function App(): JSX.Element {
     showProfilesFolder,
     updateMainWindowBounds,
   ])
+
+  useEffect(() => {
+    void initializeDesktopIntegration()
+    return window.electronAPI.desktopIntegration.onChanged(applyDesktopIntegrationSnapshot)
+  }, [applyDesktopIntegrationSnapshot, initializeDesktopIntegration])
 
   useEffect(() => {
     void initializeNowPlaying()
@@ -283,16 +303,17 @@ export default function App(): JSX.Element {
       onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
     >
       <div
-        className={`prism-toolbar-layer ${toolbarVisible ? 'is-visible' : ''}`.trim()}
+        className={`prism-toolbar-layer ${toolbarVisible && !measurementActive ? 'is-visible' : ''}`.trim()}
       >
         <Toolbar onOpenSettings={handleToggleSettings} settingsOpen={settingsOpen} />
       </div>
 
       <div className="prism-strip-region">
-        <Strip />
+        <Strip onMeasurementActiveChange={setMeasurementActive} />
       </div>
 
       <ScopePopoutBridge />
+      <TrayControlBridge ready={trayReady} />
 
       <AppBanner />
 
@@ -305,6 +326,7 @@ export default function App(): JSX.Element {
         <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
       </div>
 
+      {windowBackgroundMode !== 'solid' && <WindowResizeOverlay />}
     </div>
   )
 }

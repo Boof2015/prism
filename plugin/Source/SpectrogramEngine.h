@@ -10,7 +10,7 @@
  * produces finished display+heat columns. Unlike the other scopes, its DSP needs
  * the canvas-derived rowCount (and fft/freq/db/scale/orientation), which only the
  * webview knows — the UI pushes the full native config via "prismSpectrogramConfig",
- * routed here through configureNative(). process() mixes to mono and runs the DSP;
+ * routed here through configureNative(). process() preserves stereo energy in the DSP;
  * buildFrame() emits the columns produced since the last frame (base64) tagged with
  * rowCount, so the bridge can match them to the config the UI currently expects.
  * configure() (scope settings) is a no-op — every DSP parameter arrives in the
@@ -75,12 +75,7 @@ public:
     {
         if (! hasConfig || numSamples <= 0)
             return;
-        if ((int) mono.size() < numSamples)
-            mono.resize((size_t) numSamples);
-        for (int i = 0; i < numSamples; ++i)
-            mono[(size_t) i] = 0.5f * (left[i] + right[i]);
-
-        auto result = spectro.process(mono.data(), (size_t) numSamples);
+        auto result = spectro.processStereo(left, right, (size_t) numSamples);
         if (result.columnCount > 0 && result.rowCount == config.rowCount)
         {
             pendingDisplay.insert(pendingDisplay.end(), result.display.begin(), result.display.end());
@@ -116,7 +111,6 @@ private:
     Visualizer::SpectrogramAnalyzer spectro;
     Visualizer::SpectrogramConfig config;
     bool hasConfig = false;
-    std::vector<float> mono;
     std::vector<float> pendingDisplay, pendingHeat;
     size_t pendingColumns = 0;
 };

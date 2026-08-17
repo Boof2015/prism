@@ -31,9 +31,19 @@ import {
   HEAT_MID_DB,
   normalizeHeatDb,
 } from './heatScale'
+import {
+  resolveSpectrogramMeasurement,
+  type ScopeMeasurement,
+} from '../scopeMeasurement'
+import type { NormalizedScopePoint } from '../scopeCanvasTransform'
+import {
+  buildFrequencyGuides,
+  clampFrequencyRangeToNyquist,
+} from '../../types/frequencyScale'
 
 export interface SpectrogramDataSource extends VisualizerSessionSource {
   getPendingSpectrogramSamples: () => Float32Array[]
+  getPendingSpectrogramStereoSamples?: () => Array<{ left: Float32Array; right: Float32Array }>
 }
 
 export interface SpectrogramOptions {
@@ -52,6 +62,9 @@ export interface SpectrogramOptions {
   lineColor?: string
   heatColors?: [string, string, string]
   backgroundColor?: string
+  showGrid?: boolean
+  gridColor?: string
+  labelColor?: string
   dataSource?: SpectrogramDataSource
   frameScheduler?: FrameScheduler
   nativeAnalyzer?: SpectrogramNativeAnalyzer | null
@@ -62,8 +75,8 @@ type ResolvedSpectrogramOptions = Required<Omit<SpectrogramOptions, 'dataSource'
 const defaultOptions: ResolvedSpectrogramOptions = {
   fftSize: 4096,
   tiltDbPerOctave: DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE,
-  minFrequency: 20,
-  maxFrequency: 20000,
+  minFrequency: 10,
+  maxFrequency: 24000,
   minDecibels: -90,
   maxDecibels: -12,
   scrollSpeed: DEFAULT_SPECTROGRAM_SCROLL_SPEED,
@@ -75,10 +88,14 @@ const defaultOptions: ResolvedSpectrogramOptions = {
   lineColor: '#38bdf8',
   heatColors: ['rgb(15, 7, 33)', 'rgb(163, 26, 121)', 'rgb(255, 241, 209)'],
   backgroundColor: 'transparent',
+  showGrid: true,
+  gridColor: 'rgba(255, 255, 255, 0.12)',
+  labelColor: 'rgba(255, 255, 255, 0.4)',
 }
 
 const defaultSpectrogramDataSource: SpectrogramDataSource = {
   getPendingSpectrogramSamples: () => audioRouter.flushPendingSpectrogramSamples(),
+  getPendingSpectrogramStereoSamples: () => audioRouter.flushPendingSpectrogramStereoSamples(),
   ...defaultVisualizerSessionSource,
 }
 
@@ -117,6 +134,9 @@ function resolveOptions(base: ResolvedSpectrogramOptions, overrides: Partial<Spe
     lineColor: overrides.lineColor ?? base.lineColor,
     heatColors: overrides.heatColors ?? base.heatColors,
     backgroundColor: overrides.backgroundColor ?? base.backgroundColor,
+    showGrid: overrides.showGrid ?? base.showGrid,
+    gridColor: overrides.gridColor ?? base.gridColor,
+    labelColor: overrides.labelColor ?? base.labelColor,
   }
 }
 
@@ -331,6 +351,18 @@ export class Spectrogram {
     this.invalidate()
   }
 
+  getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
+    return resolveSpectrogramMeasurement(point, {
+      sampleRate: Math.max(1, this.dataSource.getSampleRate()),
+      minFrequency: this.options.minFrequency,
+      maxFrequency: this.options.maxFrequency,
+      scaleMode: this.options.scaleMode,
+      fftSize: this.options.fftSize,
+      scrollSpeed: this.options.scrollSpeed,
+      canvasPixelWidth: this.canvas.width,
+    })
+  }
+
   private getFrequencyPixelCount(width: number, height: number): number {
     return this.options.orientation === 'vertical' ? width : height
   }
@@ -455,7 +487,12 @@ export class Spectrogram {
     return result.display.length >= expectedLength && result.heat.length >= expectedLength
   }
 
-  private tryDrawNativeColumns(pendingSamples: Float32Array[], width: number, height: number): boolean {
+  private tryDrawNativeColumns(
+    pendingSamples: Float32Array[],
+    pendingStereoSamples: Array<{ left: Float32Array; right: Float32Array }>,
+    width: number,
+    height: number,
+  ): boolean {
     if (!this.isNativeAnalyzerReady()) {
       return false
     }
@@ -471,6 +508,16 @@ export class Spectrogram {
     try {
       if (!this.configureNativeAnalyzer(config)) {
         return false
+      }
+
+      for (const chunk of pendingStereoSamples) {
+        const result = this.nativeAnalyzer?.processStereo?.(chunk.left, chunk.right) ?? null
+        if (!this.isValidNativeResult(result, config.rowCount)) {
+          return false
+        }
+        if (result.columnCount > 0) {
+          results.push(result)
+        }
       }
 
       for (const chunk of pendingSamples) {
@@ -531,6 +578,57 @@ export class Spectrogram {
       this.ctx.fillRect(0, 0, width, height)
     }
     this.ctx.drawImage(this.waterfallCanvas, 0, 0)
+    this.drawFrequencyGrid(width, height)
+  }
+
+  private drawFrequencyGrid(width: number, height: number): void {
+    if (!this.options.showGrid) return
+
+    const vertical = this.options.orientation === 'vertical'
+    const pixelSpan = vertical ? width : height
+    const range = clampFrequencyRangeToNyquist(
+      this.dataSource.getSampleRate(),
+      this.options.minFrequency,
+      this.options.maxFrequency,
+    )
+    const guides = buildFrequencyGuides(
+      range.minFrequency,
+      range.maxFrequency,
+      this.options.scaleMode,
+      pixelSpan,
+    )
+    const dpr = window.devicePixelRatio || 1
+
+    this.ctx.lineWidth = dpr
+    this.ctx.font = `${10 * dpr}px monospace`
+    this.ctx.textBaseline = 'bottom'
+
+    for (const guide of guides) {
+      const position = guide.normalizedPosition * pixelSpan
+      this.ctx.beginPath()
+      this.ctx.strokeStyle = this.options.gridColor
+      this.ctx.globalAlpha = guide.kind === 'minor' ? 0.28 : 1
+      if (vertical) {
+        this.ctx.moveTo(position, 0)
+        this.ctx.lineTo(position, height)
+      } else {
+        const y = height - position
+        this.ctx.moveTo(0, y)
+        this.ctx.lineTo(width, y)
+      }
+      this.ctx.stroke()
+      this.ctx.globalAlpha = 1
+
+      if (guide.label) {
+        this.ctx.fillStyle = this.options.labelColor
+        this.ctx.textAlign = vertical ? 'center' : 'left'
+        if (vertical) {
+          this.ctx.fillText(guide.label, position, height - 4 * dpr)
+        } else {
+          this.ctx.fillText(guide.label, 4 * dpr, height - position - 2 * dpr)
+        }
+      }
+    }
   }
 
   private drawFrame = (): void => {
@@ -582,14 +680,21 @@ export class Spectrogram {
     }
 
     if (!this.dataSource.isPlaying()) {
-      this.dataSource.getPendingSpectrogramSamples()
+      if (this.dataSource.getPendingSpectrogramStereoSamples) {
+        this.dataSource.getPendingSpectrogramStereoSamples()
+      } else {
+        this.dataSource.getPendingSpectrogramSamples()
+      }
       // Freeze waterfall in place instead of blanking
       this.paintWaterfall(width, height)
       return
     }
 
-    const pendingSamples = this.dataSource.getPendingSpectrogramSamples()
-    this.tryDrawNativeColumns(pendingSamples, width, height)
+    const pendingStereoSamples = this.dataSource.getPendingSpectrogramStereoSamples?.() ?? []
+    const pendingSamples = pendingStereoSamples.length > 0
+      ? []
+      : this.dataSource.getPendingSpectrogramSamples()
+    this.tryDrawNativeColumns(pendingSamples, pendingStereoSamples, width, height)
     this.paintWaterfall(width, height)
   }
 

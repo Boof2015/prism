@@ -2,8 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
-#include "linux_capture.h"
-#include "macos_capture.h"
+#include "system_audio_capture_napi.h"
 #include "windows_capture.h"
 #include "oscilloscope.h"
 #include "spectrum.h"
@@ -212,6 +211,14 @@ Napi::Value SpectrumGetSideMagnitudes(const Napi::CallbackInfo& info) {
     return result;
 }
 
+Napi::Value SpectrumGetChannelMaxMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const auto& magnitudes = spectrum.getChannelMaxMagnitudes();
+    Napi::Float32Array result = Napi::Float32Array::New(env, magnitudes.size());
+    memcpy(result.Data(), magnitudes.data(), magnitudes.size() * sizeof(float));
+    return result;
+}
+
 Napi::Value SpectrumFillRawMagnitudes(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsTypedArray()) {
@@ -253,6 +260,22 @@ Napi::Value SpectrumFillSideMagnitudes(const Napi::CallbackInfo& info) {
 
     Napi::Float32Array output = info[0].As<Napi::Float32Array>();
     const auto& magnitudes = spectrum.getSideMagnitudes();
+    const size_t count = std::min(output.ElementLength(), magnitudes.size());
+    if (count > 0) {
+        memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
+    }
+    return Napi::Number::New(env, static_cast<double>(count));
+}
+
+Napi::Value SpectrumFillChannelMaxMagnitudes(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected output Float32Array").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Float32Array output = info[0].As<Napi::Float32Array>();
+    const auto& magnitudes = spectrum.getChannelMaxMagnitudes();
     const size_t count = std::min(output.ElementLength(), magnitudes.size());
     if (count > 0) {
         memcpy(output.Data(), magnitudes.data(), count * sizeof(float));
@@ -304,6 +327,27 @@ std::string GetObjectString(const Napi::Object& obj, const char* key, const std:
     Napi::Value value = obj.Get(key);
     return value.IsString() ? value.As<Napi::String>().Utf8Value() : fallback;
 }
+
+Napi::Object SpectrogramResultToJs(
+    Napi::Env env,
+    const Visualizer::SpectrogramProcessResult& result
+) {
+    Napi::Float32Array display = Napi::Float32Array::New(env, result.display.size());
+    Napi::Float32Array heat = Napi::Float32Array::New(env, result.heat.size());
+    if (!result.display.empty()) {
+        memcpy(display.Data(), result.display.data(), result.display.size() * sizeof(float));
+    }
+    if (!result.heat.empty()) {
+        memcpy(heat.Data(), result.heat.data(), result.heat.size() * sizeof(float));
+    }
+
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("display", display);
+    obj.Set("heat", heat);
+    obj.Set("columnCount", Napi::Number::New(env, static_cast<double>(result.columnCount)));
+    obj.Set("rowCount", Napi::Number::New(env, static_cast<double>(result.rowCount)));
+    return obj;
+}
 } // namespace
 
 Napi::Value SpectrogramConfigure(const Napi::CallbackInfo& info) {
@@ -342,22 +386,21 @@ Napi::Value SpectrogramProcess(const Napi::CallbackInfo& info) {
 
     Napi::Float32Array audioData = info[0].As<Napi::Float32Array>();
     auto result = spectrogramAnalyzer.process(audioData.Data(), audioData.ElementLength());
+    return SpectrogramResultToJs(env, result);
+}
 
-    Napi::Float32Array display = Napi::Float32Array::New(env, result.display.size());
-    Napi::Float32Array heat = Napi::Float32Array::New(env, result.heat.size());
-    if (!result.display.empty()) {
-        memcpy(display.Data(), result.display.data(), result.display.size() * sizeof(float));
-    }
-    if (!result.heat.empty()) {
-        memcpy(heat.Data(), result.heat.data(), result.heat.size() * sizeof(float));
+Napi::Value SpectrogramProcessStereo(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray()) {
+        Napi::TypeError::New(env, "Expected left and right Float32Arrays").ThrowAsJavaScriptException();
+        return env.Null();
     }
 
-    Napi::Object obj = Napi::Object::New(env);
-    obj.Set("display", display);
-    obj.Set("heat", heat);
-    obj.Set("columnCount", Napi::Number::New(env, static_cast<double>(result.columnCount)));
-    obj.Set("rowCount", Napi::Number::New(env, static_cast<double>(result.rowCount)));
-    return obj;
+    Napi::Float32Array left = info[0].As<Napi::Float32Array>();
+    Napi::Float32Array right = info[1].As<Napi::Float32Array>();
+    const size_t length = std::min(left.ElementLength(), right.ElementLength());
+    auto result = spectrogramAnalyzer.processStereo(left.Data(), right.Data(), length);
+    return SpectrogramResultToJs(env, result);
 }
 
 Napi::Value SpectrogramReset(const Napi::CallbackInfo& info) {
@@ -686,9 +729,11 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("fillRawMagnitudes", Napi::Function::New(env, SpectrumFillRawMagnitudes));
     specExports.Set("fillMagnitudes", Napi::Function::New(env, SpectrumFillMagnitudes));
     specExports.Set("fillSideMagnitudes", Napi::Function::New(env, SpectrumFillSideMagnitudes));
+    specExports.Set("fillChannelMaxMagnitudes", Napi::Function::New(env, SpectrumFillChannelMaxMagnitudes));
     specExports.Set("getRawMagnitudes", Napi::Function::New(env, SpectrumGetRawMagnitudes));
     specExports.Set("getMagnitudes", Napi::Function::New(env, SpectrumGetMagnitudes));
     specExports.Set("getSideMagnitudes", Napi::Function::New(env, SpectrumGetSideMagnitudes));
+    specExports.Set("getChannelMaxMagnitudes", Napi::Function::New(env, SpectrumGetChannelMaxMagnitudes));
     specExports.Set("process", Napi::Function::New(env, SpectrumProcess));
     specExports.Set("binToFrequency", Napi::Function::New(env, SpectrumBinToFrequency));
     specExports.Set("reset", Napi::Function::New(env, SpectrumReset));
@@ -698,6 +743,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     Napi::Object spectrogramExports = Napi::Object::New(env);
     spectrogramExports.Set("configure", Napi::Function::New(env, SpectrogramConfigure));
     spectrogramExports.Set("process", Napi::Function::New(env, SpectrogramProcess));
+    spectrogramExports.Set("processStereo", Napi::Function::New(env, SpectrogramProcessStereo));
     spectrogramExports.Set("reset", Napi::Function::New(env, SpectrogramReset));
     exports.Set("spectrogram", spectrogramExports);
 
@@ -739,9 +785,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     lufsExports.Set("reset", Napi::Function::New(env, LUFSMeterReset));
     exports.Set("lufsmeter", lufsExports);
 
-    RegisterMacOSCapture(env, exports);
-    RegisterWindowsCapture(env, exports);
-    RegisterLinuxCapture(env, exports);
+    RegisterSystemAudioCapture(env, exports);
+    RegisterWindowsMedia(env, exports);
     RegisterWindowChrome(env, exports);
 
     return exports;

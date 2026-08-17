@@ -9,6 +9,7 @@ import { MultibandSplitter, MultibandBuffer, createMultibandChunk, type Multiban
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
+import { normalizeVectorscopeZoomDb } from '../../types/vectorscope'
 
 export type VectorscopeMode = 'lissajous' | 'polar-unipolar' | 'polar-bipolar' | 'linear-unipolar' | 'linear-bipolar'
 
@@ -24,6 +25,7 @@ export interface VectorscopeOptions {
   gridMajorColor?: string
   gridMinorColor?: string
   labelColor?: string
+  phaseRiskColor?: string
   bandColors?: {
     low: string
     mid: string
@@ -32,6 +34,7 @@ export interface VectorscopeOptions {
   persistence?: number
   displayPoints?: number
   mode?: VectorscopeMode
+  zoomDb?: number
   multiband?: boolean
   dataSource?: VectorscopeDataSource
   frameScheduler?: FrameScheduler
@@ -48,6 +51,7 @@ const defaultOptions: ResolvedVectorscopeOptions = {
   gridMajorColor: 'rgba(255, 255, 255, 0.1)',
   gridMinorColor: 'rgba(255, 255, 255, 0.05)',
   labelColor: 'rgba(255, 255, 255, 0.1)',
+  phaseRiskColor: 'rgb(255, 191, 0)',
   bandColors: {
     low: '#ff4444',
     mid: '#44dd44',
@@ -56,6 +60,7 @@ const defaultOptions: ResolvedVectorscopeOptions = {
   persistence: 0.10,
   displayPoints: 4096,
   mode: 'lissajous',
+  zoomDb: 0,
   multiband: false,
 }
 
@@ -97,7 +102,11 @@ export class Vectorscope {
     this.ctx = ctx
 
     const { dataSource, frameScheduler, nativeAnalyzer, ...optionOverrides } = options
-    this.options = { ...defaultOptions, ...optionOverrides }
+    this.options = {
+      ...defaultOptions,
+      ...optionOverrides,
+      zoomDb: normalizeVectorscopeZoomDb(optionOverrides.zoomDb ?? defaultOptions.zoomDb),
+    }
     this.dataSource = dataSource ?? defaultVectorscopeDataSource
     this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeVectorscope : nativeAnalyzer
     this.frameLoop = new VisualizerFrameLoop({
@@ -165,9 +174,14 @@ export class Vectorscope {
 
   setOptions(options: Partial<VectorscopeOptions>): void {
     const { dataSource, frameScheduler: _frameScheduler, nativeAnalyzer, ...optionUpdates } = options
-    const nextOptions: ResolvedVectorscopeOptions = { ...this.options, ...optionUpdates }
+    const nextOptions: ResolvedVectorscopeOptions = {
+      ...this.options,
+      ...optionUpdates,
+      zoomDb: normalizeVectorscopeZoomDb(optionUpdates.zoomDb ?? this.options.zoomDb),
+    }
     const multibandChanged = nextOptions.multiband !== this.options.multiband
     const modeChanged = nextOptions.mode !== this.options.mode
+    const zoomChanged = nextOptions.zoomDb !== this.options.zoomDb
     this.options = nextOptions
     let shouldResetDisplay = false
     if (nativeAnalyzer !== undefined && nativeAnalyzer !== this.nativeAnalyzer) {
@@ -181,7 +195,7 @@ export class Vectorscope {
       this.subscribeToSessionChanges()
       shouldResetDisplay = true
     }
-    if (multibandChanged || modeChanged) {
+    if (multibandChanged || modeChanged || zoomChanged) {
       shouldResetDisplay = true
     }
     if (shouldResetDisplay) {
@@ -291,7 +305,9 @@ export class Vectorscope {
       options.gridMajorColor,
       options.gridMinorColor,
       options.labelColor,
+      options.phaseRiskColor,
       options.mode,
+      options.zoomDb,
     ].join(':')
 
     if (this.staticLayerKey === key) {
@@ -317,6 +333,8 @@ export class Vectorscope {
         options.gridMinorColor,
         options.labelColor,
         options.mode,
+        options.phaseRiskColor,
+        options.zoomDb,
         dpr,
       )
     }
@@ -561,10 +579,7 @@ export class Vectorscope {
     scale: number,
     dotSize: number,
   ): void {
-    const point = transformPoint(left, right, mode)
-    if (!point) {
-      return
-    }
+    const point = transformPoint(left, right, mode, this.options.zoomDb)
 
     const { dx, dy } = point
     const px = centerX + dx * scale

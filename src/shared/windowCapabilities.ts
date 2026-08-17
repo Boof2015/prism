@@ -1,9 +1,16 @@
 import type { WindowCapabilities, WindowDisplayServer } from '../types/windowCapabilities'
 
+export type MacWindowBlurMaterial = 'hud' | 'content'
+
+export function resolveMacWindowBlurMaterial(useDarkColors: boolean): MacWindowBlurMaterial {
+  return useDarkColors ? 'hud' : 'content'
+}
+
 interface WindowCapabilityResolutionOptions {
   platform: string
   argv?: readonly string[]
   env?: Record<string, string | undefined>
+  osVersion?: string
 }
 
 export const DEFAULT_WINDOW_CAPABILITIES: WindowCapabilities = {
@@ -11,6 +18,21 @@ export const DEFAULT_WINDOW_CAPABILITIES: WindowCapabilities = {
   useNativeDragRegions: false,
   supportsProgrammaticReposition: true,
   supportsGeometryPersistence: true,
+  supportsBlurredBackground: false,
+}
+
+// Blurred mode uses accent-policy acrylic (SetWindowCompositionAttribute),
+// which technically exists since Windows 10 1803, but drag/repaint performance
+// is only dependable on Windows 11 22H2 (build 22621) — gate it there.
+const WINDOWS_ACRYLIC_MIN_BUILD = 22621
+
+function windowsBuildSupportsAcrylic(osVersion: string | undefined): boolean {
+  if (!osVersion) {
+    return false
+  }
+
+  const build = Number.parseInt(osVersion.split('.')[2] ?? '', 10)
+  return Number.isFinite(build) && build >= WINDOWS_ACRYLIC_MIN_BUILD
 }
 
 function readSwitchValue(argv: readonly string[], switchName: string): string | null {
@@ -80,6 +102,8 @@ export function resolveWindowCapabilities(options: WindowCapabilityResolutionOpt
     return {
       ...DEFAULT_WINDOW_CAPABILITIES,
       useNativeDragRegions: true,
+      supportsBlurredBackground: options.platform === 'darwin'
+        || windowsBuildSupportsAcrylic(options.osVersion),
     }
   }
 
@@ -95,5 +119,6 @@ export function resolveWindowCapabilities(options: WindowCapabilityResolutionOpt
     useNativeDragRegions: isNativeWayland,
     supportsProgrammaticReposition: !isNativeWayland,
     supportsGeometryPersistence: !isNativeWayland,
+    supportsBlurredBackground: false,
   }
 }

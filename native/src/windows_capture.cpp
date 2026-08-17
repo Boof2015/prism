@@ -1,4 +1,7 @@
+#ifndef PRISM_CAPTURE_CORE_ONLY
 #include "windows_capture.h"
+#endif
+#include "system_audio_capture.h"
 
 #if defined(_WIN32)
 
@@ -10,14 +13,16 @@
 #include <mmreg.h>
 #include <propidl.h>
 #include <avrt.h>
-#include <roapi.h>
 #include <wrl/client.h>
 #include <windows.h>
+#ifndef PRISM_CAPTURE_CORE_ONLY
+#include <roapi.h>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.Control.h>
 #include <winrt/Windows.Storage.Streams.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -39,9 +44,11 @@
 namespace {
 
 using Microsoft::WRL::ComPtr;
+#ifndef PRISM_CAPTURE_CORE_ONLY
 using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession;
 using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus;
+#endif
 
 constexpr size_t kMaxQueuedChunks = 256;
 constexpr size_t kDefaultDrainChunkLimit = 64;
@@ -131,6 +138,7 @@ std::string hresultMessage(const char* operation, HRESULT hr) {
     return stream.str();
 }
 
+#ifndef PRISM_CAPTURE_CORE_ONLY
 std::string winrtErrorMessage(const char* operation, const winrt::hresult_error& error) {
     std::string message = hresultMessage(operation, error.code().value);
     const std::wstring detailWide = error.message().c_str();
@@ -165,6 +173,7 @@ std::string playbackStatusToString(GlobalSystemMediaTransportControlsSessionPlay
             return "Closed";
     }
 }
+#endif
 
 class ScopedCoInit {
 public:
@@ -191,6 +200,7 @@ private:
     bool usable_;
 };
 
+#ifndef PRISM_CAPTURE_CORE_ONLY
 class ScopedRoInit {
 public:
     ScopedRoInit()
@@ -344,6 +354,7 @@ std::string getOrFetchThumbnail(
     }
     return result;
 }
+#endif
 
 std::string getDeviceId(IMMDevice* device) {
     if (device == nullptr) {
@@ -584,112 +595,88 @@ std::vector<OutputDeviceInfo> enumerateOutputDevices() {
     return devices;
 }
 
-class WindowsNativeCaptureEngine {
+class WindowsNativeCaptureEngine final : public Prism::Capture::SystemAudioCapture {
 public:
-    Napi::Object GetSupport(Napi::Env env) {
-        Napi::Object support = Napi::Object::New(env);
-        support.Set("available", Napi::Boolean::New(env, true));
-        support.Set("reason", env.Null());
-        return support;
+    ~WindowsNativeCaptureEngine() override {
+        stop();
     }
 
-    Napi::Array ListOutputDevices(Napi::Env env) {
+    Prism::Capture::Support getSupport() const override {
+        return {true, {}};
+    }
+
+    std::vector<Prism::Capture::OutputDevice> listOutputDevices() override {
         const auto devices = enumerateOutputDevices();
-        Napi::Array result = Napi::Array::New(env, devices.size());
-
-        for (size_t index = 0; index < devices.size(); ++index) {
-            const auto& device = devices[index];
-            Napi::Object entry = Napi::Object::New(env);
-            entry.Set("id", Napi::String::New(env, device.id));
-            entry.Set("label", Napi::String::New(env, device.label));
-            entry.Set("kind", Napi::String::New(env, "system"));
-            entry.Set("isDefault", Napi::Boolean::New(env, device.isDefault));
-            entry.Set("sampleRate", Napi::Number::New(env, device.sampleRate));
-            entry.Set(
-                "channelCount",
-                Napi::Number::New(env, static_cast<double>(device.channelCount)));
-            result.Set(static_cast<uint32_t>(index), entry);
+        std::vector<Prism::Capture::OutputDevice> result;
+        result.reserve(devices.size());
+        for (const auto& device : devices) {
+            result.push_back({
+                device.id,
+                device.label,
+                device.sampleRate,
+                static_cast<uint32_t>(device.channelCount),
+                device.isDefault,
+            });
         }
-
         return result;
     }
 
-    Napi::Object Start(Napi::Env env, const std::string& requestedDeviceId) {
-        std::string errorMessage;
-        if (!startInternal(requestedDeviceId, &errorMessage)) {
-            Napi::Error::New(env, errorMessage).ThrowAsJavaScriptException();
-            return Napi::Object::New(env);
+    bool start(const std::string& requestedDeviceId,
+               Prism::Capture::StartResult* result,
+               std::string* errorMessage) override {
+        if (!startInternal(requestedDeviceId, errorMessage)) {
+            return false;
         }
-
-        std::lock_guard<std::mutex> lock(stateMutex_);
-        Napi::Object result = Napi::Object::New(env);
-        result.Set("sampleRate", Napi::Number::New(env, sampleRate_));
-        result.Set(
-            "channelCount", Napi::Number::New(env, static_cast<double>(channelCount_)));
-        result.Set("deviceId", Napi::String::New(env, activeDeviceId_));
-        result.Set("deviceLabel", Napi::String::New(env, activeDeviceLabel_));
-        return result;
+        if (result != nullptr) {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            result->sampleRate = sampleRate_;
+            result->channelCount = static_cast<uint32_t>(channelCount_);
+            result->deviceId = activeDeviceId_;
+            result->deviceLabel = activeDeviceLabel_;
+        }
+        return true;
     }
 
-    void Stop() {
+    void stop() override {
         stopInternal();
     }
 
-    Napi::Object Drain(Napi::Env env, size_t maxChunks) {
+    Prism::Capture::DrainResult drain(size_t maxChunks) override {
         const size_t drainLimit =
             maxChunks == 0 ? kDefaultDrainChunkLimit : std::min(maxChunks, kMaxQueuedChunks);
-
         std::deque<CapturedChunk> drained;
-        uint64_t overwriteCount = 0;
-        size_t queueDepth = 0;
-
+        Prism::Capture::DrainResult result;
         {
             std::lock_guard<std::mutex> lock(chunkMutex_);
-            overwriteCount = overwriteCount_;
+            result.overwriteCount = overwriteCount_;
             const size_t count = std::min(drainLimit, chunkQueue_.size());
             for (size_t index = 0; index < count; ++index) {
                 drained.push_back(std::move(chunkQueue_.front()));
                 chunkQueue_.pop_front();
             }
-            queueDepth = chunkQueue_.size();
+            result.queueDepth = chunkQueue_.size();
         }
-
-        Napi::Array chunks = Napi::Array::New(env, drained.size());
-        for (size_t index = 0; index < drained.size(); ++index) {
-            auto& chunk = drained[index];
-            Napi::Object entry = Napi::Object::New(env);
-            Napi::Float32Array left = Napi::Float32Array::New(env, chunk.left.size());
-            Napi::Float32Array right = Napi::Float32Array::New(env, chunk.right.size());
-            if (!chunk.left.empty()) {
-                std::memcpy(left.Data(), chunk.left.data(), chunk.left.size() * sizeof(float));
-            }
-            if (!chunk.right.empty()) {
-                std::memcpy(right.Data(), chunk.right.data(), chunk.right.size() * sizeof(float));
-            }
-            entry.Set("left", left);
-            entry.Set("right", right);
-            entry.Set(
-                "channelCount",
-                Napi::Number::New(env, static_cast<double>(chunk.channelCount)));
-            entry.Set(
-                "capturedAtMilliseconds",
-                Napi::Number::New(env, chunk.capturedAtMilliseconds));
-            entry.Set(
-                "sequence",
-                Napi::Number::New(env, static_cast<double>(chunk.sequence)));
-            chunks.Set(static_cast<uint32_t>(index), entry);
+        result.chunks.reserve(drained.size());
+        while (!drained.empty()) {
+            auto chunk = std::move(drained.front());
+            drained.pop_front();
+            result.chunks.push_back({
+                std::move(chunk.left),
+                std::move(chunk.right),
+                static_cast<uint32_t>(chunk.channelCount),
+                chunk.capturedAtMilliseconds,
+                chunk.sequence,
+            });
         }
-
-        Napi::Object result = Napi::Object::New(env);
-        result.Set("chunks", chunks);
-        result.Set(
-            "overwriteCount", Napi::Number::New(env, static_cast<double>(overwriteCount)));
-        result.Set("queueDepth", Napi::Number::New(env, static_cast<double>(queueDepth)));
         return result;
     }
 
-    double NowMilliseconds() const {
+    double nowMilliseconds() const override {
         return monotonicMilliseconds();
+    }
+
+    const char* backendName() const override {
+        return "WASAPI";
     }
 
 private:
@@ -1063,47 +1050,7 @@ private:
     UINT32 channelCount_ = 2;
 };
 
-WindowsNativeCaptureEngine& engine() {
-    static WindowsNativeCaptureEngine instance;
-    return instance;
-}
-
-Napi::Value WindowsGetSupport(const Napi::CallbackInfo& info) {
-    return engine().GetSupport(info.Env());
-}
-
-Napi::Value WindowsListOutputDevices(const Napi::CallbackInfo& info) {
-    return engine().ListOutputDevices(info.Env());
-}
-
-Napi::Value WindowsStart(const Napi::CallbackInfo& info) {
-    std::string requestedDeviceId;
-    if (info.Length() >= 1 && info[0].IsString()) {
-        requestedDeviceId = info[0].As<Napi::String>().Utf8Value();
-    }
-    return engine().Start(info.Env(), requestedDeviceId);
-}
-
-Napi::Value WindowsStop(const Napi::CallbackInfo& info) {
-    engine().Stop();
-    return info.Env().Undefined();
-}
-
-Napi::Value WindowsDrain(const Napi::CallbackInfo& info) {
-    size_t maxChunks = kDefaultDrainChunkLimit;
-    if (info.Length() >= 1 && info[0].IsNumber()) {
-        const int64_t requested = info[0].As<Napi::Number>().Int64Value();
-        if (requested > 0) {
-            maxChunks = static_cast<size_t>(requested);
-        }
-    }
-    return engine().Drain(info.Env(), maxChunks);
-}
-
-Napi::Value WindowsNowMilliseconds(const Napi::CallbackInfo& info) {
-    return Napi::Number::New(info.Env(), engine().NowMilliseconds());
-}
-
+#ifndef PRISM_CAPTURE_CORE_ONLY
 Napi::Value WindowsMediaGetSupport(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
@@ -1264,20 +1211,12 @@ Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 }
+#endif
 
 }  // namespace
 
-void RegisterWindowsCapture(Napi::Env env, Napi::Object exports) {
-    Napi::Object captureExports = Napi::Object::New(env);
-    captureExports.Set("getSupport", Napi::Function::New(env, WindowsGetSupport));
-    captureExports.Set(
-        "listOutputDevices", Napi::Function::New(env, WindowsListOutputDevices));
-    captureExports.Set("start", Napi::Function::New(env, WindowsStart));
-    captureExports.Set("stop", Napi::Function::New(env, WindowsStop));
-    captureExports.Set("drain", Napi::Function::New(env, WindowsDrain));
-    captureExports.Set("nowMilliseconds", Napi::Function::New(env, WindowsNowMilliseconds));
-    exports.Set("windowsCapture", captureExports);
-
+#ifndef PRISM_CAPTURE_CORE_ONLY
+void RegisterWindowsMedia(Napi::Env env, Napi::Object exports) {
     Napi::Object mediaExports = Napi::Object::New(env);
     mediaExports.Set("getSupport", Napi::Function::New(env, WindowsMediaGetSupport));
     mediaExports.Set(
@@ -1288,5 +1227,14 @@ void RegisterWindowsCapture(Napi::Env env, Napi::Object exports) {
         Napi::Function::New(env, WindowsMediaSendSpotifyControl));
     exports.Set("windowsMedia", mediaExports);
 }
+#endif
+
+namespace Prism::Capture {
+
+std::unique_ptr<SystemAudioCapture> createSystemAudioCapture() {
+    return std::make_unique<WindowsNativeCaptureEngine>();
+}
+
+}  // namespace Prism::Capture
 
 #endif  // defined(_WIN32)

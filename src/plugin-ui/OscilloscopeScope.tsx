@@ -1,10 +1,16 @@
-import { useEffect, useRef, type JSX } from 'react'
+import { useEffect, useLayoutEffect, useRef, type JSX } from 'react'
 import { Oscilloscope } from '../renderer/visualizers/Oscilloscope'
 import type { ScopeSettings } from '../types/settings'
 import type { ResolvedOscilloscopeTheme } from '../types/theme'
 import type { BridgeOscilloscopeAnalyzer } from './BridgeOscilloscopeAnalyzer'
 import type { PluginWebViewDataSource } from './PluginWebViewDataSource'
 import { oscilloscopeSettingsToOptions } from './oscilloscopeOptions'
+import { getScopeCanvasTransformStyle } from '../renderer/scopeCanvasTransform'
+import { applyPluginScopeCanvasLayout } from './scopeCanvasLayout'
+import {
+  ScopeMeasurementOverlay,
+  useScopeMeasurement,
+} from '../renderer/components/ScopeMeasurementOverlay'
 
 interface OscilloscopeScopeProps {
   dataSource: PluginWebViewDataSource
@@ -22,6 +28,16 @@ export default function OscilloscopeScope({
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const vizRef = useRef<Oscilloscope | null>(null)
+  const rotationRef = useRef(settings.rotation)
+  const applySizeRef = useRef<(() => void) | null>(null)
+  rotationRef.current = settings.rotation
+  const measurementController = useScopeMeasurement({
+    containerRef,
+    enabled: true,
+    rotation: settings.rotation,
+    mirrorHorizontal: settings.mirrorHorizontal,
+    getSource: () => vizRef.current,
+  })
 
   useEffect(() => {
     const container = containerRef.current
@@ -36,16 +52,12 @@ export default function OscilloscopeScope({
     vizRef.current = viz
 
     const applySize = (): void => {
-      const rect = container.getBoundingClientRect()
-      const dpr = window.devicePixelRatio || 1
-      const pixelWidth = Math.max(1, Math.floor(rect.width * dpr))
-      const pixelHeight = Math.max(1, Math.floor(rect.height * dpr))
-      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-        canvas.width = pixelWidth
-        canvas.height = pixelHeight
+      const { changed } = applyPluginScopeCanvasLayout(container, canvas, rotationRef.current)
+      if (changed) {
         viz.resize()
       }
     }
+    applySizeRef.current = applySize
 
     applySize()
     viz.start()
@@ -54,6 +66,7 @@ export default function OscilloscopeScope({
 
     return () => {
       observer.disconnect()
+      applySizeRef.current = null
       viz.dispose()
       vizRef.current = null
     }
@@ -65,9 +78,25 @@ export default function OscilloscopeScope({
     vizRef.current?.setOptions(oscilloscopeSettingsToOptions(settings, theme))
   }, [settings, theme])
 
+  useLayoutEffect(() => {
+    applySizeRef.current?.()
+  }, [settings.rotation])
+
   return (
-    <div ref={containerRef} className="spectrum-scope">
-      <canvas ref={canvasRef} className="spectrum-scope__canvas" />
+    <div
+      ref={containerRef}
+      className={`spectrum-scope scope-measurement-surface ${measurementController.active ? 'is-measuring' : ''}`.trim()}
+      {...measurementController.pointerBindings}
+    >
+      <canvas
+        ref={canvasRef}
+        className="spectrum-scope__canvas"
+        style={getScopeCanvasTransformStyle(settings.rotation, settings.mirrorHorizontal)}
+      />
+      <ScopeMeasurementOverlay
+        containerRef={containerRef}
+        measurement={measurementController.measurement}
+      />
     </div>
   )
 }

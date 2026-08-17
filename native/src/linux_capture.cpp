@@ -1,4 +1,4 @@
-#include "linux_capture.h"
+#include "system_audio_capture.h"
 
 #if defined(__linux__)
 
@@ -406,150 +406,111 @@ private:
     bool started_ = false;
 };
 
-class LinuxNativeCaptureEngine {
+class LinuxNativeCaptureEngine final : public Prism::Capture::SystemAudioCapture {
 public:
-    Napi::Value GetSupport(const Napi::CallbackInfo& info) const {
-        Napi::Object support = Napi::Object::New(info.Env());
+    ~LinuxNativeCaptureEngine() override {
+        stop();
+    }
 
+    Prism::Capture::Support getSupport() const override {
         PulseContextConnection connection;
         std::string errorMessage;
         std::vector<OutputDeviceInfo> devices;
         const bool available =
             connection.connect("Prism Linux Capture Probe", &errorMessage) &&
             connection.enumerateOutputDevices(&devices, &errorMessage);
-
-        support.Set("available", Napi::Boolean::New(info.Env(), available));
-        if (available) {
-            support.Set("reason", info.Env().Null());
-        } else {
-            const std::string reason = errorMessage.empty()
+        return {
+            available,
+            available ? std::string() : (errorMessage.empty()
                 ? "Native Linux capture is unavailable."
-                : errorMessage;
-            support.Set("reason", Napi::String::New(info.Env(), reason));
-        }
-        return support;
+                : errorMessage),
+        };
     }
 
-    Napi::Value ListOutputDevices(const Napi::CallbackInfo& info) const {
-        Napi::Env env = info.Env();
-        Napi::Array devicesArray = Napi::Array::New(env);
-
+    std::vector<Prism::Capture::OutputDevice> listOutputDevices() override {
         PulseContextConnection connection;
         std::string errorMessage;
         std::vector<OutputDeviceInfo> devices;
         if (!connection.connect("Prism Linux Capture Devices", &errorMessage) ||
             !connection.enumerateOutputDevices(&devices, &errorMessage)) {
-            return devicesArray;
+            return {};
         }
 
-        for (size_t index = 0; index < devices.size(); ++index) {
-            const auto& device = devices[index];
-            Napi::Object entry = Napi::Object::New(env);
-            entry.Set("id", Napi::String::New(env, device.id));
-            entry.Set("label", Napi::String::New(env, device.label));
-            entry.Set("kind", Napi::String::New(env, "system"));
-            entry.Set("isDefault", Napi::Boolean::New(env, device.isDefault));
-            entry.Set(
-                "sampleRate",
-                Napi::Number::New(env, static_cast<double>(device.sampleSpec.rate)));
-            entry.Set(
-                "channelCount",
-                Napi::Number::New(env, static_cast<double>(device.sampleSpec.channels)));
-            devicesArray.Set(static_cast<uint32_t>(index), entry);
+        std::vector<Prism::Capture::OutputDevice> result;
+        result.reserve(devices.size());
+        for (const auto& device : devices) {
+            result.push_back({
+                device.id,
+                device.label,
+                static_cast<double>(device.sampleSpec.rate),
+                static_cast<uint32_t>(device.sampleSpec.channels),
+                device.isDefault,
+            });
         }
-
-        return devicesArray;
-    }
-
-    Napi::Value Start(const Napi::CallbackInfo& info) {
-        Napi::Env env = info.Env();
-        std::string requestedDeviceId;
-        if (info.Length() > 0 && info[0].IsString()) {
-            requestedDeviceId = info[0].As<Napi::String>().Utf8Value();
-        }
-
-        std::string errorMessage;
-        if (!startInternal(requestedDeviceId, &errorMessage)) {
-            const std::string reason = errorMessage.empty()
-                ? "Native Linux monitor capture failed to start."
-                : errorMessage;
-            Napi::Error::New(env, reason)
-                .ThrowAsJavaScriptException();
-            return env.Null();
-        }
-
-        std::lock_guard<std::mutex> lock(stateMutex_);
-        Napi::Object result = Napi::Object::New(env);
-        result.Set("sampleRate", Napi::Number::New(env, sampleRate_));
-        result.Set("channelCount", Napi::Number::New(env, static_cast<double>(channelCount_)));
-        result.Set("deviceId", Napi::String::New(env, activeDeviceId_));
-        result.Set("deviceLabel", Napi::String::New(env, activeDeviceLabel_));
         return result;
     }
 
-    Napi::Value Stop(const Napi::CallbackInfo& info) {
-        stopInternal();
-        return info.Env().Undefined();
+    bool start(const std::string& requestedDeviceId,
+               Prism::Capture::StartResult* result,
+               std::string* errorMessage) override {
+        if (!startInternal(requestedDeviceId, errorMessage)) {
+            if (errorMessage != nullptr && errorMessage->empty()) {
+                *errorMessage = "Native Linux monitor capture failed to start.";
+            }
+            return false;
+        }
+        if (result != nullptr) {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            result->sampleRate = sampleRate_;
+            result->channelCount = channelCount_;
+            result->deviceId = activeDeviceId_;
+            result->deviceLabel = activeDeviceLabel_;
+        }
+        return true;
     }
 
-    Napi::Value Drain(const Napi::CallbackInfo& info) {
-        Napi::Env env = info.Env();
-        const size_t maxChunks = info.Length() > 0 && info[0].IsNumber()
-            ? std::max<size_t>(1, info[0].As<Napi::Number>().Uint32Value())
-            : kDefaultDrainChunkLimit;
+    void stop() override {
+        stopInternal();
+    }
 
-        std::deque<CapturedChunk> drainedChunks;
-        size_t overwriteCount = 0;
-        size_t queueDepth = 0;
-
+    Prism::Capture::DrainResult drain(size_t maxChunks) override {
+        const size_t drainLimit = maxChunks == 0
+            ? kDefaultDrainChunkLimit
+            : std::min(maxChunks, kMaxQueuedChunks);
+        std::deque<CapturedChunk> drained;
+        Prism::Capture::DrainResult result;
         {
             std::lock_guard<std::mutex> lock(chunkMutex_);
-            const size_t chunkCount = std::min(maxChunks, chunkQueue_.size());
-            for (size_t index = 0; index < chunkCount; ++index) {
-                drainedChunks.push_back(std::move(chunkQueue_.front()));
+            const size_t count = std::min(drainLimit, chunkQueue_.size());
+            for (size_t index = 0; index < count; ++index) {
+                drained.push_back(std::move(chunkQueue_.front()));
                 chunkQueue_.pop_front();
             }
-            overwriteCount = overwriteCount_;
+            result.overwriteCount = overwriteCount_;
             overwriteCount_ = 0;
-            queueDepth = chunkQueue_.size();
+            result.queueDepth = chunkQueue_.size();
         }
-
-        Napi::Array chunks = Napi::Array::New(env, drainedChunks.size());
-        for (size_t index = 0; index < drainedChunks.size(); ++index) {
-            const auto& chunk = drainedChunks[index];
-            Napi::Object entry = Napi::Object::New(env);
-            Napi::Float32Array left = Napi::Float32Array::New(env, chunk.left.size());
-            Napi::Float32Array right = Napi::Float32Array::New(env, chunk.right.size());
-            if (!chunk.left.empty()) {
-                std::memcpy(left.Data(), chunk.left.data(), chunk.left.size() * sizeof(float));
-            }
-            if (!chunk.right.empty()) {
-                std::memcpy(right.Data(), chunk.right.data(), chunk.right.size() * sizeof(float));
-            }
-            entry.Set("left", left);
-            entry.Set("right", right);
-            entry.Set(
-                "channelCount",
-                Napi::Number::New(env, static_cast<double>(chunk.channelCount)));
-            entry.Set(
-                "capturedAtMilliseconds",
-                Napi::Number::New(env, chunk.capturedAtMilliseconds));
-            entry.Set(
-                "sequence",
-                Napi::Number::New(env, static_cast<double>(chunk.sequence)));
-            chunks.Set(static_cast<uint32_t>(index), entry);
+        result.chunks.reserve(drained.size());
+        while (!drained.empty()) {
+            auto chunk = std::move(drained.front());
+            drained.pop_front();
+            result.chunks.push_back({
+                std::move(chunk.left),
+                std::move(chunk.right),
+                chunk.channelCount,
+                chunk.capturedAtMilliseconds,
+                chunk.sequence,
+            });
         }
-
-        Napi::Object result = Napi::Object::New(env);
-        result.Set("chunks", chunks);
-        result.Set(
-            "overwriteCount", Napi::Number::New(env, static_cast<double>(overwriteCount)));
-        result.Set("queueDepth", Napi::Number::New(env, static_cast<double>(queueDepth)));
         return result;
     }
 
-    Napi::Value NowMilliseconds(const Napi::CallbackInfo& info) const {
-        return Napi::Number::New(info.Env(), monotonicMilliseconds());
+    double nowMilliseconds() const override {
+        return monotonicMilliseconds();
+    }
+
+    const char* backendName() const override {
+        return "PulseAudio";
     }
 
 private:
@@ -885,47 +846,14 @@ private:
     size_t overwriteCount_ = 0;
 };
 
-LinuxNativeCaptureEngine& GetLinuxNativeCaptureEngine() {
-    static LinuxNativeCaptureEngine engine;
-    return engine;
-}
-
-Napi::Value LinuxGetSupport(const Napi::CallbackInfo& info) {
-    return GetLinuxNativeCaptureEngine().GetSupport(info);
-}
-
-Napi::Value LinuxListOutputDevices(const Napi::CallbackInfo& info) {
-    return GetLinuxNativeCaptureEngine().ListOutputDevices(info);
-}
-
-Napi::Value LinuxStart(const Napi::CallbackInfo& info) {
-    return GetLinuxNativeCaptureEngine().Start(info);
-}
-
-Napi::Value LinuxStop(const Napi::CallbackInfo& info) {
-    return GetLinuxNativeCaptureEngine().Stop(info);
-}
-
-Napi::Value LinuxDrain(const Napi::CallbackInfo& info) {
-    return GetLinuxNativeCaptureEngine().Drain(info);
-}
-
-Napi::Value LinuxNowMilliseconds(const Napi::CallbackInfo& info) {
-    return GetLinuxNativeCaptureEngine().NowMilliseconds(info);
-}
-
 }  // namespace
 
-void RegisterLinuxCapture(Napi::Env env, Napi::Object exports) {
-    Napi::Object captureExports = Napi::Object::New(env);
-    captureExports.Set("getSupport", Napi::Function::New(env, LinuxGetSupport));
-    captureExports.Set(
-        "listOutputDevices", Napi::Function::New(env, LinuxListOutputDevices));
-    captureExports.Set("start", Napi::Function::New(env, LinuxStart));
-    captureExports.Set("stop", Napi::Function::New(env, LinuxStop));
-    captureExports.Set("drain", Napi::Function::New(env, LinuxDrain));
-    captureExports.Set("nowMilliseconds", Napi::Function::New(env, LinuxNowMilliseconds));
-    exports.Set("linuxCapture", captureExports);
+namespace Prism::Capture {
+
+std::unique_ptr<SystemAudioCapture> createSystemAudioCapture() {
+    return std::make_unique<LinuxNativeCaptureEngine>();
 }
+
+}  // namespace Prism::Capture
 
 #endif

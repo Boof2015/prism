@@ -4,6 +4,7 @@ import { audioCapture } from '../src/renderer/audio/AudioCapture'
 import {
   loadAudioPreferences,
   normalizeAudioPreferences,
+  normalizeRollingCaptureSeconds,
   startAudioDeviceWatcher,
   useAudioStore,
   type PersistedAudioState,
@@ -29,6 +30,7 @@ function audioPreferences(overrides: Partial<PersistedAudioState> = {}): Persist
     captureMode: 'system',
     selectedSystemSourceId: DEFAULT_SYSTEM_SOURCE_ID,
     selectedDeviceId: null,
+    rollingCaptureSeconds: null,
     ...overrides,
   }
 }
@@ -279,6 +281,7 @@ function resetStores(): void {
   audioCapture.setSelectedDeviceId(null)
   audioCapture.setCaptureMode('system')
   audioCapture.setInputGain(0)
+  audioCapture.setRollingCaptureSeconds(null)
   useAudioStore.setState({
     ...initialAudioState,
     systemSources: [],
@@ -297,6 +300,8 @@ function resetStores(): void {
     activeSourceId: null,
     activeSourceLabel: null,
     inputGainDb: 0,
+    rollingCaptureSeconds: null,
+    rollingCaptureStatus: audioCapture.getRollingCaptureStatus(),
   })
 
   useUiStore.setState({
@@ -477,12 +482,38 @@ test('normalizeAudioPreferences preserves valid persisted selector values', () =
     captureMode: 'device',
     selectedSystemSourceId: 'speaker',
     selectedDeviceId: 'mic-1',
+    rollingCaptureSeconds: 30,
   }), audioPreferences({
     inputGainDb: -3,
     captureMode: 'device',
     selectedSystemSourceId: 'speaker',
     selectedDeviceId: 'mic-1',
+    rollingCaptureSeconds: 30,
   }))
+})
+
+test('normalizeRollingCaptureSeconds accepts only supported durations', () => {
+  assert.equal(normalizeRollingCaptureSeconds(5), 5)
+  assert.equal(normalizeRollingCaptureSeconds(60), 60)
+  assert.equal(normalizeRollingCaptureSeconds(15), null)
+  assert.equal(normalizeRollingCaptureSeconds('10'), null)
+})
+
+test('rolling capture opt-in does not allocate a buffer while capture is idle', () => {
+  resetStores()
+  try {
+    audioCapture.setRollingCaptureSeconds(60)
+
+    const enabledStatus = audioCapture.getRollingCaptureStatus()
+    assert.equal(enabledStatus.durationSeconds, 60)
+    assert.equal(enabledStatus.allocatedBytes, 0)
+    assert.equal(enabledStatus.hasAudio, false)
+
+    audioCapture.setRollingCaptureSeconds(null)
+    assert.equal(audioCapture.getRollingCaptureStatus().allocatedBytes, 0)
+  } finally {
+    resetStores()
+  }
 })
 
 test('normalizeAudioPreferences clamps out-of-range trim values', () => {
@@ -526,6 +557,37 @@ test('audio store persists normalized trim values and forwards them to audioCapt
     assert.equal(fakeStorage.getSetCount(), 2)
   } finally {
     audioCapture.setInputGain = originalSetInputGain
+    fakeStorage.restore()
+    resetStores()
+  }
+})
+
+test('audio store persists rolling capture opt-in and forwards duration changes', () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const originalSetRollingCaptureSeconds = audioCapture.setRollingCaptureSeconds
+  const forwardedValues: Array<number | null> = []
+
+  audioCapture.setRollingCaptureSeconds = (duration) => {
+    forwardedValues.push(duration)
+  }
+
+  try {
+    useAudioStore.getState().setRollingCaptureSeconds(30)
+
+    assert.equal(useAudioStore.getState().rollingCaptureSeconds, 30)
+    assert.deepEqual(forwardedValues, [30])
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      rollingCaptureSeconds: 30,
+    }))
+
+    useAudioStore.getState().setRollingCaptureSeconds(null)
+
+    assert.equal(useAudioStore.getState().rollingCaptureSeconds, null)
+    assert.deepEqual(forwardedValues, [30, null])
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences())
+  } finally {
+    audioCapture.setRollingCaptureSeconds = originalSetRollingCaptureSeconds
     fakeStorage.restore()
     resetStores()
   }

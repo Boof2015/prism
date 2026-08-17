@@ -1,9 +1,12 @@
 import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
-import { SCOPE_LABELS } from '../../types/scope'
+import { SCOPE_LABELS, isTransformableScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import { frequencyRangeLabel } from '../../types/frequencyScale'
+import { SCOPE_DISPLAY_ROTATIONS, type ScopeDisplayRotation } from '../../types/scopeTransform'
 import {
   MAX_SPECTROGRAM_CONTRAST,
+  MAX_SPECTROGRAM_SCROLL_SPEED,
   MAX_SPECTROGRAM_TILT_DB_PER_OCTAVE,
   MIN_SPECTROGRAM_CONTRAST,
   MIN_SPECTROGRAM_TILT_DB_PER_OCTAVE,
@@ -23,20 +26,26 @@ import {
   MIN_WAVEFORM_SCROLL_SPEED,
   WAVEFORM_SCROLL_SPEED_STEP,
 } from '../../types/waveform'
+import {
+  formatVectorscopeZoomDb,
+  MAX_VECTORSCOPE_ZOOM_DB,
+  MIN_VECTORSCOPE_ZOOM_DB,
+  VECTORSCOPE_ZOOM_STEP_DB,
+} from '../../types/vectorscope'
 import ThemedSelect from './ThemedSelect'
 
 function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): string {
   switch (mode) {
     case 'lissajous':
-      return 'Lissajous'
+      return 'XY (L/R)'
     case 'polar-unipolar':
-      return 'Polar Uni'
+      return 'Polar (Folded)'
     case 'polar-bipolar':
-      return 'Polar Bi'
+      return 'Polar (Bipolar)'
     case 'linear-unipolar':
-      return 'Linear Uni'
+      return 'M/S Linear (Folded)'
     case 'linear-bipolar':
-      return 'Linear Bi'
+      return 'M/S Linear (Bipolar)'
   }
 }
 
@@ -62,11 +71,20 @@ function nowPlayingVisibleLabels(settings: ScopeSettings['nowPlaying']): string[
   return labels
 }
 
+function appendTransformSummary(
+  parts: string[],
+  settings: { rotation: ScopeDisplayRotation; mirrorHorizontal: boolean },
+): string {
+  if (settings.rotation !== 0) parts.push(`R${settings.rotation}°`)
+  if (settings.mirrorHorizontal) parts.push('Mirror')
+  return parts.join(' · ')
+}
+
 export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]): string {
   switch (kind) {
     case 'spectrum': {
       const scopeSettings = settings as ScopeSettings['spectrum']
-      const summary = `${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
+      const summary = `${scopeSettings.scaleMode.toUpperCase()} · ${frequencyRangeLabel(scopeSettings.frequencyRangeMode)} · ${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
       const parts = [summary]
       if (scopeSettings.showSideLine) {
         parts.push('Side')
@@ -76,22 +94,32 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       } else if (scopeSettings.peakInfoMode === 'following') {
         parts.push('Peak Follow')
       }
-      return parts.join(' · ')
+      return appendTransformSummary(parts, scopeSettings)
     }
     case 'oscilloscope': {
       const scopeSettings = settings as ScopeSettings['oscilloscope']
       const mode = scopeSettings.pitchLock ? 'Pitch Lock' : 'Free Run'
-      return scopeSettings.underfillEnabled ? `${mode} · Fill` : mode
+      return appendTransformSummary(
+        scopeSettings.underfillEnabled ? [mode, 'Fill'] : [mode],
+        scopeSettings,
+      )
     }
     case 'vectorscope': {
       const scopeSettings = settings as ScopeSettings['vectorscope']
-      return scopeSettings.multiband
-        ? `${vectorscopeModeLabel(scopeSettings.mode)} · RGB`
-        : vectorscopeModeLabel(scopeSettings.mode)
+      const parts = [vectorscopeModeLabel(scopeSettings.mode)]
+      if (scopeSettings.zoomDb !== 0) parts.push(`Zoom ${formatVectorscopeZoomDb(scopeSettings.zoomDb)}`)
+      if (scopeSettings.multiband) parts.push('RGB')
+      return parts.join(' · ')
     }
     case 'spectrogram': {
       const scopeSettings = settings as ScopeSettings['spectrogram']
-      return `${scopeSettings.orientation.toUpperCase()} · ${scopeSettings.scaleMode.toUpperCase()} · ${scopeSettings.clarityMode}`
+      return [
+        `${scopeSettings.rotation}°`,
+        scopeSettings.scaleMode.toUpperCase(),
+        frequencyRangeLabel(scopeSettings.frequencyRangeMode),
+        scopeSettings.clarityMode,
+        ...(scopeSettings.mirrorHorizontal ? ['Mirror'] : []),
+      ].join(' · ')
     }
     case 'vumeter': {
       const scopeSettings = settings as ScopeSettings['vumeter']
@@ -112,7 +140,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
       if (scopeSettings.multiband) {
         summary.push('RGB')
       }
-      return summary.join(' · ')
+      return appendTransformSummary(summary, scopeSettings)
     }
     case 'nowPlaying': {
       const visible = nowPlayingVisibleLabels(settings as ScopeSettings['nowPlaying'])
@@ -316,6 +344,29 @@ export default function ScopeSettingsSection({
               </SelectControl>
 
               <SelectControl
+                label="Scale"
+                value={current.scaleMode}
+                onChange={(value) => onUpdate('spectrum', {
+                  scaleMode: value as ScopeSettings['spectrum']['scaleMode'],
+                })}
+              >
+                <option value="log">Log</option>
+                <option value="mel">Mel</option>
+                <option value="linear">Linear</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Range"
+                value={current.frequencyRangeMode}
+                onChange={(value) => onUpdate('spectrum', {
+                  frequencyRangeMode: value as ScopeSettings['spectrum']['frequencyRangeMode'],
+                })}
+              >
+                <option value="extended">Extended (10 Hz–up to 24 kHz)</option>
+                <option value="audible">Audible (20 Hz–20 kHz)</option>
+              </SelectControl>
+
+              <SelectControl
                 label="Peak"
                 value={current.peakInfoMode}
                 onChange={(value) => onUpdate('spectrum', {
@@ -444,12 +495,23 @@ export default function ScopeSettingsSection({
                 value={current.mode}
                 onChange={(value) => onUpdate('vectorscope', { mode: value as ScopeSettings['vectorscope']['mode'] })}
               >
-                <option value="lissajous">Lissajous</option>
-                <option value="polar-unipolar">Polar (Uni)</option>
-                <option value="polar-bipolar">Polar (Bi)</option>
-                <option value="linear-unipolar">Linear (Uni)</option>
-                <option value="linear-bipolar">Linear (Bi)</option>
+                <option value="lissajous">XY (L/R)</option>
+                <option value="polar-unipolar">Polar (Folded)</option>
+                <option value="polar-bipolar">Polar (Bipolar)</option>
+                <option value="linear-unipolar">M/S Linear (Folded)</option>
+                <option value="linear-bipolar">M/S Linear (Bipolar)</option>
               </SelectControl>
+
+              <RangeControl
+                label="Zoom"
+                value={current.zoomDb}
+                valueLabel={formatVectorscopeZoomDb(current.zoomDb)}
+                min={MIN_VECTORSCOPE_ZOOM_DB}
+                max={MAX_VECTORSCOPE_ZOOM_DB}
+                step={VECTORSCOPE_ZOOM_STEP_DB}
+                fullWidth={false}
+                onChange={(value) => onUpdate('vectorscope', { zoomDb: value })}
+              />
 
               <ToggleGroup label="Overlays">
                 <ToggleChip
@@ -516,22 +578,25 @@ export default function ScopeSettingsSection({
               </SelectControl>
 
               <SelectControl
-                label="Orientation"
-                value={current.orientation}
-                onChange={(value) => onUpdate('spectrogram', { orientation: value as ScopeSettings['spectrogram']['orientation'] })}
-              >
-                <option value="horizontal">Horizontal</option>
-                <option value="vertical">Vertical</option>
-              </SelectControl>
-
-              <SelectControl
                 label="Clarity"
                 value={current.clarityMode}
                 onChange={(value) => onUpdate('spectrogram', { clarityMode: value as ScopeSettings['spectrogram']['clarityMode'] })}
               >
                 <option value="classic">Classic</option>
+                <option value="focused">Focused</option>
                 <option value="sharp">Sharp</option>
                 <option value="sharper">Sharper</option>
+              </SelectControl>
+
+              <SelectControl
+                label="Range"
+                value={current.frequencyRangeMode}
+                onChange={(value) => onUpdate('spectrogram', {
+                  frequencyRangeMode: value as ScopeSettings['spectrogram']['frequencyRangeMode'],
+                })}
+              >
+                <option value="extended">Extended (10 Hz–up to 24 kHz)</option>
+                <option value="audible">Audible (20 Hz–20 kHz)</option>
               </SelectControl>
 
               <SelectControl
@@ -543,12 +608,20 @@ export default function ScopeSettingsSection({
                 <option value="mono">Solid</option>
               </SelectControl>
 
+              <ToggleGroup label="Overlay">
+                <ToggleChip
+                  label="Frequency Grid"
+                  active={current.showGrid}
+                  onClick={() => onUpdate('spectrogram', { showGrid: !current.showGrid })}
+                />
+              </ToggleGroup>
+
               <RangeControl
                 label="Speed"
                 value={current.scrollSpeed}
                 valueLabel={`x${current.scrollSpeed.toFixed(0)}`}
                 min={1}
-                max={8}
+                max={MAX_SPECTROGRAM_SCROLL_SPEED}
                 step={1}
                 fullWidth={false}
                 onChange={(value) => onUpdate('spectrogram', { scrollSpeed: value })}
@@ -719,6 +792,31 @@ export default function ScopeSettingsSection({
                 onClick={() => onUpdate('nowPlaying', { showControls: !current.showControls })}
               />
             </ToggleGroup>
+          )
+        })()}
+
+        {isTransformableScopeKind(kind) && (() => {
+          const current = settings as ScopeSettings[typeof kind]
+          return (
+            <>
+              <SelectControl
+                label="Rotate"
+                value={current.rotation}
+                onChange={(value) => onUpdate(kind, { rotation: Number(value) as ScopeDisplayRotation })}
+              >
+                {SCOPE_DISPLAY_ROTATIONS.map((rotation) => (
+                  <option key={rotation} value={rotation}>{rotation}°</option>
+                ))}
+              </SelectControl>
+
+              <ToggleGroup label="Transform">
+                <ToggleChip
+                  label="Mirror Horizontal"
+                  active={current.mirrorHorizontal}
+                  onClick={() => onUpdate(kind, { mirrorHorizontal: !current.mirrorHorizontal })}
+                />
+              </ToggleGroup>
+            </>
           )
         })()}
       </div>

@@ -26,6 +26,7 @@ public:
     // Read the latest smoothed magnitudes without mutating analyzer state.
     const std::vector<float>& getMagnitudes() const { return smoothedMagnitudes_; }
     const std::vector<float>& getSideMagnitudes() const { return sideSmoothedMagnitudes_; }
+    const std::vector<float>& getChannelMaxMagnitudes() const { return channelMaxMagnitudes_; }
 
     // Process audio and get spectrum data
     // Returns magnitude data (size = fftSize / 2)
@@ -46,22 +47,22 @@ private:
     std::vector<float> historyBuffer_;
     std::vector<float> sideHistoryBuffer_;
     std::vector<float> windowedInput_;
-    std::vector<float> magnitudes_;
+    std::vector<std::complex<float>> midSpectrum_;
+    std::vector<std::complex<float>> sideSpectrum_;
     std::vector<float> rawMagnitudes_;
     std::vector<float> smoothedMagnitudes_;
     std::vector<float> sideRawMagnitudes_;
     std::vector<float> sideSmoothedMagnitudes_;
+    std::vector<float> leftSmoothedMagnitudes_;
+    std::vector<float> rightSmoothedMagnitudes_;
+    std::vector<float> channelMaxMagnitudes_;
     size_t bufferedSamples_;
 
     void applyWindow(const float* input, float* output, size_t length);
     void pushHistory(std::vector<float>& history, const float* input, size_t length);
     void pushZeroHistory(std::vector<float>& history, size_t length);
-    void updateMagnitudesForHistory(
-        const std::vector<float>& history,
-        std::vector<float>& rawMagnitudes,
-        std::vector<float>& smoothedMagnitudes
-    );
-    void updateSilentSideMagnitudes();
+    float magnitudeToDb(float magnitude, float correctionDb) const;
+    void updateSmoothedMagnitude(float db, float& smoothedMagnitude);
     void updateMagnitudes();
 };
 

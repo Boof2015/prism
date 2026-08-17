@@ -8,8 +8,13 @@ import { audioRouter } from '../audio/AudioRouter'
 import { usePerformanceStore } from '../stores/performanceStore'
 import { FrameScheduler } from '../visualizers/frameScheduler'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
+import { getScopePopoutMinWidth } from '../../shared/scopeSizing'
 
-export default function Strip(): JSX.Element {
+interface StripProps {
+  onMeasurementActiveChange?: (active: boolean) => void
+}
+
+export default function Strip({ onMeasurementActiveChange }: StripProps): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopePopouts = useSettingsStore((s) => s.scopePopouts)
@@ -205,7 +210,7 @@ export default function Strip(): JSX.Element {
       nextBounds = {
         x: Math.round(windowBounds.x + rect.left),
         y: Math.round(windowBounds.y + rect.top),
-        width: Math.max(220, Math.round(rect.width)),
+        width: Math.max(getScopePopoutMinWidth(kind), Math.round(rect.width)),
         height: Math.max(160, Math.round(rect.height)),
       }
     }
@@ -268,6 +273,7 @@ export default function Strip(): JSX.Element {
             <ScopeModule
               scopeKind={kind}
               frameScheduler={frameScheduler}
+              onMeasurementActiveChange={onMeasurementActiveChange}
             />
           </div>
         ))}

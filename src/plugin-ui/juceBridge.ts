@@ -16,12 +16,15 @@ export interface SpectrumFrame {
   magnitudes: Float32Array
   /** Side magnitudes in dB (same length); empty if unavailable. */
   side: Float32Array
+  /** Smoothed max(L, R) magnitudes in dBFS (same length). */
+  channelMax: Float32Array
 }
 
 interface SpectrumFramePayload {
   sampleRate?: number
   magnitudes?: string
   side?: string
+  channelMax?: string
 }
 
 type JuceBackend = {
@@ -100,14 +103,19 @@ export function base64ToFloat32Array(b64: string): Float32Array {
   return new Float32Array(bytes.buffer, 0, byteLength >> 2)
 }
 
-function decodeFrame(payload: unknown): SpectrumFrame | null {
+export function decodeSpectrumFrame(payload: unknown): SpectrumFrame | null {
   if (typeof payload !== 'object' || payload === null) return null
-  const { sampleRate, magnitudes, side } = payload as SpectrumFramePayload
+  const { sampleRate, magnitudes, side, channelMax } = payload as SpectrumFramePayload
   if (typeof magnitudes !== 'string' || magnitudes.length === 0) return null
+  const decodedMagnitudes = base64ToFloat32Array(magnitudes)
+  const decodedChannelMax = typeof channelMax === 'string'
+    ? base64ToFloat32Array(channelMax)
+    : new Float32Array(0)
   return {
     sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,
-    magnitudes: base64ToFloat32Array(magnitudes),
+    magnitudes: decodedMagnitudes,
     side: typeof side === 'string' ? base64ToFloat32Array(side) : new Float32Array(0),
+    channelMax: decodedChannelMax.length > 0 ? decodedChannelMax : decodedMagnitudes,
   }
 }
 
@@ -128,6 +136,7 @@ export function connectSpectrumBridge(handlers: SpectrumBridgeHandlers): () => v
     const sampleRate = 48000
     const mid = new Float32Array(binCount)
     const side = new Float32Array(binCount).fill(-100)
+    const channelMax = new Float32Array(binCount)
     let phase = 0
     const tick = (): void => {
       if (disposed) return
@@ -138,8 +147,9 @@ export function connectSpectrumBridge(handlers: SpectrumBridgeHandlers): () => v
         const peak2 = Math.exp(-Math.pow((t - 0.5) * 18, 2)) * 50
         mid[i] = -100 + peak1 + peak2 + Math.random() * 6
         side[i] = -100 + peak2 * 0.4 + Math.random() * 4
+        channelMax[i] = mid[i]
       }
-      handlers.onFrame({ sampleRate, magnitudes: mid, side })
+      handlers.onFrame({ sampleRate, magnitudes: mid, side, channelMax })
       mockRaf = requestAnimationFrame(tick)
     }
     mockRaf = requestAnimationFrame(tick)
@@ -149,7 +159,7 @@ export function connectSpectrumBridge(handlers: SpectrumBridgeHandlers): () => v
     if (disposed) return
     if (backend) {
       listenerId = backend.addEventListener('spectrumFrame', (payload) => {
-        const frame = decodeFrame(payload)
+        const frame = decodeSpectrumFrame(payload)
         if (frame) handlers.onFrame(frame)
       })
       handlers.onConnected?.(false)

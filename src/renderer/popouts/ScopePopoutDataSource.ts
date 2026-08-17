@@ -35,7 +35,7 @@ function isStereoBatch(batch: ScopePopoutAudioBatch): batch is ScopePopoutStereo
 }
 
 function isStereoScope(kind: ScopeKind): boolean {
-  return kind === 'vectorscope' || kind === 'vumeter' || kind === 'lufsmeter'
+  return kind === 'spectrogram' || kind === 'vectorscope' || kind === 'vumeter' || kind === 'lufsmeter'
 }
 
 export class ScopePopoutDataSource implements AnyScopeDataSource {
@@ -128,6 +128,12 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
   getPendingSpectrogramSamples(): Float32Array[] {
     const batch = this.monoQueue
     this.monoQueue = []
+    return this.scopeKind === 'spectrogram' ? batch : []
+  }
+
+  getPendingSpectrogramStereoSamples(): ScopePopoutStereoBatch {
+    const batch = this.stereoQueue
+    this.stereoQueue = []
     return this.scopeKind === 'spectrogram' ? batch : []
   }
 

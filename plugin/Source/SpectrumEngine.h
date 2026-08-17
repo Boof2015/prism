@@ -22,7 +22,18 @@ public:
         if (fftSize > 0 && (size_t) fftSize != spectrum.getFFTSize())
             spectrum.setFFTSize((size_t) fftSize);
 
-        spectrum.setSmoothing((float) (double) settings.getProperty("smoothing", 0.9));
+        configuredSmoothing = juce::jlimit(0.0f, 0.99f,
+                                           (float) (double) settings.getProperty("smoothing", 0.9));
+        applySmoothing();
+    }
+
+    void setMeasurementActive(bool active) override
+    {
+        if (measurementActive == active)
+            return;
+
+        measurementActive = active;
+        applySmoothing();
     }
 
     void process(const float* left, const float* right, int numSamples) override
@@ -39,10 +50,19 @@ public:
         obj->setProperty("sampleRate", sampleRate);
         obj->setProperty("magnitudes", toBase64(spectrum.getMagnitudes()));
         obj->setProperty("side", toBase64(spectrum.getSideMagnitudes()));
+        obj->setProperty("channelMax", toBase64(spectrum.getChannelMaxMagnitudes()));
         return juce::var(obj);
     }
 
 private:
+    void applySmoothing()
+    {
+        constexpr float measurementSmoothing = 0.97f;
+        spectrum.setSmoothing(measurementActive
+                                  ? juce::jmax(configuredSmoothing, measurementSmoothing)
+                                  : configuredSmoothing);
+    }
+
     static juce::String toBase64(const std::vector<float>& data)
     {
         return data.empty() ? juce::String()
@@ -51,4 +71,6 @@ private:
 
     const juce::Identifier frameId { "spectrumFrame" };
     Visualizer::Spectrum spectrum { 2048 };
+    float configuredSmoothing = 0.9f;
+    bool measurementActive = false;
 };

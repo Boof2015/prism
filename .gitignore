@@ -5,6 +5,9 @@ node_modules/
 out/
 dist/
 native/build/
+tui/build/
+tui/dist-installer/prism-tui
+tui/dist-installer/prism-tui.exe
 
 # JUCE plugin build + installer staging
 plugin/build/

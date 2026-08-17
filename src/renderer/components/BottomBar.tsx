@@ -5,10 +5,15 @@ import { usePerformanceStore } from '../stores/performanceStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useUiStore } from '../stores/uiStore'
+import { useWindowBackgroundStore } from '../stores/windowBackgroundStore'
+import { useDesktopIntegrationStore } from '../stores/desktopIntegrationStore'
+import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
+import { ROLLING_CAPTURE_DURATIONS } from '../../types/audioClip'
 import { SCOPE_KINDS } from '../../types/scope'
+import type { WindowBackgroundMode, WindowBackgroundState } from '../../types/windowState'
 import ThemedSelect from './ThemedSelect'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
@@ -37,6 +42,22 @@ const FRAME_TARGET_LABELS: Record<VisualizerFrameTarget, string> = {
 }
 
 const DEFAULT_INPUT_DEVICE_ID = '__default_input__'
+
+const WINDOW_BACKGROUND_MODES: readonly WindowBackgroundMode[] = ['solid', 'blurred', 'clear']
+
+const WINDOW_BACKGROUND_MODE_LABELS: Record<WindowBackgroundMode, string> = {
+  solid: 'Solid',
+  blurred: 'Blurred',
+  clear: 'Clear',
+}
+
+const WINDOW_BACKGROUND_MODE_TITLES: Record<WindowBackgroundMode, string> = {
+  solid: 'Opaque themed background',
+  blurred: 'Desktop shows through, blurred',
+  clear: 'Desktop shows through, crisp',
+}
+
+const WINDOW_BACKGROUND_SET_THROTTLE_MS = 60
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message
@@ -102,6 +123,32 @@ export function resolveThemeCreditDetails(theme: ThemeCreditSource): {
 export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [isRefreshingThemes, setIsRefreshingThemes] = useState(false)
+  const windowBackground = useWindowBackgroundStore((s) => s.stored)
+  const previewWindowBackground = useWindowBackgroundStore((s) => s.previewBackground)
+  const setWindowBackground = useWindowBackgroundStore((s) => s.setBackground)
+  const supportsBlurredBackground = getRendererWindowCapabilities().supportsBlurredBackground
+  const pendingWindowBackgroundRef = useRef<WindowBackgroundState | null>(null)
+  const windowBackgroundFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const queueWindowBackgroundSave = (next: WindowBackgroundState): void => {
+    previewWindowBackground(next)
+    pendingWindowBackgroundRef.current = next
+    if (windowBackgroundFlushTimerRef.current) return
+
+    windowBackgroundFlushTimerRef.current = setTimeout(() => {
+      windowBackgroundFlushTimerRef.current = null
+      const pending = pendingWindowBackgroundRef.current
+      pendingWindowBackgroundRef.current = null
+      if (pending) {
+        void setWindowBackground(pending)
+      }
+    }, WINDOW_BACKGROUND_SET_THROTTLE_MS)
+  }
+
+  const handleWindowBackgroundMode = (mode: WindowBackgroundMode): void => {
+    if (mode === windowBackground.mode) return
+    void setWindowBackground({ ...windowBackground, mode })
+  }
 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
@@ -132,13 +179,23 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     captureError,
     captureNotice,
     inputGainDb,
+    rollingCaptureSeconds,
+    rollingCaptureStatus,
     clearCaptureNotice,
     selectSystemSource,
     selectDevice,
     startCapture,
     setInputGain,
+    setRollingCaptureSeconds,
+    revealRollingCaptureFolder,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
+  const desktopIntegration = useDesktopIntegrationStore((s) => s.snapshot)
+  const desktopIntegrationBusy = useDesktopIntegrationStore((s) => s.busy)
+  const desktopIntegrationError = useDesktopIntegrationStore((s) => s.error)
+  const setCloseToTray = useDesktopIntegrationStore((s) => s.setCloseToTray)
+  const setOpenAtLogin = useDesktopIntegrationStore((s) => s.setOpenAtLogin)
+  const setLoginLaunchMode = useDesktopIntegrationStore((s) => s.setLoginLaunchMode)
 
   useLayoutEffect(() => {
     if (!onHeightChange || !rootRef.current) return
@@ -258,6 +315,18 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     }
   }
 
+  const handleRevealRollingCaptureFolder = async (): Promise<void> => {
+    try {
+      await revealRollingCaptureFolder()
+    } catch (error) {
+      showBanner({
+        tone: 'error',
+        message: getErrorMessage(error, 'Could not open the Prism Captures folder.'),
+        actions: [],
+      })
+    }
+  }
+
   const handleReloadThemes = async (): Promise<void> => {
     if (isRefreshingThemes) {
       return
@@ -335,6 +404,13 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       .map((providerId) => nowPlayingState.definitions[providerId].label)
       .join(' → ')}`
   const captureMessage = captureError ?? captureNotice
+  const rollingCaptureStatusLabel = rollingCaptureSeconds === null
+    ? 'Off'
+    : rollingCaptureStatus.ready
+      ? 'Ready'
+      : rollingCaptureStatus.hasAudio
+        ? 'Filling'
+        : 'Waiting'
   const nowPlayingErrorMessage = currentNowPlayingProvider?.lastError ?? currentNowPlayingProvider?.lastControlError ?? null
   const nowPlayingDetail = nowPlayingErrorMessage
     ? `${currentNowPlayingProviderId ? `${nowPlayingState.definitions[currentNowPlayingProviderId].label} · ` : ''}${nowPlayingErrorMessage}`
@@ -344,6 +420,13 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const canUseDefaultSource = captureMode === 'system'
     ? selectedSystemSourceId !== defaultSystemSourceId
     : selectedDeviceId !== null
+  const loginItemStatusMessage = desktopIntegration.loginItemStatus === 'requires-approval'
+    ? 'Approval required in system login settings'
+    : desktopIntegration.loginItemStatus === 'blocked'
+      ? 'Disabled in system startup settings'
+      : desktopIntegration.loginItemStatus === 'unavailable'
+        ? 'Open at login is available in packaged builds'
+        : desktopIntegrationError
 
   return (
     <div className="bottom-bar" ref={rootRef}>
@@ -435,6 +518,107 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 >
                   Folder
                 </button>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--window">
+            <div className="bottom-bar__section-header">
+              <div className="bottom-bar__section-title">Window</div>
+              {windowBackground.mode !== 'solid' || loginItemStatusMessage ? (
+                <span className="bottom-bar__window-metadata">
+                  {windowBackground.mode !== 'solid' ? (
+                    <span className="bottom-bar__window-note">
+                      Window snapping is disabled in this mode
+                    </span>
+                  ) : null}
+                  {windowBackground.mode !== 'solid' && loginItemStatusMessage ? (
+                    <span className="bottom-bar__metadata-separator" aria-hidden="true">·</span>
+                  ) : null}
+                  {loginItemStatusMessage ? (
+                    <span
+                      className={`${desktopIntegrationError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__desktop-status`.trim()}
+                      role="status"
+                    >
+                      {loginItemStatusMessage}
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--window">
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
+                  {WINDOW_BACKGROUND_MODES.map((mode) => {
+                    const unsupported = mode === 'blurred' && !supportsBlurredBackground
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`settings-chip ${windowBackground.mode === mode ? 'is-active' : ''}`.trim()}
+                        onClick={() => handleWindowBackgroundMode(mode)}
+                        disabled={unsupported}
+                        title={unsupported
+                          ? 'Blurred background requires Windows 11'
+                          : WINDOW_BACKGROUND_MODE_TITLES[mode]}
+                      >
+                        {WINDOW_BACKGROUND_MODE_LABELS[mode]}
+                      </button>
+                    )
+                  })}
+                </div>
+                <span className="bottom-bar__trim-value">
+                  {windowBackground.transparency}%
+                </span>
+                <input
+                  className="settings-control__range bottom-bar__trim-slider"
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={windowBackground.transparency}
+                  disabled={windowBackground.mode === 'solid'}
+                  style={{ '--range-percent': `${windowBackground.transparency}%` } as CSSProperties}
+                  onChange={(event) => {
+                    queueWindowBackgroundSave({
+                      ...windowBackground,
+                      transparency: Number(event.target.value),
+                    })
+                  }}
+                  title="How much of the desktop shows through"
+                />
+                <span className="bottom-bar__inline-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className={`settings-chip ${desktopIntegration.closeToTray ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy}
+                  onClick={() => void setCloseToTray(!desktopIntegration.closeToTray)}
+                  title="Closing Prism hides every Prism window; use the tray menu to quit"
+                >
+                  Close to tray
+                </button>
+                <button
+                  type="button"
+                  className={`settings-chip ${desktopIntegration.openAtLogin ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy || desktopIntegration.loginItemStatus === 'unavailable'}
+                  onClick={() => void setOpenAtLogin(!desktopIntegration.openAtLogin)}
+                >
+                  Open at login
+                </button>
+                <ThemedSelect
+                  value={desktopIntegration.loginLaunchMode}
+                  disabled={desktopIntegrationBusy || !desktopIntegration.openAtLogin}
+                  onChange={(event) => {
+                    void setLoginLaunchMode(event.target.value === 'tray' ? 'tray' : 'show')
+                  }}
+                  className="bottom-bar__login-select"
+                  title="What Prism should show when opened automatically at login"
+                >
+                  <option value="show">Login: Show Prism</option>
+                  <option value="tray">Login: Start in tray</option>
+                </ThemedSelect>
               </div>
             </div>
           </section>
@@ -559,6 +743,55 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   </div>
                 </>
               ) : null}
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--rolling-capture">
+            <div className="bottom-bar__section-title">Rolling Capture</div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--rolling-capture">
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
+                  <button
+                    type="button"
+                    className={`settings-chip ${rollingCaptureSeconds === null ? 'is-active' : ''}`.trim()}
+                    onClick={() => setRollingCaptureSeconds(null)}
+                  >
+                    Off
+                  </button>
+                  {ROLLING_CAPTURE_DURATIONS.map((duration) => (
+                    <button
+                      key={duration}
+                      type="button"
+                      className={`settings-chip ${rollingCaptureSeconds === duration ? 'is-active' : ''}`.trim()}
+                      onClick={() => setRollingCaptureSeconds(duration)}
+                    >
+                      {duration}s
+                    </button>
+                  ))}
+                </div>
+
+                <div
+                  className={`settings-status-pill ${rollingCaptureStatus.ready ? 'is-capturing' : ''}`.trim()}
+                  title={rollingCaptureSeconds === null
+                    ? 'Rolling capture uses no recorder memory while off'
+                    : `Keeps up to ${rollingCaptureSeconds} seconds in memory`}
+                >
+                  <span className="settings-status-pill__dot" />
+                  <span>{rollingCaptureStatusLabel}</span>
+                </div>
+
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void handleRevealRollingCaptureFolder()
+                  }}
+                >
+                  Folder
+                </button>
+              </div>
             </div>
           </section>
 

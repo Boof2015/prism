@@ -118,6 +118,7 @@ const OSCILLOSCOPE_SCHEMA = {
 const VECTORSCOPE_SCHEMA = {
   background: 'background',
   trace: 'trace',
+  phase_risk: 'phaseRisk',
   band_low: 'bandLow',
   band_mid: 'bandMid',
   band_high: 'bandHigh',
@@ -131,6 +132,8 @@ const SPECTROGRAM_SCHEMA = {
   heat_low: 'heatLow',
   heat_mid: 'heatMid',
   heat_high: 'heatHigh',
+  guides: 'guides',
+  labels: 'labels',
 } as const satisfies SectionSchema<ThemeSpectrogramTokens>
 
 const VUMETER_SCHEMA = {
@@ -1385,6 +1388,7 @@ export function createTemplateThemeFile(): string {
   const vectorscopeSection = commentExampleTokens(serializeSection('Vectorscope', {
     ...base.vectorscope,
     background: resolved.vectorscope.background,
+    phaseRisk: resolved.vectorscope.phaseRisk,
     guides: resolved.vectorscope.guides,
     labels: resolved.vectorscope.labels,
   }, VECTORSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>))
@@ -1392,6 +1396,8 @@ export function createTemplateThemeFile(): string {
   const spectrogramSection = commentExampleTokens(serializeSection('Spectrogram', {
     ...base.spectrogram,
     background: resolved.spectrogram.background,
+    guides: resolved.spectrogram.guides,
+    labels: resolved.spectrogram.labels,
   }, SPECTROGRAM_SCHEMA as SectionSchema<Record<string, string | undefined>>))
 
   const vumeterSection = commentExampleTokens(serializeSection('VUMeter', {
@@ -1685,6 +1691,7 @@ function resolveVectorscopeTheme(
   const guides = theme.vectorscope.guides ?? scopes.guides
   return {
     trace: theme.vectorscope.trace ?? app.accent,
+    phaseRisk: theme.vectorscope.phaseRisk ?? app.warning,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
     labels: theme.vectorscope.labels ?? guides,
@@ -1703,6 +1710,8 @@ function resolveSpectrogramTheme(
   return {
     mono: theme.spectrogram.mono ?? app.accent,
     background: theme.spectrogram.background ?? scopes.background,
+    guides: theme.spectrogram.guides ?? scopes.guides,
+    labels: theme.spectrogram.labels ?? theme.spectrogram.guides ?? scopes.guides,
     heatColors: [
       theme.spectrogram.heatLow ?? DEFAULT_HEAT_LOW,
       theme.spectrogram.heatMid ?? DEFAULT_HEAT_MID,

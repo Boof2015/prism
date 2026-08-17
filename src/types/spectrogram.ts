@@ -1,27 +1,31 @@
-export type SpectrogramClarityMode = 'classic' | 'sharp' | 'sharper'
-export type SpectrogramScaleMode = 'mel' | 'log' | 'linear'
+import {
+  DEFAULT_FREQUENCY_SCALE_MODE,
+  FREQUENCY_SCALE_MODES,
+  isFrequencyScaleMode,
+  type FrequencyScaleMode,
+} from './frequencyScale'
+
+export type SpectrogramClarityMode = 'classic' | 'focused' | 'sharp' | 'sharper'
+export type SpectrogramScaleMode = FrequencyScaleMode
 export type SpectrogramOrientation = 'horizontal' | 'vertical'
 
 export const SPECTROGRAM_CLARITY_MODES: readonly SpectrogramClarityMode[] = [
   'classic',
+  'focused',
   'sharp',
   'sharper',
 ]
-export const SPECTROGRAM_SCALE_MODES: readonly SpectrogramScaleMode[] = [
-  'mel',
-  'log',
-  'linear',
-]
+export const SPECTROGRAM_SCALE_MODES: readonly SpectrogramScaleMode[] = FREQUENCY_SCALE_MODES
 export const SPECTROGRAM_ORIENTATIONS: readonly SpectrogramOrientation[] = [
   'horizontal',
   'vertical',
 ]
 
 export const DEFAULT_SPECTROGRAM_CLARITY_MODE: SpectrogramClarityMode = 'sharper'
-export const DEFAULT_SPECTROGRAM_SCALE_MODE: SpectrogramScaleMode = 'log'
+export const DEFAULT_SPECTROGRAM_SCALE_MODE: SpectrogramScaleMode = DEFAULT_FREQUENCY_SCALE_MODE
 export const DEFAULT_SPECTROGRAM_ORIENTATION: SpectrogramOrientation = 'horizontal'
 export const MIN_SPECTROGRAM_SCROLL_SPEED = 0.5
-export const MAX_SPECTROGRAM_SCROLL_SPEED = 4
+export const MAX_SPECTROGRAM_SCROLL_SPEED = 8
 export const SPECTROGRAM_SCROLL_SPEED_STEP = 0.5
 export const DEFAULT_SPECTROGRAM_SCROLL_SPEED = 2
 
@@ -40,7 +44,7 @@ export function isSpectrogramClarityMode(value: unknown): value is SpectrogramCl
 }
 
 export function isSpectrogramScaleMode(value: unknown): value is SpectrogramScaleMode {
-  return typeof value === 'string' && SPECTROGRAM_SCALE_MODES.includes(value as SpectrogramScaleMode)
+  return isFrequencyScaleMode(value)
 }
 
 export function isSpectrogramOrientation(value: unknown): value is SpectrogramOrientation {
