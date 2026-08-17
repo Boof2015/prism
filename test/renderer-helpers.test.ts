@@ -3385,6 +3385,33 @@ test('Vectorscope uses the base layout radius for projection scale', () => {
   }
 })
 
+test('Vectorscope centers width-constrained unipolar artwork vertically', () => {
+  for (const mode of ['polar-unipolar', 'linear-unipolar'] as const) {
+    const layout = getVectorscopeLayout(120, 300, mode)
+    const artworkTop = layout.centerY - layout.radius
+    const artworkBottom = layout.centerY
+
+    assertAlmostEqual(
+      (artworkTop + artworkBottom) / 2,
+      150,
+      1e-12,
+      `${mode} artwork should center in a narrow canvas`,
+    )
+  }
+})
+
+test('Vectorscope preserves height-limited and bipolar layout behavior', () => {
+  const wideUnipolar = getVectorscopeLayout(600, 200, 'polar-unipolar')
+  assertAlmostEqual(wideUnipolar.centerY, 192, 1e-12, 'wide unipolar layout should remain bottom-aligned')
+  assertAlmostEqual(wideUnipolar.radius, 192 * 0.88, 1e-12, 'wide unipolar radius should remain height-limited')
+
+  for (const mode of ['lissajous', 'polar-bipolar', 'linear-bipolar'] as const) {
+    const layout = getVectorscopeLayout(120, 300, mode)
+    assertAlmostEqual(layout.centerY, 150, 1e-12, `${mode} should remain centered`)
+    assertAlmostEqual(layout.radius, 54, 1e-12, `${mode} radius should remain unchanged`)
+  }
+})
+
 test('vectorscope adds a subtle dashed outer boundary without changing the base graph', () => {
   const lissajousRecorder = createFakeCanvasRecorder()
   drawVectorscopeGridForMode(
@@ -3566,12 +3593,23 @@ test('VUMeter needle face layout stays fixed instead of scaling up', () => {
   const retinaWide = resolveVUNeedleFaceLayout(2400, 1000, 2)
   assert.equal(retinaWide.width, VU_NEEDLE_FACE_WIDTH_CSS_PX * 2)
   assert.equal(retinaWide.height, VU_NEEDLE_FACE_HEIGHT_CSS_PX * 2)
+  assert.equal(retinaWide.y, 1000 - VU_NEEDLE_FACE_HEIGHT_CSS_PX * 2)
   assert.equal(retinaWide.scale, 1)
 
   const small = resolveVUNeedleFaceLayout(280, 180)
   assert.equal(small.width, 280)
   assert.equal(small.height, 180)
   assertAlmostEqual(small.scale, 0.5, 1e-12, 'fixed face should only shrink when the canvas is smaller')
+
+  const narrow = resolveVUNeedleFaceLayout(280, 360)
+  assert.equal(narrow.width, 280)
+  assert.equal(narrow.height, 180)
+  assert.equal(narrow.y, 90)
+
+  const retinaNarrow = resolveVUNeedleFaceLayout(560, 720, 2)
+  assert.equal(retinaNarrow.width, 560)
+  assert.equal(retinaNarrow.height, 360)
+  assert.equal(retinaNarrow.y, 180)
 })
 
 test('VUMeter shared needle helpers switch between stereo needles and combined RMS', () => {

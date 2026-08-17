@@ -151,13 +151,16 @@ export function resolveVUNeedleFaceLayout(
   const targetHeight = VU_NEEDLE_FACE_HEIGHT_CSS_PX * dpr
   const safeWidth = Math.max(0, Number.isFinite(canvasWidth) ? canvasWidth : 0)
   const safeHeight = Math.max(0, Number.isFinite(canvasHeight) ? canvasHeight : 0)
-  const scale = Math.min(1, safeWidth / targetWidth, safeHeight / targetHeight)
+  const widthScale = safeWidth / targetWidth
+  const heightScale = safeHeight / targetHeight
+  const scale = Math.min(1, widthScale, heightScale)
   const width = targetWidth * scale
   const height = targetHeight * scale
+  const widthLimited = widthScale < Math.min(1, heightScale)
 
   return {
     x: Math.max(0, (safeWidth - width) / 2),
-    y: Math.max(0, safeHeight - height),
+    y: Math.max(0, widthLimited ? (safeHeight - height) / 2 : safeHeight - height),
     width,
     height,
     scale,

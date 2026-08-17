@@ -14,8 +14,8 @@ export interface VectorscopeLayout {
 /**
  * Compute the center point and radius for a vectorscope mode.
  *
- * Unipolar modes place the center at the bottom of the canvas so the
- * semicircle/triangle fills the full vertical space.
+ * Unipolar modes place the center at the bottom when height-limited. When
+ * width-limited, the visible semicircle/triangle is centered vertically.
  * Bipolar and Lissajous center in the canvas.
  */
 export function getVectorscopeLayout(
@@ -27,10 +27,14 @@ export function getVectorscopeLayout(
   const isUnipolar = mode === 'polar-unipolar' || mode === 'linear-unipolar'
 
   if (isUnipolar) {
-    // Center near the bottom; radius fills upward
     const margin = height * 0.04
-    const centerY = height - margin
-    const radius = Math.min(width / 2, height - margin) * 0.88
+    const availableHeight = height - margin
+    const halfWidth = width / 2
+    const widthLimited = halfWidth < availableHeight
+    const radius = Math.min(halfWidth, availableHeight) * 0.88
+    const centerY = widthLimited
+      ? (height + radius) / 2
+      : availableHeight
     return { centerX, centerY, radius }
   }
 
