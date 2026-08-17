@@ -20,7 +20,7 @@ Seven visualizers driven by a native C++ analysis engine:
 
 - **Spectrum Analyzer** — FFT frequency display with heatmap and fill modes, configurable FFT size, spectral tilt, Log/Mel/Linear scaling, and Extended (default, 10 Hz–up to 24 kHz) or Audible (20 Hz–20 kHz) ranges
 - **Oscilloscope** — Time-domain waveform with a pitch-lock mode that syncs the display to the fundamental frequency
-- **Vectorscope** — Stereo phase visualization in five display modes (Lissajous, polar, linear) with optional multiband RGB split
+- **Vectorscope** — Stereo phase visualization in XY, folded/bipolar Polar, and folded/bipolar M/S Linear modes, with manual dB zoom and optional multiband RGB split
 - **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, Extended (default) or Audible ranges, optional adaptive frequency guides, stereo-energy analysis, a legacy-style Focused mode, and detail-preserving frequency reassignment in Sharp/Sharper modes
 - **VU Meter** — Classic loudness metering in needle or bar style, horizontal or vertical
 - **Loudness Meter** — Compact LUFS metering following ITU-R BS.1770 with fast stereo peak activity
@@ -29,6 +29,8 @@ Seven visualizers driven by a native C++ analysis engine:
 ![Prism scopes](assets/prism-demo-12fps.gif)
 
 Every scope is independently configurable. Drag and resize them into whatever layout makes sense, pop any scope out into its own window, and pin windows on top so they stay visible while you work.
+
+Vectorscope boundaries use exact per-channel sample-peak references in XY (square) and M/S Linear (diamond). Polar retains Prism's classic amplitude-compressed radial scaling so quieter stereo structure stays readable; its circle is labeled as a radial reference instead of a per-channel dBFS limit. Zoom changes the relevant labeled reference without changing the underlying samples. Folded modes rotate negative-Mid samples into the upper half instead of discarding them. The subtly shaded regions beyond the L/R channel guides show instantaneous Side-dominant samples; use the VU or Loudness Meter correlation reading to judge sustained mono compatibility.
 
 ## DAW Plugins
 

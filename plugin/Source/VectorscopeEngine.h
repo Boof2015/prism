@@ -6,7 +6,7 @@
 
 /**
  * Vectorscope engine. Pushes stereo audio into the reused `Visualizer::Vectorscope`
- * (lowpass-filtered L/R + a 3-band split, both in circular buffers) and emits the
+ * (full-band L/R + a 3-band split, both in circular buffers) and emits the
  * most recent display points each frame. Two layouts share the buffers: the standard
  * X/Y point cloud and the multiband (low/mid/high) cloud. Both buffers are kept warm
  * so toggling is instant; the active layout (from the `multiband` setting) is flagged

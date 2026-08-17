@@ -119,6 +119,7 @@ import { decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
 import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
 import { spectrogramSettingsToOptions } from '../src/plugin-ui/spectrogramOptions'
 import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
+import { vectorscopeSettingsToOptions } from '../src/plugin-ui/vectorscopeOptions'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
 import { Waveform } from '../src/renderer/visualizers/Waveform'
@@ -135,6 +136,8 @@ import {
 import {
   drawVectorscopeGridForMode,
   getVectorscopeLayout,
+  isVectorscopePhaseRisk,
+  transformPoint,
 } from '../src/renderer/visualizers/vectorscopeGrids'
 import {
   MultibandBuffer,
@@ -155,6 +158,11 @@ import {
   normalizedPositionAtFrequency,
   type FrequencyScaleMode,
 } from '../src/types/frequencyScale'
+import {
+  formatVectorscopeReferenceDbfs,
+  normalizeVectorscopeZoomDb,
+  vectorscopeZoomDbToGain,
+} from '../src/types/vectorscope'
 
 type WindowWithRaf = typeof globalThis & Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>
 type FakeElectronAPI = {
@@ -613,6 +621,10 @@ interface FakeCanvasRecorder {
     lineDash: number[]
   }>
   lineDashes: number[][]
+  fills: Array<{
+    commands: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }>
+    fillStyle: string
+  }>
   imageDataWrites: Array<{ x: number; y: number; width: number; height: number; data: number[] }>
   drawImageCalls: Array<{ compositeOperation: GlobalCompositeOperation; args: unknown[] }>
 }
@@ -625,6 +637,7 @@ function createFakeCanvasRecorder(): FakeCanvasRecorder {
     strokeRects: [],
     arcs: [],
     lineDashes: [],
+    fills: [],
     imageDataWrites: [],
     drawImageCalls: [],
   }
@@ -650,7 +663,9 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
       currentPath = []
     },
     closePath() {},
-    fill() {},
+    fill() {
+      recorder?.fills.push({ commands: [...currentPath], fillStyle: currentFillStyle })
+    },
     moveTo(x: number, y: number) {
       currentPath.push({ kind: 'moveTo', x, y })
     },
@@ -3321,9 +3336,11 @@ test('scopeSettingsToOptions wires waveform stereo mode into analyzer options', 
 
 test('scopeSettingsToOptions forwards shared scope background and guides to oscilloscope and vectorscope', () => {
   const profile = createDefaultProfile('Default')
+  profile.scopeSettings.vectorscope.zoomDb = 6
   const authoredTheme = createDefaultTheme()
   authoredTheme.scopes.background = 'rgb(3, 4, 5)'
   authoredTheme.scopes.guides = 'rgba(120, 130, 140, 0.2)'
+  authoredTheme.vectorscope.phaseRisk = 'rgb(200, 100, 50)'
   const theme = resolveTheme(authoredTheme)
 
   const oscilloscope = scopeSettingsToOptions('oscilloscope', profile.scopeSettings.oscilloscope, theme.oscilloscope)
@@ -3336,6 +3353,12 @@ test('scopeSettingsToOptions forwards shared scope background and guides to osci
   assert.equal(vectorscope.gridMajorColor, theme.vectorscope.guides)
   assert.equal(vectorscope.gridMinorColor, theme.vectorscope.guidesSecondary)
   assert.equal(vectorscope.labelColor, theme.vectorscope.labels)
+  assert.equal(vectorscope.phaseRiskColor, 'rgb(200, 100, 50)')
+  assert.equal(vectorscope.zoomDb, 6)
+
+  const pluginVectorscope = vectorscopeSettingsToOptions(profile.scopeSettings.vectorscope, theme.vectorscope)
+  assert.equal(pluginVectorscope.phaseRiskColor, vectorscope.phaseRiskColor)
+  assert.equal(pluginVectorscope.zoomDb, vectorscope.zoomDb)
 })
 
 test('Oscilloscope projects raw sample amplitude without renderer gain', () => {
@@ -3412,7 +3435,7 @@ test('Vectorscope preserves height-limited and bipolar layout behavior', () => {
   }
 })
 
-test('vectorscope adds a subtle dashed outer boundary without changing the base graph', () => {
+test('vectorscope grids use calibrated boundaries, phase-risk shading, and honest labels', () => {
   const lissajousRecorder = createFakeCanvasRecorder()
   drawVectorscopeGridForMode(
     createFakeCanvasContext(lissajousRecorder),
@@ -3422,12 +3445,24 @@ test('vectorscope adds a subtle dashed outer boundary without changing the base 
     'rgba(255, 255, 255, 0.05)',
     'rgba(255, 255, 255, 0.2)',
     'lissajous',
+    'rgb(255, 191, 0)',
+    6,
   )
   assert.equal(
     lissajousRecorder.lineDashes.some((segments) => segments.length > 0),
     false,
-    'lissajous should not render an outer headroom boundary',
+    'XY should not render an arbitrary overflow boundary',
   )
+  assert.equal(lissajousRecorder.strokeRects.length, 1)
+  assert.equal(lissajousRecorder.strokeRects[0]?.width, getVectorscopeLayout(320, 180, 'lissajous').radius * 2)
+  assert.equal(
+    lissajousRecorder.fillRects.filter(({ fillStyle }) => fillStyle === 'rgba(255, 191, 0, 0.08)').length,
+    2,
+    'XY should shade its two opposite-sign quadrants',
+  )
+  assert.equal(lissajousRecorder.fillTexts.some(({ text }) => text === '-6 dBFS'), true)
+  assert.equal(lissajousRecorder.fillTexts.some(({ text }) => text === 'M'), true)
+  assert.equal(lissajousRecorder.fillTexts.some(({ text }) => text === 'S'), true)
 
   const linearRecorder = createFakeCanvasRecorder()
   drawVectorscopeGridForMode(
@@ -3438,12 +3473,18 @@ test('vectorscope adds a subtle dashed outer boundary without changing the base 
     'rgba(255, 255, 255, 0.05)',
     'rgba(255, 255, 255, 0.2)',
     'linear-bipolar',
+    'rgb(255, 191, 0)',
   )
   assert.equal(
     linearRecorder.lineDashes.some((segments) => segments.length > 0),
-    true,
-    'linear mode should render a dashed outer max boundary',
+    false,
+    'linear mode should only use its exact outer diamond',
   )
+  assert.equal(linearRecorder.fills.filter(({ fillStyle }) => fillStyle === 'rgba(255, 191, 0, 0.08)').length, 2)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'M+'), true)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'M−'), true)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'S−'), true)
+  assert.equal(linearRecorder.fillTexts.some(({ text }) => text === 'S+'), true)
 
   const polarRecorder = createFakeCanvasRecorder()
   drawVectorscopeGridForMode(
@@ -3454,31 +3495,115 @@ test('vectorscope adds a subtle dashed outer boundary without changing the base 
     'rgba(255, 255, 255, 0.05)',
     'rgba(255, 255, 255, 0.2)',
     'polar-bipolar',
+    'rgb(255, 191, 0)',
   )
   const polarLayout = getVectorscopeLayout(320, 180, 'polar-bipolar')
-  const dashedPolarArc = polarRecorder.arcs.find((arc) => arc.lineDash.length > 0)
-  const expectedPolarOverflowRadius = Math.min(
-    Math.min(polarLayout.centerX, 320 - polarLayout.centerX, polarLayout.centerY, 180 - polarLayout.centerY) * 0.98,
-    polarLayout.radius * 1.25,
-  )
   assert.equal(
     polarRecorder.lineDashes.some((segments) => segments.length > 0),
-    true,
-    'polar mode should render a dashed outer boundary',
-  )
-  assert.ok(
-    dashedPolarArc && dashedPolarArc.radius > polarLayout.radius,
-    'polar dashed boundary should sit outside the existing graph',
+    false,
+    'polar mode should not render an arbitrary overflow circle',
   )
   assertAlmostEqual(
-    dashedPolarArc?.radius ?? 0,
-    expectedPolarOverflowRadius,
+    Math.max(...polarRecorder.arcs.map(({ radius }) => radius)),
+    polarLayout.radius,
     1e-6,
-    'polar dashed boundary should follow the next relative grid step, clamped to the canvas',
+    'the outer radial-reference circle should equal the layout radius',
   )
+  assert.equal(polarRecorder.fills.filter(({ fillStyle }) => fillStyle === 'rgba(255, 191, 0, 0.08)').length, 2)
+  assert.equal(polarRecorder.fillTexts.some(({ text }) => text === '0 dB radial'), true)
 })
 
-test('Vectorscope keeps the original linear projection behavior', () => {
+test('vectorscope projections calibrate XY and M/S Linear while preserving classic Polar shaping', () => {
+  const assertPoint = (
+    actual: { dx: number; dy: number },
+    expected: { dx: number; dy: number },
+    message: string,
+  ): void => {
+    assertAlmostEqual(actual.dx, expected.dx, 1e-9, `${message} x`)
+    assertAlmostEqual(actual.dy, expected.dy, 1e-9, `${message} y`)
+  }
+
+  assertPoint(transformPoint(0.5, -0.25, 'lissajous'), { dx: -0.25, dy: 0.5 }, 'XY')
+  assertPoint(transformPoint(1, 1, 'linear-bipolar'), { dx: 0, dy: 1 }, 'linear mono')
+  assertPoint(transformPoint(1, 0, 'linear-bipolar'), { dx: -0.5, dy: 0.5 }, 'linear left-only')
+  assertPoint(transformPoint(0, 1, 'linear-bipolar'), { dx: 0.5, dy: 0.5 }, 'linear right-only')
+  assertPoint(transformPoint(1, -1, 'linear-bipolar'), { dx: -1, dy: 0 }, 'linear anti-phase')
+  assertPoint(transformPoint(-1, -1, 'linear-bipolar'), { dx: 0, dy: -1 }, 'linear inverted mono')
+  assertPoint(transformPoint(0.75, -0.25, 'linear-bipolar'), { dx: -0.5, dy: 0.25 }, 'linear unequal')
+
+  const polarLeft = transformPoint(1, 0, 'polar-bipolar')
+  assertAlmostEqual(polarLeft.dx, -Math.SQRT1_2, 1e-9, 'polar left-only x')
+  assertAlmostEqual(polarLeft.dy, Math.SQRT1_2, 1e-9, 'polar left-only y')
+  assertAlmostEqual(Math.hypot(polarLeft.dx, polarLeft.dy), 1, 1e-9, 'polar left-only radius')
+  const polarUnequal = transformPoint(0.75, -0.25, 'polar-bipolar')
+  assertAlmostEqual(
+    Math.hypot(polarUnequal.dx, polarUnequal.dy),
+    Math.pow(Math.hypot(0.75, -0.25), 0.35),
+    1e-9,
+    'polar unequal radius retains classic shaping',
+  )
+
+  for (const amplitude of [0.25, 0.5, 1]) {
+    const xy = transformPoint(amplitude, amplitude, 'lissajous')
+    const linear = transformPoint(amplitude, amplitude, 'linear-bipolar')
+    const polar = transformPoint(amplitude, amplitude, 'polar-bipolar')
+    assertAlmostEqual(Math.max(Math.abs(xy.dx), Math.abs(xy.dy)), amplitude, 1e-9, `XY amplitude ${amplitude}`)
+    assertAlmostEqual(Math.abs(linear.dx) + Math.abs(linear.dy), amplitude, 1e-9, `linear amplitude ${amplitude}`)
+    assertAlmostEqual(
+      Math.hypot(polar.dx, polar.dy),
+      Math.pow(Math.hypot(amplitude, amplitude), 0.35),
+      1e-9,
+      `classic polar amplitude ${amplitude}`,
+    )
+  }
+
+  for (const mode of ['polar-unipolar', 'linear-unipolar'] as const) {
+    assertPoint(
+      transformPoint(-0.8, -0.2, mode),
+      transformPoint(0.8, 0.2, mode),
+      `${mode} antipodal fold`,
+    )
+  }
+})
+
+test('vectorscope zoom maps the labeled per-channel and Polar radial references', () => {
+  for (const zoomDb of [-12, 0, 24]) {
+    const inputReference = 10 ** (-zoomDb / 20)
+    assertAlmostEqual(vectorscopeZoomDbToGain(zoomDb) * inputReference, 1, 1e-12, `zoom ${zoomDb}`)
+
+    for (const mode of ['lissajous', 'linear-unipolar', 'linear-bipolar'] as const) {
+      const point = transformPoint(inputReference, inputReference, mode, zoomDb)
+      const boundaryValue = mode === 'lissajous'
+        ? Math.max(Math.abs(point.dx), Math.abs(point.dy))
+        : Math.abs(point.dx) + Math.abs(point.dy)
+      assertAlmostEqual(boundaryValue, 1, 1e-9, `${mode} at zoom ${zoomDb}`)
+    }
+
+    for (const mode of ['polar-unipolar', 'polar-bipolar'] as const) {
+      const point = transformPoint(inputReference, 0, mode, zoomDb)
+      assertAlmostEqual(Math.hypot(point.dx, point.dy), 1, 1e-9, `${mode} radial reference at zoom ${zoomDb}`)
+    }
+  }
+
+  assert.equal(normalizeVectorscopeZoomDb(6.49), 6)
+  assert.equal(normalizeVectorscopeZoomDb(6.5), 7)
+  assert.equal(normalizeVectorscopeZoomDb(-99), -12)
+  assert.equal(normalizeVectorscopeZoomDb(99), 24)
+  assert.equal(normalizeVectorscopeZoomDb('invalid'), 0)
+  assert.equal(formatVectorscopeReferenceDbfs(6), '-6 dBFS')
+  assert.equal(formatVectorscopeReferenceDbfs(-6), '+6 dBFS')
+})
+
+test('vectorscope phase-risk classification treats channel guides as safe boundaries', () => {
+  assert.equal(isVectorscopePhaseRisk(1, 1), false)
+  assert.equal(isVectorscopePhaseRisk(-1, -1), false)
+  assert.equal(isVectorscopePhaseRisk(1, -1), true)
+  assert.equal(isVectorscopePhaseRisk(-0.25, 0.75), true)
+  assert.equal(isVectorscopePhaseRisk(1, 0), false)
+  assert.equal(isVectorscopePhaseRisk(0, -1), false)
+})
+
+test('native and JavaScript vectorscope paths project identical channel samples', () => {
   const dom = installFakeCanvasDom()
   const dataSource = {
     getPendingVectorscopeSamples: () => [],
@@ -3486,7 +3611,71 @@ test('Vectorscope keeps the original linear projection behavior', () => {
     isPlaying: () => false,
     subscribeToSessionChanges: () => () => {},
   }
-  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource })
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource, nativeAnalyzer: null, zoomDb: 3 })
+
+  try {
+    const state = vectorscope as unknown as {
+      drawPoints: (
+        ctx: CanvasRenderingContext2D,
+        x: Float32Array,
+        y: Float32Array,
+        count: number,
+        centerX: number,
+        centerY: number,
+        scale: number,
+      ) => void
+      drawFallbackPoints: (
+        ctx: CanvasRenderingContext2D,
+        samples: Array<{ left: Float32Array; right: Float32Array }>,
+        centerX: number,
+        centerY: number,
+        scale: number,
+      ) => void
+      options: { mode: 'polar-unipolar' }
+    }
+    state.options.mode = 'polar-unipolar'
+    const left = -0.8
+    const right = -0.2
+    const nativeRecorder = createFakeCanvasRecorder()
+    const fallbackRecorder = createFakeCanvasRecorder()
+
+    state.drawPoints(
+      createFakeCanvasContext(nativeRecorder),
+      new Float32Array([right]),
+      new Float32Array([left]),
+      1,
+      100,
+      100,
+      80,
+    )
+    state.drawFallbackPoints(
+      createFakeCanvasContext(fallbackRecorder),
+      [{ left: new Float32Array([left]), right: new Float32Array([right]) }],
+      100,
+      100,
+      80,
+    )
+
+    assert.equal(nativeRecorder.fillRects.length, 1)
+    assert.equal(fallbackRecorder.fillRects.length, 1)
+    assertAlmostEqual(nativeRecorder.fillRects[0]?.x ?? 0, fallbackRecorder.fillRects[0]?.x ?? 0, 1e-6, 'path parity x')
+    assertAlmostEqual(nativeRecorder.fillRects[0]?.y ?? 0, fallbackRecorder.fillRects[0]?.y ?? 0, 1e-6, 'path parity y')
+  } finally {
+    vectorscope.dispose()
+    dom.restore()
+  }
+})
+
+test('Vectorscope applies live calibrated zoom and clears the previous projection', () => {
+  const dom = installFakeCanvasDom()
+  const nativeAnalyzer = createFakeVectorscopeNativeAnalyzer()
+  const dataSource = {
+    getPendingVectorscopeSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const vectorscope = new Vectorscope(createFakeCanvas(), { dataSource, nativeAnalyzer })
 
   try {
     const state = vectorscope as unknown as {
@@ -3501,12 +3690,16 @@ test('Vectorscope keeps the original linear projection behavior', () => {
         dotSize: number,
       ) => void
       getProjectionScale: (radius: number) => number
+      options: { zoomDb: number }
     }
     const layout = getVectorscopeLayout(320, 180, 'linear-bipolar')
     const recorder = createFakeCanvasRecorder()
     const ctx = createFakeCanvasContext(recorder)
     const scale = state.getProjectionScale(layout.radius)
 
+    vectorscope.setOptions({ zoomDb: 6.4 })
+    assert.equal(state.options.zoomDb, 6)
+    assert.equal(nativeAnalyzer.resetCount, 1)
     state.drawProjectedDot(ctx, -1, 1, 'linear-bipolar', layout.centerX, layout.centerY, scale, 2)
 
     assert.equal(recorder.fillRects.length, 1)
@@ -3515,15 +3708,15 @@ test('Vectorscope keeps the original linear projection behavior', () => {
     const projectedCenterY = rect.y + rect.height / 2
     assertAlmostEqual(
       projectedCenterX,
-      layout.centerX + layout.radius * Math.SQRT2,
+      layout.centerX + layout.radius * vectorscopeZoomDbToGain(6),
       1e-6,
-      'linear projection should preserve the original unscaled mapping',
+      'linear projection should apply the normalized zoom gain',
     )
     assertAlmostEqual(
       projectedCenterY,
       layout.centerY,
       1e-6,
-      'linear overs peak should stay on the side axis',
+      'anti-phase projection should stay on the Side axis',
     )
   } finally {
     vectorscope.dispose()
@@ -3675,6 +3868,26 @@ test('scopeSummary includes only waveform display modes', () => {
 
   profile.scopeSettings.waveform.multiband = true
   assert.equal(scopeSummary('waveform', profile.scopeSettings.waveform), 'Stereo · RGB')
+})
+
+test('scopeSummary exposes explicit vectorscope geometry and zoom names', () => {
+  const profile = createDefaultProfile('Default')
+
+  assert.equal(scopeSummary('vectorscope', profile.scopeSettings.vectorscope), 'XY (L/R)')
+
+  profile.scopeSettings.vectorscope.mode = 'polar-unipolar'
+  profile.scopeSettings.vectorscope.zoomDb = 6
+  profile.scopeSettings.vectorscope.multiband = true
+  assert.equal(
+    scopeSummary('vectorscope', profile.scopeSettings.vectorscope),
+    'Polar (Folded) · Zoom +6 dB · RGB',
+  )
+
+  profile.scopeSettings.vectorscope.mode = 'linear-bipolar'
+  assert.equal(
+    scopeSummary('vectorscope', profile.scopeSettings.vectorscope),
+    'M/S Linear (Bipolar) · Zoom +6 dB · RGB',
+  )
 })
 
 test('scopeSummary includes loudness readout source', () => {

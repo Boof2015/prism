@@ -26,20 +26,26 @@ import {
   MIN_WAVEFORM_SCROLL_SPEED,
   WAVEFORM_SCROLL_SPEED_STEP,
 } from '../../types/waveform'
+import {
+  formatVectorscopeZoomDb,
+  MAX_VECTORSCOPE_ZOOM_DB,
+  MIN_VECTORSCOPE_ZOOM_DB,
+  VECTORSCOPE_ZOOM_STEP_DB,
+} from '../../types/vectorscope'
 import ThemedSelect from './ThemedSelect'
 
 function vectorscopeModeLabel(mode: ScopeSettings['vectorscope']['mode']): string {
   switch (mode) {
     case 'lissajous':
-      return 'Lissajous'
+      return 'XY (L/R)'
     case 'polar-unipolar':
-      return 'Polar Uni'
+      return 'Polar (Folded)'
     case 'polar-bipolar':
-      return 'Polar Bi'
+      return 'Polar (Bipolar)'
     case 'linear-unipolar':
-      return 'Linear Uni'
+      return 'M/S Linear (Folded)'
     case 'linear-bipolar':
-      return 'Linear Bi'
+      return 'M/S Linear (Bipolar)'
   }
 }
 
@@ -100,9 +106,10 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     }
     case 'vectorscope': {
       const scopeSettings = settings as ScopeSettings['vectorscope']
-      return scopeSettings.multiband
-        ? `${vectorscopeModeLabel(scopeSettings.mode)} · RGB`
-        : vectorscopeModeLabel(scopeSettings.mode)
+      const parts = [vectorscopeModeLabel(scopeSettings.mode)]
+      if (scopeSettings.zoomDb !== 0) parts.push(`Zoom ${formatVectorscopeZoomDb(scopeSettings.zoomDb)}`)
+      if (scopeSettings.multiband) parts.push('RGB')
+      return parts.join(' · ')
     }
     case 'spectrogram': {
       const scopeSettings = settings as ScopeSettings['spectrogram']
@@ -488,12 +495,23 @@ export default function ScopeSettingsSection({
                 value={current.mode}
                 onChange={(value) => onUpdate('vectorscope', { mode: value as ScopeSettings['vectorscope']['mode'] })}
               >
-                <option value="lissajous">Lissajous</option>
-                <option value="polar-unipolar">Polar (Uni)</option>
-                <option value="polar-bipolar">Polar (Bi)</option>
-                <option value="linear-unipolar">Linear (Uni)</option>
-                <option value="linear-bipolar">Linear (Bi)</option>
+                <option value="lissajous">XY (L/R)</option>
+                <option value="polar-unipolar">Polar (Folded)</option>
+                <option value="polar-bipolar">Polar (Bipolar)</option>
+                <option value="linear-unipolar">M/S Linear (Folded)</option>
+                <option value="linear-bipolar">M/S Linear (Bipolar)</option>
               </SelectControl>
+
+              <RangeControl
+                label="Zoom"
+                value={current.zoomDb}
+                valueLabel={formatVectorscopeZoomDb(current.zoomDb)}
+                min={MIN_VECTORSCOPE_ZOOM_DB}
+                max={MAX_VECTORSCOPE_ZOOM_DB}
+                step={VECTORSCOPE_ZOOM_STEP_DB}
+                fullWidth={false}
+                onChange={(value) => onUpdate('vectorscope', { zoomDb: value })}
+              />
 
               <ToggleGroup label="Overlays">
                 <ToggleChip

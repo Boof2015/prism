@@ -33,6 +33,7 @@ import {
   normalizeScopeMirrorHorizontal,
   type ScopeDisplayRotation,
 } from '../types/scopeTransform'
+import { normalizeVectorscopeZoomDb } from '../types/vectorscope'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -189,6 +190,9 @@ export function mergeScopeSettings(
   const rawOscilloscope: Partial<ScopeSettings['oscilloscope']> = typeof parsed.oscilloscope === 'object' && parsed.oscilloscope !== null
     ? parsed.oscilloscope
     : {}
+  const rawVectorscope: Partial<ScopeSettings['vectorscope']> = typeof parsed.vectorscope === 'object' && parsed.vectorscope !== null
+    ? parsed.vectorscope
+    : {}
   const rawWaveform: Partial<ScopeSettings['waveform']> = typeof parsed.waveform === 'object' && parsed.waveform !== null
     ? parsed.waveform
     : {}
@@ -216,7 +220,11 @@ export function mergeScopeSettings(
       ...rawOscilloscope,
       ...normalizeDisplayTransform(rawOscilloscope),
     },
-    vectorscope: { ...DEFAULT_SCOPE_SETTINGS.vectorscope, ...(parsed.vectorscope ?? {}) },
+    vectorscope: {
+      ...DEFAULT_SCOPE_SETTINGS.vectorscope,
+      ...rawVectorscope,
+      zoomDb: normalizeVectorscopeZoomDb(rawVectorscope.zoomDb),
+    },
     spectrogram: {
       ...DEFAULT_SCOPE_SETTINGS.spectrogram,
       ...rawSpectrogramSettings,

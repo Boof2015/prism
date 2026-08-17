@@ -124,6 +124,9 @@ jobs:
       - name: Test native spectrogram accuracy
         run: npm run test:spectrogram-native
 
+      - name: Test native vectorscope calibration
+        run: npm run test:vectorscope-native
+
       - name: Build and test Prism TUI
         run: npm run test:tui
 

@@ -118,6 +118,7 @@ const OSCILLOSCOPE_SCHEMA = {
 const VECTORSCOPE_SCHEMA = {
   background: 'background',
   trace: 'trace',
+  phase_risk: 'phaseRisk',
   band_low: 'bandLow',
   band_mid: 'bandMid',
   band_high: 'bandHigh',
@@ -1387,6 +1388,7 @@ export function createTemplateThemeFile(): string {
   const vectorscopeSection = commentExampleTokens(serializeSection('Vectorscope', {
     ...base.vectorscope,
     background: resolved.vectorscope.background,
+    phaseRisk: resolved.vectorscope.phaseRisk,
     guides: resolved.vectorscope.guides,
     labels: resolved.vectorscope.labels,
   }, VECTORSCOPE_SCHEMA as SectionSchema<Record<string, string | undefined>>))
@@ -1689,6 +1691,7 @@ function resolveVectorscopeTheme(
   const guides = theme.vectorscope.guides ?? scopes.guides
   return {
     trace: theme.vectorscope.trace ?? app.accent,
+    phaseRisk: theme.vectorscope.phaseRisk ?? app.warning,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
     labels: theme.vectorscope.labels ?? guides,

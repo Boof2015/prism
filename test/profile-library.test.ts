@@ -52,6 +52,7 @@ function createProfile(name: string): Profile {
   profile.scopeSettings.spectrum.heatmapSmoothing = 0.67
   profile.scopeSettings.spectrum.scaleMode = 'mel'
   profile.scopeSettings.spectrum.frequencyRangeMode = 'audible'
+  profile.scopeSettings.vectorscope.zoomDb = 6
   profile.scopeSettings.spectrogram.colorScheme = 'mono'
   profile.scopeSettings.spectrogram.clarityMode = 'focused'
   profile.scopeSettings.spectrogram.scaleMode = 'linear'
@@ -76,6 +77,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(file.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(file.scopeSettings.spectrum.scaleMode, 'mel')
   assert.equal(file.scopeSettings.spectrum.frequencyRangeMode, 'audible')
+  assert.equal(file.scopeSettings.vectorscope.zoomDb, 6)
   assert.equal(file.scopeSettings.spectrogram.scaleMode, 'linear')
   assert.equal(file.scopeSettings.spectrogram.clarityMode, 'focused')
   assert.equal(file.scopeSettings.spectrogram.frequencyRangeMode, 'extended')
@@ -94,6 +96,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrum.heatmapSmoothing, 0.67)
   assert.equal(restored.scopeSettings.spectrum.scaleMode, 'mel')
   assert.equal(restored.scopeSettings.spectrum.frequencyRangeMode, 'audible')
+  assert.equal(restored.scopeSettings.vectorscope.zoomDb, 6)
   assert.equal(restored.scopeSettings.spectrogram.colorScheme, 'mono')
   assert.equal(restored.scopeSettings.spectrogram.clarityMode, 'focused')
   assert.equal(restored.scopeSettings.spectrogram.scaleMode, 'linear')
@@ -200,6 +203,16 @@ test('mergeScopeSettings defaults missing or invalid VU needle channel settings 
   assert.equal(combined.vumeter.needleChannels, 'combined')
   assert.equal(invalid.vumeter.needleChannels, 'stereo')
   assert.equal(missing.vumeter.needleChannels, 'stereo')
+})
+
+test('mergeScopeSettings normalizes vectorscope zoom without a profile migration', () => {
+  assert.equal(mergeScopeSettings({ vectorscope: { zoomDb: 6.49 } }).vectorscope.zoomDb, 6)
+  assert.equal(mergeScopeSettings({ vectorscope: { zoomDb: 6.5 } }).vectorscope.zoomDb, 7)
+  assert.equal(mergeScopeSettings({ vectorscope: { zoomDb: -99 } }).vectorscope.zoomDb, -12)
+  assert.equal(mergeScopeSettings({ vectorscope: { zoomDb: 99 } }).vectorscope.zoomDb, 24)
+  assert.equal(mergeScopeSettings({ vectorscope: { zoomDb: 'loud' } }).vectorscope.zoomDb, 0)
+  assert.equal(mergeScopeSettings({ vectorscope: {} }).vectorscope.zoomDb, 0)
+  assert.equal(mergeScopeSettings({}).vectorscope.zoomDb, 0)
 })
 
 test('mergeScopeSettings normalizes frequency scales, ranges, clarity, and supported spectrogram speeds', () => {

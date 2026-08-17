@@ -20,6 +20,7 @@ import {
   DEFAULT_SCOPE_MIRROR_HORIZONTAL,
   type ScopeDisplayTransformSettings,
 } from './scopeTransform'
+import { DEFAULT_VECTORSCOPE_ZOOM_DB } from './vectorscope'
 
 export interface ScopeSettings {
   spectrum: ScopeDisplayTransformSettings & {
@@ -44,6 +45,7 @@ export interface ScopeSettings {
   }
   vectorscope: {
     mode: VectorscopeMode
+    zoomDb: number
     multiband: boolean
     showGrid: boolean
     persistence: number
@@ -88,7 +90,7 @@ export interface ScopeSettings {
 export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   spectrum: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, scaleMode: DEFAULT_FREQUENCY_SCALE_MODE, frequencyRangeMode: DEFAULT_FREQUENCY_RANGE_MODE, fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, heatmapSmoothing: 0.5, showGrid: true, smoothing: 0.9, fillGradient: true, showSideLine: false, peakInfoMode: DEFAULT_SPECTRUM_PEAK_INFO_MODE },
   oscilloscope: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, pitchLock: true, underfillEnabled: false, showGrid: true, lineWidth: 2 },
-  vectorscope: { mode: 'lissajous', multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
+  vectorscope: { mode: 'lissajous', zoomDb: DEFAULT_VECTORSCOPE_ZOOM_DB, multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
   spectrogram: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, fftSize: 4096, tiltDbPerOctave: DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE, scrollSpeed: 2, contrast: DEFAULT_SPECTROGRAM_CONTRAST, clarityMode: 'sharper', scaleMode: 'log', frequencyRangeMode: DEFAULT_FREQUENCY_RANGE_MODE, showGrid: true, colorScheme: 'heat' },
   vumeter: { mode: 'bar', orientation: 'horizontal', needleChannels: 'stereo', referenceDb: DEFAULT_VU_REFERENCE_DBFS },
   lufsmeter: { mode: 'bar', readout: DEFAULT_LUFS_METER_READOUT },

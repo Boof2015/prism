@@ -77,6 +77,7 @@ export interface ThemeOscilloscopeTokens {
 export interface ThemeVectorscopeTokens {
   background?: string
   trace?: string
+  phaseRisk?: string
   bandLow?: string
   bandMid?: string
   bandHigh?: string
@@ -268,6 +269,7 @@ export interface ResolvedOscilloscopeTheme {
 
 export interface ResolvedVectorscopeTheme {
   trace: string
+  phaseRisk: string
   guides: string
   guidesSecondary: string
   labels: string

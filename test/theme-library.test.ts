@@ -63,6 +63,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   theme.controls.flatControls = 'true'
   theme.scopes.background = '#030712'
   theme.spectrum.heatMid = 'rgb(200, 50, 120)'
+  theme.vectorscope.phaseRisk = 'rgb(240, 120, 40)'
   theme.vumeter.track = '#111827'
   theme.vumeter.needleLeft = 'rgb(70, 80, 90)'
 
@@ -76,6 +77,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.match(serialized, /\[Scopes\]/)
   assert.match(serialized, /flat_controls = true/)
   assert.match(serialized, /needle_left = 70, 80, 90/)
+  assert.match(serialized, /phase_risk = 240, 120, 40/)
   assert.doesNotMatch(serialized, /^id = /m)
   assert.doesNotMatch(serialized, /^name = /m)
 
@@ -85,6 +87,7 @@ test('theme files round-trip and keep grouped sections intact', () => {
   assert.equal(parsed.controls.flatControls, 'true')
   assert.equal(parsed.scopes.background, 'rgb(3, 7, 18)')
   assert.equal(parsed.spectrum.heatMid, 'rgb(200, 50, 120)')
+  assert.equal(parsed.vectorscope.phaseRisk, 'rgb(240, 120, 40)')
   assert.equal(parsed.vumeter.track, 'rgb(17, 24, 39)')
   assert.equal(parsed.vumeter.needleLeft, 'rgb(70, 80, 90)')
   assert.equal(parsed.nowPlaying.background, theme.nowPlaying.background)
@@ -316,6 +319,7 @@ test('createTemplateThemeFile presents a simplified recommended theme layout', (
   assert.match(template, /^\[Controls\]$/m)
   assert.match(template, /^\[Scopes\]$/m)
   assert.match(template, /^\[Spectrum\]$/m)
+  assert.match(template, /^# phase_risk = 255, 191, 0$/m)
   assert.match(template, /^# flat_controls = false$/m)
   assert.match(template, /^# toolbar_bg = 4, 8, 12, 199$/m)
   assert.equal(parsed.app.accent, 'rgb(56, 189, 248)')
@@ -335,6 +339,7 @@ test('parsed template keeps module colors and backgrounds derived from starter a
   assert.equal(resolved.spectrum.line, 'rgb(74, 222, 128)')
   assert.equal(resolved.oscilloscope.line, 'rgb(74, 222, 128)')
   assert.equal(resolved.vectorscope.trace, 'rgb(74, 222, 128)')
+  assert.equal(resolved.vectorscope.phaseRisk, resolved.interface.warning)
   assert.equal(resolved.waveform.line, 'rgb(74, 222, 128)')
   assert.equal(resolved.interface.scopeBackground, 'rgb(3, 7, 18)')
   assert.equal(resolved.spectrum.background, 'rgb(3, 7, 18)')

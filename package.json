@@ -25,6 +25,7 @@
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
     "test:spectrum-native": "node --test test/spectrum-native.test.mjs",
     "test:spectrogram-native": "node --test test/spectrogram-native.test.mjs",
+    "test:vectorscope-native": "node --test test/vectorscope-native.test.mjs",
     "test:tui": "node scripts/build/build-tui.cjs --test",
     "test:build-metadata": "node scripts/run-build-metadata-tests.mjs",
     "test:updates": "node scripts/run-update-tests.mjs",
