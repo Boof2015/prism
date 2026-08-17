@@ -70,6 +70,8 @@ The plugins install alongside Prism, so there is no separate download.
 
 Prism also includes `prism-tui`, a native terminal interface built on the same capture and analysis code.
 
+![Prism TUI](assets/prism-tui-demo-readme.gif)
+
 It provides real-time spectrum, metering, loudness, and other monitoring tools without needing to run the desktop interface.
 
 ```bash
