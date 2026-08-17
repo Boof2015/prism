@@ -259,10 +259,11 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
             <div className="scope-popout__actions">
               <button
                 type="button"
-                className={`scope-popout__button ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
+                className={`scope-popout__button scope-popout__button--pin ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
                 onClick={() => window.electronAPI.toggleAlwaysOnTop()}
                 aria-label={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
                 title={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
+                aria-pressed={isAlwaysOnTop}
               >
                 <PinIcon />
               </button>

@@ -780,10 +780,26 @@ button.toolbar__version:hover {
   transform: translateY(-1px);
 }
 
-.toolbar__icon-button.is-active {
+.toolbar__icon-button.is-active,
+.toolbar__icon-button.is-active:hover:not(:disabled) {
   color: var(--accent);
   border-color: var(--control-border-active);
   background: var(--control-bg-active);
+  transform: none;
+}
+
+.toolbar__icon-button--pin:hover:not(:disabled):not(.is-active) {
+  border-color: var(--control-border);
+  background: var(--control-bg);
+}
+
+.toolbar__icon-button--pin.is-active,
+.toolbar__icon-button--pin.is-active:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.toolbar__icon-button--pin.is-active svg path {
+  fill: currentColor;
 }
 
 .toolbar__icon-button--danger:hover:not(:disabled) {
@@ -2407,12 +2423,33 @@ button.toolbar__version:hover {
   height: 14px;
 }
 
-.scope-popout__button:hover:not(:disabled),
-.scope-popout__button.is-active {
+.scope-popout__button:hover:not(:disabled) {
+  color: var(--control-text);
+  border-color: var(--control-border-active);
+  background: var(--control-bg-hover);
+  transform: translateY(-1px);
+}
+
+.scope-popout__button.is-active,
+.scope-popout__button.is-active:hover:not(:disabled) {
   color: var(--accent);
   border-color: var(--control-border-active);
   background: var(--control-bg-active);
-  transform: translateY(-1px);
+  transform: none;
+}
+
+.scope-popout__button--pin:hover:not(:disabled):not(.is-active) {
+  border-color: transparent;
+  background: var(--control-bg);
+}
+
+.scope-popout__button--pin.is-active,
+.scope-popout__button--pin.is-active:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.scope-popout__button--pin.is-active svg path {
+  fill: currentColor;
 }
 
 .scope-popout__button:disabled {

@@ -3992,6 +3992,40 @@ test('BottomBar close button uses flat themed control backgrounds', async () => 
   assert.doesNotMatch(closeHoverBlock, /linear-gradient/)
 })
 
+test('pin buttons use a persistent filled active state distinct from inactive hover', async () => {
+  const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
+  const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const toolbarHoverBlock = stylesSource.match(
+    /\.toolbar__icon-button--pin:hover:not\(:disabled\):not\(\.is-active\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+  const toolbarActiveBlock = stylesSource.match(
+    /\.toolbar__icon-button--pin\.is-active,\n\.toolbar__icon-button--pin\.is-active:hover:not\(:disabled\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+  const popoutHoverBlock = stylesSource.match(
+    /\.scope-popout__button--pin:hover:not\(:disabled\):not\(\.is-active\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+  const popoutActiveBlock = stylesSource.match(
+    /\.scope-popout__button--pin\.is-active,\n\.scope-popout__button--pin\.is-active:hover:not\(:disabled\) \{([\s\S]*?)\n\}/,
+  )?.[1]
+
+  assert.match(toolbarSource, /toolbar__icon-button toolbar__icon-button--pin/)
+  assert.match(toolbarSource, /aria-pressed=\{isAlwaysOnTop\}/)
+  assert.match(popoutSource, /scope-popout__button scope-popout__button--pin/)
+  assert.match(popoutSource, /aria-pressed=\{isAlwaysOnTop\}/)
+  assert.ok(toolbarHoverBlock)
+  assert.ok(toolbarActiveBlock)
+  assert.ok(popoutHoverBlock)
+  assert.ok(popoutActiveBlock)
+
+  assert.match(toolbarHoverBlock, /background: var\(--control-bg\);/)
+  assert.match(popoutHoverBlock, /background: var\(--control-bg\);/)
+  assert.match(toolbarActiveBlock, /border-color: var\(--accent\);/)
+  assert.match(popoutActiveBlock, /border-color: var\(--accent\);/)
+  assert.match(stylesSource, /\.toolbar__icon-button--pin\.is-active svg path \{\n  fill: currentColor;/)
+  assert.match(stylesSource, /\.scope-popout__button--pin\.is-active svg path \{\n  fill: currentColor;/)
+})
+
 test('toolbar uses the Prism logo support link and static package icons are configured', async () => {
   const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
   const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')

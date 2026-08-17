@@ -621,10 +621,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
 
         <button
           type="button"
-          className={`toolbar__icon-button ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
+          className={`toolbar__icon-button toolbar__icon-button--pin ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
           onClick={handlePin}
           title={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
           aria-label={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
+          aria-pressed={isAlwaysOnTop}
         >
           <PinIcon />
         </button>
