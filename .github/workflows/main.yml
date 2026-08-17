@@ -1,0 +1,272 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 22.x
+  CMAKE_BUILD_PARALLEL_LEVEL: '4'
+  PRISM_JUCE_VERSION: 8.0.4
+  PRISM_WEBVIEW2_VERSION: 1.0.1901.177
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Cache Electron
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install Linux native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            python3 \
+            libpulse-dev
+
+      - name: Install dependencies
+        env:
+          PRISM_SKIP_NATIVE_POSTINSTALL: '1'
+        run: npm ci
+
+      - name: Build native DSP module
+        run: npm run rebuild:native
+
+      - name: Verify native module exists
+        shell: bash
+        run: |
+          if [ ! -f native/build/Release/visualizer_dsp.node ]; then
+            echo "ERROR: native DSP module was not built!"
+            exit 1
+          fi
+          echo "Native module built successfully: $(ls -lh native/build/Release/visualizer_dsp.node)"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build and test Prism TUI
+        run: npm run test:tui
+
+      - name: Build desktop application
+        run: npm run build
+
+      - name: Build plugin webview bundle
+        run: npm run plugin-ui:build
+
+  build-smoke:
+    name: Build Smoke (${{ matrix.os }})
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: quality-gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Cache Electron
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Setup sccache
+        if: runner.os != 'Linux'
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache JUCE
+        uses: actions/cache@v5
+        with:
+          path: .ci-cache/juce/JUCE-${{ env.PRISM_JUCE_VERSION }}
+          key: ${{ runner.os }}-juce-${{ env.PRISM_JUCE_VERSION }}-v1
+
+      - name: Prepare JUCE checkout
+        shell: bash
+        run: |
+          juce_dir=".ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}"
+          if [ ! -f "$juce_dir/CMakeLists.txt" ]; then
+            rm -rf "$juce_dir"
+            mkdir -p "$(dirname "$juce_dir")"
+            git clone --depth 1 --branch "$PRISM_JUCE_VERSION" https://github.com/juce-framework/JUCE.git "$juce_dir"
+          fi
+
+      - name: Install dependencies
+        env:
+          PRISM_SKIP_NATIVE_POSTINSTALL: '1'
+        run: npm ci
+
+      - name: Install Linux native build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            python3 \
+            libpulse-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            ladspa-sdk \
+            libcurl4-openssl-dev \
+            libfreetype-dev \
+            libfontconfig1-dev \
+            libgtk-3-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libwebkit2gtk-4.1-dev \
+            libglu1-mesa-dev \
+            mesa-common-dev
+
+      - name: Build native DSP module
+        run: npm run rebuild:native
+
+      - name: Verify native module exists
+        shell: bash
+        run: |
+          if [ ! -f native/build/Release/visualizer_dsp.node ]; then
+            echo "ERROR: native DSP module was not built!"
+            exit 1
+          fi
+          echo "Native module built successfully: $(ls -lh native/build/Release/visualizer_dsp.node)"
+
+      - name: Test native spectrum and capture exports
+        run: npm run test:spectrum-native
+
+      - name: Test native spectrogram accuracy
+        run: npm run test:spectrogram-native
+
+      - name: Test native vectorscope calibration
+        run: npm run test:vectorscope-native
+
+      - name: Build and test Prism TUI
+        run: npm run test:tui
+
+      - name: Build desktop application
+        run: npm run build
+
+      - name: Build plugin webview bundle
+        run: npm run plugin-ui:build
+
+      - name: Cache WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/webview2
+          key: ${{ runner.os }}-webview2-${{ env.PRISM_WEBVIEW2_VERSION }}-v1
+
+      - name: Install WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sdkRoot = "$env:RUNNER_TEMP\webview2"
+          $packageRoot = Join-Path $sdkRoot "Microsoft.Web.WebView2"
+          $webViewHeader = Join-Path $packageRoot "build\native\include\WebView2.h"
+          if (-not (Test-Path $webViewHeader)) {
+            Remove-Item -Recurse -Force $sdkRoot -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $sdkRoot | Out-Null
+            nuget install Microsoft.Web.WebView2 -Version $env:PRISM_WEBVIEW2_VERSION -OutputDirectory $sdkRoot -ExcludeVersion
+          }
+          "JUCE_WEBVIEW2_PACKAGE_LOCATION=$sdkRoot" >> $env:GITHUB_ENV
+
+      - name: Configure JUCE plugins (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -B plugin/build -S plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
+            -DPRISM_PLUGIN_FORMATS="AU;VST3" \
+            -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Configure JUCE plugins (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -B plugin/build -S plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
+            -DPRISM_PLUGIN_FORMATS=VST3 \
+            -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      - name: Configure JUCE plugins (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="%GITHUB_WORKSPACE%\.ci-cache\juce\JUCE-%PRISM_JUCE_VERSION%" -DPRISM_PLUGIN_FORMATS=VST3 -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF -DJUCE_WEBVIEW2_PACKAGE_LOCATION="%JUCE_WEBVIEW2_PACKAGE_LOCATION%" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build JUCE plugins (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
+      - name: Build JUCE plugins (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
+      - name: Build JUCE plugins (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build plugin/build --target PrismInstallerPlugins --config Release --parallel 4
+
+      - name: Show sccache stats
+        if: runner.os != 'Linux'
+        run: sccache --show-stats

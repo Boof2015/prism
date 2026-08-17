@@ -10,6 +10,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "build:icons": "node scripts/build/generate-prism-icons.mjs",
+    "test": "node scripts/run-tests.mjs",
     "test:audio-router": "node scripts/run-audio-router-tests.mjs",
     "test:audio-clips": "node scripts/run-audio-clip-tests.mjs",
     "test:audio-store": "node scripts/run-audio-store-tests.mjs",
