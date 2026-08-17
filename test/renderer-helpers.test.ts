@@ -609,6 +609,7 @@ interface FakeCanvasRecorder {
   lineStrokes: Array<{
     commands: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }>
     strokeStyle: string
+    lineWidth: number
   }>
   strokeRects: Array<{ x: number; y: number; width: number; height: number; lineDash: number[] }>
   arcs: Array<{
@@ -647,6 +648,7 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
   let currentLineDash: number[] = []
   let currentFillStyle = ''
   let currentStrokeStyle = ''
+  let currentLineWidth = 1
   let currentFont = ''
   let currentCompositeOperation: GlobalCompositeOperation = 'source-over'
   let currentPath: Array<{ kind: 'moveTo' | 'lineTo'; x: number; y: number }> = []
@@ -674,7 +676,11 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     },
     stroke() {
       if (currentPath.length > 0) {
-        recorder?.lineStrokes.push({ commands: [...currentPath], strokeStyle: currentStrokeStyle })
+        recorder?.lineStrokes.push({
+          commands: [...currentPath],
+          strokeStyle: currentStrokeStyle,
+          lineWidth: currentLineWidth,
+        })
       }
     },
     strokeRect(x: number, y: number, width: number, height: number) {
@@ -683,6 +689,7 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, anticlockwise = false) {
       recorder?.arcs.push({ x, y, radius, startAngle, endAngle, anticlockwise, lineDash: [...currentLineDash] })
     },
+    ellipse() {},
     drawImage(...args: unknown[]) {
       recorder?.drawImageCalls.push({ compositeOperation: currentCompositeOperation, args })
     },
@@ -710,7 +717,12 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
       const fontSize = fontSizeMatch ? Number(fontSizeMatch[1]) : 12
       return { width: String(text).length * fontSize * 0.62 } as TextMetrics
     },
-    lineWidth: 1,
+    get lineWidth() {
+      return currentLineWidth
+    },
+    set lineWidth(value: number) {
+      currentLineWidth = value
+    },
     get font() {
       return currentFont
     },
@@ -3803,6 +3815,108 @@ test('VUMeter needle face layout stays fixed instead of scaling up', () => {
   assert.equal(retinaNarrow.width, 560)
   assert.equal(retinaNarrow.height, 360)
   assert.equal(retinaNarrow.y, 180)
+})
+
+test('VUMeter needle face renders a readable primary scale without redundant inner percentages', () => {
+  const dataSource = {
+    getPendingVUMeterSamples: () => [],
+    getSampleRate: () => 48000,
+    isPlaying: () => false,
+    subscribeToSessionChanges: () => () => {},
+  }
+  const renderNeedleFace = (
+    width: number,
+    height: number,
+    needleChannels: 'stereo' | 'combined',
+  ): FakeCanvasRecorder => {
+    const recorder = createFakeCanvasRecorder()
+    const meter = new VUMeter(createFakeCanvas(recorder, width, height), {
+      mode: 'needle',
+      needleChannels,
+      dataSource,
+      nativeAnalyzer: null,
+      labelColor: 'rgb(180, 200, 220)',
+      scaleColor: 'rgb(90, 100, 110)',
+      clipColor: 'rgb(250, 80, 70)',
+    })
+
+    try {
+      ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+    } finally {
+      meter.dispose()
+    }
+    return recorder
+  }
+
+  const full = renderNeedleFace(560, 360, 'stereo')
+  const fullColdEndpoint = full.fillTexts.find((text) => text.text === '20' && text.font.startsWith('700 '))
+  const fullMajor = full.fillTexts.find((text) => text.text === '+3')
+  const fullIntermediate = full.fillTexts.find((text) => text.text === '5')
+  const fullLeftLabel = full.fillTexts.find((text) => text.text === 'L')
+  const fullRightLabel = full.fillTexts.find((text) => text.text === 'R')
+  const fullReadoutValue = full.fillTexts.find((text) => text.text === '-∞')
+  const fullReadoutUnit = full.fillTexts.find((text) => text.text === 'dB')
+
+  assert.equal(fullMajor?.font, '700 26px "JetBrains Mono", monospace')
+  assert.equal(fullMajor?.fillStyle, 'rgba(250, 80, 70, 1)')
+  assert.equal(fullIntermediate?.font, '600 23.92px "JetBrains Mono", monospace')
+  assert.equal(fullIntermediate?.fillStyle, 'rgba(180, 200, 220, 1)')
+  assert.equal(fullLeftLabel?.font, '700 13.5px "JetBrains Mono", monospace')
+  assert.equal(fullRightLabel?.font, '700 13.5px "JetBrains Mono", monospace')
+  assert.equal(fullReadoutValue?.font, '600 19.5px "JetBrains Mono", monospace')
+  assert.equal(fullReadoutUnit?.font, '600 11.5px "JetBrains Mono", monospace')
+  assert.equal(full.fillTexts.some((text) => ['40', '60', '80', '100'].includes(text.text)), false)
+  assert.equal(full.fillTexts.some((text) => text.font.startsWith('500 ')), false)
+  assert.equal(
+    full.fillRects.filter((rect) => rect.fillStyle === 'rgba(180, 200, 220, 0.055)').length,
+    2,
+  )
+  assert.ok(full.arcs.some((arc) => arc.radius > 5))
+
+  const fullScaleTicks = full.lineStrokes.slice(0, 12)
+  const fullColdTickStart = fullScaleTicks[0]?.commands[0]
+  const fullHotTickStart = fullScaleTicks[11]?.commands[0]
+  assert.equal(fullColdTickStart?.kind, 'moveTo')
+  assert.equal(fullHotTickStart?.kind, 'moveTo')
+  assert.ok((fullColdEndpoint?.x ?? Number.POSITIVE_INFINITY) < (fullColdTickStart?.x ?? Number.NEGATIVE_INFINITY))
+  assert.ok((fullMajor?.x ?? Number.NEGATIVE_INFINITY) > (fullHotTickStart?.x ?? Number.POSITIVE_INFINITY))
+
+  const majorTick = full.lineStrokes.find((stroke) => stroke.strokeStyle === 'rgba(90, 100, 110, 0.96)')
+  const minorTick = full.lineStrokes.find((stroke) => stroke.strokeStyle === 'rgba(90, 100, 110, 0.82)')
+  assert.ok(majorTick)
+  assert.ok(minorTick)
+  assert.ok(majorTick.lineWidth > minorTick.lineWidth)
+
+  const compact = renderNeedleFace(280, 180, 'combined')
+  const compactColdEndpoint = compact.fillTexts.find((text) => text.text === '20' && text.font.startsWith('700 '))
+  const compactMajor = compact.fillTexts.find((text) => text.text === '+3')
+  const compactIntermediate = compact.fillTexts.find((text) => text.text === '5')
+  const compactReadoutValue = compact.fillTexts.find((text) => text.text === '-∞')
+  const compactReadoutUnit = compact.fillTexts.find((text) => text.text === 'dB')
+  const compactPrimaryLabels = compact.fillTexts.filter((text) => (
+    text.font === '700 13px "JetBrains Mono", monospace'
+    || text.font === '600 11.96px "JetBrains Mono", monospace'
+  ))
+
+  assert.equal(compactMajor?.font, '700 13px "JetBrains Mono", monospace')
+  assert.equal(compactIntermediate?.font, '600 11.96px "JetBrains Mono", monospace')
+  assert.equal(compactReadoutValue?.font, '600 9.75px "JetBrains Mono", monospace')
+  assert.equal(compactReadoutUnit?.font, '600 5.75px "JetBrains Mono", monospace')
+  assert.equal(compact.fillTexts.some((text) => ['40', '60', '80', '100'].includes(text.text)), false)
+  assert.equal(compactPrimaryLabels.length, 9)
+  for (const label of compactPrimaryLabels) {
+    const fontSize = Number(label.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 0)
+    const halfLabelWidth = label.text.length * fontSize * 0.62 / 2
+    assert.ok(label.x - halfLabelWidth >= 5.5)
+    assert.ok(label.x + halfLabelWidth <= 274.5)
+    assert.ok(label.y >= 0 && label.y <= 180)
+  }
+
+  const compactScaleTicks = compact.lineStrokes.slice(0, 12)
+  const compactColdTickStart = compactScaleTicks[0]?.commands[0]
+  const compactHotTickStart = compactScaleTicks[11]?.commands[0]
+  assert.ok((compactColdEndpoint?.x ?? Number.POSITIVE_INFINITY) < (compactColdTickStart?.x ?? Number.NEGATIVE_INFINITY))
+  assert.ok((compactMajor?.x ?? Number.NEGATIVE_INFINITY) > (compactHotTickStart?.x ?? Number.POSITIVE_INFINITY))
 })
 
 test('VUMeter shared needle helpers switch between stereo needles and combined RMS', () => {

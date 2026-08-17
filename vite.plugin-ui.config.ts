@@ -72,6 +72,9 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, 'plugin/webview-dist'),
     emptyOutDir: true,
+    // The plugin ships as one embedded HTML resource. Keep the meter's Latin
+    // font files inside the inlined stylesheet so no runtime asset URLs remain.
+    assetsInlineLimit: 64 * 1024,
     // Stable (unhashed) asset names so the C++ resource provider can map them
     // deterministically and CMake's embedded BinaryData symbols stay stable.
     rollupOptions: {

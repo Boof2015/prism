@@ -9,6 +9,8 @@ import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
 import '@fontsource/inter/600.css'
 import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/latin-600.css'
+import '@fontsource/jetbrains-mono/latin-700.css'
 import { SCOPE_KINDS, type ScopeKind } from '../types/scope'
 import { bootstrapWindowBackgroundFromQuery } from './windowBackground'
 
