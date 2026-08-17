@@ -2458,6 +2458,31 @@ button.toolbar__version:hover {
   transform: none;
 }
 
+@media (max-width: 180px) {
+  .scope-popout__header {
+    gap: 2px;
+    padding: 4px;
+  }
+
+  .scope-popout__drag {
+    flex: 0 0 auto;
+    gap: 0;
+  }
+
+  .scope-popout__title-group {
+    display: none;
+  }
+
+  .scope-popout__actions {
+    gap: 2px;
+  }
+
+  .scope-popout__button {
+    width: 24px;
+    height: 24px;
+  }
+}
+
 .toolbar__brand:focus-visible,
 .toolbar__profile-button:focus-visible,
 .toolbar__chip:focus-visible,

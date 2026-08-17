@@ -23,6 +23,7 @@ import type {
 import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
 import type { DialogOptions, DialogResult } from '../types/dialog'
 import { normalizeProfile } from '../shared/profileState'
+import { getScopePopoutMinWidth } from '../shared/scopeSizing'
 import { resolveNativeThemeSource } from '../shared/themeState'
 import {
   resolveMacWindowBlurMaterial,
@@ -141,7 +142,6 @@ const WINDOW_DEFAULTS = {
 const POPOUT_DEFAULTS = {
   width: 360,
   height: 240,
-  minWidth: 220,
   minHeight: 160,
 }
 
@@ -1543,7 +1543,7 @@ function buildProfileMenuTemplate(
   return template
 }
 
-function normalizeBounds(raw: unknown, fallback: WindowBounds): WindowBounds {
+function normalizeBounds(kind: ScopeKind, raw: unknown, fallback: WindowBounds): WindowBounds {
   if (typeof raw !== 'object' || raw === null) return fallback
 
   const candidate = raw as Partial<WindowBounds>
@@ -1559,7 +1559,7 @@ function normalizeBounds(raw: unknown, fallback: WindowBounds): WindowBounds {
   return {
     x: Math.round(candidate.x),
     y: Math.round(candidate.y),
-    width: Math.max(POPOUT_DEFAULTS.minWidth, Math.round(candidate.width)),
+    width: Math.max(getScopePopoutMinWidth(kind), Math.round(candidate.width)),
     height: Math.max(POPOUT_DEFAULTS.minHeight, Math.round(candidate.height)),
   }
 }
@@ -1878,7 +1878,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
         height: POPOUT_DEFAULTS.height,
       }
   const normalizedBounds = shouldRestoreGeometry
-    ? normalizeBounds(rawBounds, fallbackBounds)
+    ? normalizeBounds(kind, rawBounds, fallbackBounds)
     : fallbackBounds
   const bounds = shouldRestoreGeometry
     ? clampRestoredWindowBounds(normalizedBounds, getDisplayWorkAreas(), RESTORED_WINDOW_VISIBLE_MARGIN)
@@ -1889,7 +1889,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   const options: BrowserWindowConstructorOptions = {
     width: bounds.width,
     height: bounds.height,
-    minWidth: POPOUT_DEFAULTS.minWidth,
+    minWidth: getScopePopoutMinWidth(kind),
     minHeight: POPOUT_DEFAULTS.minHeight,
     ...getFramelessWindowOptions(background),
     autoHideMenuBar: true,
@@ -1974,7 +1974,7 @@ function syncScopePopouts(nextState: ScopePopoutSyncStateMap): void {
     if (supportsGeometryPersistence() && desired.bounds) {
       const currentBounds = popoutWindow.getBounds()
       const nextBounds = clampRestoredWindowBounds(
-        normalizeBounds(desired.bounds, currentBounds),
+        normalizeBounds(kind, desired.bounds, currentBounds),
         getDisplayWorkAreas(),
         RESTORED_WINDOW_VISIBLE_MARGIN,
       )

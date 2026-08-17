@@ -18,9 +18,13 @@ import {
   resolveMainWindowSettingsPanelHeight,
 } from '../src/renderer/mainWindowSettings'
 import {
-  LOCKED_LOUDNESS_METER_WIDTH_PX,
   buildAnalyzerGridTemplateColumns,
 } from '../src/renderer/analyzerLayout'
+import {
+  DEFAULT_SCOPE_POPOUT_MIN_WIDTH_PX,
+  MIN_LOUDNESS_METER_WIDTH_PX,
+  getScopePopoutMinWidth,
+} from '../src/shared/scopeSizing'
 import {
   formatAstraTime,
   getAstraPlaybackProgress,
@@ -769,6 +773,27 @@ function createFakeCanvas(
     height,
     getContext: (kind: string) => kind === '2d' ? context : null,
   } as unknown as HTMLCanvasElement
+}
+
+function createFakeCssSizedCanvas(
+  recorder: FakeCanvasRecorder,
+  cssWidth: number,
+  cssHeight: number,
+  pixelRatio = 1,
+): HTMLCanvasElement {
+  const canvas = createFakeCanvas(
+    recorder,
+    Math.round(cssWidth * pixelRatio),
+    Math.round(cssHeight * pixelRatio),
+  )
+  Object.defineProperty(canvas, 'style', {
+    configurable: true,
+    value: {
+      width: `${cssWidth}px`,
+      height: `${cssHeight}px`,
+    },
+  })
+  return canvas
 }
 
 function installFakeCanvasDom(createCanvas: () => HTMLCanvasElement = () => createFakeCanvas()): {
@@ -1677,17 +1702,28 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
   ])
 })
 
-test('analyzer layout locks the loudness meter width', () => {
+test('analyzer layout lets the loudness meter follow its width weight down to its supported minimum', () => {
   const columns = buildAnalyzerGridTemplateColumns(
     ['spectrum', 'lufsmeter', 'waveform'],
     { spectrum: 1, lufsmeter: 0.15, waveform: 1 },
   )
 
-  assert.equal(LOCKED_LOUDNESS_METER_WIDTH_PX, 150)
+  assert.equal(MIN_LOUDNESS_METER_WIDTH_PX, 112)
   assert.equal(
     columns,
-    `minmax(0, 1fr) minmax(${LOCKED_LOUDNESS_METER_WIDTH_PX}px, ${LOCKED_LOUDNESS_METER_WIDTH_PX}px) minmax(0, 1fr)`,
+    `minmax(0, 1fr) minmax(${MIN_LOUDNESS_METER_WIDTH_PX}px, 0.15fr) minmax(0, 1fr)`,
   )
+})
+
+test('scope popout sizing permits compact LUFS windows without changing other scope minimums', () => {
+  assert.equal(getScopePopoutMinWidth('lufsmeter'), MIN_LOUDNESS_METER_WIDTH_PX)
+  assert.equal(MIN_LOUDNESS_METER_WIDTH_PX, 112)
+  assert.equal(DEFAULT_SCOPE_POPOUT_MIN_WIDTH_PX, 220)
+
+  for (const kind of SCOPE_KINDS) {
+    if (kind === 'lufsmeter') continue
+    assert.equal(getScopePopoutMinWidth(kind), DEFAULT_SCOPE_POPOUT_MIN_WIDTH_PX)
+  }
 })
 
 test('scope canvas layout swaps logical dimensions for quarter-turn rotations', () => {
@@ -6410,6 +6446,172 @@ test('LUFSMeter fits readout text inside narrow tags', () => {
     assert.equal(estimatedTextWidth <= tagRect.width - 8, true)
   } finally {
     meter.dispose()
+    dom.restore()
+  }
+})
+
+test('LUFSMeter centers wide layouts in a bounded viewport', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const canvas = createFakeCssSizedCanvas(recorder, 522, 196)
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7 })
+  const meter = new LUFSMeter(canvas, {
+    dataSource: {
+      getPendingLUFSMeterSamples: () => [],
+      getSampleRate: () => 48000,
+      isPlaying: () => true,
+      subscribeToSessionChanges: () => () => {},
+    },
+    nativeAnalyzer,
+    lineColor: '#123456',
+    trackColor: '#111111',
+    targetColor: '#222222',
+    scaleColor: '#333333',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    const tracks = recorder.fillRects.filter((rect) => rect.fillStyle === '#111111')
+    const target = recorder.fillRects.find((rect) => rect.fillStyle === '#222222')
+    const tag = recorder.fillRects.find((rect) => rect.fillStyle === '#123456' && rect.height <= 22)
+    const readout = recorder.fillTexts[recorder.fillTexts.length - 1]
+    const viewportLeft = (canvas.width - 240) / 2
+    const viewportRight = viewportLeft + 240
+
+    assert.equal(tracks.length, 3)
+    assert.ok(target)
+    assert.ok(tag)
+    assert.equal(tracks[0]?.x, 174)
+    assert.equal(tracks[0]?.width, tracks[1]?.width)
+    assert.ok(Math.abs((tracks[2]?.width ?? 0) - (tracks[0]?.width ?? 0) * 2) <= 3)
+    assert.equal(target.x, tracks[0]?.x)
+    assert.equal(target.x + target.width, (tracks[2]?.x ?? 0) + (tracks[2]?.width ?? 0))
+    assert.equal(readout?.text, '-8.7LUFS')
+
+    for (const rect of recorder.fillRects) {
+      assert.ok(rect.x >= viewportLeft, `rectangle starts left of LUFS viewport: ${JSON.stringify(rect)}`)
+      assert.ok(rect.x + rect.width <= viewportRight, `rectangle exceeds LUFS viewport: ${JSON.stringify(rect)}`)
+    }
+  } finally {
+    meter.dispose()
+    dom.restore()
+  }
+})
+
+test('LUFSMeter keeps minimum-width layout and compact readout inside canvas bounds', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const canvas = createFakeCssSizedCanvas(recorder, 112, 196)
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7 })
+  const meter = new LUFSMeter(canvas, {
+    dataSource: {
+      getPendingLUFSMeterSamples: () => [],
+      getSampleRate: () => 48000,
+      isPlaying: () => true,
+      subscribeToSessionChanges: () => () => {},
+    },
+    nativeAnalyzer,
+    lineColor: '#123456',
+    trackColor: '#111111',
+    targetColor: '#222222',
+    scaleColor: '#333333',
+  })
+
+  try {
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+
+    const tracks = recorder.fillRects.filter((rect) => rect.fillStyle === '#111111')
+    const tag = recorder.fillRects.find((rect) => (
+      rect.fillStyle === '#123456'
+      && rect.height > 2
+      && rect.height <= 22
+    ))
+    const readout = recorder.fillTexts[recorder.fillTexts.length - 1]
+
+    assert.deepEqual(tracks.map((rect) => rect.width), [6, 6, 12])
+    assert.ok(tag)
+    assert.equal(readout?.text, '-8.7')
+
+    for (const rect of recorder.fillRects) {
+      assert.ok(rect.x >= 0, `rectangle starts before canvas: ${JSON.stringify(rect)}`)
+      assert.ok(rect.y >= 0, `rectangle starts above canvas: ${JSON.stringify(rect)}`)
+      assert.ok(rect.width > 0, `rectangle has non-positive width: ${JSON.stringify(rect)}`)
+      assert.ok(rect.height > 0, `rectangle has non-positive height: ${JSON.stringify(rect)}`)
+      assert.ok(rect.x + rect.width <= canvas.width, `rectangle exceeds canvas width: ${JSON.stringify(rect)}`)
+      assert.ok(rect.y + rect.height <= canvas.height, `rectangle exceeds canvas height: ${JSON.stringify(rect)}`)
+    }
+
+    const fontSize = Number(readout?.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 0)
+    const estimatedTextWidth = (readout?.text.length ?? 0) * fontSize * 0.62
+    assert.ok((readout?.x ?? 0) >= tag.x)
+    assert.ok((readout?.x ?? 0) + estimatedTextWidth <= tag.x + tag.width)
+  } finally {
+    meter.dispose()
+    dom.restore()
+  }
+})
+
+test('LUFSMeter keeps equivalent CSS geometry across canvas backing ratios', () => {
+  const dom = installFakeCanvasDom()
+
+  const renderAtRatio = (pixelRatio: number): {
+    tracks: FakeCanvasRecorder['fillRects']
+    tag: FakeCanvasRecorder['fillRects'][number]
+  } => {
+    const recorder = createFakeCanvasRecorder()
+    const canvas = createFakeCssSizedCanvas(recorder, 522, 196, pixelRatio)
+    const meter = new LUFSMeter(canvas, {
+      dataSource: {
+        getPendingLUFSMeterSamples: () => [],
+        getSampleRate: () => 48000,
+        isPlaying: () => true,
+        subscribeToSessionChanges: () => () => {},
+      },
+      nativeAnalyzer: createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7 }),
+      lineColor: '#123456',
+      trackColor: '#111111',
+      targetColor: '#222222',
+      scaleColor: '#333333',
+    })
+
+    ;(meter as unknown as { drawFrame: () => void }).drawFrame()
+    meter.dispose()
+
+    const tracks = recorder.fillRects
+      .filter((rect) => rect.fillStyle === '#111111')
+      .map((rect) => ({
+        ...rect,
+        x: rect.x / pixelRatio,
+        y: rect.y / pixelRatio,
+        width: rect.width / pixelRatio,
+        height: rect.height / pixelRatio,
+      }))
+    const rawTag = recorder.fillRects.find((rect) => rect.fillStyle === '#123456' && rect.height <= 22 * pixelRatio)
+    assert.ok(rawTag)
+    const tag = {
+      ...rawTag,
+      x: rawTag.x / pixelRatio,
+      y: rawTag.y / pixelRatio,
+      width: rawTag.width / pixelRatio,
+      height: rawTag.height / pixelRatio,
+    }
+    return { tracks, tag }
+  }
+
+  try {
+    const baseline = renderAtRatio(1)
+    for (const pixelRatio of [1.25, 2]) {
+      const result = renderAtRatio(pixelRatio)
+      assert.equal(result.tracks.length, baseline.tracks.length)
+      for (let index = 0; index < baseline.tracks.length; index += 1) {
+        assertAlmostEqual(result.tracks[index]?.x ?? 0, baseline.tracks[index]?.x ?? 0, 2, `track ${index} x at ${pixelRatio}x`)
+        assertAlmostEqual(result.tracks[index]?.width ?? 0, baseline.tracks[index]?.width ?? 0, 2, `track ${index} width at ${pixelRatio}x`)
+      }
+      assertAlmostEqual(result.tag.x, baseline.tag.x, 2, `readout tag x at ${pixelRatio}x`)
+      assertAlmostEqual(result.tag.width, baseline.tag.width, 2, `readout tag width at ${pixelRatio}x`)
+    }
+  } finally {
     dom.restore()
   }
 })

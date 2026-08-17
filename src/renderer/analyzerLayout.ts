@@ -1,7 +1,7 @@
 import type { ScopeKind } from '../types/scope'
+import { MIN_LOUDNESS_METER_WIDTH_PX } from '../shared/scopeSizing'
 
 const DEFAULT_COLLAPSED_SCOPE_WEIGHT = 1
-export const LOCKED_LOUDNESS_METER_WIDTH_PX = 150
 
 function usesCollapsedDefaultWeight(scope: ScopeKind): boolean {
   return scope === 'spectrogram'
@@ -27,7 +27,8 @@ export function buildAnalyzerGridTemplateColumns(
     }
 
     if (scope === 'lufsmeter') {
-      return `minmax(${LOCKED_LOUDNESS_METER_WIDTH_PX}px, ${LOCKED_LOUDNESS_METER_WIDTH_PX}px)`
+      const resolvedWeight = weight > 0 ? weight : DEFAULT_COLLAPSED_SCOPE_WEIGHT
+      return `minmax(${MIN_LOUDNESS_METER_WIDTH_PX}px, ${resolvedWeight}fr)`
     }
 
     if (usesCollapsedDefaultWeight(scope) && weight <= 0) {
