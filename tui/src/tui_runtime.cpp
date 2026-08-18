@@ -1230,11 +1230,18 @@ ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
         static_cast<float>(std::max(0, meterRows - 1))));
 
     Elements rows;
-    rows.push_back(hbox({
-        text("    L R LUFS") | dim,
-        filler(),
-        text("target -14") | color(terminalColor(palette().lufsTarget)),
-    }));
+    Elements heading;
+    heading.push_back(text("    L R LUFS") | dim);
+    heading.push_back(filler());
+    heading.push_back(text(formatMaxTruePeakDb(
+        frame.lufs.maxTruePeakDb, width < 60)) |
+        color(terminalColor(palette().lufsLabels)));
+    if (width >= 52) {
+        heading.push_back(text(" "));
+        heading.push_back(text("target -14") |
+            color(terminalColor(palette().lufsTarget)));
+    }
+    rows.push_back(hbox(std::move(heading)));
     for (int row = 0; row < meterRows; ++row) {
         Elements parts;
         const auto gap = [&]() {
@@ -1246,11 +1253,11 @@ ftxui::Element renderLUFSMeterPanel(const DisplayFrame& frame,
         parts.push_back(text(lufsScaleLabel(row, meterRows)) | dim);
         parts.push_back(gap());
         parts.push_back(renderLufsBarCell(
-            frame.lufs.barLDb, frame.lufs.peakLDb,
+            frame.lufs.barLDb, frame.lufs.truePeakLDb,
             row, meterRows, 2, true, row == targetRow));
         parts.push_back(gap());
         parts.push_back(renderLufsBarCell(
-            frame.lufs.barRDb, frame.lufs.peakRDb,
+            frame.lufs.barRDb, frame.lufs.truePeakRDb,
             row, meterRows, 2, true, row == targetRow));
         parts.push_back(gap());
         parts.push_back(renderLufsBarCell(

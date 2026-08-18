@@ -151,4 +151,14 @@ std::string formatLufs(float value) {
     return formatDb(value, 1);
 }
 
+std::string formatMaxTruePeakDb(float value, bool compact) {
+    std::string formatted = formatDb(value, 1);
+    if (std::isfinite(value) && value > -60.0f && value >= 0.0f) {
+        formatted.insert(formatted.begin(), '+');
+    }
+    return compact
+        ? formatted + "dBTP"
+        : "MAX TP " + formatted + " dBTP";
+}
+
 }  // namespace Prism::Tui

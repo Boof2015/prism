@@ -26,5 +26,6 @@ std::string buildFrequencyAxis(size_t columns, float maxFrequency);
 std::string buildMeterBar(float levelDb, float peakDb, size_t columns);
 std::string formatDb(float value, int precision = 1);
 std::string formatLufs(float value);
+std::string formatMaxTruePeakDb(float value, bool compact = false);
 
 }  // namespace Prism::Tui

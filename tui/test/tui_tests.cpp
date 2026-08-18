@@ -429,6 +429,10 @@ void testMeterDisplayModels() {
     require(Prism::Tui::selectLufsReadout(
         -10.0f, -12.0f, -14.0f, Prism::Tui::LUFSReadout::Integrated) == -14.0f,
         "LUFS readout selection should drive the dedicated loudness bar");
+    require(Prism::Tui::formatMaxTruePeakDb(3.0f) == "MAX TP +3.0 dBTP" &&
+        Prism::Tui::formatMaxTruePeakDb(3.0f, true) == "+3.0dBTP" &&
+        Prism::Tui::formatMaxTruePeakDb(-60.0f) == "MAX TP -inf dBTP",
+        "true-peak maximum formatting should cover normal, compact, and reset states");
 }
 
 void testSpectrumPeakModel() {
@@ -1040,6 +1044,10 @@ void testPipelineAndFakeCapture() {
         "momentary LUFS should match the deterministic stereo tone");
     require(std::abs(frame.lufs.integratedLUFS + 12.03f) < 0.5f,
         "integrated LUFS should match the deterministic stereo tone");
+    require(std::abs(frame.lufs.maxTruePeakDb + 12.04f) < 0.2f &&
+        std::abs(frame.lufs.truePeakLDb - frame.lufs.maxTruePeakDb) < 0.1f &&
+        std::abs(frame.lufs.truePeakRDb - frame.lufs.maxTruePeakDb) < 0.1f,
+        "TUI loudness snapshots should expose calibrated stereo true peak");
 
     Prism::Tui::AnalysisPipeline trimmedPipeline(48000.0f);
     trimmedPipeline.setInputTrimDb(6.0f);
@@ -1072,6 +1080,8 @@ void testPipelineAndFakeCapture() {
     pipeline.reset();
     const auto reset = pipeline.snapshot();
     require(reset.lufs.integratedLUFS <= -59.0f, "reset should clear integrated loudness");
+    require(reset.lufs.maxTruePeakDb <= -59.0f,
+        "reset should clear the maximum true-peak readout");
     require(!reset.oscilloscope.signalPresent,
         "reset should clear the oscilloscope display window");
     require(reset.oscilloscope.detectedPitch == 0.0f,
