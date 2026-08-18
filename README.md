@@ -102,7 +102,7 @@ Prism's interface is themeable through editable `.iro` files.
 
 Themes control the colors used throughout the application and its scopes. You can edit your own, drop them into the `Prism Themes` folder, or download themes made by the community.
 
-![Prism themes](assets/themes.png)
+![Prism themes](assets/prism-themes-readme-10fps.gif)
 
 Prism also includes chroma-key-friendly themes for using scopes as overlays in OBS or other video software.
 
