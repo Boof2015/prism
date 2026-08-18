@@ -73,6 +73,7 @@ const TARGET_LUFS = -14
 const METER_MIN_DB = -60
 const MAX_METER_VIEWPORT_CSS_WIDTH = 240
 const FULL_READOUT_WIDTH_SAMPLE = '-00.0LUFS'
+const TRUE_PEAK_EMPTY_DB = METER_MIN_DB
 
 const INITIAL_NATIVE_SNAPSHOT: LUFSMeterNativeSnapshot = {
   momentaryLUFS: METER_MIN_LUFS,
@@ -82,8 +83,9 @@ const INITIAL_NATIVE_SNAPSHOT: LUFSMeterNativeSnapshot = {
   vuRDb: METER_MIN_DB,
   barLDb: METER_MIN_DB,
   barRDb: METER_MIN_DB,
-  peakLDb: METER_MIN_DB,
-  peakRDb: METER_MIN_DB,
+  truePeakLDb: METER_MIN_DB,
+  truePeakRDb: METER_MIN_DB,
+  maxTruePeakDb: TRUE_PEAK_EMPTY_DB,
   correlation: 0,
 }
 
@@ -104,10 +106,18 @@ function normalizeNativeSnapshot(snapshot: LUFSMeterNativeSnapshot | null): LUFS
     vuRDb: finiteNumber(snapshot.vuRDb, METER_MIN_DB),
     barLDb: finiteNumber(snapshot.barLDb, METER_MIN_DB),
     barRDb: finiteNumber(snapshot.barRDb, METER_MIN_DB),
-    peakLDb: finiteNumber(snapshot.peakLDb, METER_MIN_DB),
-    peakRDb: finiteNumber(snapshot.peakRDb, METER_MIN_DB),
+    truePeakLDb: finiteNumber(snapshot.truePeakLDb, METER_MIN_DB),
+    truePeakRDb: finiteNumber(snapshot.truePeakRDb, METER_MIN_DB),
+    maxTruePeakDb: finiteNumber(snapshot.maxTruePeakDb, TRUE_PEAK_EMPTY_DB),
     correlation: finiteNumber(snapshot.correlation, 0),
   }
+}
+
+export function formatMaxTruePeakDb(maxTruePeakDb: number, compact = false): string {
+  const value = Number.isFinite(maxTruePeakDb) && maxTruePeakDb > TRUE_PEAK_EMPTY_DB
+    ? `${maxTruePeakDb >= 0 ? '+' : '−'}${Math.abs(maxTruePeakDb).toFixed(1)}`
+    : '−∞'
+  return compact ? `${value}dBTP` : `MAX TP ${value} dBTP`
 }
 
 // ---- Loudness meter class ----
@@ -383,8 +393,12 @@ export class LUFSMeter {
 
     const paddingX = Math.round(Math.max(4, Math.floor(cssWidth * 0.012)) * dpr)
     const paddingY = Math.round(Math.max(4, Math.floor(cssHeight * 0.025)) * dpr)
+    const footerFontSizeCss = Math.max(7, Math.min(11, Math.floor(cssHeight * 0.052)))
+    const footerFontSize = Math.max(1, Math.round(footerFontSizeCss * dpr))
+    const footerHeight = Math.max(1, Math.round((footerFontSizeCss + 4) * dpr))
+    const footerGap = Math.max(1, Math.round(4 * dpr))
     const meterTop = paddingY
-    const meterBottom = height - paddingY
+    const meterBottom = Math.max(meterTop + 1, height - paddingY - footerHeight - footerGap)
     const meterHeight = Math.max(1, meterBottom - meterTop)
     const availableViewportWidth = Math.max(1, width - paddingX * 2)
     const viewportWidth = Math.max(1, Math.min(
@@ -448,7 +462,7 @@ export class LUFSMeter {
       barWidth,
       meterHeight,
       this.snapshot.barLDb,
-      this.snapshot.peakLDb,
+      this.snapshot.truePeakLDb,
       tint,
       dpr,
     )
@@ -458,7 +472,7 @@ export class LUFSMeter {
       barWidth,
       meterHeight,
       this.snapshot.barRDb,
-      this.snapshot.peakRDb,
+      this.snapshot.truePeakRDb,
       tint,
       dpr,
     )
@@ -509,6 +523,29 @@ export class LUFSMeter {
     ctx.textBaseline = 'middle'
     ctx.fillStyle = this.contrastForLevelColor()
     ctx.fillText(readoutLayout.text, tagX + tagPadding, tagY + tagHeight / 2)
+
+    const fullTruePeakText = formatMaxTruePeakDb(this.snapshot.maxTruePeakDb)
+    const compactTruePeakText = formatMaxTruePeakDb(this.snapshot.maxTruePeakDb, true)
+    ctx.font = `700 ${footerFontSize}px "JetBrains Mono", "SF Mono", monospace`
+    const truePeakText = viewportCssWidth >= 160
+      && ctx.measureText(fullTruePeakText).width <= viewportWidth
+      ? fullTruePeakText
+      : compactTruePeakText
+    const truePeakLayout = this.resolveReadoutTextLayout(
+      [truePeakText],
+      viewportWidth,
+      footerFontSize,
+      Math.max(1, Math.round(7 * dpr)),
+    )
+    ctx.font = `700 ${truePeakLayout.fontSize}px "JetBrains Mono", "SF Mono", monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = this.options.labelColor
+    ctx.fillText(
+      truePeakLayout.text,
+      Math.round(width / 2),
+      Math.round(meterBottom + footerGap + footerHeight / 2),
+    )
   }
 
   dispose(): void {

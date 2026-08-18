@@ -14,8 +14,9 @@ struct LUFSMeterSnapshot {
     float vuRDb;
     float barLDb;
     float barRDb;
-    float peakLDb;
-    float peakRDb;
+    float truePeakLDb;
+    float truePeakRDb;
+    float maxTruePeakDb;
     float correlation;
 };
 
@@ -47,6 +48,7 @@ private:
     void configureForSampleRate(float sampleRate);
     void configureKWeighting();
     void configureFastMeter();
+    void configureTruePeakDetector();
     void processLoudnessSample(float left, float right);
     void updateMomentaryShortTermLoudness();
     double computeGatedIntegratedLoudness() const;
@@ -54,13 +56,15 @@ private:
     double histogramLufsAtIndex(size_t index) const;
     double applyBiquad(const BiquadCoeffs& coeffs, BiquadState& state, double input);
 
-    void processFastMeterSample(float left, float right, double& maxPeakL, double& maxPeakR);
-    void advancePeaks(double nowMs);
-    void maybeUpdatePeak(double peakDb, double nowMs, bool leftChannel);
+    void processFastMeterSample(float left, float right);
+    void processTruePeakSample(float left, float right, double& maxTruePeakL, double& maxTruePeakR);
+    void advanceTruePeaks(double nowMs);
+    void maybeUpdateTruePeak(double peakDb, double nowMs, bool leftChannel);
     double applyPeakDecay(double currentDb, double holdUntilMs, double nowMs) const;
     void recomputeFastSnapshot();
     static double currentTimeMs();
     static double amplitudeToDb(double amplitude);
+    static double truePeakAmplitudeToDb(double amplitude);
     static double clampDb(double db, double minDb, double maxDb);
     static BiquadCoeffs preFilterCoeffs(double sampleRate);
     static BiquadCoeffs rlbFilterCoeffs(double sampleRate);
@@ -98,6 +102,12 @@ private:
     double peakHoldUntilR_ = 0.0;
     double lastPeakUpdateMs_ = 0.0;
     bool hasLastPeakUpdate_ = false;
+
+    size_t truePeakOversampleFactor_ = 1;
+    std::vector<double> truePeakCoefficients_;
+    std::vector<double> truePeakHistoryL_;
+    std::vector<double> truePeakHistoryR_;
+    size_t truePeakHistoryWriteIndex_ = 0;
 
     LUFSMeterSnapshot snapshot_{};
 };

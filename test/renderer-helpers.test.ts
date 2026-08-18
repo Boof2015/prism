@@ -115,11 +115,11 @@ import {
   HEAT_MIN_DB,
   normalizeHeatDb,
 } from '../src/renderer/visualizers/heatScale'
-import { LUFSMeter } from '../src/renderer/visualizers/LUFSMeter'
+import { LUFSMeter, formatMaxTruePeakDb } from '../src/renderer/visualizers/LUFSMeter'
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
 import { BridgeSpectrumAnalyzer } from '../src/plugin-ui/BridgeSpectrumAnalyzer'
-import { decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
+import { decodeLUFSMeterFrame, decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
 import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
 import { spectrogramSettingsToOptions } from '../src/plugin-ui/spectrogramOptions'
 import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
@@ -6296,8 +6296,9 @@ function createFakeLUFSMeterNativeAnalyzer(
       vuRDb: -13,
       barLDb: -10,
       barRDb: -12,
-      peakLDb: -4,
-      peakRDb: -5,
+      truePeakLDb: -4,
+      truePeakRDb: -5,
+      maxTruePeakDb: -4,
       correlation: 0.5,
       ...snapshotOverrides,
     } satisfies LUFSMeterNativeSnapshot,
@@ -6319,7 +6320,45 @@ function createFakeLUFSMeterNativeAnalyzer(
   return analyzer
 }
 
-test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and attached readout', () => {
+test('LUFSMeter formats positive, negative, compact, and reset true-peak maxima', () => {
+  assert.equal(formatMaxTruePeakDb(3), 'MAX TP +3.0 dBTP')
+  assert.equal(formatMaxTruePeakDb(-4.25), 'MAX TP −4.3 dBTP')
+  assert.equal(formatMaxTruePeakDb(3, true), '+3.0dBTP')
+  assert.equal(formatMaxTruePeakDb(-60), 'MAX TP −∞ dBTP')
+  assert.equal(formatMaxTruePeakDb(Number.NaN, true), '−∞dBTP')
+})
+
+test('loudness bridge decodes true-peak fields and accumulates legacy peak maxima', () => {
+  const current = decodeLUFSMeterFrame({
+    sampleRate: 96000,
+    truePeakLDb: 1.25,
+    truePeakRDb: -2,
+    maxTruePeakDb: 2.5,
+  })
+  assert.ok(current)
+  assert.equal(current.sampleRate, 96000)
+  assert.equal(current.truePeakLDb, 1.25)
+  assert.equal(current.truePeakRDb, -2)
+  assert.equal(current.maxTruePeakDb, 2.5)
+
+  const firstLegacy = decodeLUFSMeterFrame({ peakLDb: -3, peakRDb: -5 }, -60)
+  assert.ok(firstLegacy)
+  assert.equal(firstLegacy.truePeakLDb, -3)
+  assert.equal(firstLegacy.truePeakRDb, -5)
+  assert.equal(firstLegacy.maxTruePeakDb, -3)
+
+  const quieterLegacy = decodeLUFSMeterFrame({ peakLDb: -9, peakRDb: -7 }, firstLegacy.maxTruePeakDb)
+  assert.equal(quieterLegacy?.maxTruePeakDb, -3)
+
+  const explicitReset = decodeLUFSMeterFrame({
+    truePeakLDb: -60,
+    truePeakRDb: -60,
+    maxTruePeakDb: -60,
+  }, 2.5)
+  assert.equal(explicitReset?.maxTruePeakDb, -60)
+})
+
+test('LUFSMeter draws fast bars, true-peak markers, LUFS readout, and maximum dBTP footer', () => {
   const dom = installFakeCanvasDom()
   const recorder = createFakeCanvasRecorder()
   const leftChunk = new Float32Array(4800)
@@ -6343,7 +6382,12 @@ test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and a
     isPlaying: () => true,
     subscribeToSessionChanges: () => () => {},
   }
-  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ momentaryLUFS: -18.4 })
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({
+    momentaryLUFS: -18.4,
+    truePeakLDb: 3,
+    truePeakRDb: -5,
+    maxTruePeakDb: 3,
+  })
   const meter = new LUFSMeter(createFakeCanvas(recorder), {
     dataSource,
     nativeAnalyzer,
@@ -6392,6 +6436,10 @@ test('LUFSMeter draws compact fast bars, a thicker LUFS bar, scale labels, and a
       recorder.fillTexts.some((text) => text.text.endsWith('LUFS') && text.fillStyle === 'rgba(0, 0, 0, 0.9)'),
       true,
     )
+    assert.equal(
+      recorder.fillTexts.some((text) => text.text === 'MAX TP +3.0 dBTP' && text.fillStyle === 'rgb(7, 8, 9)'),
+      true,
+    )
   } finally {
     meter.dispose()
     dom.restore()
@@ -6419,7 +6467,7 @@ test('LUFSMeter fits readout text inside narrow tags', () => {
     isPlaying: () => true,
     subscribeToSessionChanges: () => () => {},
   }
-  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ momentaryLUFS: -8.1 })
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ momentaryLUFS: -8.1, maxTruePeakDb: 3 })
   const meter = new LUFSMeter(createFakeCanvas(recorder, 180, 360), {
     dataSource,
     nativeAnalyzer,
@@ -6444,6 +6492,7 @@ test('LUFSMeter fits readout text inside narrow tags', () => {
     const fontSize = Number(readout.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 0)
     const estimatedTextWidth = readout.text.length * fontSize * 0.62
     assert.equal(estimatedTextWidth <= tagRect.width - 8, true)
+    assert.equal(recorder.fillTexts.some((text) => text.text === 'MAX TP +3.0 dBTP'), true)
   } finally {
     meter.dispose()
     dom.restore()
@@ -6475,7 +6524,7 @@ test('LUFSMeter centers wide layouts in a bounded viewport', () => {
     const tracks = recorder.fillRects.filter((rect) => rect.fillStyle === '#111111')
     const target = recorder.fillRects.find((rect) => rect.fillStyle === '#222222')
     const tag = recorder.fillRects.find((rect) => rect.fillStyle === '#123456' && rect.height <= 22)
-    const readout = recorder.fillTexts[recorder.fillTexts.length - 1]
+    const readout = recorder.fillTexts.find((text) => text.text.endsWith('LUFS'))
     const viewportLeft = (canvas.width - 240) / 2
     const viewportRight = viewportLeft + 240
 
@@ -6503,7 +6552,7 @@ test('LUFSMeter keeps minimum-width layout and compact readout inside canvas bou
   const dom = installFakeCanvasDom()
   const recorder = createFakeCanvasRecorder()
   const canvas = createFakeCssSizedCanvas(recorder, 112, 196)
-  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7 })
+  const nativeAnalyzer = createFakeLUFSMeterNativeAnalyzer({ shortTermLUFS: -8.7, maxTruePeakDb: 3 })
   const meter = new LUFSMeter(canvas, {
     dataSource: {
       getPendingLUFSMeterSamples: () => [],
@@ -6527,11 +6576,17 @@ test('LUFSMeter keeps minimum-width layout and compact readout inside canvas bou
       && rect.height > 2
       && rect.height <= 22
     ))
-    const readout = recorder.fillTexts[recorder.fillTexts.length - 1]
+    const readout = recorder.fillTexts.find((text) => text.text === '-8.7')
 
     assert.deepEqual(tracks.map((rect) => rect.width), [6, 6, 12])
     assert.ok(tag)
     assert.equal(readout?.text, '-8.7')
+    const truePeakReadout = recorder.fillTexts.find((text) => text.text.endsWith('dBTP'))
+    assert.equal(truePeakReadout?.text, '+3.0dBTP')
+    const truePeakFontSize = Number(truePeakReadout?.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 0)
+    const truePeakWidth = (truePeakReadout?.text.length ?? 0) * truePeakFontSize * 0.62
+    assert.ok((truePeakReadout?.x ?? 0) - truePeakWidth / 2 >= 0)
+    assert.ok((truePeakReadout?.x ?? 0) + truePeakWidth / 2 <= canvas.width)
 
     for (const rect of recorder.fillRects) {
       assert.ok(rect.x >= 0, `rectangle starts before canvas: ${JSON.stringify(rect)}`)

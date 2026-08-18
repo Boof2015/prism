@@ -19,6 +19,7 @@ const testScripts = [
   'test:spectrum-native',
   'test:spectrogram-native',
   'test:vectorscope-native',
+  'test:lufsmeter-native',
 ]
 
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'

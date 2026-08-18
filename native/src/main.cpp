@@ -690,8 +690,9 @@ Napi::Value LUFSMeterGetSnapshot(const Napi::CallbackInfo& info) {
     obj.Set("vuRDb", Napi::Number::New(env, snapshot.vuRDb));
     obj.Set("barLDb", Napi::Number::New(env, snapshot.barLDb));
     obj.Set("barRDb", Napi::Number::New(env, snapshot.barRDb));
-    obj.Set("peakLDb", Napi::Number::New(env, snapshot.peakLDb));
-    obj.Set("peakRDb", Napi::Number::New(env, snapshot.peakRDb));
+    obj.Set("truePeakLDb", Napi::Number::New(env, snapshot.truePeakLDb));
+    obj.Set("truePeakRDb", Napi::Number::New(env, snapshot.truePeakRDb));
+    obj.Set("maxTruePeakDb", Napi::Number::New(env, snapshot.maxTruePeakDb));
     obj.Set("correlation", Napi::Number::New(env, snapshot.correlation));
     return obj;
 }

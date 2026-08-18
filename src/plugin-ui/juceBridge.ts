@@ -275,16 +275,25 @@ export interface LUFSMeterFrame {
   vuRDb: number
   barLDb: number
   barRDb: number
-  peakLDb: number
-  peakRDb: number
+  truePeakLDb: number
+  truePeakRDb: number
+  maxTruePeakDb: number
   correlation: number
 }
 
-function decodeLUFSMeterFrame(payload: unknown): LUFSMeterFrame | null {
+export function decodeLUFSMeterFrame(
+  payload: unknown,
+  previousMaxTruePeakDb = -60,
+): LUFSMeterFrame | null {
   if (typeof payload !== 'object' || payload === null) return null
   const p = payload as Record<string, unknown>
   const num = (key: string, fallback: number): number =>
     typeof p[key] === 'number' && Number.isFinite(p[key]) ? (p[key] as number) : fallback
+  const truePeakLDb = num('truePeakLDb', num('peakLDb', -60))
+  const truePeakRDb = num('truePeakRDb', num('peakRDb', -60))
+  const explicitMaximum = typeof p.maxTruePeakDb === 'number' && Number.isFinite(p.maxTruePeakDb)
+    ? p.maxTruePeakDb
+    : null
   return {
     sampleRate: num('sampleRate', 48000) > 0 ? num('sampleRate', 48000) : 48000,
     momentaryLUFS: num('momentaryLUFS', -70),
@@ -294,8 +303,13 @@ function decodeLUFSMeterFrame(payload: unknown): LUFSMeterFrame | null {
     vuRDb: num('vuRDb', -60),
     barLDb: num('barLDb', -60),
     barRDb: num('barRDb', -60),
-    peakLDb: num('peakLDb', -60),
-    peakRDb: num('peakRDb', -60),
+    truePeakLDb,
+    truePeakRDb,
+    maxTruePeakDb: explicitMaximum ?? Math.max(
+      Number.isFinite(previousMaxTruePeakDb) ? previousMaxTruePeakDb : -60,
+      truePeakLDb,
+      truePeakRDb,
+    ),
     correlation: num('correlation', 0),
   }
 }
@@ -309,6 +323,8 @@ export function connectLUFSMeterBridge(handlers: LUFSMeterBridgeHandlers): () =>
   let disposed = false
   let listenerId: number | null = null
   let mockRaf: number | null = null
+  let maxTruePeakDb = -60
+  let previousSampleRate = 0
 
   const startMock = (): void => {
     handlers.onConnected?.(true)
@@ -320,6 +336,9 @@ export function connectLUFSMeterBridge(handlers: LUFSMeterBridgeHandlers): () =>
       const lufs = (offset: number): number => -24 + Math.sin(phase + offset) * 6
       const vuL = -36 + (Math.sin(phase) * 0.5 + 0.5) * 30
       const vuR = -36 + (Math.sin(phase + 0.7) * 0.5 + 0.5) * 30
+      const truePeakLDb = vuL + 3
+      const truePeakRDb = vuR + 3
+      maxTruePeakDb = Math.max(maxTruePeakDb, truePeakLDb, truePeakRDb)
       handlers.onFrame({
         sampleRate: 48000,
         momentaryLUFS: lufs(0),
@@ -329,8 +348,9 @@ export function connectLUFSMeterBridge(handlers: LUFSMeterBridgeHandlers): () =>
         vuRDb: vuR,
         barLDb: vuL,
         barRDb: vuR,
-        peakLDb: vuL + 3,
-        peakRDb: vuR + 3,
+        truePeakLDb,
+        truePeakRDb,
+        maxTruePeakDb,
         correlation: Math.sin(phase * 0.3),
       })
       mockRaf = requestAnimationFrame(tick)
@@ -342,8 +362,15 @@ export function connectLUFSMeterBridge(handlers: LUFSMeterBridgeHandlers): () =>
     if (disposed) return
     if (backend) {
       listenerId = backend.addEventListener('lufsmeterFrame', (payload) => {
-        const frame = decodeLUFSMeterFrame(payload)
-        if (frame) handlers.onFrame(frame)
+        let frame = decodeLUFSMeterFrame(payload, maxTruePeakDb)
+        if (frame && previousSampleRate > 0 && Math.abs(frame.sampleRate - previousSampleRate) > 1) {
+          frame = decodeLUFSMeterFrame(payload, -60)
+        }
+        if (frame) {
+          previousSampleRate = frame.sampleRate
+          maxTruePeakDb = frame.maxTruePeakDb
+          handlers.onFrame(frame)
+        }
       })
       handlers.onConnected?.(false)
       console.log('[prism-plugin] connected to JUCE host (lufsmeter)')

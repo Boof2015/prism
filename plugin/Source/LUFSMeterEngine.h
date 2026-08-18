@@ -5,9 +5,9 @@
 
 /**
  * Loudness (LUFS) meter engine. Pushes stereo audio into the reused
- * `Visualizer::LUFSMeterAnalyzer` (K-weighting + gated integration + the same fast
- * VU/peak/correlation block) and emits its scalar snapshot each frame. Like the VU
- * engine the frame is plain numbers (no base64); getSnapshot() advances peak decay
+ * `Visualizer::LUFSMeterAnalyzer` (K-weighting, gated integration, true peak, and
+ * the same fast VU/correlation block) and emits its scalar snapshot each frame.
+ * The frame is plain numbers (no base64); getSnapshot() advances true-peak decay
  * on the steady clock, so it's safe to call every frame. configure() is a no-op —
  * LUFS settings (mode/readout) are render-side.
  */
@@ -44,8 +44,9 @@ public:
         obj->setProperty("vuRDb", snap.vuRDb);
         obj->setProperty("barLDb", snap.barLDb);
         obj->setProperty("barRDb", snap.barRDb);
-        obj->setProperty("peakLDb", snap.peakLDb);
-        obj->setProperty("peakRDb", snap.peakRDb);
+        obj->setProperty("truePeakLDb", snap.truePeakLDb);
+        obj->setProperty("truePeakRDb", snap.truePeakRDb);
+        obj->setProperty("maxTruePeakDb", snap.maxTruePeakDb);
         obj->setProperty("correlation", snap.correlation);
         return juce::var(obj);
     }

@@ -27,6 +27,8 @@
     "test:spectrum-native": "node --test test/spectrum-native.test.mjs",
     "test:spectrogram-native": "node --test test/spectrogram-native.test.mjs",
     "test:vectorscope-native": "node --test test/vectorscope-native.test.mjs",
+    "test:lufsmeter-native": "node --test test/lufsmeter-native.test.mjs",
+    "test:lufsmeter-ebu": "node scripts/run-ebu-true-peak-tests.mjs",
     "test:tui": "node scripts/build/build-tui.cjs --test",
     "test:build-metadata": "node scripts/run-build-metadata-tests.mjs",
     "test:updates": "node scripts/run-update-tests.mjs",

@@ -27,7 +27,7 @@ Prism includes seven real-time scopes and meters:
 * **Vectorscope** — Full-band stereo phase analysis with XY, Polar, and M/S Linear views, calibrated references, adjustable zoom, and optional multiband RGB
 * **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, stereo-energy analysis, and frequency reassignment in Sharp and Sharper modes
 * **VU Meter** — 300 ms metering with adjustable 0 VU reference, stereo correlation, and needle or bar displays
-* **Loudness Meter** — ITU-R BS.1770 momentary, short-term, and integrated LUFS metering with stereo peak activity
+* **Loudness Meter** — ITU-R BS.1770 momentary, short-term, and integrated LUFS metering with BS.1770 true-peak activity
 * **Waveform** — Scrolling mono or stereo waveform with transient-preserving min/max sampling and optional multiband energy visualization
 
 Every scope can be configured independently. Resize and rearrange them into a rack, rotate supported scopes, pop them into separate windows, or pin them on top of other applications.
@@ -98,7 +98,8 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * −70 LUFS absolute gate
 * Relative gate at −10 LU below ungated programme loudness
 * Momentary, short-term, and integrated LUFS are calculated independently
-* Peak readouts are sample peak, not true peak
+* Stereo true-peak reconstruction uses a rate-aware 48-tap-per-phase FIR at 2× to 8× oversampling for common 44.1–192 kHz host rates
+* Held L/R true-peak markers and a reset-scoped combined maximum are reported in dBTP
 
 ### VU and correlation
 
@@ -277,10 +278,17 @@ npm run build            # Build application assets
 npm run configure:tui    # Configure the standalone CMake project
 npm run build:tui        # Build prism-tui
 npm run test:tui         # Build and run native TUI tests
+npm run test:lufsmeter-native # Run generated BS.1770/EBU true-peak vectors
 npm run dist             # Package for current platform
 npm run dist:mac         # macOS
 npm run dist:win         # Windows
 npm run dist:linux       # Linux
+```
+
+If you have downloaded and extracted the official [EBU Loudness Test Set](https://tech.ebu.ch/publications/ebu_loudness_test_set) for internal testing, run cases 15–23 without copying the WAVs into the repository. The files are not downloaded or redistributed by Prism, in accordance with the [EBU test-sequence usage terms](https://tech.ebu.ch/files/live/sites/tech/files/shared/testmaterial/use%20of%20EBU%20AUDIO%20test%20sequences.pdf).
+
+```bash
+npm run test:lufsmeter-ebu -- /path/to/extracted-ebu-loudness-test-set
 ```
 
 The TUI build downloads the pinned FTXUI source through CMake. Linux also requires the PulseAudio development package.

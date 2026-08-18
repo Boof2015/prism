@@ -54,8 +54,9 @@ export interface LUFSMeterNativeSnapshot {
   vuRDb: number;
   barLDb: number;
   barRDb: number;
-  peakLDb: number;
-  peakRDb: number;
+  truePeakLDb: number;
+  truePeakRDb: number;
+  maxTruePeakDb: number;
   correlation: number;
 }
 

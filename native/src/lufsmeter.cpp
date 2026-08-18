@@ -31,16 +31,44 @@ constexpr double RLB_FILTER_F0_HZ = 38.13547087613982;
 constexpr double RLB_FILTER_Q = 0.5003270373223665;
 
 constexpr double VU_INTEGRATION_WINDOW_MS = 300.0;
-constexpr double VU_PEAK_HOLD_MS = 750.0;
-constexpr double VU_PEAK_DECAY_DB_PER_SECOND = 18.0;
+constexpr double TRUE_PEAK_HOLD_MS = 750.0;
+constexpr double TRUE_PEAK_DECAY_DB_PER_SECOND = 18.0;
 constexpr double BAR_ATTACK_MS = 5.0;
 constexpr double BAR_RELEASE_MS = 180.0;
+constexpr double TRUE_PEAK_MIN_OUTPUT_RATE_HZ = 320000.0;
+constexpr size_t TRUE_PEAK_TAPS_PER_PHASE = 48;
+constexpr size_t TRUE_PEAK_MAX_OVERSAMPLE_FACTOR = 64;
+constexpr double TRUE_PEAK_KAISER_BETA = 8.6;
+
+double besselI0(double value) {
+    const double absoluteValue = std::abs(value);
+    if (absoluteValue < 3.75) {
+        const double ratio = value / 3.75;
+        const double squared = ratio * ratio;
+        return 1.0 + squared * (3.5156229 + squared * (3.0899424 + squared * (1.2067492
+            + squared * (0.2659732 + squared * (0.0360768 + squared * 0.0045813)))));
+    }
+
+    const double ratio = 3.75 / absoluteValue;
+    return (std::exp(absoluteValue) / std::sqrt(absoluteValue))
+        * (0.39894228 + ratio * (0.01328592 + ratio * (0.00225319 + ratio * (-0.00157565
+            + ratio * (0.00916281 + ratio * (-0.02057706 + ratio * (0.02635537
+            + ratio * (-0.01647633 + ratio * 0.00392377))))))));
+}
+
+double normalizedSinc(double value) {
+    if (std::abs(value) < 1e-12) {
+        return 1.0;
+    }
+    return std::sin(PI * value) / (PI * value);
+}
 
 LUFSMeterSnapshot makeInitialSnapshot() {
     return {
         static_cast<float>(METER_MIN_LUFS),
         static_cast<float>(METER_MIN_LUFS),
         static_cast<float>(METER_MIN_LUFS),
+        static_cast<float>(VU_METER_MIN_DB),
         static_cast<float>(VU_METER_MIN_DB),
         static_cast<float>(VU_METER_MIN_DB),
         static_cast<float>(VU_METER_MIN_DB),
@@ -82,6 +110,7 @@ void LUFSMeterAnalyzer::configureForSampleRate(float sampleRate) {
     integratedHistogramPowerSums_.assign(INTEGRATED_HISTOGRAM_BIN_COUNT, 0.0);
 
     configureFastMeter();
+    configureTruePeakDetector();
     reset();
 }
 
@@ -100,6 +129,44 @@ void LUFSMeterAnalyzer::configureFastMeter() {
     fastCross_.assign(integrationWindowSamples_, 0.0);
     barAttackCoeff_ = std::exp(-1.0 / (static_cast<double>(sampleRate_) * (BAR_ATTACK_MS / 1000.0)));
     barReleaseCoeff_ = std::exp(-1.0 / (static_cast<double>(sampleRate_) * (BAR_RELEASE_MS / 1000.0)));
+}
+
+void LUFSMeterAnalyzer::configureTruePeakDetector() {
+    truePeakOversampleFactor_ = 1;
+    while (static_cast<double>(sampleRate_) * truePeakOversampleFactor_ < TRUE_PEAK_MIN_OUTPUT_RATE_HZ
+        && truePeakOversampleFactor_ < TRUE_PEAK_MAX_OVERSAMPLE_FACTOR) {
+        truePeakOversampleFactor_ *= 2;
+    }
+
+    truePeakCoefficients_.assign(truePeakOversampleFactor_ * TRUE_PEAK_TAPS_PER_PHASE, 0.0);
+    truePeakHistoryL_.assign(TRUE_PEAK_TAPS_PER_PHASE * 2, 0.0);
+    truePeakHistoryR_.assign(TRUE_PEAK_TAPS_PER_PHASE * 2, 0.0);
+
+    const double windowRadius = static_cast<double>(TRUE_PEAK_TAPS_PER_PHASE) / 2.0;
+    const double inverseI0Beta = 1.0 / besselI0(TRUE_PEAK_KAISER_BETA);
+    // Each phase is a causal fractional-delay reconstruction. The 24-sample
+    // delay keeps the 48 source taps centered without requiring future input.
+    for (size_t phase = 0; phase < truePeakOversampleFactor_; phase += 1) {
+        const double fraction = static_cast<double>(phase) / truePeakOversampleFactor_;
+        double coefficientSum = 0.0;
+        for (size_t tap = 0; tap < TRUE_PEAK_TAPS_PER_PHASE; tap += 1) {
+            const double distance = static_cast<double>(tap) - windowRadius + fraction;
+            const double normalizedDistance = distance / windowRadius;
+            const double windowArgument = std::sqrt(std::max(0.0, 1.0 - normalizedDistance * normalizedDistance));
+            const double window = std::abs(normalizedDistance) <= 1.0
+                ? besselI0(TRUE_PEAK_KAISER_BETA * windowArgument) * inverseI0Beta
+                : 0.0;
+            const double coefficient = normalizedSinc(distance) * window;
+            truePeakCoefficients_[phase * TRUE_PEAK_TAPS_PER_PHASE + tap] = coefficient;
+            coefficientSum += coefficient;
+        }
+
+        if (std::abs(coefficientSum) > 1e-12) {
+            for (size_t tap = 0; tap < TRUE_PEAK_TAPS_PER_PHASE; tap += 1) {
+                truePeakCoefficients_[phase * TRUE_PEAK_TAPS_PER_PHASE + tap] /= coefficientSum;
+            }
+        }
+    }
 }
 
 void LUFSMeterAnalyzer::reset() {
@@ -131,6 +198,10 @@ void LUFSMeterAnalyzer::reset() {
     lastPeakUpdateMs_ = 0.0;
     hasLastPeakUpdate_ = false;
 
+    std::fill(truePeakHistoryL_.begin(), truePeakHistoryL_.end(), 0.0);
+    std::fill(truePeakHistoryR_.begin(), truePeakHistoryR_.end(), 0.0);
+    truePeakHistoryWriteIndex_ = 0;
+
     snapshot_ = makeInitialSnapshot();
 }
 
@@ -140,27 +211,35 @@ void LUFSMeterAnalyzer::pushSamples(const float* leftChannel, const float* right
     }
 
     const double nowMs = currentTimeMs();
-    advancePeaks(nowMs);
+    advanceTruePeaks(nowMs);
 
-    double maxPeakL = 0.0;
-    double maxPeakR = 0.0;
+    double maxTruePeakL = 0.0;
+    double maxTruePeakR = 0.0;
 
     for (size_t index = 0; index < length; index += 1) {
         const float left = leftChannel[index];
         const float right = rightChannel[index];
         processLoudnessSample(left, right);
-        processFastMeterSample(left, right, maxPeakL, maxPeakR);
+        processFastMeterSample(left, right);
+        processTruePeakSample(left, right, maxTruePeakL, maxTruePeakR);
     }
 
-    maybeUpdatePeak(amplitudeToDb(maxPeakL), nowMs, true);
-    maybeUpdatePeak(amplitudeToDb(maxPeakR), nowMs, false);
+    const double truePeakLDb = truePeakAmplitudeToDb(maxTruePeakL);
+    const double truePeakRDb = truePeakAmplitudeToDb(maxTruePeakR);
+    maybeUpdateTruePeak(truePeakLDb, nowMs, true);
+    maybeUpdateTruePeak(truePeakRDb, nowMs, false);
+    snapshot_.maxTruePeakDb = static_cast<float>(std::max({
+        static_cast<double>(snapshot_.maxTruePeakDb),
+        truePeakLDb,
+        truePeakRDb,
+    }));
     recomputeFastSnapshot();
     updateMomentaryShortTermLoudness();
     snapshot_.integratedLUFS = static_cast<float>(computeGatedIntegratedLoudness());
 }
 
 LUFSMeterSnapshot LUFSMeterAnalyzer::getSnapshot() {
-    advancePeaks(currentTimeMs());
+    advanceTruePeaks(currentTimeMs());
     recomputeFastSnapshot();
     return snapshot_;
 }
@@ -303,7 +382,7 @@ double LUFSMeterAnalyzer::applyBiquad(const BiquadCoeffs& coeffs, BiquadState& s
     return output;
 }
 
-void LUFSMeterAnalyzer::processFastMeterSample(float left, float right, double& maxPeakL, double& maxPeakR) {
+void LUFSMeterAnalyzer::processFastMeterSample(float left, float right) {
     if (fastSqL_.empty()) {
         return;
     }
@@ -334,16 +413,44 @@ void LUFSMeterAnalyzer::processFastMeterSample(float left, float right, double& 
     const double coeffR = absR > barEnvelopeR_ ? barAttackCoeff_ : barReleaseCoeff_;
     barEnvelopeL_ = coeffL * barEnvelopeL_ + (1.0 - coeffL) * absL;
     barEnvelopeR_ = coeffR * barEnvelopeR_ + (1.0 - coeffR) * absR;
-
-    if (absL > maxPeakL) {
-        maxPeakL = absL;
-    }
-    if (absR > maxPeakR) {
-        maxPeakR = absR;
-    }
 }
 
-void LUFSMeterAnalyzer::advancePeaks(double nowMs) {
+void LUFSMeterAnalyzer::processTruePeakSample(
+    float left,
+    float right,
+    double& maxTruePeakL,
+    double& maxTruePeakR
+) {
+    if (truePeakHistoryL_.empty() || truePeakCoefficients_.empty()) {
+        return;
+    }
+
+    const double leftSample = static_cast<double>(left);
+    const double rightSample = static_cast<double>(right);
+    truePeakHistoryL_[truePeakHistoryWriteIndex_] = leftSample;
+    truePeakHistoryL_[truePeakHistoryWriteIndex_ + TRUE_PEAK_TAPS_PER_PHASE] = leftSample;
+    truePeakHistoryR_[truePeakHistoryWriteIndex_] = rightSample;
+    truePeakHistoryR_[truePeakHistoryWriteIndex_ + TRUE_PEAK_TAPS_PER_PHASE] = rightSample;
+
+    for (size_t phase = 0; phase < truePeakOversampleFactor_; phase += 1) {
+        const size_t coefficientOffset = phase * TRUE_PEAK_TAPS_PER_PHASE;
+        double reconstructedL = 0.0;
+        double reconstructedR = 0.0;
+        const size_t newestHistoryIndex = truePeakHistoryWriteIndex_ + TRUE_PEAK_TAPS_PER_PHASE;
+        for (size_t tap = 0; tap < TRUE_PEAK_TAPS_PER_PHASE; tap += 1) {
+            const size_t historyIndex = newestHistoryIndex - tap;
+            const double coefficient = truePeakCoefficients_[coefficientOffset + tap];
+            reconstructedL += coefficient * truePeakHistoryL_[historyIndex];
+            reconstructedR += coefficient * truePeakHistoryR_[historyIndex];
+        }
+        maxTruePeakL = std::max(maxTruePeakL, std::abs(reconstructedL));
+        maxTruePeakR = std::max(maxTruePeakR, std::abs(reconstructedR));
+    }
+
+    truePeakHistoryWriteIndex_ = (truePeakHistoryWriteIndex_ + 1) % TRUE_PEAK_TAPS_PER_PHASE;
+}
+
+void LUFSMeterAnalyzer::advanceTruePeaks(double nowMs) {
     if (!std::isfinite(nowMs)) {
         return;
     }
@@ -358,23 +465,23 @@ void LUFSMeterAnalyzer::advancePeaks(double nowMs) {
         return;
     }
 
-    snapshot_.peakLDb = static_cast<float>(applyPeakDecay(snapshot_.peakLDb, peakHoldUntilL_, nowMs));
-    snapshot_.peakRDb = static_cast<float>(applyPeakDecay(snapshot_.peakRDb, peakHoldUntilR_, nowMs));
+    snapshot_.truePeakLDb = static_cast<float>(applyPeakDecay(snapshot_.truePeakLDb, peakHoldUntilL_, nowMs));
+    snapshot_.truePeakRDb = static_cast<float>(applyPeakDecay(snapshot_.truePeakRDb, peakHoldUntilR_, nowMs));
     lastPeakUpdateMs_ = nowMs;
 }
 
-void LUFSMeterAnalyzer::maybeUpdatePeak(double peakDb, double nowMs, bool leftChannel) {
+void LUFSMeterAnalyzer::maybeUpdateTruePeak(double peakDb, double nowMs, bool leftChannel) {
     if (leftChannel) {
-        if (peakDb > snapshot_.peakLDb) {
-            snapshot_.peakLDb = static_cast<float>(peakDb);
-            peakHoldUntilL_ = nowMs + VU_PEAK_HOLD_MS;
+        if (peakDb > snapshot_.truePeakLDb) {
+            snapshot_.truePeakLDb = static_cast<float>(peakDb);
+            peakHoldUntilL_ = nowMs + TRUE_PEAK_HOLD_MS;
         }
         return;
     }
 
-    if (peakDb > snapshot_.peakRDb) {
-        snapshot_.peakRDb = static_cast<float>(peakDb);
-        peakHoldUntilR_ = nowMs + VU_PEAK_HOLD_MS;
+    if (peakDb > snapshot_.truePeakRDb) {
+        snapshot_.truePeakRDb = static_cast<float>(peakDb);
+        peakHoldUntilR_ = nowMs + TRUE_PEAK_HOLD_MS;
     }
 }
 
@@ -384,7 +491,7 @@ double LUFSMeterAnalyzer::applyPeakDecay(double currentDb, double holdUntilMs, d
         return currentDb;
     }
 
-    const double decayAmount = ((nowMs - decayStartMs) / 1000.0) * VU_PEAK_DECAY_DB_PER_SECOND;
+    const double decayAmount = ((nowMs - decayStartMs) / 1000.0) * TRUE_PEAK_DECAY_DB_PER_SECOND;
     return std::max(VU_METER_MIN_DB, currentDb - decayAmount);
 }
 
@@ -422,6 +529,13 @@ double LUFSMeterAnalyzer::amplitudeToDb(double amplitude) {
         return VU_METER_MIN_DB;
     }
     return clampDb(20.0 * std::log10(std::max(amplitude, 1e-10)), VU_METER_MIN_DB, VU_METER_MAX_DB);
+}
+
+double LUFSMeterAnalyzer::truePeakAmplitudeToDb(double amplitude) {
+    if (!std::isfinite(amplitude) || amplitude <= 0.0) {
+        return VU_METER_MIN_DB;
+    }
+    return std::max(VU_METER_MIN_DB, 20.0 * std::log10(std::max(amplitude, 1e-10)));
 }
 
 double LUFSMeterAnalyzer::clampDb(double db, double minDb, double maxDb) {

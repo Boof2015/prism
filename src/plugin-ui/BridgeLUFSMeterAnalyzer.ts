@@ -3,7 +3,7 @@ import type { LUFSMeterNativeAnalyzer, LUFSMeterNativeSnapshot } from '../render
 /**
  * Drop-in `LUFSMeterNativeAnalyzer` for the plugin webview.
  *
- * The loudness DSP (K-weighting, gated integration, fast VU/peak/correlation) runs
+ * The loudness DSP (K-weighting, gated integration, true peak, fast VU/correlation) runs
  * in the C++ plugin, which pushes a finished scalar snapshot each frame. This shim
  * caches that snapshot and serves it through the interface `LUFSMeter` consumes.
  * `pushSamples` is a no-op (audio never flows through the webview); `reset` clears

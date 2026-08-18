@@ -127,6 +127,9 @@ jobs:
       - name: Test native vectorscope calibration
         run: npm run test:vectorscope-native
 
+      - name: Test native BS.1770 true-peak calibration
+        run: npm run test:lufsmeter-native
+
       - name: Build and test Prism TUI
         run: npm run test:tui
 
