@@ -32,6 +32,8 @@ Prism includes seven real-time scopes and meters:
 
 Every scope can be configured independently. Resize and rearrange them into a rack, rotate supported scopes, pop them into separate windows, or pin them on top of other applications.
 
+![Prism customize](assets/prism-showcase-layout-readme.gif)
+
 Spectrum, Spectrogram, Oscilloscope, and Waveform also include interactive measurement overlays for inspecting frequency, level, pitch, amplitude, or time directly from the display.
 
 <details> <summary><strong>Stats for nerds</strong></summary>
