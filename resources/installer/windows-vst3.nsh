@@ -20,6 +20,23 @@
   Var PRISM_VST_CHECKBOX
   Var PRISM_VST_STATE
 
+  !macro customHeader
+    ; electron-builder disables the standard NSIS details view in common.nsh.
+    ; customHeader is inserted after common.nsh, so this supported hook can
+    ; override that default without modifying electron-builder's templates.
+    ShowInstDetails show
+
+    ; This hidden section runs before electron-builder's main install section.
+    ; Its message therefore remains visible while the bundled application is
+    ; extracted and atomically copied into the selected installation folder.
+    Section "-Prism install status"
+      ${IfNot} ${Silent}
+        SetDetailsPrint both
+        DetailPrint "Step 1 of 4: Unpacking Prism application files. This may take a minute..."
+      ${EndIf}
+    SectionEnd
+  !macroend
+
   !macro customInit
     ; Silent installs skip the options page, so default to installing plugins.
     StrCpy $PRISM_VST_STATE ${BST_CHECKED}
@@ -55,11 +72,15 @@
   !macroend
 
   !macro customInstall
+    SetDetailsPrint both
+
     ${IfNot} ${FileExists} "$INSTDIR\resources\tui\prism-tui.exe"
       DetailPrint "ERROR: bundled prism-tui.exe was not found"
       MessageBox MB_OK|MB_ICONSTOP "The bundled prism-tui executable was not found.$\r$\n$\r$\nMissing path:$\r$\n$INSTDIR\resources\tui\prism-tui.exe" /SD IDOK
       Abort
     ${EndIf}
+
+    DetailPrint "Step 2 of 4: Adding prism-tui to the machine PATH..."
 
     ; Pass the path through the installer's process environment. Supplying it
     ; after PowerShell's -Command argument loses quotes at the native command
@@ -85,7 +106,7 @@
     DetailPrint "Added $INSTDIR\resources\tui to the machine PATH"
 
     ${If} $PRISM_VST_STATE == ${BST_CHECKED}
-      DetailPrint "Installing Prism VST3 plugins to $COMMONFILES64\VST3"
+      DetailPrint "Step 3 of 4: Installing Prism VST3 plugins to $COMMONFILES64\VST3..."
 
       ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\VST3\*.vst3"
         ; Plugins are optional. Local app/TUI builds may intentionally omit the
@@ -103,10 +124,13 @@
           MessageBox MB_OK|MB_ICONSTOP "Prism VST3 plugin installation failed while copying files to:$\r$\n$COMMONFILES64\VST3$\r$\n$\r$\nxcopy exit code: $0" /SD IDOK
           Abort
         ${EndIf}
+        DetailPrint "Installed Prism VST3 plugins."
       ${EndIf}
     ${Else}
-      DetailPrint "Prism VST3 plugins: skipped (opted out)."
+      DetailPrint "Step 3 of 4: Prism VST3 plugins skipped (opted out)."
     ${EndIf}
+
+    DetailPrint "Step 4 of 4: Finishing Prism installation..."
   !macroend
 !endif
 

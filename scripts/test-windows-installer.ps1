@@ -116,6 +116,30 @@ function Invoke-CheckedProcess {
   }
 }
 
+function Remove-DirectoryWithRetry {
+  param(
+    [Parameter(Mandatory)][string]$LiteralPath,
+    [int]$MaximumAttempts = 10,
+    [int]$DelayMilliseconds = 500
+  )
+
+  for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt += 1) {
+    if (-not (Test-Path -LiteralPath $LiteralPath)) {
+      return
+    }
+
+    try {
+      Remove-Item -LiteralPath $LiteralPath -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($attempt -eq $MaximumAttempts) {
+        throw
+      }
+      Start-Sleep -Milliseconds $DelayMilliseconds
+    }
+  }
+}
+
 try {
   if ([string]::Equals($legacyEntry, $tuiDirectory, [StringComparison]::OrdinalIgnoreCase)) {
     throw "The smoke-test installation path must contain whitespace: $installRoot"
@@ -184,7 +208,10 @@ try {
   $expectedReinstalledEntries = @($originalEntries) + $legacyEntry + $tuiDirectory
   Assert-PathEntriesEqual -Expected $expectedReinstalledEntries -Actual $reinstalledEntries -Context 'Reinstalled machine PATH'
 
-  Invoke-CheckedProcess -FilePath $uninstallerPath -Arguments '/S' | Out-Null
+  # _?= prevents NSIS from spawning a temporary uninstaller and exiting early,
+  # so WaitForExit observes the process that is actually removing the files.
+  # NSIS requires this to be the final argument and forbids quoting its value.
+  Invoke-CheckedProcess -FilePath $uninstallerPath -Arguments "/S _?=$installRoot" | Out-Null
   $uninstalled = $true
 
   $uninstalledEntries = @(Get-PathEntries ([Environment]::GetEnvironmentVariable('Path', 'Machine')))
@@ -198,7 +225,7 @@ try {
 } finally {
   if (-not $uninstalled -and (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
     try {
-      Invoke-CheckedProcess -FilePath $uninstallerPath -Arguments '/S' | Out-Null
+      Invoke-CheckedProcess -FilePath $uninstallerPath -Arguments "/S _?=$installRoot" | Out-Null
     } catch {
       Write-Warning "Smoke-test uninstall cleanup failed: $($_.Exception.Message)"
     }
@@ -210,7 +237,7 @@ try {
     $fullTempRoot = [IO.Path]::GetFullPath($tempRoot).TrimEnd('\') + '\'
     $fullInstallRoot = [IO.Path]::GetFullPath($installRoot)
     if ($fullInstallRoot.StartsWith($fullTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
-      Remove-Item -LiteralPath $fullInstallRoot -Recurse -Force
+      Remove-DirectoryWithRetry -LiteralPath $fullInstallRoot
     } else {
       Write-Warning "Refusing to remove unexpected smoke-test directory: $fullInstallRoot"
     }
@@ -220,7 +247,7 @@ try {
     $fullTempRoot = [IO.Path]::GetFullPath($tempRoot).TrimEnd('\') + '\'
     $fullLegacyEntry = [IO.Path]::GetFullPath($legacyEntry)
     if ($fullLegacyEntry.StartsWith($fullTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
-      Remove-Item -LiteralPath $fullLegacyEntry -Recurse -Force
+      Remove-DirectoryWithRetry -LiteralPath $fullLegacyEntry
     } else {
       Write-Warning "Refusing to remove unexpected legacy fixture directory: $fullLegacyEntry"
     }
