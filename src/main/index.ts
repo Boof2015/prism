@@ -153,6 +153,8 @@ const NOW_PLAYING_CONFIG_DEFAULTS = {
 }
 
 const STATIC_APP_ICON_FILENAME = 'icon.png'
+const AUDIO_CLIP_DRAG_ICON_FILENAME = 'audio-clip.png'
+const AUDIO_CLIP_DRAG_ICON_SIZE = 32
 const DESKTOP_INTEGRATION_PREFS_FILENAME = 'desktop-integration.json'
 const MAIN_WINDOW_SYNC_SUPPRESSION_MS = 180
 const MAIN_WINDOW_VISIBLE_GRAB_MARGIN = 64
@@ -377,11 +379,32 @@ function getStaticWindowIconOptions(): Pick<BrowserWindowConstructorOptions, 'ic
   return icon ? { icon } : {}
 }
 
+function getAudioClipDragIconPath(): string | undefined {
+  const candidates = app.isPackaged
+    ? [join(process.resourcesPath, 'drag', AUDIO_CLIP_DRAG_ICON_FILENAME)]
+    : [
+        join(process.cwd(), 'resources', 'drag', AUDIO_CLIP_DRAG_ICON_FILENAME),
+        join(__dirname, '../../resources/drag', AUDIO_CLIP_DRAG_ICON_FILENAME),
+      ]
+
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
 function getAudioClipDragIcon() {
-  const iconPath = getStaticAppIconPath()
+  const iconPath = getAudioClipDragIconPath()
   if (iconPath) {
     const icon = nativeImage.createFromPath(iconPath)
-    if (!icon.isEmpty()) return icon
+    if (!icon.isEmpty()) {
+      const size = icon.getSize()
+      if (size.width > AUDIO_CLIP_DRAG_ICON_SIZE || size.height > AUDIO_CLIP_DRAG_ICON_SIZE) {
+        return icon.resize({
+          width: AUDIO_CLIP_DRAG_ICON_SIZE,
+          height: AUDIO_CLIP_DRAG_ICON_SIZE,
+          quality: 'best',
+        })
+      }
+      return icon
+    }
   }
 
   const fallback = nativeImage.createFromDataURL(

@@ -4492,6 +4492,36 @@ test('rolling capture exposes persisted duration controls and a native toolbar d
   assert.match(trayBridgeSource, /rollingCaptureSeconds,/)
 })
 
+test('rolling capture uses a dedicated bounded audio-file drag preview', async () => {
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const packageSource = await readFile(join(process.cwd(), 'package.json'), 'utf8')
+  const icon1x = await readFile(join(process.cwd(), 'resources', 'drag', 'audio-clip.png'))
+  const icon2x = await readFile(join(process.cwd(), 'resources', 'drag', 'audio-clip@2x.png'))
+  const packageJson = JSON.parse(packageSource) as {
+    build: {
+      extraResources: Array<{ from: string; to: string }>
+    }
+  }
+
+  const pngDimensions = (buffer: Buffer): [number, number] => {
+    assert.deepEqual([...buffer.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
+    return [buffer.readUInt32BE(16), buffer.readUInt32BE(20)]
+  }
+
+  assert.deepEqual(pngDimensions(icon1x), [32, 32])
+  assert.deepEqual(pngDimensions(icon2x), [64, 64])
+  assert.match(mainSource, /const AUDIO_CLIP_DRAG_ICON_FILENAME = 'audio-clip\.png'/)
+  assert.match(mainSource, /const AUDIO_CLIP_DRAG_ICON_SIZE = 32/)
+  assert.match(mainSource, /function getAudioClipDragIconPath\(\)/)
+  assert.match(mainSource, /const iconPath = getAudioClipDragIconPath\(\)/)
+  assert.match(mainSource, /icon\.resize\(\{[\s\S]*width: AUDIO_CLIP_DRAG_ICON_SIZE,[\s\S]*height: AUDIO_CLIP_DRAG_ICON_SIZE/)
+  assert.doesNotMatch(mainSource, /function getAudioClipDragIcon\(\) \{\s*const iconPath = getStaticAppIconPath\(\)/)
+  assert.match(mainSource, /event\.sender\.startDrag\(\{\s*file: filePath,\s*icon: getAudioClipDragIcon\(\),\s*\}\)/)
+  assert.ok(packageJson.build.extraResources.some((entry) => {
+    return entry.from === 'resources/drag/' && entry.to === 'drag/'
+  }))
+})
+
 test('resolveWindowCapabilities detects native Wayland sessions on Linux', () => {
   assert.deepEqual(
     resolveWindowCapabilities({
