@@ -114,6 +114,8 @@ Prebuilt versions of Prism for Windows, macOS, and Linux are available on the [R
 
 Installable packages include the desktop application and the components supported by that package, including DAW plugins and `prism-tui` where applicable.
 
+On Windows, the NSIS installer adds `prism-tui` to the machine `PATH`. Open a new terminal after installation so it inherits the updated environment. The portable Windows package does not modify `PATH`.
+
 ## Building from Source
 
 **Prerequisites:** Node.js 18+, npm, CMake 3.22+, and a C++ compiler toolchain.

@@ -281,6 +281,11 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
+      - name: Smoke-test Windows installer PATH integration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-installer.ps1
+
       - name: Build Linux packages with VST3 plugins
         if: runner.os == 'Linux'
         shell: bash

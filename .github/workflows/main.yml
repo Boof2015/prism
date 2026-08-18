@@ -267,6 +267,37 @@ jobs:
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build plugin/build --target PrismInstallerPlugins --config Release --parallel 4
 
+      - name: Stage plugins for Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          rm -rf plugin/dist-installer
+          mkdir -p plugin/dist-installer/VST3
+          for art in PrismSpectrum PrismOscilloscope PrismVUMeter PrismLUFSMeter PrismVectorscope PrismSpectrogram PrismWaveform; do
+            vst3_dir="plugin/build/${art}_artefacts/Release/VST3"
+            [ -d "$vst3_dir" ] && find "$vst3_dir" -maxdepth 1 -name "*.vst3" -exec cp -R {} plugin/dist-installer/VST3/ \;
+          done
+          vst3_count="$(find plugin/dist-installer/VST3 -maxdepth 1 -name "*.vst3" | wc -l | tr -d ' ')"
+          if [ "$vst3_count" -ne 7 ]; then
+            echo "ERROR: expected 7 VST3 plugins, found $vst3_count"
+            exit 1
+          fi
+
+      - name: Stage Prism TUI for Windows installer
+        if: runner.os == 'Windows'
+        run: npm run stage:tui
+
+      - name: Build Windows NSIS smoke artifact
+        if: runner.os == 'Windows'
+        run: npx electron-builder --win nsis --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Smoke-test Windows installer PATH integration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-installer.ps1
+
       - name: Show sccache stats
         if: runner.os != 'Linux'
         run: sccache --show-stats

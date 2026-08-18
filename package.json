@@ -40,7 +40,7 @@
     "postinstall": "node scripts/build/postinstall-native.cjs",
     "dist": "node scripts/build/dist-current.cjs",
     "dist:mac": "npm run stage:tui && npm run build && electron-builder --mac --publish never",
-    "dist:win": "npm run stage:tui && npm run build && electron-builder --win --publish never",
+    "dist:win": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build/check-windows-dist-output.ps1 && npm run stage:tui && npm run build && electron-builder --win --publish never",
     "dist:linux": "npm run dist:linux:appimage && npm run stage:tui && electron-builder --linux deb rpm tar.gz --publish never",
     "dist:linux:appimage": "npm run build && electron-builder --config electron-builder.appimage.cjs --linux AppImage --publish never",
     "dist:linux:packages": "npm run stage:tui && electron-builder --linux deb rpm tar.gz --publish never"

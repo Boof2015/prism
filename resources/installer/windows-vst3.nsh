@@ -61,10 +61,20 @@
       Abort
     ${EndIf}
 
+    ; Pass the path through the installer's process environment. Supplying it
+    ; after PowerShell's -Command argument loses quotes at the native command
+    ; line boundary and truncates the default path to "C:\Program".
+    System::Call 'Kernel32::SetEnvironmentVariable(t, t)i ("PRISM_TUI_INSTALL_DIR", "$INSTDIR\resources\tui").r0'
+    ${If} $0 == 0
+      DetailPrint "ERROR: could not prepare the Prism TUI PATH update"
+      MessageBox MB_OK|MB_ICONSTOP "Prism could not prepare the prism-tui PATH update." /SD IDOK
+      Abort
+    ${EndIf}
+
     ; PowerShell avoids NSIS string-length truncation on machines with a large
-    ; PATH. It removes exact duplicates, appends Prism once, and leaves every
-    ; other entry intact. PowerShell comparisons are case-insensitive here.
-    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { param([string]$$entry) $$path = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$entries = @($$path -split ';' | Where-Object { $$_ -and $$_ -ine $$entry }); $$entries += $$entry; [Environment]::SetEnvironmentVariable('Path', ($$entries -join ';'), 'Machine') }" "$INSTDIR\resources\tui"`
+    ; PATH. It removes exact duplicates, safely repairs the truncated entry
+    ; written by older installers, appends Prism once, and verifies the write.
+    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'Stop'; $$entry = $$env:PRISM_TUI_INSTALL_DIR; if ([string]::IsNullOrWhiteSpace($$entry)) { exit 10 }; $$legacyEntry = $$null; $$removeLegacy = $$false; if ($$entry -match '\s') { $$legacyEntry = ($$entry -split '\s', 2)[0]; $$removeLegacy = $$legacyEntry -ine $$entry -and -not (Test-Path -LiteralPath $$legacyEntry -PathType Container) }; $$path = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$entries = @($$path -split ';' | Where-Object { $$_ -and $$_ -ine $$entry -and (-not $$removeLegacy -or $$_ -ine $$legacyEntry) }); $$entries += $$entry; [Environment]::SetEnvironmentVariable('Path', ($$entries -join ';'), 'Machine'); $$updatedPath = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$matches = @($$updatedPath -split ';' | Where-Object { $$_ -ieq $$entry }); if ($$matches.Count -ne 1) { exit 11 } }"`
     Pop $0
     ${If} $0 != 0
       DetailPrint "ERROR: could not add Prism TUI to the machine PATH (exit code $0)"
@@ -78,20 +88,21 @@
       DetailPrint "Installing Prism VST3 plugins to $COMMONFILES64\VST3"
 
       ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\VST3\*.vst3"
-        DetailPrint "ERROR: bundled Prism VST3 plugins were not found at $INSTDIR\resources\plugins\VST3"
-        MessageBox MB_OK|MB_ICONSTOP "Prism VST3 plugins were selected, but the bundled plugin files were not found.$\r$\n$\r$\nMissing path:$\r$\n$INSTDIR\resources\plugins\VST3" /SD IDOK
-        Abort
-      ${EndIf}
-
-      CreateDirectory "$COMMONFILES64\VST3"
-      ; xcopy /E recurse, /I treat dest as dir, /Y overwrite without prompt.
-      ; The trailing "\*" + "/E" copies each *.vst3 bundle subfolder verbatim.
-      nsExec::ExecToLog 'cmd.exe /c xcopy /E /I /Y "$INSTDIR\resources\plugins\VST3\*" "$COMMONFILES64\VST3\"'
-      Pop $0
-      ${If} $0 != 0
-        DetailPrint "ERROR: Prism VST3 plugin copy failed with xcopy exit code $0"
-        MessageBox MB_OK|MB_ICONSTOP "Prism VST3 plugin installation failed while copying files to:$\r$\n$COMMONFILES64\VST3$\r$\n$\r$\nxcopy exit code: $0" /SD IDOK
-        Abort
+        ; Plugins are optional. Local app/TUI builds may intentionally omit the
+        ; staged bundles, so do not roll back an otherwise valid installation.
+        DetailPrint "WARNING: bundled Prism VST3 plugins were not found; skipping plugin installation"
+        MessageBox MB_OK|MB_ICONEXCLAMATION "Prism was installed, but this package does not contain the optional VST3 plugins.$\r$\n$\r$\nprism-tui and the desktop app are ready to use." /SD IDOK
+      ${Else}
+        CreateDirectory "$COMMONFILES64\VST3"
+        ; xcopy /E recurse, /I treat dest as dir, /Y overwrite without prompt.
+        ; The trailing "\*" + "/E" copies each *.vst3 bundle subfolder verbatim.
+        nsExec::ExecToLog 'cmd.exe /c xcopy /E /I /Y "$INSTDIR\resources\plugins\VST3\*" "$COMMONFILES64\VST3\"'
+        Pop $0
+        ${If} $0 != 0
+          DetailPrint "ERROR: Prism VST3 plugin copy failed with xcopy exit code $0"
+          MessageBox MB_OK|MB_ICONSTOP "Prism VST3 plugin installation failed while copying files to:$\r$\n$COMMONFILES64\VST3$\r$\n$\r$\nxcopy exit code: $0" /SD IDOK
+          Abort
+        ${EndIf}
       ${EndIf}
     ${Else}
       DetailPrint "Prism VST3 plugins: skipped (opted out)."
@@ -102,12 +113,17 @@
 !macro customUnInstall
   ; Remove only Prism's exact machine-PATH entry. A failure is non-fatal so an
   ; otherwise valid uninstall is never blocked.
-  nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { param([string]$$entry) $$path = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$entries = @($$path -split ';' | Where-Object { $$_ -and $$_ -ine $$entry }); [Environment]::SetEnvironmentVariable('Path', ($$entries -join ';'), 'Machine') }" "$INSTDIR\resources\tui"`
-  Pop $0
+  System::Call 'Kernel32::SetEnvironmentVariable(t, t)i ("PRISM_TUI_INSTALL_DIR", "$INSTDIR\resources\tui").r0'
   ${If} $0 == 0
-    SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+    DetailPrint "WARNING: could not prepare the Prism TUI PATH removal"
   ${Else}
-    DetailPrint "WARNING: could not remove Prism TUI from the machine PATH (exit code $0)"
+    nsExec::ExecToLog `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'Stop'; $$entry = $$env:PRISM_TUI_INSTALL_DIR; if ([string]::IsNullOrWhiteSpace($$entry)) { exit 10 }; $$legacyEntry = $$null; $$removeLegacy = $$false; if ($$entry -match '\s') { $$legacyEntry = ($$entry -split '\s', 2)[0]; $$removeLegacy = $$legacyEntry -ine $$entry -and -not (Test-Path -LiteralPath $$legacyEntry -PathType Container) }; $$path = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$entries = @($$path -split ';' | Where-Object { $$_ -and $$_ -ine $$entry -and (-not $$removeLegacy -or $$_ -ine $$legacyEntry) }); [Environment]::SetEnvironmentVariable('Path', ($$entries -join ';'), 'Machine'); $$updatedPath = [Environment]::GetEnvironmentVariable('Path', 'Machine'); $$matches = @($$updatedPath -split ';' | Where-Object { $$_ -ieq $$entry }); if ($$matches.Count -ne 0) { exit 11 } }"`
+    Pop $0
+    ${If} $0 == 0
+      SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+    ${Else}
+      DetailPrint "WARNING: could not remove Prism TUI from the machine PATH (exit code $0)"
+    ${EndIf}
   ${EndIf}
 
   ; Always attempt removal — harmless RMDir if the bundle isn't there (user opted
