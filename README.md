@@ -20,19 +20,156 @@ Monitor system audio or an input with a configurable set of real-time scopes and
 
 ## Scopes
 
-Prism includes seven scopes and meters:
+Prism includes seven real-time scopes and meters:
 
-* **Spectrum Analyzer** — Frequency spectrum with heatmap and fill modes, configurable FFT size, spectral tilt, multiple frequency scales, and peak information
-* **Oscilloscope** — Time-domain waveform with an optional pitch-lock mode that follows the fundamental frequency
-* **Vectorscope** — Stereo image and phase visualization with XY, Polar, and M/S Linear views, adjustable zoom, and an optional multiband RGB split
-* **Spectrogram** — Scrolling frequency-over-time display with Log, Mel, and Linear scales and several detail modes
-* **VU Meter** — Classic VU metering with needle and bar styles in horizontal or vertical layouts
-* **Loudness Meter** — LUFS metering following ITU-R BS.1770 alongside stereo peak activity
-* **Waveform** — Scrolling waveform view with mono, stereo, and multiband modes
+* **Spectrum Analyzer** — FFT spectrum with calibrated dBFS levels, configurable FFT size, spectral tilt, Log/Mel/Linear scales, heatmap and fill modes, and peak/pitch readouts
+* **Oscilloscope** — Time-domain waveform with fundamental-frequency pitch locking and sub-sample triggering for a stable display
+* **Vectorscope** — Full-band stereo phase analysis with XY, Polar, and M/S Linear views, calibrated references, adjustable zoom, and optional multiband RGB
+* **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, stereo-energy analysis, and frequency reassignment in Sharp and Sharper modes
+* **VU Meter** — 300 ms metering with adjustable 0 VU reference, stereo correlation, and needle or bar displays
+* **Loudness Meter** — ITU-R BS.1770 momentary, short-term, and integrated LUFS metering with stereo peak activity
+* **Waveform** — Scrolling mono or stereo waveform with transient-preserving min/max sampling and optional multiband energy visualization
 
-Every scope can be configured independently. Resize and rearrange them into a rack, rotate them, pop individual scopes into their own windows, or pin them on top of other applications.
+Every scope can be configured independently. Resize and rearrange them into a rack, rotate supported scopes, pop them into separate windows, or pin them on top of other applications.
 
-Compatible scopes also include an interactive measurement overlay for inspecting the display directly.
+Spectrum, Spectrogram, Oscilloscope, and Waveform also include interactive measurement overlays for inspecting frequency, level, pitch, amplitude, or time directly from the display.
+
+<details> <summary><strong>Stats for nerds</strong></summary>
+
+Most of Prism's analysis runs in native C++, with the same DSP implementations reused across the desktop app, DAW plugins, and terminal interface where applicable.
+
+### Spectrum
+
+* Hann-windowed FFT with selectable sizes from 1024 to 16384 samples
+* Coherent-gain correction for calibrated dBFS magnitude rather than arbitrary FFT amplitude
+* Native calibration tests measure bin-centered tones within ±0.05 dB and off-bin interpolated peaks within 0.3 dB across all exposed FFT sizes
+* Maintains Mid, Side, Left, Right, and channel-max spectra internally
+* Logarithmic, Slaney Mel, and Linear frequency scales
+* Extended 10 Hz–24 kHz and Audible 20 Hz–20 kHz ranges, automatically clamped to Nyquist
+* Independent spectral and heatmap tilt around a 1 kHz reference
+* Peak analysis can report dBFS, frequency, musical note, octave, and cents offset
+* Interactive measurement overlay exposes frequency, level, and pitch directly from the graph
+
+### Spectrogram
+
+* Hann-windowed FFT with 4× zero-padding
+* Coherent amplitude normalization for calibrated spectral levels
+* Native tests keep tone levels within 0.3 dB across multiple FFT sizes, amplitudes, and off-bin frequencies
+* Logarithmic, Slaney Mel, and Linear frequency mapping
+* Frequency placement is tested across 44.1, 48, and 96 kHz sample rates
+* Classic mode provides a conventional spectral display
+* Focused mode relocates local spectral peaks using phase correction and a local spectral centroid
+* Sharp and Sharper perform phase-based frequency reassignment rather than post-process image sharpening
+* Reassignment operates on every visible contributing FFT bin instead of only local maxima, preserving quieter partials and ambience
+* Reassigned power compensates for Hann-window equivalent noise bandwidth and zero-padding so relocation remains level-calibrated
+* Stereo analysis combines L/R energy rather than summing to mono, so anti-phase material remains visible instead of cancelling out
+* Native tests verify reassigned tones stay on the correct Log, Mel, and Linear frequency rows
+* Interactive inspection reports frequency, pitch, and time history
+
+### Oscilloscope
+
+* FFT-based fundamental detection over a 2048-sample analysis window
+* Pitch detector currently searches from 40 to 1000 Hz
+* Pitch-lock dynamically retunes a narrow FIR band-pass around the detected fundamental
+* Triggering follows a rising zero crossing rather than simply drawing the newest block of samples
+* Trigger positions retain sub-sample precision
+* Catmull-Rom interpolation is used when reading the waveform at fractional sample positions
+* Adaptive pitch smoothing locks quickly at startup and becomes more conservative once stable
+* Interactive measurement reports time, linear amplitude, and dBFS
+
+### Vectorscope
+
+* Full-band L/R analysis with no hidden high-frequency low-pass
+* Native regression tests explicitly verify preservation of content above 8 kHz at 44.1, 48, and 96 kHz
+* XY mode uses the original channel samples directly: Right on X, Left on Y
+* XY and M/S Linear modes use calibrated channel-amplitude reference boundaries
+* Polar retains an intentionally amplitude-compressed radial projection so low-level stereo structure remains readable
+* Folded modes rotate negative-Mid samples rather than discarding them
+* Adjustable display zoom from −12 to +24 dB without modifying the underlying signal
+* Optional three-band stereo view with 250 Hz and 2.5 kHz crossovers
+* Multiband analysis retains separate low, mid, and high L/R signals
+
+### Loudness
+
+* ITU-R BS.1770-style K-weighting using the pre-filter and RLB weighting stages
+* Momentary loudness uses a 400 ms window
+* Short-term loudness uses a 3 second window
+* Integrated loudness uses overlapping 400 ms blocks with 100 ms hops
+* −70 LUFS absolute gate
+* Relative gate at −10 LU below ungated programme loudness
+* Momentary, short-term, and integrated LUFS are calculated independently
+* Peak readouts are sample peak, not true peak
+
+### VU and correlation
+
+* 300 ms RMS integration window
+* Adjustable 0 VU calibration from −30 to 0 dBFS
+* Default reference is 0 VU = −14 dBFS
+* Stereo correlation is calculated over the same analysis window and reported from −1 to +1
+* 750 ms sample-peak hold
+* Peak decay of 18 dB/s
+* Bar envelope uses a 5 ms attack and 180 ms release
+* Needle and bar displays can use the same underlying analysis
+
+### Waveform
+
+* Each rendered time column retains the minimum and maximum sample instead of selecting or averaging a single sample, helping preserve short transients while downsampling the history
+* Mono and separate stereo-lane modes
+* Optional multiband view calculates low, mid, and high RMS energy for every displayed time column
+* Uses the same 250 Hz and 2.5 kHz multiband split as the vectorscope
+* Interactive measurement reports time history, amplitude, and dBFS
+
+### Capture
+
+* Native CoreAudio system-output capture on macOS using Audio Hardware Taps
+* Native WASAPI loopback capture on Windows
+* Native PulseAudio monitor-source capture on Linux
+* Linux capture handles U8, 16-bit, 24-bit, 32-bit integer, and 32-bit floating-point PulseAudio formats before normalizing them for analysis
+* Microphone and interface inputs use a separate low-latency AudioWorklet capture path
+* Capture follows the active device sample rate instead of assuming a fixed 44.1 or 48 kHz analysis rate
+
+### Rolling capture
+
+* Keeps the previous 5, 10, 30, or 60 seconds of audio available without starting a recording beforehand
+* Buffer is stored as PCM and exported as a standard RIFF/WAV file
+* Mono and stereo capture are supported
+* Exported clips use 16-bit PCM
+* The export path supports source sample rates up to 384 kHz
+* Captured audio can be dragged directly out of Prism as a file
+
+### DAW plugins
+
+* All seven Prism analyzers are built from the same native DSP source used by the desktop application
+* VST3 on Windows, macOS, and Linux
+* AU on macOS
+* Mono and stereo host layouts are supported
+* Analyzer plugins are pure pass-through: Prism does not modify the host's audio buffer
+* The realtime process callback only copies samples into a FIFO
+* FFT, loudness, visualization, and other analysis work happens outside the realtime audio thread
+* Scope configuration is serialized into the DAW's project/plugin state
+* Plugins use JUCE 8 and a shared Prism web UI while keeping analysis native
+
+### Terminal UI
+
+* Native C++ frontend using the same Spectrum, Oscilloscope, Vectorscope, VU, Loudness, Spectrogram, Waveform, and system-capture implementations
+* 60 FPS default rendering
+* Experimental 120 FPS mode
+* Compatibility mode uses 256-color output at up to 60 FPS
+* Safe mode uses basic ANSI colors and caps rendering at 30 FPS
+* Supports live output-device switching
+* Supports input trim before every analyzer
+* Includes pitch locking, vectorscope modes, calibrated VU reference levels, spectrogram reassignment modes, mono/stereo waveform views, and multiband analysis
+* Reads Prism .iro themes and has its own shareable profile/customization system
+* Typically uses around 35 MB of RAM
+
+### Rendering and measurement
+
+* Desktop visualizers can target 10, 30, 60, 120, or 144 FPS, or synchronize to the display refresh rate
+* Spectrum, Spectrogram, Oscilloscope, and Waveform support interactive measurement overlays
+* Measurement coordinates account for scope rotation and mirroring, so displayed readouts continue to correspond to the underlying signal after transforming a scope
+
+</details>
+
 
 ## Desktop
 
