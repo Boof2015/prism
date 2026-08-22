@@ -1,6 +1,7 @@
 import type { CaptureBackendKind } from './capture'
 import type { ScopeKind } from './scope'
 import type { ScopeSettings } from './settings'
+import type { AnalysisSettings } from './analysis'
 import type {
   ResolvedAstraTheme,
   ResolvedInterfaceTheme,
@@ -67,4 +68,5 @@ export interface ScopePopoutSnapshot<K extends ScopeKind = ScopeKind> {
   interfaceTheme: ResolvedInterfaceTheme
   scopeTheme: ScopePopoutResolvedScopeTheme
   settings: ScopeSettings[K]
+  analysisSettings: AnalysisSettings
 }

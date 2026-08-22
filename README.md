@@ -34,7 +34,7 @@ Every scope can be configured independently. Resize and rearrange them into a ra
 
 ![Prism customize](assets/prism-showcase-layout-readme.gif)
 
-Spectrum, Spectrogram, Oscilloscope, and Waveform also include interactive measurement overlays for inspecting frequency, level, pitch, amplitude, or time directly from the display.
+Spectrum, Spectrogram, Oscilloscope, and Waveform also include interactive measurement overlays for inspecting frequency, level, pitch, amplitude, or time directly from the display. Optional Linked Analysis mirrors compatible frequency, history-time, and amplitude guides across docked and detached scopes.
 
 <details> <summary><strong>Stats for nerds</strong></summary>
 
@@ -170,6 +170,7 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * Desktop visualizers can target 10, 30, 60, 120, or 144 FPS, or synchronize to the display refresh rate
 * Spectrum, Spectrogram, Oscilloscope, and Waveform support interactive measurement overlays
 * Measurement coordinates account for scope rotation and mirroring, so displayed readouts continue to correspond to the underlying signal after transforming a scope
+* Linked Analysis maps only compatible semantic axes between scopes and hides guides when an exact value is outside the target's visible range
 
 </details>
 

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { isTransformableScopeKind, type ScopeKind } from '../../types/scope'
+import {
+  isLinkedAnalysisCompatibleScopeKind,
+  type LinkedAnalysisMessage,
+  type LinkedAnalysisProbe,
+  type LinkedAnalysisProjection,
+} from '../../types/analysis'
 import type { ScopeSettings } from '../../types/settings'
 import { nominalFrequencyBoundsForRange } from '../../types/frequencyScale'
 import type { ScopeDisplayRotation } from '../../types/scopeTransform'
@@ -28,10 +34,11 @@ import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
 import type { FrameScheduler } from '../visualizers/frameScheduler'
 import {
+  ScopeLinkedAnalysisOverlay,
   ScopeMeasurementOverlay,
   useScopeMeasurement,
 } from './ScopeMeasurementOverlay'
-import type { ScopeMeasurementSource } from '../scopeMeasurement'
+import type { ActiveScopeMeasurement, ScopeMeasurementSource } from '../scopeMeasurement'
 import {
   getScopeCanvasTransformStyle,
   isSameScopeCanvasLayout,
@@ -56,6 +63,9 @@ interface ScopeModuleProps {
   settings?: ScopeSettings[ScopeKind]
   frameScheduler?: FrameScheduler
   onMeasurementActiveChange?: (active: boolean) => void
+  linkedAnalysisEnabled?: boolean
+  linkedAnalysisProbe?: LinkedAnalysisProbe | null
+  onLinkedAnalysisMessage?: (message: LinkedAnalysisMessage) => void
   dataSource?:
     | SpectrumAnalyzerDataSource
     | OscilloscopeDataSource
@@ -74,6 +84,7 @@ interface Visualizer {
   setOptions(options: Record<string, unknown>): void
   getMeasurementAt?: ScopeMeasurementSource['getMeasurementAt']
   setMeasurementActive?: ScopeMeasurementSource['setMeasurementActive']
+  getLinkedAnalysisProjection?: (probe: LinkedAnalysisProbe) => LinkedAnalysisProjection | null
 }
 
 const SPECTRUM_PEAK_OVERLAY_MARGIN_PX = 10
@@ -404,6 +415,9 @@ export default function ScopeModule({
   settings,
   frameScheduler,
   onMeasurementActiveChange,
+  linkedAnalysisEnabled = false,
+  linkedAnalysisProbe = null,
+  onLinkedAnalysisMessage,
   dataSource,
 }: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -417,6 +431,12 @@ export default function ScopeModule({
   const peakOverlayRef = useRef<HTMLDivElement | null>(null)
   const [spectrumPeakInfo, setSpectrumPeakInfo] = useState<SpectrumPeakInfo | null>(null)
   const [peakOverlaySize, setPeakOverlaySize] = useState<SizeMeasurement | null>(null)
+  const [linkedProjection, setLinkedProjection] = useState<LinkedAnalysisProjection | null>(null)
+  const linkedAnalysisProbeRef = useRef(linkedAnalysisProbe)
+  const refreshLinkedProjectionRef = useRef<() => void>(() => {})
+  const onMeasurementActiveChangeRef = useRef(onMeasurementActiveChange)
+  linkedAnalysisProbeRef.current = linkedAnalysisProbe
+  onMeasurementActiveChangeRef.current = onMeasurementActiveChange
 
   const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
   const activeTheme = useThemeStore((s) => s.activeTheme)
@@ -440,6 +460,26 @@ export default function ScopeModule({
     || scopeKind === 'spectrogram'
     || scopeKind === 'oscilloscope'
     || scopeKind === 'waveform'
+  const handleMeasurementChange = useCallback((change: {
+    interactionId: string
+    measurement: ActiveScopeMeasurement | null
+  }): void => {
+    if (!linkedAnalysisEnabled || !isLinkedAnalysisCompatibleScopeKind(scopeKind)) return
+    if (change.measurement) {
+      onLinkedAnalysisMessage?.({
+        active: true,
+        interactionId: change.interactionId,
+        sourceKind: scopeKind,
+        dimensions: change.measurement.measurement.dimensions,
+      })
+      return
+    }
+    onLinkedAnalysisMessage?.({
+      active: false,
+      interactionId: change.interactionId,
+      sourceKind: scopeKind,
+    })
+  }, [linkedAnalysisEnabled, onLinkedAnalysisMessage, scopeKind])
   const measurementController = useScopeMeasurement({
     containerRef,
     enabled: measurementEnabled,
@@ -451,8 +491,28 @@ export default function ScopeModule({
         ? visualizer as ScopeMeasurementSource
         : null
     },
-    onActiveChange: onMeasurementActiveChange,
+    onMeasurementChange: handleMeasurementChange,
   })
+  const refreshLinkedProjection = useCallback((): void => {
+    const probe = linkedAnalysisProbeRef.current
+    const visualizer = visualizerRef.current
+    const nextProjection = linkedAnalysisEnabled
+      && probe
+      && probe.sourceKind !== scopeKind
+      && visualizer?.getLinkedAnalysisProjection
+      ? visualizer.getLinkedAnalysisProjection(probe)
+      : null
+    setLinkedProjection(nextProjection)
+  }, [linkedAnalysisEnabled, scopeKind])
+  refreshLinkedProjectionRef.current = refreshLinkedProjection
+  const analysisActive = measurementController.active || linkedProjection !== null
+
+  useEffect(() => {
+    onMeasurementActiveChangeRef.current?.(analysisActive)
+    return () => {
+      if (analysisActive) onMeasurementActiveChangeRef.current?.(false)
+    }
+  }, [analysisActive])
 
   useEffect(() => {
     if (!captureSpectrumPeakInfo) {
@@ -527,6 +587,7 @@ export default function ScopeModule({
 
     visualizerRef.current = viz
     viz.start()
+    refreshLinkedProjectionRef.current()
 
     requestAnimationFrame(() => {
       initializedRef.current = true
@@ -560,6 +621,10 @@ export default function ScopeModule({
     }
     visualizerRef.current.setOptions(opts)
   }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind, windowBgAlpha])
+
+  useEffect(() => {
+    refreshLinkedProjection()
+  }, [linkedAnalysisProbe, mySettings, refreshLinkedProjection])
 
   useLayoutEffect(() => {
     const container = containerRef.current
@@ -614,6 +679,7 @@ export default function ScopeModule({
 
       appliedResizeRef.current = nextResize
       visualizerRef.current?.resize()
+      refreshLinkedProjectionRef.current()
     }
 
     const scheduleResize = (): void => {
@@ -664,7 +730,7 @@ export default function ScopeModule({
       className={[
         'scope-module',
         measurementEnabled ? 'scope-measurement-surface' : '',
-        measurementController.active ? 'is-measuring' : '',
+        analysisActive ? 'is-measuring' : '',
       ].filter(Boolean).join(' ')}
       ref={containerRef}
       {...measurementController.pointerBindings}
@@ -685,7 +751,15 @@ export default function ScopeModule({
         containerRef={containerRef}
         measurement={measurementController.measurement}
       />
-      {!measurementController.active && scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
+      {!measurementController.active && (
+        <ScopeLinkedAnalysisOverlay
+          containerRef={containerRef}
+          projection={linkedProjection}
+          rotation={rotation}
+          mirrorHorizontal={mirrorHorizontal}
+        />
+      )}
+      {!analysisActive && scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
         <div
           ref={spectrumPeakMode === 'following' ? peakOverlayRef : null}
           className={[

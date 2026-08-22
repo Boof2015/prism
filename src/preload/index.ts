@@ -24,6 +24,7 @@ import type {
   ProfileLibrarySnapshot,
 } from '../types/profile'
 import type { ScopeKind } from '../types/scope'
+import type { LinkedAnalysisMessage } from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   LegacyThemeMigrationResult,
@@ -167,6 +168,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   notifyScopePopoutReady: (kind: ScopeKind) => ipcRenderer.send('scope-popout:ready', kind),
   requestScopePopIn: (kind: ScopeKind) => ipcRenderer.send('scope-popout:request-pop-in', kind),
   sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => ipcRenderer.send('scope-popout:settings-update', kind, partial),
+  sendLinkedAnalysisMessage: (message: LinkedAnalysisMessage) => ipcRenderer.send('linked-analysis:update', message),
+  onLinkedAnalysisMessage: (callback: (message: LinkedAnalysisMessage) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: LinkedAnalysisMessage): void => callback(message)
+    ipcRenderer.on('linked-analysis:update', handler)
+    return () => ipcRenderer.removeListener('linked-analysis:update', handler)
+  },
   onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, isOnTop: boolean): void => callback(isOnTop)
     ipcRenderer.on('window:always-on-top-changed', handler)

@@ -935,6 +935,62 @@ button.toolbar__version:hover {
   opacity: 0.4;
 }
 
+.scope-linked-analysis {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.scope-linked-analysis__line {
+  position: absolute;
+  display: block;
+  opacity: 0.46;
+  filter: drop-shadow(0 0 0.5px rgba(0, 0, 0, 0.55));
+}
+
+.scope-linked-analysis__line--vertical {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--scope-overlay-text) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+.scope-linked-analysis__line--horizontal {
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
+  background: repeating-linear-gradient(
+    to right,
+    var(--scope-overlay-text) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+.scope-linked-analysis__label {
+  position: absolute;
+  max-width: calc(100% - 16px);
+  padding: 5px 8px;
+  border: 1px dashed var(--scope-overlay-border);
+  border-radius: 5px;
+  background: var(--scope-overlay-bg);
+  color: var(--scope-overlay-text);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
 .scope-module__peak-info {
   position: absolute;
   z-index: 3;

@@ -16,6 +16,12 @@ import type {
 import type { ProfileMenuRequest } from '../types/profileMenu'
 import type { LegacyProfileMigrationPayload, Profile } from '../types/profile'
 import { SCOPE_KINDS, SCOPE_LABELS, type ScopeKind } from '../types/scope'
+import {
+  isLinkedAnalysisCompatibleScopeKind,
+  normalizeLinkedAnalysisMessage,
+  type LinkedAnalysisMessage,
+  type LinkedAnalysisProbe,
+} from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   ThemeLibrarySnapshot,
@@ -107,6 +113,8 @@ const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
 const suppressNextPopoutBoundsEvents = new Set<ScopeKind>()
+const linkedAnalysisSources = new Map<number, LinkedAnalysisProbe>()
+const linkedAnalysisCleanupRegistered = new Set<number>()
 let nowPlayingConfigWindow: BrowserWindow | null = null
 let nowPlayingConfigBoundsTimer: ReturnType<typeof setTimeout> | null = null
 const windowSettingsHeights = new Map<number, number>()
@@ -1086,6 +1094,36 @@ function getScopeKindForWindow(window: BrowserWindow | null): ScopeKind | null {
   }
 
   return null
+}
+
+function broadcastLinkedAnalysisMessage(message: LinkedAnalysisMessage): void {
+  const targets = new Set<BrowserWindow>()
+  if (mainWindow) targets.add(mainWindow)
+  for (const popoutWindow of scopePopoutWindows.values()) targets.add(popoutWindow)
+
+  for (const target of targets) {
+    if (!target.isDestroyed() && !target.webContents.isDestroyed()) {
+      target.webContents.send('linked-analysis:update', message)
+    }
+  }
+}
+
+function registerLinkedAnalysisSourceCleanup(sender: WebContents): void {
+  if (linkedAnalysisCleanupRegistered.has(sender.id)) return
+  const senderId = sender.id
+  linkedAnalysisCleanupRegistered.add(senderId)
+  sender.once('destroyed', () => {
+    linkedAnalysisCleanupRegistered.delete(senderId)
+    const activeProbe = linkedAnalysisSources.get(senderId)
+    linkedAnalysisSources.delete(senderId)
+    if (activeProbe) {
+      broadcastLinkedAnalysisMessage({
+        active: false,
+        interactionId: activeProbe.interactionId,
+        sourceKind: activeProbe.sourceKind,
+      })
+    }
+  })
 }
 
 function describeWindow(window: BrowserWindow): string {
@@ -2698,6 +2736,32 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
     mainWindow?.webContents.send('scope-popout:settings-update', kind, partial)
+  })
+
+  ipcMain.on('linked-analysis:update', (event, rawMessage: unknown) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    const message = normalizeLinkedAnalysisMessage(rawMessage)
+    if (!targetWindow || !message) return
+
+    const popoutKind = getScopeKindForWindow(targetWindow)
+    if (!isMainRendererWindow(targetWindow)) {
+      if (!popoutKind || !isLinkedAnalysisCompatibleScopeKind(popoutKind) || message.sourceKind !== popoutKind) {
+        return
+      }
+    }
+
+    const senderId = event.sender.id
+    registerLinkedAnalysisSourceCleanup(event.sender)
+    if (message.active) {
+      linkedAnalysisSources.set(senderId, message)
+      broadcastLinkedAnalysisMessage(message)
+      return
+    }
+
+    const activeProbe = linkedAnalysisSources.get(senderId)
+    if (!activeProbe || activeProbe.interactionId !== message.interactionId) return
+    linkedAnalysisSources.delete(senderId)
+    broadcastLinkedAnalysisMessage(message)
   })
 }
 

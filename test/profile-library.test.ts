@@ -60,6 +60,7 @@ function createProfile(name: string): Profile {
   profile.scopeSettings.spectrogram.showGrid = true
   profile.scopeSettings.spectrogram.rotation = 90
   profile.scopeSettings.spectrogram.mirrorHorizontal = true
+  profile.analysisSettings.linkedAnalysis = true
   return profile
 }
 
@@ -88,6 +89,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(file.scopeOrder.includes('nowPlaying'), false)
   assert.equal(file.hiddenScopes.includes('nowPlaying'), true)
   assert.equal(file.widthWeights.nowPlaying, 1)
+  assert.equal(file.analysisSettings.linkedAnalysis, true)
 
   const restored = profileFileToProfile(file, extractLocalProfileMetadata(profile))
   assert.deepEqual(restored.windowBounds, profile.windowBounds)
@@ -105,6 +107,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrogram.rotation, 90)
   assert.equal(restored.scopeSettings.spectrogram.mirrorHorizontal, true)
   assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
+  assert.equal(restored.analysisSettings.linkedAnalysis, true)
 })
 
 test('profile file waveform speed migration preserves legacy scroll feel', () => {
@@ -406,6 +409,7 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     assert.equal(Object.hasOwn(partialSnapshot.profiles.profile_partial.scopeSettings.waveform, 'gainDb'), false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopePopouts.spectrogram.poppedOut, true)
     assert.equal(partialSnapshot.profiles.profile_partial.widthWeights.spectrum, 1)
+    assert.equal(partialSnapshot.profiles.profile_partial.analysisSettings.linkedAnalysis, false)
 
     const badVersionPath = join(harness.rootDir, 'unsupported.prsm')
     await writeFile(badVersionPath, `${JSON.stringify({
@@ -501,6 +505,22 @@ test('version 3 profiles remain importable and migrate vertical spectrograms to 
     assert.equal(imported.scopeSettings.spectrogram.rotation, 90)
     assert.equal(imported.scopeSettings.spectrogram.mirrorHorizontal, false)
     assert.equal('orientation' in imported.scopeSettings.spectrogram, false)
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('version 4 profiles remain importable with linked analysis disabled', async () => {
+  const harness = await createHarness()
+
+  try {
+    const base = profileToFileData('profile_v4', createDefaultProfile('Version 4'))
+    const { analysisSettings: _analysisSettings, ...legacy } = base
+    const legacyPath = join(harness.rootDir, 'version-4.prsm')
+    await writeFile(legacyPath, `${JSON.stringify({ ...legacy, version: 4 }, null, 2)}\n`, 'utf8')
+
+    const snapshot = await harness.library.importProfileFromPath(legacyPath)
+    assert.equal(snapshot.profiles.profile_v4.analysisSettings.linkedAnalysis, false)
   } finally {
     await harness.cleanup()
   }

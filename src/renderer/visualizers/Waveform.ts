@@ -14,9 +14,11 @@ import { MultibandSplitter, createMultibandChunk, type MultibandChunk } from './
 import {
   WAVEFORM_BASE_PIXELS_PER_SECOND,
   WAVEFORM_DISPLAY_MARGIN,
+  resolveWaveformLinkedAnalysisProjection,
   resolveWaveformMeasurement,
   type ScopeMeasurement,
 } from '../scopeMeasurement'
+import type { LinkedAnalysisProbe, LinkedAnalysisProjection } from '../../types/analysis'
 import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 
 export interface WaveformStereoChunk {
@@ -257,6 +259,14 @@ export class Waveform {
 
   getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
     return resolveWaveformMeasurement(point, {
+      mode: this.options.mode,
+      scrollSpeed: this.options.scrollSpeed,
+      canvasPixelWidth: this.canvas.width,
+    })
+  }
+
+  getLinkedAnalysisProjection(probe: LinkedAnalysisProbe): LinkedAnalysisProjection | null {
+    return resolveWaveformLinkedAnalysisProjection(probe, {
       mode: this.options.mode,
       scrollSpeed: this.options.scrollSpeed,
       canvasPixelWidth: this.canvas.width,

@@ -153,6 +153,8 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const toggleScope = useSettingsStore((s) => s.toggleScope)
+  const linkedAnalysis = useSettingsStore((s) => s.analysisSettings.linkedAnalysis)
+  const updateAnalysisSettings = useSettingsStore((s) => s.updateAnalysisSettings)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
   const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
@@ -450,6 +452,25 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                     </button>
                   )
                 })}
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--analysis">
+            <div className="bottom-bar__section-title">Analysis</div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--chips">
+                <button
+                  type="button"
+                  className={`settings-chip ${linkedAnalysis ? 'is-active' : ''}`.trim()}
+                  onClick={() => updateAnalysisSettings({ linkedAnalysis: !linkedAnalysis })}
+                  aria-pressed={linkedAnalysis}
+                  title="Link compatible frequency, history, and amplitude guides across scopes"
+                >
+                  Linked Analysis
+                </button>
               </div>
             </div>
           </section>

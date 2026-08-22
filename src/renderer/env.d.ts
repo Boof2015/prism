@@ -27,6 +27,7 @@ import type {
   ProfileLibrarySnapshot,
 } from '../types/profile'
 import type { ScopeKind } from '../types/scope'
+import type { LinkedAnalysisMessage } from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   LegacyThemeMigrationResult,
@@ -129,6 +130,8 @@ declare global {
       notifyScopePopoutReady: (kind: ScopeKind) => void
       requestScopePopIn: (kind: ScopeKind) => void
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
+      sendLinkedAnalysisMessage: (message: LinkedAnalysisMessage) => void
+      onLinkedAnalysisMessage: (callback: (message: LinkedAnalysisMessage) => void) => () => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
       onWindowBackgroundChanged: (callback: (snapshot: WindowBackgroundSnapshot) => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void

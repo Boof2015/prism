@@ -9,7 +9,7 @@ import {
   type ProfileLocalMetadata,
   type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV4,
+  type PrismProfileFileV5,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
@@ -34,6 +34,10 @@ import {
   type ScopeDisplayRotation,
 } from '../types/scopeTransform'
 import { normalizeVectorscopeZoomDb } from '../types/vectorscope'
+import {
+  DEFAULT_ANALYSIS_SETTINGS,
+  normalizeAnalysisSettings,
+} from '../types/analysis'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -303,6 +307,7 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): Profile {
     hiddenScopes: SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind)),
     widthWeights: { ...DEFAULT_SCOPE_WIDTH_WEIGHTS },
     scopeSettings: cloneScopeSettings(DEFAULT_SCOPE_SETTINGS),
+    analysisSettings: { ...DEFAULT_ANALYSIS_SETTINGS },
     scopePopouts: createDefaultScopePopouts(),
   }
 }
@@ -318,6 +323,7 @@ export function normalizeProfile(raw: unknown, fallbackName = DEFAULT_PROFILE_NA
     hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
     scopeSettings: mergeScopeSettings(parsed.scopeSettings),
+    analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeScopePopouts(parsed.scopePopouts),
     windowBounds: normalizeWindowBounds(parsed.windowBounds),
   }
@@ -340,9 +346,9 @@ export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-) : PrismProfileFileV4 {
+) : PrismProfileFileV5 {
   const parsed = typeof raw === 'object' && raw !== null
-    ? raw as Partial<PrismProfileFile>
+    ? raw as Omit<Partial<PrismProfileFileV5>, 'version'> & { version?: unknown }
     : {}
 
   const id = typeof parsed.id === 'string' && parsed.id.trim()
@@ -362,11 +368,12 @@ export function normalizeProfileFile(
     scopeSettings: mergeScopeSettings(parsed.scopeSettings, {
       legacyProfileFileScale: isLegacyProfileFileVersion(parsed.version),
     }),
+    analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeProfileFileScopePopouts(parsed.scopePopouts),
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV4 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV5 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {
@@ -378,6 +385,7 @@ export function profileToFileData(id: string, profile: Profile): PrismProfileFil
     hiddenScopes: [...normalized.hiddenScopes],
     widthWeights: { ...normalized.widthWeights },
     scopeSettings: cloneScopeSettings(normalized.scopeSettings),
+    analysisSettings: { ...normalized.analysisSettings },
     scopePopouts: SCOPE_KINDS.reduce((acc, kind) => {
       acc[kind] = { poppedOut: normalized.scopePopouts[kind]?.poppedOut === true }
       return acc
@@ -475,6 +483,9 @@ export function profileFileToProfile(
     scopeSettings: mergeScopeSettings(file.scopeSettings, {
       legacyProfileFileScale: isLegacyProfileFileVersion(file.version),
     }),
+    analysisSettings: normalizeAnalysisSettings(
+      'analysisSettings' in file ? file.analysisSettings : undefined,
+    ),
     scopePopouts: SCOPE_KINDS.reduce((acc, kind) => {
       acc[kind] = {
         poppedOut: Boolean(file.scopePopouts[kind]?.poppedOut),

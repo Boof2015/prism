@@ -32,9 +32,11 @@ import {
   normalizeHeatDb,
 } from './heatScale'
 import {
+  resolveSpectrogramLinkedAnalysisProjection,
   resolveSpectrogramMeasurement,
   type ScopeMeasurement,
 } from '../scopeMeasurement'
+import type { LinkedAnalysisProbe, LinkedAnalysisProjection } from '../../types/analysis'
 import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 import {
   buildFrequencyGuides,
@@ -353,6 +355,18 @@ export class Spectrogram {
 
   getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
     return resolveSpectrogramMeasurement(point, {
+      sampleRate: Math.max(1, this.dataSource.getSampleRate()),
+      minFrequency: this.options.minFrequency,
+      maxFrequency: this.options.maxFrequency,
+      scaleMode: this.options.scaleMode,
+      fftSize: this.options.fftSize,
+      scrollSpeed: this.options.scrollSpeed,
+      canvasPixelWidth: this.canvas.width,
+    })
+  }
+
+  getLinkedAnalysisProjection(probe: LinkedAnalysisProbe): LinkedAnalysisProjection | null {
+    return resolveSpectrogramLinkedAnalysisProjection(probe, {
       sampleRate: Math.max(1, this.dataSource.getSampleRate()),
       minFrequency: this.options.minFrequency,
       maxFrequency: this.options.maxFrequency,

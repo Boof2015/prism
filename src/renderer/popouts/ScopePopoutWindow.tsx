@@ -12,6 +12,7 @@ import { useWindowBackgroundStore } from '../stores/windowBackgroundStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
+import { useLinkedAnalysis } from '../useLinkedAnalysis'
 
 function PopInIcon(): JSX.Element {
   return (
@@ -138,6 +139,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
 
   const effectiveSettings = (snapshot?.settings ?? DEFAULT_SCOPE_SETTINGS[scopeKind]) as ScopeSettings[ScopeKind]
   const effectiveScopeTheme = snapshot?.scopeTheme ?? defaultTheme[scopeKind]
+  const linkedAnalysisEnabled = snapshot?.analysisSettings.linkedAnalysis ?? false
+  const linkedAnalysis = useLinkedAnalysis(linkedAnalysisEnabled)
   const settingsHeight = miniSettingsOpen ? POPOUT_SETTINGS_EXPAND_HEIGHT : 0
 
   const handleUpdateScopeSettings = <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>): void => {
@@ -298,6 +301,9 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
               frameScheduler={frameScheduler}
               dataSource={dataSource}
               onMeasurementActiveChange={setMeasurementActive}
+              linkedAnalysisEnabled={linkedAnalysisEnabled}
+              linkedAnalysisProbe={linkedAnalysis.probe}
+              onLinkedAnalysisMessage={linkedAnalysis.publish}
             />
           </div>
         </div>

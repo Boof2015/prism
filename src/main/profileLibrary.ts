@@ -355,6 +355,7 @@ export class FileBackedProfileLibrary {
       candidate.version !== 1
       && candidate.version !== 2
       && candidate.version !== 3
+      && candidate.version !== 4
       && candidate.version !== PROFILE_FILE_VERSION
     ) {
       throw new Error(`Unsupported profile version in ${basename(filePath)}.`)

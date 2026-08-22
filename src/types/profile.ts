@@ -1,9 +1,10 @@
 import type { ScopePopoutStateMap, WindowBounds } from './popout'
 import type { ScopeKind } from './scope'
 import type { ScopeSettings } from './settings'
+import type { AnalysisSettings } from './analysis'
 
 export const PROFILE_FILE_FORMAT = 'prism-profile'
-export const PROFILE_FILE_VERSION = 4
+export const PROFILE_FILE_VERSION = 5
 export const PROFILE_LOCAL_STATE_FORMAT = 'prism-profile-local'
 export const PROFILE_LOCAL_STATE_VERSION = 1
 export const LEGACY_PROFILE_MIGRATION_VERSION = 1
@@ -16,6 +17,7 @@ export interface Profile {
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
+  analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
 }
@@ -66,7 +68,7 @@ export interface PrismProfileFileV3 {
 
 export interface PrismProfileFileV4 {
   format: typeof PROFILE_FILE_FORMAT
-  version: typeof PROFILE_FILE_VERSION
+  version: 4
   id: string
   name: string
   themeId?: string | null
@@ -77,7 +79,21 @@ export interface PrismProfileFileV4 {
   scopePopouts: PrismProfileFileScopePopoutMap
 }
 
-export type PrismProfileFile = PrismProfileFileV1 | PrismProfileFileV2 | PrismProfileFileV3 | PrismProfileFileV4
+export interface PrismProfileFileV5 {
+  format: typeof PROFILE_FILE_FORMAT
+  version: typeof PROFILE_FILE_VERSION
+  id: string
+  name: string
+  themeId?: string | null
+  scopeOrder: ScopeKind[]
+  hiddenScopes: ScopeKind[]
+  widthWeights: Record<ScopeKind, number>
+  scopeSettings: ScopeSettings
+  analysisSettings: AnalysisSettings
+  scopePopouts: PrismProfileFileScopePopoutMap
+}
+
+export type PrismProfileFile = PrismProfileFileV1 | PrismProfileFileV2 | PrismProfileFileV3 | PrismProfileFileV4 | PrismProfileFileV5
 
 export interface ProfileLocalMetadata {
   windowBounds?: WindowBounds
