@@ -1011,6 +1011,128 @@ status_error = 230, 0, 69
 `,
   },
   {
+    name: 'NeutralDark',
+    content: `[Theme]
+format = prism-theme
+version = 2
+credit = Boof2015
+website = https://astramusic.dev/
+description = A neutral dark theme
+
+[App]
+accent = 190, 210, 238
+success = 160, 220, 180
+warning = 220, 198, 140
+danger = 230, 145, 145
+background = 6, 10, 14
+surface = 10, 15, 21, 235
+surface_alt = 5, 8, 12, 250
+border = 190, 210, 238, 24
+text = 245, 247, 250
+text_muted = 142, 157, 181
+toolbar_bg = 10, 15, 21, 199
+settings_bg_top = 10, 15, 21, 235
+settings_bg_bottom = 5, 8, 12, 250
+bottom_bar_bg = 5, 8, 12, 250
+
+[Controls]
+surface = 255, 255, 255, 8
+surface_hover = 255, 255, 255, 15
+surface_active = 190, 210, 238, 31
+border = 190, 210, 238, 20
+border_active = 190, 210, 238, 71
+text = 245, 247, 250, 235
+input_surface = 6, 10, 14, 245
+input_border = 190, 210, 238, 23
+menu_surface = 10, 15, 21, 245
+menu_border = 190, 210, 238, 26
+slider = 190, 210, 238, 209
+
+[Scopes]
+background = 6, 10, 14
+guides = 48, 58, 70
+overlay_surface = 10, 15, 21, 224
+overlay_text = 245, 247, 250, 194
+overlay_border = 190, 210, 238, 31
+resize_handle = 190, 210, 238, 31
+
+[Spectrum]
+background = 6, 10, 14
+line = 196, 216, 247
+side_line = 196, 216, 247, 128
+fill = 196, 216, 247, 78
+heat_low = 42, 10, 82, 195
+heat_mid = 206, 0, 126, 235
+heat_high = 255, 82, 16
+heat_base = 6, 10, 14
+guides = 48, 58, 70
+labels = 76, 90, 108
+
+[Oscilloscope]
+background = 6, 10, 14
+line = 196, 216, 247
+fill = 255, 58, 26, 36
+guides = 48, 58, 70
+
+[Vectorscope]
+background = 6, 10, 14
+trace = 196, 216, 247
+band_low = 255, 40, 30
+band_mid = 0, 255, 80
+band_high = 58, 92, 255
+guides = 48, 58, 70
+labels = 76, 90, 108
+
+[Spectrogram]
+background = 6, 10, 14
+mono = 196, 216, 247
+heat_low = 42, 10, 82, 195
+heat_mid = 206, 0, 126, 235
+heat_high = 255, 82, 16
+
+[VUMeter]
+background = 6, 10, 14
+level = 196, 216, 247
+track = 196, 216, 247, 20
+peak = 255, 131, 0
+clip = 230, 145, 145, 230
+scale = 100, 119, 145
+labels = 174, 191, 216
+needle_left = 196, 216, 247
+needle_right = 255, 76, 38
+needle_combined = 255, 144, 0
+
+[LUFSMeter]
+background = 6, 10, 14
+level = 196, 216, 247
+track = 196, 216, 247, 20
+target = 255, 144, 0, 72
+scale = 100, 119, 145
+labels = 174, 191, 216
+
+[Waveform]
+background = 6, 10, 14
+line = 196, 216, 247
+band_low = 255, 60, 34
+band_mid = 255, 0, 132
+band_high = 92, 208, 255
+guides = 100, 119, 145
+
+[Now Playing]
+accent = 190, 210, 238
+background = 6, 10, 14, 230
+surface = 10, 15, 21, 235
+border = 190, 210, 238, 31
+text = 245, 247, 250
+progress_track = 100, 119, 145
+progress_fill = 255, 82, 16
+button_surface = 255, 255, 255, 13
+button_border = 190, 210, 238, 31
+status_ok = 160, 220, 180
+status_error = 230, 145, 145
+`,
+  },
+  {
     name: 'Stanky Leg',
     content: `[Theme]
 format = prism-theme
@@ -1055,6 +1177,35 @@ line = 86, 25, 230
 band_low = 177, 105, 219
 band_mid = 108, 31, 196
 band_high = 69, 20, 184
+`,
+  },
+  {
+    name: 'Vy',
+    content: `[Theme]
+format = prism-theme
+version = 2
+credit = Lillith Rose
+website = https://lilyy.gay
+description = im so porpl
+
+[App]
+accent = 142, 77, 165
+background = 45, 33, 45
+surface = 51, 37, 51
+surface_alt = 57, 42, 57
+border = 255, 255, 255, 23
+text = 255, 255, 255
+
+[Vectorscope]
+phase_risk = 255, 255, 255, 100
+band_low = 37, 13, 45
+band_mid = 101, 45, 122
+band_high = 142, 77, 165
+
+[Spectrogram]
+heat_low = 37, 13, 45
+heat_mid = 101, 45, 122
+heat_high = 142, 77, 165
 `,
   },
 ] as const

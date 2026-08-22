@@ -23,8 +23,10 @@ const BUNDLED_THEME_FILE_NAMES = [
   'Chroma Blue.iro',
   'Chroma Green.iro',
   'Default.iro',
+  'NeutralDark.iro',
   'Redshift.iro',
   'Stanky Leg.iro',
+  'Vy.iro',
   '_TEMPLATE.iro',
 ].sort()
 
@@ -386,7 +388,9 @@ test('bundled tester themes preserve authored tokens and migrated accent themes 
     'Chroma Blue',
     'Chroma Green',
     'Redshift',
+    'NeutralDark',
     'Stanky Leg',
+    'Vy',
   ])
 
   const defaultTheme = bundledThemes.find((theme) => theme.name === DEFAULT_THEME_NAME)
@@ -413,6 +417,22 @@ test('bundled tester themes preserve authored tokens and migrated accent themes 
   assert.ok(redshift)
   assert.equal(redshift.oscilloscope.line, redshift.app.accent)
   assert.equal(redshift.vectorscope.trace, redshift.app.accent)
+
+  const neutralDark = bundledThemes.find((theme) => theme.name === 'NeutralDark')
+  assert.ok(neutralDark)
+  assert.equal(neutralDark.credit, 'Boof2015')
+  assert.equal(neutralDark.description, 'A neutral dark theme')
+  assert.equal(neutralDark.app.accent, 'rgb(190, 210, 238)')
+  assert.equal(neutralDark.vumeter.needleCombined, 'rgb(255, 144, 0)')
+
+  const vy = bundledThemes.find((theme) => theme.name === 'Vy')
+  assert.ok(vy)
+  assert.equal(vy.credit, 'Lillith Rose')
+  assert.equal(vy.website, 'https://lilyy.gay')
+  assert.equal(vy.description, 'im so porpl')
+  assert.equal(vy.app.accent, 'rgb(142, 77, 165)')
+  assert.equal(vy.vectorscope.phaseRisk, 'rgba(255, 255, 255, 0.392)')
+  assert.equal(vy.spectrogram.heatHigh, 'rgb(142, 77, 165)')
 
   const migrated = createMigratedAccentTheme('#4ade80')
   assert.ok(migrated)
