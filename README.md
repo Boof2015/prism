@@ -143,6 +143,7 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 ### DAW plugins
 
 * All seven Prism analyzers are built from the same native DSP source used by the desktop application
+* Prism Bridge streams one DAW track or bus into the standalone app without changing the track audio
 * VST3 on Windows, macOS, and Linux
 * AU on macOS
 * Mono and stereo host layouts are supported
@@ -202,6 +203,17 @@ Drop a **Spectrum**, **Oscilloscope**, **Vectorscope**, **Spectrogram**, **VU Me
 * Settings are stored with your project
 * Plugins follow your Prism themes and profiles
 * Audio passes through untouched
+
+Prism also installs **Prism Bridge**, a lightweight pass-through plugin for sending
+one DAW track or bus to the standalone application. Keep Prism open, insert Bridge
+on the source you want to inspect, then choose it under **DAW Bridges** in Prism's
+audio selector. Multiple Bridge instances can be available at once; only the one
+you select streams audio. Waveform and Spectrogram can optionally show host-derived
+Bars + Beats or Seconds rulers, including loop, seek, and packet-gap seams.
+
+Bridge is available as VST3 on Windows, macOS, and Linux and as AU on macOS. The AU
+is intentionally not marked sandbox-safe because it requires localhost access.
+Protocol details and host-validation notes are in [docs/daw-bridge.md](docs/daw-bridge.md).
 
 Tested in Ableton Live, FL Studio, and Reaper.
 

@@ -66,5 +66,10 @@ export function getCaptureBackendSupport(
       available: true,
       reason: null,
     },
+    dawBridge: {
+      kind: 'daw-bridge',
+      available: false,
+      reason: 'The DAW bridge listener is still starting.',
+    },
   }
 }

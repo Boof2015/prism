@@ -1,5 +1,6 @@
 import type { CaptureBackendKind } from './capture'
 import type { ScopeKind } from './scope'
+import type { DawTransportSnapshot } from './dawBridge'
 import type { ScopeSettings } from './settings'
 import type { AnalysisSettings } from './analysis'
 import type {
@@ -40,12 +41,14 @@ export interface ScopePopoutSessionState {
   sampleRate: number
   channelCount: number
   capturing: boolean
+  suspended: boolean
   backendKind: CaptureBackendKind | null
 }
 
 export interface ScopePopoutStereoChunk {
   left: Float32Array
   right: Float32Array
+  transport?: DawTransportSnapshot
 }
 
 export type ScopePopoutMonoBatch = Float32Array[]

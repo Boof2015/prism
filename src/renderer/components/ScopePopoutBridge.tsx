@@ -45,9 +45,7 @@ function flushScopeAudioBatch(kind: AudioScopeKind, scopeSettings: ScopeSettings
     case 'lufsmeter':
       return audioRouter.flushPendingLUFSMeterSamples()
     case 'waveform':
-      return scopeSettings.waveform.mode === 'stereo'
-        ? audioRouter.flushPendingWaveformStereoSamples()
-        : audioRouter.flushPendingWaveformSamples()
+      return audioRouter.flushPendingWaveformAnnotatedSamples()
   }
 }
 
@@ -57,6 +55,7 @@ function toPopoutSessionState(state: ScopePopoutSessionState): ScopePopoutSessio
     sampleRate: state.sampleRate,
     channelCount: state.channelCount,
     capturing: state.capturing,
+    suspended: state.suspended,
     backendKind: state.backendKind,
   }
 }

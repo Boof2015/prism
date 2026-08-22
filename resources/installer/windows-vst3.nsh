@@ -60,7 +60,7 @@
       Pop $PRISM_VST_CHECKBOX
       ${NSD_Check} $PRISM_VST_CHECKBOX
 
-      ${NSD_CreateLabel} 0 22u 100% 80u "Installs the seven Prism scope plugins (Spectrum, Oscilloscope, Vectorscope, Spectrogram, VU Meter, Loudness Meter, Waveform) to:$\r$\n$\r$\n    $COMMONFILES64\VST3$\r$\n$\r$\nDAWs (FL Studio, Ableton, Logic, Reaper, etc.) will find them on the next plugin rescan.$\r$\n$\r$\nUncheck to install only the Prism desktop app. You can re-run this installer at any time to add the plugins later."
+      ${NSD_CreateLabel} 0 22u 100% 80u "Installs seven Prism analyzer plugins plus Prism Bridge to:$\r$\n$\r$\n    $COMMONFILES64\VST3$\r$\n$\r$\nDAWs (FL Studio, Ableton, Logic, Reaper, etc.) will find them on the next plugin rescan.$\r$\n$\r$\nPrism Bridge sends one inserted track or bus to the standalone Prism app. Uncheck to install only the desktop app."
       Pop $0
 
       nsDialogs::Show
@@ -159,4 +159,5 @@
   RMDir /r "$COMMONFILES64\VST3\Prism Vectorscope.vst3"
   RMDir /r "$COMMONFILES64\VST3\Prism Spectrogram.vst3"
   RMDir /r "$COMMONFILES64\VST3\Prism Waveform.vst3"
+  RMDir /r "$COMMONFILES64\VST3\Prism Bridge.vst3"
 !macroend

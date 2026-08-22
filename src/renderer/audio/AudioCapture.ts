@@ -26,6 +26,11 @@ import type {
   NativeCaptureStartResult,
   NativeSystemCaptureAPI,
 } from '../../types/nativeCapture'
+import type {
+  DawBridgeAudioBatch,
+  DawBridgeSnapshot,
+  DawTransportSnapshot,
+} from '../../types/dawBridge'
 
 export type { CaptureMode } from '../../types/capture'
 
@@ -35,6 +40,7 @@ interface CaptureChunk {
   channelCount: number
   capturedAt: number
   sequence: number
+  transport?: DawTransportSnapshot
 }
 
 interface CaptureBackendStatus {
@@ -46,10 +52,12 @@ interface CaptureBackendStatus {
   channelCount: number
   activeSourceId: string | null
   activeSourceLabel: string | null
+  waiting?: boolean
 }
 
 interface CaptureBackendStartRequest {
   deviceId?: string
+  persistentSourceId?: string
   forceRestart?: boolean
 }
 
@@ -140,6 +148,11 @@ export function createDefaultBackendSupport(platform = resolvePlatform()): Captu
       available: true,
       reason: null,
     },
+    dawBridge: {
+      kind: 'daw-bridge',
+      available: false,
+      reason: 'The DAW bridge listener is still starting.',
+    },
   }
 }
 
@@ -152,6 +165,7 @@ export interface CaptureManagerStatus {
   isCapturing: boolean
   activeSourceId: string | null
   activeSourceLabel: string | null
+  waiting: boolean
 }
 
 type StatusListener = (status: CaptureManagerStatus) => void
@@ -627,6 +641,158 @@ class NativeUnavailableCaptureBackend implements CaptureBackend {
   }
 }
 
+class DawBridgeCaptureBackend implements CaptureBackend {
+  readonly kind = 'daw-bridge' as const
+
+  private snapshot: DawBridgeSnapshot = {
+    available: false,
+    reason: 'The DAW bridge listener is not initialized.',
+    selectedSourceId: null,
+    sources: [],
+  }
+  private active = false
+  private selectedSourceId: string | null = null
+  private preferredPersistentId: string | null = null
+  private readonly chunkListeners = new Set<(chunk: CaptureChunk) => void>()
+  private readonly statusListeners = new Set<() => void>()
+  private readonly sourceListeners = new Set<() => void>()
+
+  constructor() {
+    if (typeof window === 'undefined' || !window.electronAPI?.dawBridge) return
+    window.electronAPI.dawBridge.onSnapshot((snapshot) => {
+      this.snapshot = snapshot
+      void this.reconcileSelection()
+      for (const listener of this.sourceListeners) listener()
+    })
+    window.electronAPI.dawBridge.onAudioBatch((batch) => this.handleAudioBatch(batch))
+    void window.electronAPI.dawBridge.getSnapshot().then((snapshot) => {
+      this.snapshot = snapshot
+      this.emitStatus()
+      for (const listener of this.sourceListeners) listener()
+    })
+  }
+
+  async start(request?: CaptureBackendStartRequest): Promise<void> {
+    this.active = true
+    this.preferredPersistentId = request?.persistentSourceId ?? request?.deviceId ?? this.preferredPersistentId
+    this.selectedSourceId = this.resolveRequestedSource(request?.deviceId ?? this.selectedSourceId)
+    if (typeof window === 'undefined' || !window.electronAPI?.dawBridge) {
+      throw new Error('The DAW bridge API is unavailable in this build.')
+    }
+    this.snapshot = await window.electronAPI.dawBridge.selectSource(this.selectedSourceId)
+    if (!this.snapshot.available) {
+      this.active = false
+      throw new Error(this.snapshot.reason ?? 'The DAW bridge listener is unavailable.')
+    }
+    this.emitStatus()
+  }
+
+  async stop(): Promise<void> {
+    this.active = false
+    if (typeof window !== 'undefined' && window.electronAPI?.dawBridge) {
+      this.snapshot = await window.electronAPI.dawBridge.selectSource(null)
+    }
+    this.emitStatus()
+  }
+
+  async listSources(): Promise<CaptureSourceDescriptor[]> {
+    if (typeof window !== 'undefined' && window.electronAPI?.dawBridge) {
+      this.snapshot = await window.electronAPI.dawBridge.getSnapshot()
+    }
+    return this.snapshot.sources.map((source) => ({
+      id: source.id,
+      persistentId: source.persistentId,
+      label: source.hostName ? `${source.label} — ${source.hostName}` : source.label,
+      kind: 'daw',
+      sampleRate: source.sampleRate,
+      channelCount: source.channelCount,
+    }))
+  }
+
+  subscribe(listener: (chunk: CaptureChunk) => void): () => void {
+    this.chunkListeners.add(listener)
+    return () => this.chunkListeners.delete(listener)
+  }
+
+  subscribeStatus(listener: () => void): () => void {
+    this.statusListeners.add(listener)
+    return () => this.statusListeners.delete(listener)
+  }
+
+  subscribeSources(listener: () => void): () => void {
+    this.sourceListeners.add(listener)
+    return () => this.sourceListeners.delete(listener)
+  }
+
+  setSelectedSourceId(persistentSourceId: string | null, liveSourceId: string | null = null): void {
+    this.preferredPersistentId = persistentSourceId
+    this.selectedSourceId = liveSourceId ?? this.resolveRequestedSource(persistentSourceId)
+  }
+
+  getSelectedSourceId(): string | null {
+    return this.selectedSourceId
+  }
+
+  getStatus(): CaptureBackendStatus {
+    const source = this.snapshot.sources.find((candidate) => candidate.id === this.selectedSourceId) ?? null
+    return {
+      kind: this.kind,
+      active: this.active,
+      available: this.snapshot.available,
+      reason: this.snapshot.reason,
+      sampleRate: source?.sampleRate ?? 48000,
+      channelCount: source?.channelCount ?? 2,
+      activeSourceId: this.active ? this.selectedSourceId : null,
+      activeSourceLabel: this.active ? source?.label ?? null : null,
+      waiting: this.active && !source,
+    }
+  }
+
+  private handleAudioBatch(batch: DawBridgeAudioBatch): void {
+    if (!this.active || batch.sourceId !== this.selectedSourceId) return
+    for (const packet of batch.packets) {
+      const chunk: CaptureChunk = {
+        left: packet.left,
+        right: packet.right,
+        channelCount: packet.channelCount,
+        capturedAt: performance.now(),
+        sequence: packet.sequence,
+        transport: packet.transport,
+      }
+      for (const listener of this.chunkListeners) listener(chunk)
+    }
+  }
+
+  private emitStatus(): void {
+    for (const listener of this.statusListeners) listener()
+  }
+
+  private resolveRequestedSource(sourceId: string | null | undefined): string | null {
+    if (!sourceId) return null
+    const exact = this.snapshot.sources.find((source) => source.id === sourceId)
+    if (exact) return exact.id
+    const stableMatches = this.snapshot.sources.filter((source) => source.persistentId === sourceId)
+    return stableMatches.length === 1 ? stableMatches[0]!.id : null
+  }
+
+  private async reconcileSelection(): Promise<void> {
+    if (!this.active) {
+      this.emitStatus()
+      return
+    }
+    if (this.selectedSourceId && this.snapshot.sources.some((source) => source.id === this.selectedSourceId)) {
+      this.emitStatus()
+      return
+    }
+
+    this.selectedSourceId = this.resolveRequestedSource(this.preferredPersistentId)
+    if (typeof window !== 'undefined' && window.electronAPI?.dawBridge) {
+      this.snapshot = await window.electronAPI.dawBridge.selectSource(this.selectedSourceId)
+    }
+    this.emitStatus()
+  }
+}
+
 interface CaptureStartOptions {
   forceDeviceRestart?: boolean
 }
@@ -634,6 +800,7 @@ interface CaptureStartOptions {
 class AudioCapture {
   private readonly deviceInputRuntime = new DeviceInputCaptureRuntime()
   private readonly deviceInputBackend: CaptureBackend
+  private readonly dawBridgeBackend = new DawBridgeCaptureBackend()
 
   private backendSupport: CaptureBackendSupport | null = null
   private backendSupportPromise: Promise<CaptureBackendSupport> | null = null
@@ -643,6 +810,8 @@ class AudioCapture {
 
   private selectedDeviceId: string | null = null
   private selectedSystemSourceId: string | null = DEFAULT_SYSTEM_SOURCE_ID
+  private selectedDawSourceId: string | null = null
+  private selectedDawConnectionId: string | null = null
   private captureMode: CaptureMode = 'system'
   private sessionId: number | null = null
   private inputGainDb = 0
@@ -655,6 +824,8 @@ class AudioCapture {
   constructor() {
     this.deviceInputBackend = new DeviceInputCaptureBackend(this.deviceInputRuntime)
     this.deviceInputBackend.subscribe((chunk) => this.handleChunk(this.deviceInputBackend.kind, chunk))
+    this.dawBridgeBackend.subscribe((chunk) => this.handleChunk(this.dawBridgeBackend.kind, chunk))
+    this.dawBridgeBackend.subscribeStatus(() => this.handleDawBridgeStatus())
 
     this.nativeBackend = this.createNativeBackend(createDefaultBackendSupport().nativeBackend)
     this.bindNativeBackend(this.nativeBackend)
@@ -701,6 +872,11 @@ class AudioCapture {
     await this.start(undefined, options)
   }
 
+  async startDawBridge(): Promise<void> {
+    this.captureMode = 'daw'
+    await this.start()
+  }
+
   async start(deviceId?: string, options: CaptureStartOptions = {}): Promise<void> {
     if (deviceId) {
       this.selectedDeviceId = deviceId
@@ -712,13 +888,18 @@ class AudioCapture {
 
     const requestedBackend = this.captureMode === 'device'
       ? this.deviceInputBackend
-      : this.nativeBackend
+      : this.captureMode === 'daw'
+        ? this.dawBridgeBackend
+        : this.nativeBackend
     const requestedDeviceId = this.captureMode === 'device'
       ? this.selectedDeviceId ?? undefined
-      : this.selectedSystemSourceId ?? DEFAULT_SYSTEM_SOURCE_ID
+      : this.captureMode === 'daw'
+        ? this.selectedDawConnectionId ?? this.selectedDawSourceId ?? undefined
+        : this.selectedSystemSourceId ?? DEFAULT_SYSTEM_SOURCE_ID
 
     await requestedBackend.start({
       deviceId: requestedDeviceId,
+      persistentSourceId: this.captureMode === 'daw' ? this.selectedDawSourceId ?? undefined : undefined,
       forceRestart: this.captureMode === 'device' && options.forceDeviceRestart === true,
     })
     this.activeBackend = requestedBackend
@@ -734,6 +915,9 @@ class AudioCapture {
       backendStatus.channelCount,
     )
     nativeVisualizerTransport.reset(audioRouter.getSessionState())
+    if (requestedBackend.kind === 'daw-bridge') {
+      this.handleDawBridgeStatus()
+    }
     this.emitStatus()
   }
 
@@ -746,6 +930,9 @@ class AudioCapture {
     await this.ensureBackendSupport()
     if (mode === 'device') {
       return this.deviceInputBackend.listSources()
+    }
+    if (mode === 'daw') {
+      return this.dawBridgeBackend.listSources()
     }
 
     const sources = await this.nativeBackend.listSources()
@@ -780,6 +967,21 @@ class AudioCapture {
     this.emitStatus()
   }
 
+  getSelectedDawSourceId(): string | null {
+    return this.selectedDawSourceId
+  }
+
+  setSelectedDawSourceId(id: string | null, liveConnectionId: string | null = null): void {
+    this.selectedDawSourceId = id
+    this.selectedDawConnectionId = liveConnectionId
+    this.dawBridgeBackend.setSelectedSourceId(id, liveConnectionId)
+    this.emitStatus()
+  }
+
+  subscribeDawSources(listener: () => void): () => void {
+    return this.dawBridgeBackend.subscribeSources(listener)
+  }
+
   getCaptureMode(): CaptureMode {
     return this.captureMode
   }
@@ -805,6 +1007,7 @@ class AudioCapture {
       isCapturing,
       activeSourceId: isCapturing ? backendStatus?.activeSourceId ?? null : null,
       activeSourceLabel: isCapturing ? backendStatus?.activeSourceLabel ?? null : null,
+      waiting: Boolean(backendStatus?.waiting),
     }
   }
 
@@ -918,8 +1121,22 @@ class AudioCapture {
       return
     }
 
-    if (originKind.startsWith('native-') && this.inputGainLinear !== 1) {
+    if ((originKind.startsWith('native-') || originKind === 'daw-bridge') && this.inputGainLinear !== 1) {
       applyInputGainToStereoSamples(chunk.left, chunk.right, this.inputGainLinear)
+    }
+
+    if (
+      originKind === 'daw-bridge'
+      && this.activeBackend
+      && (
+        this.activeBackend.getStatus().sampleRate !== audioRouter.getSampleRate()
+        || chunk.channelCount !== audioRouter.getChannelCount()
+      )
+    ) {
+      const status = this.activeBackend.getStatus()
+      this.sessionId = audioRouter.beginSession(status.sampleRate, chunk.channelCount, originKind)
+      this.beginRollingCaptureSession(status.sampleRate, chunk.channelCount)
+      nativeVisualizerTransport.reset(audioRouter.getSessionState())
     }
 
     audioRouter.ingestChunk(chunk.left, chunk.right, {
@@ -927,6 +1144,7 @@ class AudioCapture {
       channelCount: chunk.channelCount,
       capturedAt: chunk.capturedAt,
       sequence: chunk.sequence,
+      transport: chunk.transport,
     })
 
     let rollingAudioBuffer = this.rollingAudioBuffer
@@ -953,6 +1171,32 @@ class AudioCapture {
         this.emitRollingCaptureStatus()
       }
     }
+  }
+
+  private handleDawBridgeStatus(): void {
+    if (this.activeBackend?.kind !== 'daw-bridge' || this.sessionId === null) {
+      this.emitStatus()
+      return
+    }
+
+    const status = this.activeBackend.getStatus()
+    if (status.waiting) {
+      audioRouter.suspendSession()
+    } else if (
+      status.sampleRate !== audioRouter.getSampleRate()
+      || status.channelCount !== audioRouter.getChannelCount()
+    ) {
+      this.sessionId = audioRouter.beginSession(
+        status.sampleRate,
+        status.channelCount,
+        'daw-bridge',
+      )
+      this.beginRollingCaptureSession(status.sampleRate, status.channelCount)
+      nativeVisualizerTransport.reset(audioRouter.getSessionState())
+    } else {
+      audioRouter.resumeSession()
+    }
+    this.emitStatus()
   }
 
   setInputGain(db: number): void {

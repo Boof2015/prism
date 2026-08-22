@@ -173,11 +173,14 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const {
     systemSources,
     devices,
+    dawSources,
     selectedSystemSourceId,
     selectedDeviceId,
+    selectedDawSourceId,
     captureMode,
     isCapturing,
     captureStatus,
+    activeSourceId,
     captureError,
     captureNotice,
     inputGainDb,
@@ -186,6 +189,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     clearCaptureNotice,
     selectSystemSource,
     selectDevice,
+    selectDawSource,
     startCapture,
     setInputGain,
     setRollingCaptureSeconds,
@@ -238,6 +242,13 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       const deviceId = value.slice('device:'.length)
       await selectDevice(deviceId === DEFAULT_INPUT_DEVICE_ID ? null : deviceId)
       await startCapture()
+      return
+    }
+
+    if (value.startsWith('daw:')) {
+      const sourceId = value.slice('daw:'.length)
+      await selectDawSource(sourceId)
+      await startCapture()
     }
   }
 
@@ -245,18 +256,32 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     ? systemSources
     : [{ id: '__default_system_output__', label: 'Default Output', kind: 'system', isDefault: true }]
   const defaultSystemSourceId = visibleSystemSources[0]?.id ?? '__default_system_output__'
+  const matchingDawSources = dawSources.filter((source) => (
+    source.id === selectedDawSourceId || source.persistentId === selectedDawSourceId
+  ))
+  const selectedDawLiveSourceId = captureMode === 'daw'
+    && activeSourceId
+    && dawSources.some((source) => source.id === activeSourceId)
+    ? activeSourceId
+    : matchingDawSources.length === 1
+      ? matchingDawSources[0]!.id
+      : null
 
   const selectedSourceValue = captureMode === 'system'
     ? `system:${selectedSystemSourceId ?? defaultSystemSourceId}`
-    : `device:${selectedDeviceId ?? DEFAULT_INPUT_DEVICE_ID}`
+    : captureMode === 'device'
+      ? `device:${selectedDeviceId ?? DEFAULT_INPUT_DEVICE_ID}`
+      : `daw:${selectedDawLiveSourceId ?? selectedDawSourceId ?? ''}`
 
-  const indicatorLabel = isCapturing
-    ? 'Capturing'
+  const indicatorLabel = captureStatus === 'waiting'
+    ? 'Waiting'
     : captureStatus === 'connecting'
       ? 'Connecting'
       : captureStatus === 'error'
         ? 'Capture Failed'
-        : 'Idle'
+        : isCapturing
+          ? 'Capturing'
+          : 'Idle'
 
   const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
   const roundedDockedRenderFps = Math.max(0, Math.round(dockedRenderFps))
@@ -421,7 +446,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       : nowPlayingSummary
   const canUseDefaultSource = captureMode === 'system'
     ? selectedSystemSourceId !== defaultSystemSourceId
-    : selectedDeviceId !== null
+    : captureMode === 'device' && selectedDeviceId !== null
   const loginItemStatusMessage = desktopIntegration.loginItemStatus === 'requires-approval'
     ? 'Approval required in system login settings'
     : desktopIntegration.loginItemStatus === 'blocked'
@@ -715,6 +740,23 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                     {devices.map((device) => (
                       <option key={device.deviceId} value={`device:${device.deviceId}`}>
                         {device.label || `Input ${device.deviceId.slice(0, 8)}`}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="DAW Bridges">
+                    {captureMode === 'daw'
+                      && selectedDawSourceId
+                      && !selectedDawLiveSourceId ? (
+                        <option value={`daw:${selectedDawSourceId}`}>
+                          Waiting for selected bridge…
+                        </option>
+                      ) : null}
+                    {dawSources.length === 0 && captureMode !== 'daw' ? (
+                      <option value="daw:" disabled>No bridges connected</option>
+                    ) : null}
+                    {dawSources.map((source) => (
+                      <option key={source.id} value={`daw:${source.id}`}>
+                        {source.label}
                       </option>
                     ))}
                   </optgroup>

@@ -6,6 +6,7 @@
 
 import { AUDIO_SCOPE_KINDS, type AudioScopeKind } from '../../types/scope'
 import type { CaptureBackendKind } from '../../types/capture'
+import type { DawTransportSnapshot } from '../../types/dawBridge'
 
 const MAX_PENDING_CHUNKS = 20
 const MAX_PENDING_SPECTRUM_CHUNKS = 96
@@ -27,6 +28,7 @@ export interface AudioSessionState {
   sampleRate: number
   channelCount: number
   capturing: boolean
+  suspended: boolean
   backendKind: CaptureBackendKind | null
 }
 
@@ -67,12 +69,14 @@ interface AudioChunkMeta {
   channelCount?: number
   capturedAt?: number
   sequence?: number
+  transport?: DawTransportSnapshot
 }
 
 interface MonoChunkRecord {
   samples: Float32Array
   capturedAt: number
   sequence: number
+  transport?: DawTransportSnapshot
 }
 
 interface StereoChunkRecord {
@@ -80,6 +84,7 @@ interface StereoChunkRecord {
   right: Float32Array
   capturedAt: number
   sequence: number
+  transport?: DawTransportSnapshot
 }
 
 interface ScopeLatencyTracker {
@@ -235,6 +240,7 @@ export class AudioRouter {
 
   private _sampleRate = 48000
   private _capturing = false
+  private _suspended = false
   private _channelCount = 2
   private _sessionId = 0
   private _backendKind: CaptureBackendKind | null = null
@@ -271,6 +277,7 @@ export class AudioRouter {
       sampleRate: this._sampleRate,
       channelCount: this._channelCount,
       capturing: this._capturing,
+      suspended: this._suspended,
       backendKind: this._backendKind,
     }
   }
@@ -280,6 +287,7 @@ export class AudioRouter {
     this._sampleRate = sampleRate
     this._channelCount = Math.max(1, Math.floor(channelCount) || 1)
     this._capturing = true
+    this._suspended = false
     this._backendKind = backendKind
     this.reset()
     this.emitSessionState()
@@ -289,8 +297,21 @@ export class AudioRouter {
   endSession(): void {
     this._sessionId += 1
     this._capturing = false
+    this._suspended = false
     this._backendKind = null
     this.reset()
+    this.emitSessionState()
+  }
+
+  suspendSession(): void {
+    if (!this._capturing || this._suspended) return
+    this._suspended = true
+    this.emitSessionState()
+  }
+
+  resumeSession(): void {
+    if (!this._capturing || !this._suspended) return
+    this._suspended = false
     this.emitSessionState()
   }
 
@@ -344,7 +365,7 @@ export class AudioRouter {
   }
 
   ingestChunk(left: Float32Array, right: Float32Array, meta: AudioChunkMeta = {}): void {
-    if (!this._capturing) {
+    if (!this._capturing || this._suspended) {
       this.notCapturingDrops += 1
       return
     }
@@ -377,31 +398,31 @@ export class AudioRouter {
     const rightSamples = resolvedRight.length === len ? resolvedRight : resolvedRight.subarray(0, len)
 
     if (activeDemand.oscilloscope) {
-      this.rings.oscilloscope.push({ samples: leftSamples, capturedAt, sequence })
+      this.rings.oscilloscope.push({ samples: leftSamples, capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.spectrum) {
-      this.rings.spectrum.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
+      this.rings.spectrum.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.spectrogram) {
-      this.rings.spectrogram.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
+      this.rings.spectrogram.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.vectorscope) {
-      this.rings.vectorscope.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
+      this.rings.vectorscope.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.vumeter) {
-      this.rings.vumeter.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
+      this.rings.vumeter.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.lufsmeter) {
-      this.rings.lufsmeter.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
+      this.rings.lufsmeter.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.waveform) {
-      this.rings.waveform.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
+      this.rings.waveform.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
     }
   }
 
@@ -443,10 +464,10 @@ export class AudioRouter {
     })
   }
 
-  flushPendingSpectrogramStereoSamples(): { left: Float32Array; right: Float32Array }[] {
+  flushPendingSpectrogramStereoSamples(): { left: Float32Array; right: Float32Array; transport?: DawTransportSnapshot }[] {
     const records = this.rings.spectrogram.drain()
     this.recordScopeDrain('spectrogram', records)
-    return records.map((record) => ({ left: record.left, right: record.right }))
+    return records.map((record) => ({ left: record.left, right: record.right, transport: record.transport }))
   }
 
   flushPendingVectorscopeSamples(): { left: Float32Array; right: Float32Array }[] {
@@ -473,10 +494,16 @@ export class AudioRouter {
     return records.map((record) => record.left)
   }
 
-  flushPendingWaveformStereoSamples(): { left: Float32Array; right: Float32Array }[] {
+  flushPendingWaveformStereoSamples(): { left: Float32Array; right: Float32Array; transport?: DawTransportSnapshot }[] {
     const records = this.rings.waveform.drain()
     this.recordScopeDrain('waveform', records)
-    return records.map((record) => ({ left: record.left, right: record.right }))
+    return records.map((record) => ({ left: record.left, right: record.right, transport: record.transport }))
+  }
+
+  flushPendingWaveformAnnotatedSamples(): { left: Float32Array; right: Float32Array; transport?: DawTransportSnapshot }[] {
+    const records = this.rings.waveform.drain()
+    this.recordScopeDrain('waveform', records)
+    return records.map((record) => ({ left: record.left, right: record.right, transport: record.transport }))
   }
 
   getDiagnosticsSnapshot(): AudioRouterDiagnostics {

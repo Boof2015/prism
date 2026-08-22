@@ -30,6 +30,7 @@ function audioPreferences(overrides: Partial<PersistedAudioState> = {}): Persist
     captureMode: 'system',
     selectedSystemSourceId: DEFAULT_SYSTEM_SOURCE_ID,
     selectedDeviceId: null,
+    selectedDawSourceId: null,
     rollingCaptureSeconds: null,
     ...overrides,
   }
@@ -104,6 +105,11 @@ function createBackendSupport(available: boolean, reason: string | null): Captur
     },
     deviceInput: {
       kind: 'device-input',
+      available: true,
+      reason: null,
+    },
+    dawBridge: {
+      kind: 'daw-bridge',
       available: true,
       reason: null,
     },
@@ -279,6 +285,7 @@ function installFakeDeviceWatcherEnvironment(): {
 function resetStores(): void {
   audioCapture.setSelectedSystemSourceId(DEFAULT_SYSTEM_SOURCE_ID)
   audioCapture.setSelectedDeviceId(null)
+  audioCapture.setSelectedDawSourceId(null)
   audioCapture.setCaptureMode('system')
   audioCapture.setInputGain(0)
   audioCapture.setRollingCaptureSeconds(null)
@@ -288,6 +295,8 @@ function resetStores(): void {
     devices: [],
     selectedSystemSourceId: '__default_system_output__',
     selectedDeviceId: null,
+    selectedDawSourceId: null,
+    dawSources: [],
     captureMode: 'system',
     activeBackendKind: null,
     backendSupport: null,
@@ -414,6 +423,7 @@ function installAudioCaptureHarness(options: {
     isCapturing,
     activeSourceId: isCapturing ? activeSourceId : null,
     activeSourceLabel: isCapturing ? activeSourceLabel : null,
+    waiting: false,
   })
   audioCapture.setCaptureMode = (mode) => {
     captureMode = mode
@@ -489,6 +499,16 @@ test('normalizeAudioPreferences preserves valid persisted selector values', () =
     selectedSystemSourceId: 'speaker',
     selectedDeviceId: 'mic-1',
     rollingCaptureSeconds: 30,
+  }))
+})
+
+test('normalizeAudioPreferences preserves DAW mode and its stable bridge UUID', () => {
+  assert.deepEqual(normalizeAudioPreferences({
+    captureMode: 'daw',
+    selectedDawSourceId: 'bridge-stable-uuid',
+  }), audioPreferences({
+    captureMode: 'daw',
+    selectedDawSourceId: 'bridge-stable-uuid',
   }))
 })
 
@@ -628,6 +648,40 @@ test('audio store persists input source selections', async () => {
       selectedDeviceId: 'mic-1',
     }))
   } finally {
+    fakeStorage.restore()
+    resetStores()
+  }
+})
+
+test('audio store persists a Bridge stable UUID while selecting its live connection key', async () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const originalSetSelectedDawSourceId = audioCapture.setSelectedDawSourceId
+  const selections: Array<[string | null, string | null]> = []
+  audioCapture.setSelectedDawSourceId = (stableId, liveId = null) => {
+    selections.push([stableId, liveId])
+  }
+
+  try {
+    useAudioStore.setState({
+      dawSources: [{
+        id: 'bridge-stable-uuid:live-key',
+        persistentId: 'bridge-stable-uuid',
+        label: 'Drums',
+        kind: 'daw',
+      }],
+    })
+    await useAudioStore.getState().selectDawSource('bridge-stable-uuid:live-key')
+
+    assert.equal(useAudioStore.getState().captureMode, 'daw')
+    assert.equal(useAudioStore.getState().selectedDawSourceId, 'bridge-stable-uuid')
+    assert.deepEqual(selections, [['bridge-stable-uuid', 'bridge-stable-uuid:live-key']])
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'daw',
+      selectedDawSourceId: 'bridge-stable-uuid',
+    }))
+  } finally {
+    audioCapture.setSelectedDawSourceId = originalSetSelectedDawSourceId
     fakeStorage.restore()
     resetStores()
   }

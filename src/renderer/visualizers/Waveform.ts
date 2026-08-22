@@ -20,15 +20,19 @@ import {
 } from '../scopeMeasurement'
 import type { LinkedAnalysisProbe, LinkedAnalysisProjection } from '../../types/analysis'
 import type { NormalizedScopePoint } from '../scopeCanvasTransform'
+import type { DawTransportSnapshot, TimelineUnit } from '../../types/dawBridge'
+import { ScrollingTimeline } from './scrollingTimeline'
 
 export interface WaveformStereoChunk {
   left: Float32Array
   right: Float32Array
+  transport?: DawTransportSnapshot
 }
 
 export interface WaveformDataSource extends VisualizerSessionSource {
   getPendingWaveformSamples: () => Float32Array[]
   getPendingWaveformStereoSamples: () => WaveformStereoChunk[]
+  getPendingWaveformAnnotatedSamples?: () => WaveformStereoChunk[]
 }
 
 export interface WaveformOptions {
@@ -36,6 +40,7 @@ export interface WaveformOptions {
   lineColor?: string
   gridMajorColor?: string
   gridMinorColor?: string
+  labelColor?: string
   bandColors?: {
     low: string
     mid: string
@@ -44,6 +49,7 @@ export interface WaveformOptions {
   mode?: WaveformMode
   scrollSpeed?: number
   multiband?: boolean
+  timelineUnit?: TimelineUnit
   dataSource?: WaveformDataSource
   frameScheduler?: FrameScheduler
   nativeAnalyzer?: WaveformNativeAnalyzer | null
@@ -56,6 +62,7 @@ const defaultOptions: ResolvedWaveformOptions = {
   lineColor: '#38bdf8',
   gridMajorColor: 'rgba(255, 255, 255, 0.08)',
   gridMinorColor: 'rgba(255, 255, 255, 0.04)',
+  labelColor: 'rgba(255, 255, 255, 0.4)',
   bandColors: {
     low: '#ff4444',
     mid: '#44dd44',
@@ -64,6 +71,7 @@ const defaultOptions: ResolvedWaveformOptions = {
   mode: DEFAULT_WAVEFORM_MODE,
   scrollSpeed: DEFAULT_WAVEFORM_SCROLL_SPEED,
   multiband: false,
+  timelineUnit: 'bars-beats',
 }
 
 const MULTIBAND_WEIGHT_EMPHASIS = 2.6
@@ -74,6 +82,7 @@ const MULTIBAND_EDGE_ALPHA = 1.0
 const defaultWaveformDataSource: WaveformDataSource = {
   getPendingWaveformSamples: () => audioRouter.flushPendingWaveformSamples(),
   getPendingWaveformStereoSamples: () => audioRouter.flushPendingWaveformStereoSamples(),
+  getPendingWaveformAnnotatedSamples: () => audioRouter.flushPendingWaveformAnnotatedSamples(),
   ...defaultVisualizerSessionSource,
 }
 
@@ -106,6 +115,8 @@ export class Waveform {
   private rightBandHighAcc: Float32Array = new Float32Array(0)
   private multibandScratch: MultibandChunk = createMultibandChunk(0)
   private unsubscribeSessionChange: (() => void) | null = null
+  private readonly timeline = new ScrollingTimeline()
+  private timelineColumnRemainder = 0
 
   constructor(canvas: HTMLCanvasElement, options: WaveformOptions = {}) {
     this.canvas = canvas
@@ -159,6 +170,8 @@ export class Waveform {
   private resetDisplay(): void {
     this.waterfallCtx.clearRect(0, 0, this.waterfallCanvas.width, this.waterfallCanvas.height)
     this.columnAccumulatorPos = 0
+    this.timelineColumnRemainder = 0
+    this.timeline.reset()
     this.splitter.reset()
     this.nativeAnalyzer?.reset()
     this.configureNativeAnalyzer()
@@ -202,6 +215,7 @@ export class Waveform {
       lineColor: optionUpdates.lineColor ?? this.options.lineColor,
       scrollSpeed: clampWaveformScrollSpeed(optionUpdates.scrollSpeed ?? this.options.scrollSpeed),
       multiband: optionUpdates.multiband ?? this.options.multiband,
+      timelineUnit: optionUpdates.timelineUnit ?? this.options.timelineUnit,
     }
     const speedChanged = nextOptions.scrollSpeed !== this.options.scrollSpeed
     const multibandChanged = nextOptions.multiband !== this.options.multiband
@@ -509,12 +523,40 @@ export class Waveform {
   }
 
   private drainPendingSamples(): void {
+    if (this.dataSource.getPendingWaveformAnnotatedSamples) {
+      this.dataSource.getPendingWaveformAnnotatedSamples()
+      return
+    }
     if (this.options.mode === 'stereo') {
       this.dataSource.getPendingWaveformStereoSamples()
       return
     }
 
     this.dataSource.getPendingWaveformSamples()
+  }
+
+  private recordTimeline(chunk: WaveformStereoChunk, width: number): void {
+    const frameCount = Math.min(chunk.left.length, chunk.right.length)
+    const total = this.timelineColumnRemainder + frameCount
+    const columnCount = Math.floor(total / Math.max(1, this.samplesPerColumn))
+    this.timelineColumnRemainder = total % Math.max(1, this.samplesPerColumn)
+    this.timeline.append({
+      frameCount,
+      sampleRate: Math.max(1, this.dataSource.getSampleRate()),
+      transport: chunk.transport,
+    }, columnCount, width)
+  }
+
+  private drawTimeline(width: number, height: number): void {
+    this.timeline.draw(
+      this.ctx,
+      width,
+      height,
+      this.options.timelineUnit,
+      this.dataSource.getBackendKind?.() ?? null,
+      this.options.gridMajorColor,
+      this.options.labelColor,
+    )
   }
 
   private processMonoChunk(chunk: Float32Array, width: number, height: number): void {
@@ -712,6 +754,7 @@ export class Waveform {
 
       this.recomputeSamplesPerColumn()
       this.staticLayerKey = ''
+      this.timeline.resize(width)
     }
 
     const sampleRate = this.dataSource.getSampleRate()
@@ -723,12 +766,24 @@ export class Waveform {
       this.drainPendingSamples()
       this.renderStaticLayer(width, height)
       this.ctx.drawImage(this.waterfallCanvas, 0, 0)
+      this.drawTimeline(width, height)
       return
     }
 
-    if (this.options.mode === 'stereo') {
+    const annotated = this.dataSource.getPendingWaveformAnnotatedSamples?.()
+    if (annotated) {
+      for (const chunk of annotated) {
+        this.recordTimeline(chunk, width)
+        if (this.options.mode === 'stereo') {
+          this.processStereoChunk(chunk, width, height)
+        } else {
+          this.processMonoChunk(chunk.left, width, height)
+        }
+      }
+    } else if (this.options.mode === 'stereo') {
       const pending = this.dataSource.getPendingWaveformStereoSamples()
       for (const chunk of pending) {
+        this.recordTimeline(chunk, width)
         this.processStereoChunk(chunk, width, height)
       }
     } else {
@@ -740,6 +795,7 @@ export class Waveform {
 
     this.renderStaticLayer(width, height)
     this.ctx.drawImage(this.waterfallCanvas, 0, 0)
+    this.drawTimeline(width, height)
   }
 
   dispose(): void {

@@ -214,6 +214,14 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build plugin/build --target PrismInstallerPlugins --config Release --parallel 4
+          cmake --build plugin/build --target PrismBridgeTests --config Release --parallel 4
+          ctest --test-dir plugin/build -C Release --output-on-failure -R PrismBridgeProcessorTests
+
+      - name: Test Prism Bridge processor
+        if: runner.os != 'Windows'
+        run: |
+          cmake --build plugin/build --target PrismBridgeTests --config Release --parallel 4
+          ctest --test-dir plugin/build -C Release --output-on-failure -R PrismBridgeProcessorTests
 
       - name: Show sccache stats
         if: runner.os != 'Linux'
@@ -226,7 +234,7 @@ jobs:
           mkdir -p plugin/dist-installer
           mkdir -p plugin/dist-installer/VST3
           [ "$RUNNER_OS" = "macOS" ] && mkdir -p plugin/dist-installer/AU
-          for art in PrismSpectrum PrismOscilloscope PrismVUMeter PrismLUFSMeter PrismVectorscope PrismSpectrogram PrismWaveform; do
+          for art in PrismSpectrum PrismOscilloscope PrismVUMeter PrismLUFSMeter PrismVectorscope PrismSpectrogram PrismWaveform PrismBridge; do
             vst3_dir="plugin/build/${art}_artefacts/Release/VST3"
             [ -d "$vst3_dir" ] && find "$vst3_dir" -maxdepth 1 -name "*.vst3" -exec cp -R {} plugin/dist-installer/VST3/ \;
             if [ "$RUNNER_OS" = "macOS" ]; then
@@ -237,8 +245,8 @@ jobs:
           echo "--- staged VST3 ---"
           ls -la plugin/dist-installer/VST3
           vst3_count="$(find plugin/dist-installer/VST3 -maxdepth 1 -name "*.vst3" | wc -l | tr -d ' ')"
-          if [ "$vst3_count" -ne 7 ]; then
-            echo "ERROR: expected 7 VST3 plugins, found $vst3_count"
+          if [ "$vst3_count" -ne 8 ]; then
+            echo "ERROR: expected 8 VST3 plugins, found $vst3_count"
             exit 1
           fi
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -255,8 +263,8 @@ jobs:
             echo "--- staged AU ---"
             ls -la plugin/dist-installer/AU
             au_count="$(find plugin/dist-installer/AU -maxdepth 1 -name "*.component" | wc -l | tr -d ' ')"
-            if [ "$au_count" -ne 7 ]; then
-              echo "ERROR: expected 7 AU plugins, found $au_count"
+            if [ "$au_count" -ne 8 ]; then
+              echo "ERROR: expected 8 AU plugins, found $au_count"
               exit 1
             fi
           fi

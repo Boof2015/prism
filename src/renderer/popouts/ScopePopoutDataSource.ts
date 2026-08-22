@@ -27,6 +27,7 @@ const INITIAL_SESSION_STATE: ScopePopoutSessionState = {
   sampleRate: 48000,
   channelCount: 2,
   capturing: false,
+  suspended: false,
   backendKind: null,
 }
 
@@ -80,7 +81,7 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
   setSessionState(nextState: ScopePopoutSessionState): void {
     this.sessionState = nextState
     this.nativeVisualizerTransport.reset(nextState)
-    if (!nextState.capturing) {
+    if (!nextState.capturing || nextState.suspended) {
       this.monoQueue = []
       this.stereoQueue = []
     }
@@ -95,7 +96,11 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
   }
 
   isPlaying(): boolean {
-    return this.sessionState.capturing
+    return this.sessionState.capturing && !this.sessionState.suspended
+  }
+
+  getBackendKind(): ScopePopoutSessionState['backendKind'] {
+    return this.sessionState.backendKind
   }
 
   subscribeToSessionChanges(listener: (state: ScopePopoutSessionState) => void): () => void {
@@ -147,6 +152,10 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     const batch = this.stereoQueue
     this.stereoQueue = []
     return this.scopeKind === 'waveform' ? batch : []
+  }
+
+  getPendingWaveformAnnotatedSamples(): ScopePopoutStereoBatch {
+    return this.getPendingWaveformStereoSamples()
   }
 
   getPendingVectorscopeSamples(): ScopePopoutStereoBatch {

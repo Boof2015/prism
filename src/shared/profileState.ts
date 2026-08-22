@@ -9,7 +9,7 @@ import {
   type ProfileLocalMetadata,
   type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV5,
+  type PrismProfileFileV6,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
@@ -38,6 +38,7 @@ import {
   DEFAULT_ANALYSIS_SETTINGS,
   normalizeAnalysisSettings,
 } from '../types/analysis'
+import { DEFAULT_TIMELINE_UNIT, isTimelineUnit } from '../types/dawBridge'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -245,6 +246,9 @@ export function mergeScopeSettings(
       tiltDbPerOctave: clampSpectrogramTiltDbPerOctave(
         rawSpectrogram.tiltDbPerOctave ?? DEFAULT_SCOPE_SETTINGS.spectrogram.tiltDbPerOctave
       ),
+      timelineUnit: isTimelineUnit(rawSpectrogram.timelineUnit)
+        ? rawSpectrogram.timelineUnit
+        : DEFAULT_TIMELINE_UNIT,
     },
     vumeter: {
       ...DEFAULT_SCOPE_SETTINGS.vumeter,
@@ -271,6 +275,9 @@ export function mergeScopeSettings(
       multiband: typeof rawWaveform.multiband === 'boolean'
         ? rawWaveform.multiband
         : DEFAULT_SCOPE_SETTINGS.waveform.multiband,
+      timelineUnit: isTimelineUnit(rawWaveform.timelineUnit)
+        ? rawWaveform.timelineUnit
+        : DEFAULT_TIMELINE_UNIT,
     },
     nowPlaying: { ...DEFAULT_SCOPE_SETTINGS.nowPlaying, ...rawNowPlaying },
   }
@@ -346,9 +353,9 @@ export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-) : PrismProfileFileV5 {
+) : PrismProfileFileV6 {
   const parsed = typeof raw === 'object' && raw !== null
-    ? raw as Omit<Partial<PrismProfileFileV5>, 'version'> & { version?: unknown }
+    ? raw as Omit<Partial<PrismProfileFileV6>, 'version'> & { version?: unknown }
     : {}
 
   const id = typeof parsed.id === 'string' && parsed.id.trim()
@@ -373,7 +380,7 @@ export function normalizeProfileFile(
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV5 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV6 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {

@@ -11,6 +11,8 @@ endif()
 
 project(PrismPlugins VERSION 0.1.0 LANGUAGES C CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -197,6 +199,66 @@ add_prism_scope(PrismVectorscope  "Prism Vectorscope"  Pvct "PRISM_SCOPE_VECTORS
 add_prism_scope(PrismSpectrogram  "Prism Spectrogram"  Pspg "PRISM_SCOPE_SPECTROGRAM=1")
 add_prism_scope(PrismWaveform     "Prism Waveform"     Pwav "PRISM_SCOPE_WAVEFORM=1")
 
+# Prism Bridge is intentionally a small native-only pass-through plug-in. It has
+# no standalone target and never creates a webview or performs networking on the
+# audio thread.
+set(PRISM_BRIDGE_FORMATS ${PRISM_PLUGIN_FORMATS})
+list(REMOVE_ITEM PRISM_BRIDGE_FORMATS Standalone)
+
+juce_add_plugin(PrismBridge
+    PRODUCT_NAME "Prism Bridge"
+    COMPANY_NAME "Prism"
+    BUNDLE_ID com.astra.prism.PrismBridge
+    PLUGIN_MANUFACTURER_CODE Prsm
+    PLUGIN_CODE Pbrg
+    FORMATS ${PRISM_BRIDGE_FORMATS}
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    AU_SANDBOX_SAFE FALSE
+    COPY_PLUGIN_AFTER_BUILD ${PRISM_COPY_PLUGIN_AFTER_BUILD})
+
+target_sources(PrismBridge PRIVATE
+    Source/BridgeProcessor.cpp
+    Source/BridgeEditor.cpp)
+
+target_include_directories(PrismBridge PRIVATE Source)
+target_compile_definitions(PrismBridge PRIVATE
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0)
+target_link_libraries(PrismBridge PRIVATE
+    juce::juce_audio_utils
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags)
+
+if(APPLE AND TARGET PrismBridge_AU)
+    # Keep local/CI AU bundles structurally valid before the release pipeline
+    # replaces this ad-hoc signature with the distribution identity.
+    add_custom_command(TARGET PrismBridge_AU POST_BUILD
+        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:PrismBridge_AU>"
+        VERBATIM)
+endif()
+
+if(BUILD_TESTING)
+    juce_add_console_app(PrismBridgeTests PRODUCT_NAME "Prism Bridge Tests")
+    target_sources(PrismBridgeTests PRIVATE
+        Tests/BridgeProcessorTests.cpp
+        Source/BridgeProcessor.cpp
+        Source/BridgeEditor.cpp)
+    target_include_directories(PrismBridgeTests PRIVATE Source)
+    target_compile_definitions(PrismBridgeTests PRIVATE
+        PRISM_BRIDGE_TESTING=1
+        JucePlugin_Name="Prism Bridge"
+        JUCE_USE_CURL=0)
+    target_link_libraries(PrismBridgeTests PRIVATE
+        juce::juce_audio_utils
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+    add_test(NAME PrismBridgeProcessorTests COMMAND PrismBridgeTests)
+endif()
+
 set(PRISM_SCOPE_TARGETS
     PrismSpectrum
     PrismOscilloscope
@@ -204,7 +266,8 @@ set(PRISM_SCOPE_TARGETS
     PrismLUFSMeter
     PrismVectorscope
     PrismSpectrogram
-    PrismWaveform)
+    PrismWaveform
+    PrismBridge)
 
 add_custom_target(PrismInstallerPlugins)
 foreach(PRISM_SCOPE_TARGET IN LISTS PRISM_SCOPE_TARGETS)

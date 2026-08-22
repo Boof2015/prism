@@ -264,6 +264,7 @@ export function scopeSettingsToOptions(
         showGrid: s.showGrid,
         orientation: 'horizontal',
         colorScheme: s.colorScheme,
+        timelineUnit: s.timelineUnit,
       }
     }
     case 'vumeter': {
@@ -308,6 +309,7 @@ export function scopeSettingsToOptions(
         lineColor: t.line,
         gridMajorColor: t.guides,
         gridMinorColor: t.guidesSecondary,
+        labelColor: t.line,
         bandColors: {
           low: t.bandLow,
           mid: t.bandMid,
@@ -316,6 +318,7 @@ export function scopeSettingsToOptions(
         mode: s.mode,
         scrollSpeed: s.scrollSpeed,
         multiband: s.multiband,
+        timelineUnit: s.timelineUnit,
       }
     }
     case 'nowPlaying':

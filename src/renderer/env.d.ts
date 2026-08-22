@@ -44,6 +44,7 @@ import type {
   TrayRendererCommand,
   TrayRendererState,
 } from '../types/desktopIntegration'
+import type { DawBridgeRendererAPI } from '../types/dawBridge'
 
 declare global {
   interface Window {
@@ -81,6 +82,7 @@ declare global {
       setWindowBackground: (state: WindowBackgroundState) => Promise<WindowBackgroundSnapshot>
       isCursorInsideWindow: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
+      dawBridge: DawBridgeRendererAPI
       audioClips: {
         startDrag: (payload: AudioClipDragPayload) => void
         revealFolder: () => Promise<void>

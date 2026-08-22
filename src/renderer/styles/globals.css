@@ -1881,6 +1881,15 @@ button.toolbar__version:hover {
   border-color: var(--accent);
 }
 
+.settings-status-pill.is-waiting .settings-status-pill__dot {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.72);
+}
+
+.settings-status-pill.is-waiting {
+  color: #fbbf24;
+}
+
 .settings-status-pill.is-capturing .settings-status-pill__dot {
   background: var(--success);
   box-shadow: 0 0 8px var(--success);

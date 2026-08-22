@@ -44,6 +44,10 @@ import type {
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import { getCaptureBackendSupport } from './captureSupport'
+import type {
+  DawBridgeAudioBatch,
+  DawBridgeSnapshot,
+} from '../types/dawBridge'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
 const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
@@ -104,7 +108,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWindowBackground: () => ipcRenderer.invoke('window:get-background') as Promise<WindowBackgroundSnapshot>,
   setWindowBackground: (state: WindowBackgroundState) => ipcRenderer.invoke('window:set-background', state) as Promise<WindowBackgroundSnapshot>,
   isCursorInsideWindow: () => ipcRenderer.invoke('window:is-cursor-inside') as Promise<boolean>,
-  getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
+  getCaptureBackendSupport: async () => {
+    const nativeSupport = getCaptureBackendSupport(process.platform, nativeCaptureAPI)
+    const bridgeSnapshot = await ipcRenderer.invoke('daw-bridge:get-snapshot') as DawBridgeSnapshot
+    return {
+      ...nativeSupport,
+      dawBridge: {
+        kind: 'daw-bridge',
+        available: bridgeSnapshot.available,
+        reason: bridgeSnapshot.reason,
+      },
+    } as CaptureBackendSupport
+  },
+  dawBridge: {
+    getSnapshot: () => ipcRenderer.invoke('daw-bridge:get-snapshot') as Promise<DawBridgeSnapshot>,
+    selectSource: (sourceId: string | null) => ipcRenderer.invoke(
+      'daw-bridge:select-source',
+      sourceId,
+    ) as Promise<DawBridgeSnapshot>,
+    onSnapshot: (callback: (snapshot: DawBridgeSnapshot) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: DawBridgeSnapshot): void => callback(snapshot)
+      ipcRenderer.on('daw-bridge:snapshot', handler)
+      return () => ipcRenderer.removeListener('daw-bridge:snapshot', handler)
+    },
+    onAudioBatch: (callback: (batch: DawBridgeAudioBatch) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, batch: DawBridgeAudioBatch): void => callback(batch)
+      ipcRenderer.on('daw-bridge:audio-batch', handler)
+      return () => ipcRenderer.removeListener('daw-bridge:audio-batch', handler)
+    },
+  },
   audioClips: {
     startDrag: (payload: AudioClipDragPayload) => ipcRenderer.send('audio-clips:start-drag', payload),
     revealFolder: () => ipcRenderer.invoke('audio-clips:reveal-folder') as Promise<void>,

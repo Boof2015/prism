@@ -183,6 +183,26 @@ test('drops stale-session chunks before they reach scope queues', () => {
   assert.equal(router.getDiagnosticsSnapshot().staleSessionDrops, 1)
 })
 
+test('suspend and resume preserve queued history without creating a new session', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'daw-bridge')
+  router.setVisualizerConsumerDemand('timeline', { waveform: true })
+  router.ingestChunk(createChunk(1), createChunk(1), { sessionId, sequence: 1 })
+
+  router.suspendSession()
+  assert.equal(router.getSessionState().suspended, true)
+  assert.equal(router.getSessionState().sessionId, sessionId)
+  router.ingestChunk(createChunk(2), createChunk(2), { sessionId, sequence: 2 })
+
+  router.resumeSession()
+  assert.equal(router.getSessionState().suspended, false)
+  assert.equal(router.getSessionState().sessionId, sessionId)
+  router.ingestChunk(createChunk(3), createChunk(3), { sessionId, sequence: 3 })
+
+  const chunks = router.flushPendingWaveformStereoSamples()
+  assert.deepEqual(chunks.map((chunk) => chunk.left[0]), [1, 3])
+})
+
 test('publishes aggregated visualizer demand changes for downstream transports', () => {
   const router = new AudioRouter()
   const snapshots: Array<ReturnType<AudioRouter['getActiveVisualizerDemand']>> = []

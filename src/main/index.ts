@@ -82,6 +82,8 @@ import {
 } from './services/trayMenu'
 import { TrayRendererCommandQueue } from './services/trayRendererCommandQueue'
 import { resolveTrayAssetPath } from './services/trayAssets'
+import { DawBridgeService } from './services/dawBridgeService'
+import type { DawBridgeAudioBatch, DawBridgeSnapshot } from '../types/dawBridge'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
@@ -130,6 +132,7 @@ let nativeWindowsMediaApi: NativeWindowsMediaAPI | null | undefined
 let nativeWindowChromeApi: NativeWindowChromeAPI | null | undefined
 let loginItemService: LoginItemService | null = null
 let audioClipLibrary: AudioClipLibrary | null = null
+let dawBridgeService: DawBridgeService | null = null
 let desktopIntegrationPreferences: DesktopIntegrationPreferences = {
   ...DEFAULT_DESKTOP_INTEGRATION_PREFERENCES,
 }
@@ -686,12 +689,28 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
         deviceId: source.id || null,
       }),
     })),
+    { type: 'separator' },
+    { label: 'DAW Bridges', enabled: false },
+    ...model.rendererState.dawSources.map((source): MenuItemConstructorOptions => ({
+      label: source.label,
+      type: 'radio',
+      checked: model.rendererState.captureMode === 'daw'
+        && source.id === model.rendererState.selectedDawSourceId,
+      enabled: model.rendererReady,
+      click: () => sendTrayRendererCommand({
+        type: 'select-daw-source',
+        sourceId: source.id,
+      }),
+    })),
   ]
   if (model.rendererState.systemSources.length === 0) {
     audioSourceItems.splice(1, 0, { label: 'No outputs available', enabled: false })
   }
   if (model.rendererState.inputSources.length === 0) {
     audioSourceItems.push({ label: 'No inputs available', enabled: false })
+  }
+  if (model.rendererState.dawSources.length === 0) {
+    audioSourceItems.push({ label: 'No DAW bridges connected', enabled: false })
   }
 
   const loginStatus = loginItemStatusLabel(model.desktopIntegration)
@@ -2346,6 +2365,24 @@ function setupIPC(): void {
     return getAppBuildInfo()
   })
 
+  ipcMain.handle('daw-bridge:get-snapshot', () => {
+    return dawBridgeService?.getSnapshot() ?? {
+      available: false,
+      reason: 'The DAW bridge listener is not initialized.',
+      selectedSourceId: null,
+      sources: [],
+    } satisfies DawBridgeSnapshot
+  })
+
+  ipcMain.handle('daw-bridge:select-source', (_event, sourceId: unknown) => {
+    return dawBridgeService?.selectSource(typeof sourceId === 'string' ? sourceId : null) ?? {
+      available: false,
+      reason: 'The DAW bridge listener is not initialized.',
+      selectedSourceId: null,
+      sources: [],
+    } satisfies DawBridgeSnapshot
+  })
+
   ipcMain.on('audio-clips:start-drag', (event, rawPayload: unknown) => {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || !isMainRendererWindow(targetWindow)) return
@@ -2778,6 +2815,19 @@ if (!hasSingleInstanceLock) {
     setupPermissions()
     void getNowPlayingManager().initialize()
     setupIPC()
+    dawBridgeService = new DawBridgeService({
+      onSnapshot: (snapshot: DawBridgeSnapshot) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('daw-bridge:snapshot', snapshot)
+        }
+      },
+      onAudioBatch: (batch: DawBridgeAudioBatch) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('daw-bridge:audio-batch', batch)
+        }
+      },
+    })
+    await dawBridgeService.start()
     await getWindowStateStore().initialize()
     desktopIntegrationPreferences = await loadDesktopIntegrationPreferences(
       getDesktopIntegrationPreferencesPath(),
@@ -2837,6 +2887,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isAppQuitting = true
+  dawBridgeService?.stop()
+  dawBridgeService = null
   destroyAppTray()
   pendingTrayRendererCommands.clear()
 })

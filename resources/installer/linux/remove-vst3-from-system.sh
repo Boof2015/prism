@@ -52,6 +52,7 @@ remove_plugin "Prism Loudness Meter.vst3"
 remove_plugin "Prism Vectorscope.vst3"
 remove_plugin "Prism Spectrogram.vst3"
 remove_plugin "Prism Waveform.vst3"
+remove_plugin "Prism Bridge.vst3"
 remove_tui_link
 
 echo "Prism VST3 plugins removed from $DEST_DIR"

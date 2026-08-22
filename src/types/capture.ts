@@ -1,4 +1,5 @@
-export type CaptureMode = 'system' | 'device'
+export type CaptureMode = 'system' | 'device' | 'daw'
+export type CaptureStatus = 'idle' | 'connecting' | 'waiting' | 'capturing' | 'error'
 
 export type NativeSystemCaptureBackendKind =
   | 'native-macos'
@@ -7,6 +8,7 @@ export type NativeSystemCaptureBackendKind =
 
 export type CaptureBackendKind =
   | 'device-input'
+  | 'daw-bridge'
   | NativeSystemCaptureBackendKind
 
 export function resolveNativeBackendKind(platform: string): NativeSystemCaptureBackendKind {
@@ -22,6 +24,7 @@ export function resolveNativeBackendKind(platform: string): NativeSystemCaptureB
 
 export interface CaptureSourceDescriptor {
   id: string
+  persistentId?: string
   label: string
   kind: CaptureMode
   isDefault?: boolean
@@ -38,4 +41,5 @@ export interface CaptureBackendSupportEntry {
 export interface CaptureBackendSupport {
   nativeBackend: CaptureBackendSupportEntry
   deviceInput: CaptureBackendSupportEntry
+  dawBridge: CaptureBackendSupportEntry
 }

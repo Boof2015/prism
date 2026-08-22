@@ -101,6 +101,7 @@ import {
 } from '../src/renderer/visualizers/vuMeterBallistics'
 import { FrameScheduler } from '../src/renderer/visualizers/frameScheduler'
 import { VisualizerFrameLoop } from '../src/renderer/visualizers/visualizerFrameLoop'
+import { resolveTimelineSeam, ScrollingTimeline } from '../src/renderer/visualizers/scrollingTimeline'
 import {
   NativeVisualizerTransport,
   type NativeVisualizerTransportBridge,
@@ -7260,5 +7261,103 @@ test('NativePolledCaptureBackend trims stale backlog to the newest live slice wh
     assert.equal(timers.pendingCount(), 0)
   } finally {
     timers.restore()
+  }
+})
+
+test('DAW timeline seams distinguish gaps, loops, seeks, and stopped resumption', () => {
+  const previous = {
+    sequence: 10,
+    frameCount: 512,
+    timeInSamples: 48000,
+    isPlaying: true,
+    isLooping: false,
+  }
+  const transport = {
+    sequence: 11,
+    timeInSamples: 48512,
+    isPlaying: true,
+    isRecording: false,
+    isLooping: false,
+  }
+
+  assert.equal(resolveTimelineSeam(previous, transport), undefined)
+  assert.equal(resolveTimelineSeam(previous, { ...transport, sequence: 12 }), 'Gap')
+  assert.equal(resolveTimelineSeam(previous, { ...transport, timeInSamples: 96000 }), 'Jump')
+  assert.equal(resolveTimelineSeam(previous, {
+    ...transport,
+    timeInSamples: 12000,
+    isLooping: true,
+  }), 'Loop')
+  assert.equal(resolveTimelineSeam({ ...previous, isPlaying: false }, transport), 'Jump')
+})
+
+test('DAW musical ruler labels every roomy beat and every bar in dense history', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    const roomyRecorder = createFakeCanvasRecorder()
+    const roomy = new ScrollingTimeline()
+    roomy.append({
+      frameCount: 192000,
+      sampleRate: 48000,
+      transport: {
+        sequence: 1,
+        timeInSamples: 0,
+        timeInSeconds: 0,
+        ppqPosition: 0,
+        ppqPositionOfLastBarStart: 0,
+        bpm: 120,
+        timeSignature: { numerator: 4, denominator: 4 },
+        isPlaying: true,
+        isRecording: false,
+        isLooping: false,
+      },
+    }, 800, 800)
+    roomy.draw(
+      createFakeCanvasContext(roomyRecorder),
+      800,
+      180,
+      'bars-beats',
+      'daw-bridge',
+      '#333',
+      '#fff',
+    )
+    assert.deepEqual(
+      roomyRecorder.fillTexts.slice(0, 7).map(({ text }) => text),
+      ['1|2', '1|3', '1|4', '2|1', '2|2', '2|3', '2|4'],
+    )
+
+    const denseRecorder = createFakeCanvasRecorder()
+    const dense = new ScrollingTimeline()
+    dense.append({
+      frameCount: 768000,
+      sampleRate: 48000,
+      transport: {
+        sequence: 1,
+        timeInSamples: 0,
+        timeInSeconds: 0,
+        ppqPosition: 0,
+        ppqPositionOfLastBarStart: 0,
+        bpm: 120,
+        timeSignature: { numerator: 4, denominator: 4 },
+        isPlaying: true,
+        isRecording: false,
+        isLooping: false,
+      },
+    }, 160, 160)
+    dense.draw(
+      createFakeCanvasContext(denseRecorder),
+      160,
+      180,
+      'bars-beats',
+      'daw-bridge',
+      '#333',
+      '#fff',
+    )
+    assert.deepEqual(
+      denseRecorder.fillTexts.map(({ text }) => text),
+      ['2', '3', '4', '5', '6', '7', '8', '9'],
+    )
+  } finally {
+    dom.restore()
   }
 })
