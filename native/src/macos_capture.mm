@@ -1,4 +1,5 @@
 #include "system_audio_capture.h"
+#include "capture_channel_selection.h"
 
 #if defined(__APPLE__)
 
@@ -8,9 +9,10 @@
 #import <CoreAudio/CATapDescription.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -29,7 +31,36 @@ struct OutputDeviceInfo {
     double sampleRate;
     UInt32 channelCount;
     bool isDefault;
+    std::vector<Prism::Capture::ChannelDescriptor> channels;
 };
+
+std::string cfStringToStdString(CFStringRef value);
+
+std::vector<Prism::Capture::ChannelDescriptor> getChannelDescriptors(
+    AudioDeviceID deviceId,
+    AudioObjectPropertyScope scope,
+    UInt32 channelCount) {
+    std::vector<Prism::Capture::ChannelDescriptor> channels;
+    channels.reserve(channelCount);
+    for (UInt32 index = 0; index < channelCount; ++index) {
+        std::string label = "Channel " + std::to_string(index + 1);
+        AudioObjectPropertyAddress address{
+            kAudioObjectPropertyElementName,
+            scope,
+            index + 1,
+        };
+        CFStringRef value = nullptr;
+        UInt32 size = sizeof(value);
+        if (AudioObjectGetPropertyData(deviceId, &address, 0, nullptr, &size, &value) == noErr
+            && value != nullptr) {
+            const std::string resolved = cfStringToStdString(value);
+            CFRelease(value);
+            if (!resolved.empty()) label = resolved;
+        }
+        channels.push_back({static_cast<uint32_t>(index), label});
+    }
+    return channels;
+}
 
 struct CapturedChunk {
     std::vector<float> left;
@@ -225,6 +256,10 @@ std::vector<OutputDeviceInfo> enumerateOutputDevices() {
             sampleRate,
             channelCount,
             deviceId == defaultDeviceId,
+            getChannelDescriptors(
+                deviceId,
+                kAudioDevicePropertyScopeOutput,
+                channelCount),
         });
     }
 
@@ -244,75 +279,6 @@ bool getTapFormat(AudioObjectID tapId, AudioStreamBasicDescription* outFormat) {
 
     UInt32 size = sizeof(AudioStreamBasicDescription);
     return AudioObjectGetPropertyData(tapId, &address, 0, nullptr, &size, outFormat) == noErr;
-}
-
-float decodeSignedIntegerSample(const uint8_t* data, UInt32 bytesPerSample, bool isBigEndian) {
-    if (data == nullptr || bytesPerSample == 0 || bytesPerSample > 4) {
-        return 0.0f;
-    }
-
-    int32_t rawValue = 0;
-    if (isBigEndian) {
-        for (UInt32 byteIndex = 0; byteIndex < bytesPerSample; ++byteIndex) {
-            rawValue = (rawValue << 8) | data[byteIndex];
-        }
-    } else {
-        for (UInt32 byteIndex = 0; byteIndex < bytesPerSample; ++byteIndex) {
-            rawValue |= static_cast<int32_t>(data[byteIndex]) << (byteIndex * 8);
-        }
-    }
-
-    const UInt32 totalBits = bytesPerSample * 8;
-    const int32_t signMask = 1 << (totalBits - 1);
-    if ((rawValue & signMask) != 0) {
-        rawValue |= ~((1 << totalBits) - 1);
-    }
-
-    const double maxMagnitude = static_cast<double>((1u << (totalBits - 1)) - 1u);
-    if (maxMagnitude <= 0.0) {
-        return 0.0f;
-    }
-
-    return static_cast<float>(static_cast<double>(rawValue) / maxMagnitude);
-}
-
-float readSampleFromFormat(const uint8_t* data,
-                           const AudioStreamBasicDescription& format,
-                           UInt32 sampleIndex) {
-    if (data == nullptr) {
-        return 0.0f;
-    }
-
-    const UInt32 bytesPerChannel = format.mBitsPerChannel / 8;
-    if (bytesPerChannel == 0) {
-        return 0.0f;
-    }
-
-    const uint8_t* samplePtr = data + static_cast<size_t>(sampleIndex) * bytesPerChannel;
-    const bool isFloat = (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0;
-    const bool isBigEndian = (format.mFormatFlags & kAudioFormatFlagIsBigEndian) != 0;
-
-    if (isFloat && format.mBitsPerChannel == 32) {
-        Float32 value = 0.0f;
-        std::memcpy(&value, samplePtr, sizeof(Float32));
-        return value;
-    }
-
-    if (isFloat && format.mBitsPerChannel == 64) {
-        Float64 value = 0.0;
-        std::memcpy(&value, samplePtr, sizeof(Float64));
-        return static_cast<float>(value);
-    }
-
-    if ((format.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0) {
-        return decodeSignedIntegerSample(samplePtr, bytesPerChannel, isBigEndian);
-    }
-
-    return 0.0f;
-}
-
-bool isFormatInterleaved(const AudioStreamBasicDescription& format) {
-    return (format.mFormatFlags & kAudioFormatFlagIsNonInterleaved) == 0;
 }
 
 std::string formatStatusMessage(const char* operation, OSStatus status) {
@@ -346,6 +312,7 @@ public:
                 device.sampleRate,
                 static_cast<uint32_t>(device.channelCount),
                 device.isDefault,
+                device.channels,
             });
         }
         return result;
@@ -367,11 +334,26 @@ public:
         if (result != nullptr) {
             std::lock_guard<std::mutex> lock(stateMutex_);
             result->sampleRate = sampleRate_;
-            result->channelCount = static_cast<uint32_t>(channelCount_);
+            const UInt32 sourceChannelCount = channelCount_.load(std::memory_order_relaxed);
+            result->channelCount = sourceChannelCount > 1 ? 2u : 1u;
+            result->sourceChannelCount = static_cast<uint32_t>(sourceChannelCount);
             result->deviceId = activeDeviceUid_;
             result->deviceLabel = activeDeviceLabel_;
         }
         return true;
+    }
+
+    Prism::Capture::ChannelRouting setChannelRouting(
+        uint32_t left,
+        uint32_t right) override {
+        const UInt32 count = channelCount_.load(std::memory_order_relaxed);
+        if (active_.load(std::memory_order_acquire) && count > 0) {
+            left = std::min<uint32_t>(left, count - 1);
+            right = std::min<uint32_t>(right, count - 1);
+        }
+        routeLeft_.store(left, std::memory_order_release);
+        routeRight_.store(right, std::memory_order_release);
+        return {left, right};
     }
 
     void stop() override {
@@ -439,68 +421,69 @@ private:
                       const AudioTimeStamp*,
                       AudioBufferList*,
                       const AudioTimeStamp*) {
-        AudioStreamBasicDescription format{};
-        UInt32 channelCount = 0;
-
-        {
-            std::lock_guard<std::mutex> stateLock(stateMutex_);
-            if (!active_ || inputData == nullptr) {
-                return noErr;
-            }
-            format = tapFormat_;
-            channelCount = channelCount_;
-        }
+        if (!active_.load(std::memory_order_acquire) || inputData == nullptr) return noErr;
+        // tapFormat_ is configured before active_ is published and is not changed until
+        // AudioDeviceStop has joined the callback, so the realtime path needs no state lock.
+        const AudioStreamBasicDescription format = tapFormat_;
+        const UInt32 channelCount = channelCount_.load(std::memory_order_relaxed);
 
         if (inputData->mNumberBuffers == 0 || format.mBytesPerFrame == 0) {
             return noErr;
         }
 
-        const bool interleaved = isFormatInterleaved(format);
         const AudioBuffer& firstBuffer = inputData->mBuffers[0];
-        const UInt32 frames =
-            format.mBytesPerFrame == 0 ? 0 : firstBuffer.mDataByteSize / format.mBytesPerFrame;
+        const UInt32 bytesPerChannel = std::max<UInt32>(1, format.mBitsPerChannel / 8);
+        const UInt32 firstBufferChannels = std::max<UInt32>(1, firstBuffer.mNumberChannels);
+        const UInt32 frames = firstBuffer.mDataByteSize /
+            std::max<UInt32>(1, bytesPerChannel * firstBufferChannels);
         if (frames == 0) {
             return noErr;
         }
 
         CapturedChunk chunk;
-        chunk.channelCount = channelCount;
+        chunk.channelCount = channelCount > 1 ? 2 : 1;
         chunk.capturedAtMilliseconds = monotonicMilliseconds();
 
-        {
-            std::lock_guard<std::mutex> stateLock(stateMutex_);
-            chunk.sequence = ++sequence_;
-        }
+        chunk.sequence = sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
 
         chunk.left.resize(frames);
         chunk.right.resize(frames);
 
-        if (interleaved) {
-            const uint8_t* rawData = static_cast<const uint8_t*>(firstBuffer.mData);
-            for (UInt32 frameIndex = 0; frameIndex < frames; ++frameIndex) {
-                const UInt32 sampleBaseIndex = frameIndex * std::max<UInt32>(1, channelCount);
-                const float leftSample =
-                    readSampleFromFormat(rawData, format, sampleBaseIndex);
-                const float rightSample = channelCount > 1
-                    ? readSampleFromFormat(rawData, format, sampleBaseIndex + 1)
-                    : leftSample;
-                chunk.left[frameIndex] = leftSample;
-                chunk.right[frameIndex] = rightSample;
-            }
-        } else {
-            const uint8_t* leftData = static_cast<const uint8_t*>(inputData->mBuffers[0].mData);
-            const uint8_t* rightData = static_cast<const uint8_t*>(
-                inputData->mNumberBuffers > 1 ? inputData->mBuffers[1].mData
-                                              : inputData->mBuffers[0].mData);
-
-            for (UInt32 frameIndex = 0; frameIndex < frames; ++frameIndex) {
-                chunk.left[frameIndex] =
-                    readSampleFromFormat(leftData, format, frameIndex);
-                chunk.right[frameIndex] = inputData->mNumberBuffers > 1
-                    ? readSampleFromFormat(rightData, format, frameIndex)
-                    : chunk.left[frameIndex];
-            }
+        const UInt32 leftChannel = std::min<UInt32>(
+            routeLeft_.load(std::memory_order_acquire), channelCount - 1);
+        const UInt32 rightChannel = std::min<UInt32>(
+            routeRight_.load(std::memory_order_acquire), channelCount - 1);
+        constexpr size_t kMaximumAudioBuffers = 128;
+        if (inputData->mNumberBuffers > kMaximumAudioBuffers) return noErr;
+        std::array<Prism::Capture::PCMBufferView, kMaximumAudioBuffers> buffers{};
+        for (UInt32 bufferIndex = 0; bufferIndex < inputData->mNumberBuffers; ++bufferIndex) {
+            const AudioBuffer& buffer = inputData->mBuffers[bufferIndex];
+            buffers[bufferIndex] = {
+                static_cast<const uint8_t*>(buffer.mData),
+                buffer.mDataByteSize,
+                buffer.mNumberChannels,
+            };
         }
+        const Prism::Capture::SampleEncoding encoding =
+            (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+            ? Prism::Capture::SampleEncoding::Float
+            : (format.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0
+                ? Prism::Capture::SampleEncoding::SignedInteger
+                : Prism::Capture::SampleEncoding::Unsupported;
+        Prism::Capture::selectStereoChannels(
+            buffers.data(),
+            inputData->mNumberBuffers,
+            {
+                encoding,
+                format.mBitsPerChannel,
+                (format.mFormatFlags & kAudioFormatFlagIsBigEndian) != 0,
+            },
+            frames,
+            channelCount,
+            leftChannel,
+            rightChannel,
+            chunk.left.data(),
+            chunk.right.data());
 
         {
             std::lock_guard<std::mutex> queueLock(chunkMutex_);
@@ -675,19 +658,28 @@ private:
             overwriteCount_ = 0;
         }
 
-        active_ = true;
+        channelCount_.store(
+            std::max<UInt32>(1, tapFormat_.mChannelsPerFrame > 0
+                ? tapFormat_.mChannelsPerFrame
+                : selected->channelCount),
+            std::memory_order_relaxed);
+        const UInt32 resolvedChannelCount = channelCount_.load(std::memory_order_relaxed);
+        routeLeft_.store(
+            std::min<UInt32>(routeLeft_.load(std::memory_order_relaxed), resolvedChannelCount - 1),
+            std::memory_order_relaxed);
+        routeRight_.store(
+            std::min<UInt32>(routeRight_.load(std::memory_order_relaxed), resolvedChannelCount - 1),
+            std::memory_order_relaxed);
+        active_.store(true, std::memory_order_release);
         activeDeviceUid_ = selected->uid;
         activeDeviceLabel_ = selected->label;
         sampleRate_ = tapFormat_.mSampleRate > 0 ? tapFormat_.mSampleRate : selected->sampleRate;
-        channelCount_ =
-            std::max<UInt32>(1, tapFormat_.mChannelsPerFrame > 0 ? tapFormat_.mChannelsPerFrame
-                                                                 : selected->channelCount);
-        sequence_ = 0;
+        sequence_.store(0, std::memory_order_relaxed);
         return true;
     }
 
     void stopLocked() {
-        active_ = false;
+        active_.store(false, std::memory_order_release);
 
         if (aggregateDeviceId_ != kUnknownObject && ioProcId_ != nullptr) {
             AudioDeviceStop(aggregateDeviceId_, ioProcId_);
@@ -711,8 +703,8 @@ private:
         activeDeviceUid_.clear();
         activeDeviceLabel_.clear();
         sampleRate_ = 48000.0;
-        channelCount_ = 2;
-        sequence_ = 0;
+        channelCount_.store(2, std::memory_order_relaxed);
+        sequence_.store(0, std::memory_order_relaxed);
 
         std::lock_guard<std::mutex> queueLock(chunkMutex_);
         chunkQueue_.clear();
@@ -730,18 +722,20 @@ private:
     std::mutex chunkMutex_;
     std::deque<CapturedChunk> chunkQueue_;
     uint64_t overwriteCount_ = 0;
-    uint64_t sequence_ = 0;
+    std::atomic<uint64_t> sequence_{0};
 
     AudioObjectID tapId_ = kUnknownObject;
     AudioObjectID aggregateDeviceId_ = kUnknownObject;
     AudioDeviceIOProcID ioProcId_ = nullptr;
     AudioStreamBasicDescription tapFormat_{};
 
-    bool active_ = false;
+    std::atomic<bool> active_{false};
     std::string activeDeviceUid_;
     std::string activeDeviceLabel_;
     double sampleRate_ = 48000.0;
-    UInt32 channelCount_ = 2;
+    std::atomic<UInt32> channelCount_{2};
+    std::atomic<UInt32> routeLeft_{0};
+    std::atomic<UInt32> routeRight_{1};
 };
 
 }  // namespace

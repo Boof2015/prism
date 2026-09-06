@@ -17,6 +17,7 @@
     "test:audio-store": "node scripts/run-audio-store-tests.mjs",
     "test:astra": "node scripts/run-astra-integration-tests.mjs",
     "test:capture-support": "node scripts/run-capture-support-tests.mjs",
+    "test:capture-channel-selection-native": "node --test test/capture-channel-selection-native.test.mjs",
     "test:daw-bridge": "node scripts/run-daw-bridge-tests.mjs",
     "test:spotify-provider": "node scripts/run-mac-spotify-provider-tests.mjs",
     "test:now-playing": "node scripts/run-now-playing-manager-tests.mjs",
@@ -134,6 +135,10 @@
       "target": ["pkg", "zip"],
       "icon": "resources/icon.icns",
       "category": "public.app-category.music",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Prism uses audio inputs so you can meter microphones, interfaces, and line inputs.",
+        "NSAudioCaptureUsageDescription": "Prism captures system audio so you can meter output devices."
+      },
       "hardenedRuntime": true,
       "entitlements": "resources/entitlements.mac.plist",
       "entitlementsInherit": "resources/entitlements.mac.inherit.plist"

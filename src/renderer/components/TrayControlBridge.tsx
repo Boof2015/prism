@@ -136,10 +136,10 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
       inputSources: [
         { id: '', label: 'Default Input', isDefault: true },
         ...devices
-          .filter((device) => device.deviceId !== 'default')
+          .filter((device) => device.id !== 'default')
           .map((device) => ({
-            id: device.deviceId,
-            label: device.label || `Input ${device.deviceId.slice(0, 8)}`,
+            id: device.id,
+            label: device.label || `Input ${device.id.slice(0, 8)}`,
           })),
       ],
       dawSources: dawSources.map((source) => ({

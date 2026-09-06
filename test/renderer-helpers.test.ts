@@ -4578,6 +4578,27 @@ test('BottomBar keeps Window controls on one row', async () => {
   assert.match(stylesSource, /\.bottom-bar__inline--window \{[\s\S]*gap: 8px;/)
 })
 
+test('BottomBar channel routing uses horizontal space without increasing the settings height', async () => {
+  const bottomBarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const matrixSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ChannelRoutingMatrix.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  const sourceSection = bottomBarSource.match(
+    /<section className="bottom-bar__section bottom-bar__section--source">([\s\S]*?)<\/section>/,
+  )?.[1]
+
+  assert.ok(sourceSection)
+  assert.doesNotMatch(sourceSection, /ChannelRoutingMatrix/)
+  assert.match(bottomBarSource, /bottom-bar__section--routing/)
+  assert.match(bottomBarSource, /<div className="bottom-bar__section-title">Channel Routing<\/div>/)
+  assert.doesNotMatch(matrixSource, /channel-routing__header/)
+  assert.match(matrixSource, /\{channel\.index \+ 1\}/)
+  assert.match(stylesSource, /\.bottom-bar__section--routing \{[\s\S]*gap: 1px;/)
+  assert.match(stylesSource, /\.channel-routing__scroll \{[\s\S]*height: 43px;/)
+  assert.match(stylesSource, /\.channel-routing__scroll \{[\s\S]*border: 1px solid var\(--control-border\);/)
+  assert.match(stylesSource, /\.channel-routing__cell \{[\s\S]*width: 28px;[\s\S]*height: 19px;/)
+})
+
 test('BottomBar close button uses flat themed control backgrounds', async () => {
   const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
   const closeBlock = [...stylesSource.matchAll(/^\.settings-panel__close \{([\s\S]*?)\n\}/gm)]

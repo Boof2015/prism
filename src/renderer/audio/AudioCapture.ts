@@ -1,7 +1,8 @@
 /**
  * AudioCapture — backend manager for Prism's live capture pipeline.
  * System output capture flows through native platform backends while
- * input-device capture continues to use browser media devices.
+ * input-device capture uses native multichannel capture where available and
+ * falls back to browser media devices elsewhere.
  */
 
 import { audioRouter } from './AudioRouter'
@@ -17,13 +18,20 @@ import type {
   CaptureBackendKind,
   CaptureBackendSupport,
   CaptureBackendSupportEntry,
+  CaptureChannelRouting,
   CaptureMode,
   CaptureSourceDescriptor,
 } from '../../types/capture'
-import { resolveNativeBackendKind } from '../../types/capture'
+import {
+  createDefaultCaptureChannelRouting,
+  normalizeCaptureChannelRouting,
+  resolveNativeBackendKind,
+} from '../../types/capture'
 import type {
   NativeCaptureDrainResult,
+  NativeCaptureSource,
   NativeCaptureStartResult,
+  NativeDeviceInputCaptureAPI,
   NativeSystemCaptureAPI,
 } from '../../types/nativeCapture'
 import type {
@@ -50,6 +58,9 @@ interface CaptureBackendStatus {
   reason: string | null
   sampleRate: number
   channelCount: number
+  sourceChannelCount: number
+  channelRoutingAvailable: boolean
+  channelRouting: CaptureChannelRouting
   activeSourceId: string | null
   activeSourceLabel: string | null
   waiting?: boolean
@@ -59,6 +70,7 @@ interface CaptureBackendStartRequest {
   deviceId?: string
   persistentSourceId?: string
   forceRestart?: boolean
+  channelRouting?: CaptureChannelRouting
 }
 
 interface CaptureBackend {
@@ -68,6 +80,7 @@ interface CaptureBackend {
   listSources(): Promise<CaptureSourceDescriptor[]>
   subscribe(listener: (chunk: CaptureChunk) => void): () => void
   getStatus(): CaptureBackendStatus
+  setChannelRouting(routing: CaptureChannelRouting): CaptureChannelRouting
 }
 
 const NATIVE_BACKLOG_CATCH_UP_CHUNK_THRESHOLD = 4
@@ -142,11 +155,13 @@ export function createDefaultBackendSupport(platform = resolvePlatform()): Captu
       kind: resolveNativeBackendKind(platform),
       available: false,
       reason: 'Native system audio capture is not available in this build.',
+      channelRoutingAvailable: false,
     },
     deviceInput: {
       kind: 'device-input',
       available: true,
       reason: null,
+      channelRoutingAvailable: false,
     },
     dawBridge: {
       kind: 'daw-bridge',
@@ -162,6 +177,9 @@ export interface CaptureManagerStatus {
   backendSupport: CaptureBackendSupport | null
   sampleRate: number
   channelCount: number
+  sourceChannelCount: number
+  channelRoutingAvailable: boolean
+  channelRouting: CaptureChannelRouting
   isCapturing: boolean
   activeSourceId: string | null
   activeSourceLabel: string | null
@@ -178,6 +196,8 @@ function toDeviceSourceDescriptor(device: MediaDeviceInfo): CaptureSourceDescrip
     id: device.deviceId,
     label: device.label || `Input ${device.deviceId.slice(0, 8)}`,
     kind: 'device',
+    isDefault: device.deviceId === 'default',
+    channelRoutingAvailable: false,
   }
 }
 
@@ -251,6 +271,7 @@ class DeviceInputCaptureRuntime {
   }
 
   getStatus(kind: CaptureBackendKind): CaptureBackendStatus {
+    const routing = createDefaultCaptureChannelRouting(this.channelCount)
     return {
       kind,
       active: this.active,
@@ -258,6 +279,9 @@ class DeviceInputCaptureRuntime {
       reason: null,
       sampleRate: this.sampleRate,
       channelCount: this.channelCount,
+      sourceChannelCount: this.channelCount,
+      channelRoutingAvailable: false,
+      channelRouting: routing,
       activeSourceId: this.active ? this.activeSourceId : null,
       activeSourceLabel: this.active ? this.activeSourceLabel : null,
     }
@@ -406,6 +430,19 @@ class DeviceInputCaptureBackend implements CaptureBackend {
   getStatus(): CaptureBackendStatus {
     return this.runtime.getStatus(this.kind)
   }
+
+  setChannelRouting(): CaptureChannelRouting {
+    return createDefaultCaptureChannelRouting(this.runtime.getStatus(this.kind).channelCount)
+  }
+}
+
+interface NativePolledCaptureModule {
+  getSupport: () => { available: boolean; reason: string | null }
+  start: (deviceId?: string, routing?: CaptureChannelRouting) => NativeCaptureStartResult
+  setChannelRouting?: (left: number, right: number) => CaptureChannelRouting
+  stop: () => void
+  drain: (maxChunks?: number) => NativeCaptureDrainResult
+  nowMilliseconds: () => number
 }
 
 export abstract class NativePolledCaptureBackend implements CaptureBackend {
@@ -416,6 +453,8 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
   private active = false
   private sampleRate = 48000
   private channelCount = 2
+  private sourceChannelCount = 2
+  private channelRouting: CaptureChannelRouting = createDefaultCaptureChannelRouting(2)
   private supportReason: string | null
   private performanceOffsetMilliseconds = 0
   private activeSourceId: string | null = null
@@ -443,10 +482,25 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
       request?.deviceId && request.deviceId !== DEFAULT_SYSTEM_SOURCE_ID
         ? request.deviceId
         : undefined,
+      request?.channelRouting,
     ) as NativeCaptureStartResult
 
     this.sampleRate = Math.max(1, Math.floor(startResult.sampleRate) || 48000)
-    this.channelCount = Math.max(1, Math.floor(startResult.channelCount) || 2)
+    this.channelCount = Math.max(1, Math.min(2, Math.floor(startResult.channelCount) || 2))
+    this.sourceChannelCount = Math.max(
+      1,
+      Math.floor(startResult.sourceChannelCount ?? startResult.channelCount) || 1,
+    )
+    this.channelRouting = normalizeCaptureChannelRouting(
+      request?.channelRouting,
+      this.sourceChannelCount,
+    )
+    if (nativeCapture.setChannelRouting) {
+      this.channelRouting = nativeCapture.setChannelRouting(
+        this.channelRouting.left,
+        this.channelRouting.right,
+      )
+    }
     this.activeSourceId = startResult.deviceId || null
     this.activeSourceLabel = startResult.deviceLabel || null
     this.supportReason = null
@@ -473,13 +527,16 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
       return []
     }
 
-    return nativeCapture.listOutputDevices().map((source) => ({
+    return this.listNativeSources(nativeCapture).map((source) => ({
       id: source.id,
       label: source.label,
-      kind: 'system',
+      kind: source.kind,
       isDefault: source.isDefault,
       sampleRate: source.sampleRate,
       channelCount: source.channelCount,
+      channels: source.channels,
+      channelRoutingAvailable: source.channelRoutingAvailable
+        && typeof nativeCapture.setChannelRouting === 'function',
     }))
   }
 
@@ -498,9 +555,21 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
       reason: this.supportReason,
       sampleRate: this.sampleRate,
       channelCount: this.channelCount,
+      sourceChannelCount: this.sourceChannelCount,
+      channelRoutingAvailable: typeof this.getNativeCaptureModule()?.setChannelRouting === 'function',
+      channelRouting: this.channelRouting,
       activeSourceId: this.active ? this.activeSourceId : null,
       activeSourceLabel: this.active ? this.activeSourceLabel : null,
     }
+  }
+
+  setChannelRouting(routing: CaptureChannelRouting): CaptureChannelRouting {
+    const normalized = normalizeCaptureChannelRouting(routing, this.sourceChannelCount)
+    const nativeCapture = this.getNativeCaptureModule()
+    this.channelRouting = nativeCapture?.setChannelRouting
+      ? nativeCapture.setChannelRouting(normalized.left, normalized.right)
+      : normalized
+    return this.channelRouting
   }
 
   protected shouldTrimBacklogForLiveCapture(): boolean {
@@ -558,7 +627,8 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
     }
   }
 
-  protected abstract getNativeCaptureModule(): NativeSystemCaptureAPI | null
+  protected abstract getNativeCaptureModule(): NativePolledCaptureModule | null
+  protected abstract listNativeSources(module: NativePolledCaptureModule): NativeCaptureSource[]
   protected abstract getBackendLabel(): string
 }
 
@@ -567,6 +637,10 @@ class NativeMacOSCaptureBackend extends NativePolledCaptureBackend {
 
   protected getNativeCaptureModule(): NativeSystemCaptureAPI | null {
     return typeof window !== 'undefined' ? window.nativeCaptureAPI?.macosCapture ?? null : null
+  }
+
+  protected listNativeSources(module: NativePolledCaptureModule): NativeCaptureSource[] {
+    return (module as NativeSystemCaptureAPI).listOutputDevices()
   }
 
   protected getBackendLabel(): string {
@@ -581,6 +655,10 @@ class NativeWindowsCaptureBackend extends NativePolledCaptureBackend {
     return typeof window !== 'undefined' ? window.nativeCaptureAPI?.windowsCapture ?? null : null
   }
 
+  protected listNativeSources(module: NativePolledCaptureModule): NativeCaptureSource[] {
+    return (module as NativeSystemCaptureAPI).listOutputDevices()
+  }
+
   protected getBackendLabel(): string {
     return 'Native Windows'
   }
@@ -593,12 +671,46 @@ class NativeLinuxCaptureBackend extends NativePolledCaptureBackend {
     return typeof window !== 'undefined' ? window.nativeCaptureAPI?.linuxCapture ?? null : null
   }
 
+  protected listNativeSources(module: NativePolledCaptureModule): NativeCaptureSource[] {
+    return (module as NativeSystemCaptureAPI).listOutputDevices()
+  }
+
   protected getBackendLabel(): string {
     return 'Native Linux'
   }
 
   protected shouldTrimBacklogForLiveCapture(): boolean {
     return true
+  }
+}
+
+class NativeDeviceInputCaptureBackend extends NativePolledCaptureBackend {
+  readonly kind = 'device-input' as const
+
+  async start(request?: CaptureBackendStartRequest): Promise<void> {
+    if (typeof window !== 'undefined' && window.electronAPI?.requestMicrophoneAccess) {
+      const granted = await window.electronAPI.requestMicrophoneAccess()
+      if (!granted) {
+        throw new Error(
+          'Microphone access is required for input-device capture. Enable Prism in System Settings → Privacy & Security → Microphone, then restart Prism.',
+        )
+      }
+    }
+    await super.start(request)
+  }
+
+  protected getNativeCaptureModule(): NativeDeviceInputCaptureAPI | null {
+    return typeof window !== 'undefined'
+      ? window.nativeCaptureAPI?.deviceInputCapture ?? null
+      : null
+  }
+
+  protected listNativeSources(module: NativePolledCaptureModule): NativeCaptureSource[] {
+    return (module as NativeDeviceInputCaptureAPI).listInputDevices()
+  }
+
+  protected getBackendLabel(): string {
+    return 'Native device input'
   }
 }
 
@@ -627,6 +739,10 @@ class NativeUnavailableCaptureBackend implements CaptureBackend {
     return () => {}
   }
 
+  setChannelRouting(): CaptureChannelRouting {
+    return createDefaultCaptureChannelRouting(2)
+  }
+
   getStatus(): CaptureBackendStatus {
     return {
       kind: this.kind,
@@ -635,6 +751,9 @@ class NativeUnavailableCaptureBackend implements CaptureBackend {
       reason: this.reason,
       sampleRate: 48000,
       channelCount: 2,
+      sourceChannelCount: 2,
+      channelRoutingAvailable: false,
+      channelRouting: createDefaultCaptureChannelRouting(2),
       activeSourceId: null,
       activeSourceLabel: null,
     }
@@ -742,10 +861,17 @@ class DawBridgeCaptureBackend implements CaptureBackend {
       reason: this.snapshot.reason,
       sampleRate: source?.sampleRate ?? 48000,
       channelCount: source?.channelCount ?? 2,
+      sourceChannelCount: source?.channelCount ?? 2,
+      channelRoutingAvailable: false,
+      channelRouting: createDefaultCaptureChannelRouting(source?.channelCount ?? 2),
       activeSourceId: this.active ? this.selectedSourceId : null,
       activeSourceLabel: this.active ? source?.label ?? null : null,
       waiting: this.active && !source,
     }
+  }
+
+  setChannelRouting(): CaptureChannelRouting {
+    return createDefaultCaptureChannelRouting(this.getStatus().channelCount)
   }
 
   private handleAudioBatch(batch: DawBridgeAudioBatch): void {
@@ -795,6 +921,7 @@ class DawBridgeCaptureBackend implements CaptureBackend {
 
 interface CaptureStartOptions {
   forceDeviceRestart?: boolean
+  channelRouting?: CaptureChannelRouting
 }
 
 class AudioCapture {
@@ -813,6 +940,7 @@ class AudioCapture {
   private selectedDawSourceId: string | null = null
   private selectedDawConnectionId: string | null = null
   private captureMode: CaptureMode = 'system'
+  private selectedChannelRouting: CaptureChannelRouting = createDefaultCaptureChannelRouting(2)
   private sessionId: number | null = null
   private inputGainDb = 0
   private inputGainLinear = 1
@@ -822,7 +950,18 @@ class AudioCapture {
   private rollingCaptureStatusListeners = new Set<RollingCaptureStatusListener>()
 
   constructor() {
-    this.deviceInputBackend = new DeviceInputCaptureBackend(this.deviceInputRuntime)
+    const nativeInputModule = typeof window !== 'undefined'
+      ? window.nativeCaptureAPI?.deviceInputCapture ?? null
+      : null
+    const nativeInputSupport = nativeInputModule?.getSupport()
+    this.deviceInputBackend = nativeInputSupport?.available
+      ? new NativeDeviceInputCaptureBackend({
+          kind: 'device-input',
+          available: true,
+          reason: null,
+          channelRoutingAvailable: true,
+        })
+      : new DeviceInputCaptureBackend(this.deviceInputRuntime)
     this.deviceInputBackend.subscribe((chunk) => this.handleChunk(this.deviceInputBackend.kind, chunk))
     this.dawBridgeBackend.subscribe((chunk) => this.handleChunk(this.dawBridgeBackend.kind, chunk))
     this.dawBridgeBackend.subscribeStatus(() => this.handleDawBridgeStatus())
@@ -858,12 +997,12 @@ class AudioCapture {
     return this.ensureBackendSupport()
   }
 
-  async startSystemAudio(sourceId?: string): Promise<void> {
+  async startSystemAudio(sourceId?: string, options: CaptureStartOptions = {}): Promise<void> {
     this.captureMode = 'system'
     if (sourceId) {
       this.selectedSystemSourceId = sourceId
     }
-    await this.start()
+    await this.start(undefined, options)
   }
 
   async startDevice(deviceId?: string, options: CaptureStartOptions = {}): Promise<void> {
@@ -901,10 +1040,12 @@ class AudioCapture {
       deviceId: requestedDeviceId,
       persistentSourceId: this.captureMode === 'daw' ? this.selectedDawSourceId ?? undefined : undefined,
       forceRestart: this.captureMode === 'device' && options.forceDeviceRestart === true,
+      channelRouting: options.channelRouting ?? this.selectedChannelRouting,
     })
     this.activeBackend = requestedBackend
 
     const backendStatus = requestedBackend.getStatus()
+    this.selectedChannelRouting = backendStatus.channelRouting
     this.sessionId = audioRouter.beginSession(
       backendStatus.sampleRate,
       backendStatus.channelCount,
@@ -944,9 +1085,8 @@ class AudioCapture {
     return [getDefaultSystemSourceDescriptor(), ...dedupedSources]
   }
 
-  async listDevices(): Promise<MediaDeviceInfo[]> {
-    const devices = await navigator.mediaDevices.enumerateDevices()
-    return devices.filter((device) => device.kind === 'audioinput')
+  async listDevices(): Promise<CaptureSourceDescriptor[]> {
+    return this.listSources('device')
   }
 
   getSelectedDeviceId(): string | null {
@@ -991,6 +1131,22 @@ class AudioCapture {
     this.emitStatus()
   }
 
+  setChannelRouting(routing: CaptureChannelRouting): CaptureChannelRouting {
+    const sourceChannelCount = this.activeBackend?.getStatus().sourceChannelCount ?? 2
+    this.selectedChannelRouting = normalizeCaptureChannelRouting(routing, sourceChannelCount)
+    if (
+      this.activeBackend
+      && this.activeBackend.kind !== 'daw-bridge'
+      && this.activeBackend.getStatus().channelRoutingAvailable
+    ) {
+      this.selectedChannelRouting = this.activeBackend.setChannelRouting(
+        this.selectedChannelRouting,
+      )
+    }
+    this.emitStatus()
+    return this.selectedChannelRouting
+  }
+
   getSampleRate(): number {
     return this.activeBackend?.getStatus().sampleRate ?? 48000
   }
@@ -1004,6 +1160,9 @@ class AudioCapture {
       backendSupport: this.backendSupport,
       sampleRate: backendStatus?.sampleRate ?? 48000,
       channelCount: backendStatus?.channelCount ?? 2,
+      sourceChannelCount: backendStatus?.sourceChannelCount ?? 2,
+      channelRoutingAvailable: backendStatus?.channelRoutingAvailable ?? false,
+      channelRouting: backendStatus?.channelRouting ?? this.selectedChannelRouting,
       isCapturing,
       activeSourceId: isCapturing ? backendStatus?.activeSourceId ?? null : null,
       activeSourceLabel: isCapturing ? backendStatus?.activeSourceLabel ?? null : null,
@@ -1121,7 +1280,12 @@ class AudioCapture {
       return
     }
 
-    if ((originKind.startsWith('native-') || originKind === 'daw-bridge') && this.inputGainLinear !== 1) {
+    const nativeDeviceInput = originKind === 'device-input'
+      && this.activeBackend instanceof NativeDeviceInputCaptureBackend
+    if (
+      (originKind.startsWith('native-') || originKind === 'daw-bridge' || nativeDeviceInput)
+      && this.inputGainLinear !== 1
+    ) {
       applyInputGainToStereoSamples(chunk.left, chunk.right, this.inputGainLinear)
     }
 

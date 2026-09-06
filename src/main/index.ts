@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
@@ -2363,6 +2363,14 @@ function setupIPC(): void {
 
   ipcMain.handle('app:get-build-info', () => {
     return getAppBuildInfo()
+  })
+
+  ipcMain.handle('audio:request-microphone-access', async () => {
+    if (process.platform !== 'darwin') return true
+    const status = systemPreferences.getMediaAccessStatus('microphone')
+    if (status === 'granted') return true
+    if (status === 'denied' || status === 'restricted') return false
+    return systemPreferences.askForMediaAccess('microphone')
   })
 
   ipcMain.handle('daw-bridge:get-snapshot', () => {

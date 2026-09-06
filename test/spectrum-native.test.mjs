@@ -55,6 +55,21 @@ test('native capture exports preserve the renderer-facing API shape', () => {
     }
   }
 
+  const deviceInputCapture = nativeAddon.deviceInputCapture
+  assert.ok(deviceInputCapture, 'deviceInputCapture should be exported')
+  for (const method of [
+    'getSupport',
+    'listInputDevices',
+    'start',
+    'setChannelRouting',
+    'stop',
+    'drain',
+    'nowMilliseconds',
+  ]) {
+    assert.equal(typeof deviceInputCapture[method], 'function', `deviceInputCapture.${method} should be a function`)
+  }
+  assert.equal(deviceInputCapture.getSupport().available, process.platform === 'darwin')
+
   const activeExport = process.platform === 'darwin'
     ? 'macosCapture'
     : process.platform === 'win32'

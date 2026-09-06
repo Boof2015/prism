@@ -25,6 +25,7 @@ export function resolveNativeCaptureSupport(
       kind: 'native-macos',
       available: support.available,
       reason: support.reason,
+      channelRoutingAvailable: typeof macosCapture.setChannelRouting === 'function',
     }
   }
 
@@ -59,12 +60,14 @@ export function getCaptureBackendSupport(
   platform: string,
   nativeCaptureAPI: NativeCaptureAPI | null,
 ): CaptureBackendSupport {
+  const nativeDeviceInputSupport = nativeCaptureAPI?.deviceInputCapture?.getSupport()
   return {
     nativeBackend: resolveNativeCaptureSupport(platform, nativeCaptureAPI),
     deviceInput: {
       kind: 'device-input',
       available: true,
       reason: null,
+      channelRoutingAvailable: nativeDeviceInputSupport?.available === true,
     },
     dawBridge: {
       kind: 'daw-bridge',

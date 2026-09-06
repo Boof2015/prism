@@ -13,8 +13,14 @@ import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
 import { ROLLING_CAPTURE_DURATIONS } from '../../types/audioClip'
 import { SCOPE_KINDS } from '../../types/scope'
+import {
+  getCaptureRoutingStorageKey,
+  normalizeCaptureChannelRouting,
+  type CaptureSourceDescriptor,
+} from '../../types/capture'
 import type { WindowBackgroundMode, WindowBackgroundState } from '../../types/windowState'
 import ThemedSelect from './ThemedSelect'
+import ChannelRoutingMatrix from './ChannelRoutingMatrix'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
   spectrum: 'Spectrum',
@@ -42,6 +48,22 @@ const FRAME_TARGET_LABELS: Record<VisualizerFrameTarget, string> = {
 }
 
 const DEFAULT_INPUT_DEVICE_ID = '__default_input__'
+const DEFAULT_SYSTEM_SOURCE_ID = '__default_system_output__'
+
+function resolveRoutingSource(
+  captureMode: 'system' | 'device' | 'daw',
+  sources: CaptureSourceDescriptor[],
+  selectedId: string | null,
+): CaptureSourceDescriptor | null {
+  if (captureMode === 'daw') return null
+  const defaultSentinel = captureMode === 'system' ? DEFAULT_SYSTEM_SOURCE_ID : null
+  if (selectedId && selectedId !== defaultSentinel) {
+    return sources.find((source) => source.id === selectedId) ?? null
+  }
+  return sources.find((source) => source.id !== defaultSentinel && source.isDefault)
+    ?? sources.find((source) => source.id !== defaultSentinel)
+    ?? null
+}
 
 const WINDOW_BACKGROUND_MODES: readonly WindowBackgroundMode[] = ['solid', 'blurred', 'clear']
 
@@ -186,12 +208,14 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     inputGainDb,
     rollingCaptureSeconds,
     rollingCaptureStatus,
+    channelRoutingBySource,
     clearCaptureNotice,
     selectSystemSource,
     selectDevice,
     selectDawSource,
     startCapture,
     setInputGain,
+    setChannelRouting,
     setRollingCaptureSeconds,
     revealRollingCaptureFolder,
   } = useAudioStore()
@@ -252,10 +276,10 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     }
   }
 
-  const visibleSystemSources = systemSources.length
+  const visibleSystemSources: CaptureSourceDescriptor[] = systemSources.length
     ? systemSources
-    : [{ id: '__default_system_output__', label: 'Default Output', kind: 'system', isDefault: true }]
-  const defaultSystemSourceId = visibleSystemSources[0]?.id ?? '__default_system_output__'
+    : [{ id: DEFAULT_SYSTEM_SOURCE_ID, label: 'Default Output', kind: 'system', isDefault: true }]
+  const defaultSystemSourceId = visibleSystemSources[0]?.id ?? DEFAULT_SYSTEM_SOURCE_ID
   const matchingDawSources = dawSources.filter((source) => (
     source.id === selectedDawSourceId || source.persistentId === selectedDawSourceId
   ))
@@ -272,6 +296,29 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     : captureMode === 'device'
       ? `device:${selectedDeviceId ?? DEFAULT_INPUT_DEVICE_ID}`
       : `daw:${selectedDawLiveSourceId ?? selectedDawSourceId ?? ''}`
+
+  const routingSource = captureMode === 'system'
+    ? resolveRoutingSource(captureMode, visibleSystemSources, selectedSystemSourceId)
+    : resolveRoutingSource(captureMode, devices, selectedDeviceId)
+  const routingChannels = routingSource?.channelRoutingAvailable
+    ? routingSource.channels ?? Array.from(
+      { length: Math.max(1, routingSource.channelCount ?? 1) },
+      (_, index) => ({ index, label: `Channel ${index + 1}` }),
+    )
+    : []
+  const routingKey = routingSource
+    ? getCaptureRoutingStorageKey(
+      routingSource.kind === 'system' ? 'system' : 'device',
+      routingSource.id,
+    )
+    : null
+  const selectedChannelRouting = normalizeCaptureChannelRouting(
+    routingKey ? channelRoutingBySource[routingKey] : undefined,
+    routingChannels.length,
+  )
+  const routingSectionStyle = {
+    width: Math.max(128, Math.min(620, 48 + routingChannels.length * 31)),
+  } as CSSProperties
 
   const indicatorLabel = captureStatus === 'waiting'
     ? 'Waiting'
@@ -737,9 +784,9 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   </optgroup>
                   <optgroup label="Input Devices">
                     <option value={`device:${DEFAULT_INPUT_DEVICE_ID}`}>Default Input</option>
-                    {devices.map((device) => (
-                      <option key={device.deviceId} value={`device:${device.deviceId}`}>
-                        {device.label || `Input ${device.deviceId.slice(0, 8)}`}
+                    {devices.filter((device) => device.id !== 'default').map((device) => (
+                      <option key={device.id} value={`device:${device.id}`}>
+                        {device.label || `Input ${device.id.slice(0, 8)}`}
                       </option>
                     ))}
                   </optgroup>
@@ -808,6 +855,26 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
               ) : null}
             </div>
           </section>
+
+          {routingChannels.length > 0 ? (
+            <>
+              <div className="bottom-bar__divider" />
+
+              <section
+                className="bottom-bar__section bottom-bar__section--routing"
+                style={routingSectionStyle}
+              >
+                <div className="bottom-bar__section-title">Channel Routing</div>
+                <div className="bottom-bar__section-body">
+                  <ChannelRoutingMatrix
+                    channels={routingChannels}
+                    routing={selectedChannelRouting}
+                    onChange={setChannelRouting}
+                  />
+                </div>
+              </section>
+            </>
+          ) : null}
 
           <div className="bottom-bar__divider" />
 

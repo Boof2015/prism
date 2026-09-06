@@ -54,6 +54,7 @@ declare global {
       platform: string
       windowCapabilities: WindowCapabilities
       getAppBuildInfo: () => Promise<AppBuildInfo>
+      requestMicrophoneAccess: () => Promise<boolean>
       minimize: () => void
       close: () => void
       desktopIntegration: {

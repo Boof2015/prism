@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   windowCapabilities,
   getAppBuildInfo: () => ipcRenderer.invoke('app:get-build-info') as Promise<AppBuildInfo>,
+  requestMicrophoneAccess: () => ipcRenderer.invoke('audio:request-microphone-access') as Promise<boolean>,
   minimize: () => ipcRenderer.send('window:minimize'),
   close: () => ipcRenderer.send('window:close'),
   desktopIntegration: {
@@ -354,6 +355,7 @@ const nativeCaptureAPI = nativeAddonModule
       macosCapture: nativeAddonModule.macosCapture,
       windowsCapture: nativeAddonModule.windowsCapture,
       linuxCapture: nativeAddonModule.linuxCapture,
+      deviceInputCapture: nativeAddonModule.deviceInputCapture,
     }
   : null
 

@@ -8,6 +8,9 @@
       "sources": [
         "src/main.cpp",
         "src/system_audio_capture_napi.cpp",
+        "src/device_input_capture_napi.cpp",
+        "src/capture_channel_selection.cpp",
+        "src/capture_channel_selection_napi.cpp",
         "src/oscilloscope.cpp",
         "src/spectrum.cpp",
         "src/spectrogram.cpp",
@@ -28,6 +31,7 @@
         ["OS=='mac'", {
           "sources": [
             "src/macos_capture.mm",
+            "src/macos_input_capture.mm",
             "src/windows_capture_stub.cpp"
           ],
           "xcode_settings": {
@@ -44,7 +48,8 @@
         }],
         ["OS=='win'", {
           "sources": [
-            "src/windows_capture.cpp"
+            "src/windows_capture.cpp",
+            "src/device_input_capture_stub.cpp"
           ],
           "defines": [
             "WIN32_LEAN_AND_MEAN",
@@ -67,7 +72,8 @@
         ["OS=='linux'", {
           "sources": [
             "src/windows_capture_stub.cpp",
-            "src/linux_capture.cpp"
+            "src/linux_capture.cpp",
+            "src/device_input_capture_stub.cpp"
           ],
           "cflags_cc": ["-std=c++17", "-O3", "-ffast-math", "-fPIC"],
           "libraries": [
