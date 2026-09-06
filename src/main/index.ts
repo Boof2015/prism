@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
@@ -16,6 +16,12 @@ import type {
 import type { ProfileMenuRequest } from '../types/profileMenu'
 import type { LegacyProfileMigrationPayload, Profile } from '../types/profile'
 import { SCOPE_KINDS, SCOPE_LABELS, type ScopeKind } from '../types/scope'
+import {
+  isLinkedAnalysisCompatibleScopeKind,
+  normalizeLinkedAnalysisMessage,
+  type LinkedAnalysisMessage,
+  type LinkedAnalysisProbe,
+} from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   ThemeLibrarySnapshot,
@@ -76,6 +82,8 @@ import {
 } from './services/trayMenu'
 import { TrayRendererCommandQueue } from './services/trayRendererCommandQueue'
 import { resolveTrayAssetPath } from './services/trayAssets'
+import { DawBridgeService } from './services/dawBridgeService'
+import type { DawBridgeAudioBatch, DawBridgeSnapshot } from '../types/dawBridge'
 
 let mainWindow: BrowserWindow | null = null
 let moveInterval: ReturnType<typeof setInterval> | null = null
@@ -107,6 +115,8 @@ const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
 const suppressNextPopoutBoundsEvents = new Set<ScopeKind>()
+const linkedAnalysisSources = new Map<number, LinkedAnalysisProbe>()
+const linkedAnalysisCleanupRegistered = new Set<number>()
 let nowPlayingConfigWindow: BrowserWindow | null = null
 let nowPlayingConfigBoundsTimer: ReturnType<typeof setTimeout> | null = null
 const windowSettingsHeights = new Map<number, number>()
@@ -122,6 +132,7 @@ let nativeWindowsMediaApi: NativeWindowsMediaAPI | null | undefined
 let nativeWindowChromeApi: NativeWindowChromeAPI | null | undefined
 let loginItemService: LoginItemService | null = null
 let audioClipLibrary: AudioClipLibrary | null = null
+let dawBridgeService: DawBridgeService | null = null
 let desktopIntegrationPreferences: DesktopIntegrationPreferences = {
   ...DEFAULT_DESKTOP_INTEGRATION_PREFERENCES,
 }
@@ -678,12 +689,28 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
         deviceId: source.id || null,
       }),
     })),
+    { type: 'separator' },
+    { label: 'DAW Bridges', enabled: false },
+    ...model.rendererState.dawSources.map((source): MenuItemConstructorOptions => ({
+      label: source.label,
+      type: 'radio',
+      checked: model.rendererState.captureMode === 'daw'
+        && source.id === model.rendererState.selectedDawSourceId,
+      enabled: model.rendererReady,
+      click: () => sendTrayRendererCommand({
+        type: 'select-daw-source',
+        sourceId: source.id,
+      }),
+    })),
   ]
   if (model.rendererState.systemSources.length === 0) {
     audioSourceItems.splice(1, 0, { label: 'No outputs available', enabled: false })
   }
   if (model.rendererState.inputSources.length === 0) {
     audioSourceItems.push({ label: 'No inputs available', enabled: false })
+  }
+  if (model.rendererState.dawSources.length === 0) {
+    audioSourceItems.push({ label: 'No DAW bridges connected', enabled: false })
   }
 
   const loginStatus = loginItemStatusLabel(model.desktopIntegration)
@@ -1086,6 +1113,36 @@ function getScopeKindForWindow(window: BrowserWindow | null): ScopeKind | null {
   }
 
   return null
+}
+
+function broadcastLinkedAnalysisMessage(message: LinkedAnalysisMessage): void {
+  const targets = new Set<BrowserWindow>()
+  if (mainWindow) targets.add(mainWindow)
+  for (const popoutWindow of scopePopoutWindows.values()) targets.add(popoutWindow)
+
+  for (const target of targets) {
+    if (!target.isDestroyed() && !target.webContents.isDestroyed()) {
+      target.webContents.send('linked-analysis:update', message)
+    }
+  }
+}
+
+function registerLinkedAnalysisSourceCleanup(sender: WebContents): void {
+  if (linkedAnalysisCleanupRegistered.has(sender.id)) return
+  const senderId = sender.id
+  linkedAnalysisCleanupRegistered.add(senderId)
+  sender.once('destroyed', () => {
+    linkedAnalysisCleanupRegistered.delete(senderId)
+    const activeProbe = linkedAnalysisSources.get(senderId)
+    linkedAnalysisSources.delete(senderId)
+    if (activeProbe) {
+      broadcastLinkedAnalysisMessage({
+        active: false,
+        interactionId: activeProbe.interactionId,
+        sourceKind: activeProbe.sourceKind,
+      })
+    }
+  })
 }
 
 function describeWindow(window: BrowserWindow): string {
@@ -2308,6 +2365,32 @@ function setupIPC(): void {
     return getAppBuildInfo()
   })
 
+  ipcMain.handle('audio:request-microphone-access', async () => {
+    if (process.platform !== 'darwin') return true
+    const status = systemPreferences.getMediaAccessStatus('microphone')
+    if (status === 'granted') return true
+    if (status === 'denied' || status === 'restricted') return false
+    return systemPreferences.askForMediaAccess('microphone')
+  })
+
+  ipcMain.handle('daw-bridge:get-snapshot', () => {
+    return dawBridgeService?.getSnapshot() ?? {
+      available: false,
+      reason: 'The DAW bridge listener is not initialized.',
+      selectedSourceId: null,
+      sources: [],
+    } satisfies DawBridgeSnapshot
+  })
+
+  ipcMain.handle('daw-bridge:select-source', (_event, sourceId: unknown) => {
+    return dawBridgeService?.selectSource(typeof sourceId === 'string' ? sourceId : null) ?? {
+      available: false,
+      reason: 'The DAW bridge listener is not initialized.',
+      selectedSourceId: null,
+      sources: [],
+    } satisfies DawBridgeSnapshot
+  })
+
   ipcMain.on('audio-clips:start-drag', (event, rawPayload: unknown) => {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || !isMainRendererWindow(targetWindow)) return
@@ -2699,6 +2782,32 @@ function setupIPC(): void {
     if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
     mainWindow?.webContents.send('scope-popout:settings-update', kind, partial)
   })
+
+  ipcMain.on('linked-analysis:update', (event, rawMessage: unknown) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    const message = normalizeLinkedAnalysisMessage(rawMessage)
+    if (!targetWindow || !message) return
+
+    const popoutKind = getScopeKindForWindow(targetWindow)
+    if (!isMainRendererWindow(targetWindow)) {
+      if (!popoutKind || !isLinkedAnalysisCompatibleScopeKind(popoutKind) || message.sourceKind !== popoutKind) {
+        return
+      }
+    }
+
+    const senderId = event.sender.id
+    registerLinkedAnalysisSourceCleanup(event.sender)
+    if (message.active) {
+      linkedAnalysisSources.set(senderId, message)
+      broadcastLinkedAnalysisMessage(message)
+      return
+    }
+
+    const activeProbe = linkedAnalysisSources.get(senderId)
+    if (!activeProbe || activeProbe.interactionId !== message.interactionId) return
+    linkedAnalysisSources.delete(senderId)
+    broadcastLinkedAnalysisMessage(message)
+  })
 }
 
 app.commandLine.appendSwitch('enable-features', 'Metal')
@@ -2714,6 +2823,19 @@ if (!hasSingleInstanceLock) {
     setupPermissions()
     void getNowPlayingManager().initialize()
     setupIPC()
+    dawBridgeService = new DawBridgeService({
+      onSnapshot: (snapshot: DawBridgeSnapshot) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('daw-bridge:snapshot', snapshot)
+        }
+      },
+      onAudioBatch: (batch: DawBridgeAudioBatch) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('daw-bridge:audio-batch', batch)
+        }
+      },
+    })
+    await dawBridgeService.start()
     await getWindowStateStore().initialize()
     desktopIntegrationPreferences = await loadDesktopIntegrationPreferences(
       getDesktopIntegrationPreferencesPath(),
@@ -2773,6 +2895,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isAppQuitting = true
+  dawBridgeService?.stop()
+  dawBridgeService = null
   destroyAppTray()
   pendingTrayRendererCommands.clear()
 })

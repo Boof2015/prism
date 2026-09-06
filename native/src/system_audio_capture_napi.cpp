@@ -39,6 +39,33 @@ Napi::Object supportToNapi(Napi::Env env, const Prism::Capture::Support& support
     return result;
 }
 
+Napi::Array channelsToNapi(
+    Napi::Env env,
+    const std::vector<Prism::Capture::ChannelDescriptor>& channels,
+    uint32_t fallbackCount) {
+    const uint32_t count = channels.empty()
+        ? fallbackCount
+        : static_cast<uint32_t>(channels.size());
+    Napi::Array result = Napi::Array::New(env, count);
+    for (uint32_t index = 0; index < count; ++index) {
+        Napi::Object channel = Napi::Object::New(env);
+        const std::string label = index < channels.size() && !channels[index].label.empty()
+            ? channels[index].label
+            : "Channel " + std::to_string(index + 1);
+        channel.Set("index", Napi::Number::New(env, index));
+        channel.Set("label", Napi::String::New(env, label));
+        result.Set(index, channel);
+    }
+    return result;
+}
+
+Napi::Object routingToNapi(Napi::Env env, const Prism::Capture::ChannelRouting& routing) {
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("left", Napi::Number::New(env, routing.left));
+    result.Set("right", Napi::Number::New(env, routing.right));
+    return result;
+}
+
 Napi::Object drainToNapi(Napi::Env env, Prism::Capture::DrainResult&& drained) {
     Napi::Array chunks = Napi::Array::New(env, drained.chunks.size());
     for (size_t index = 0; index < drained.chunks.size(); ++index) {
@@ -84,6 +111,12 @@ Napi::Value ListOutputDevices(const Napi::CallbackInfo& info) {
         entry.Set("isDefault", Napi::Boolean::New(env, device.isDefault));
         entry.Set("sampleRate", Napi::Number::New(env, device.sampleRate));
         entry.Set("channelCount", Napi::Number::New(env, device.channelCount));
+        entry.Set("channels", channelsToNapi(env, device.channels, device.channelCount));
+#if defined(__APPLE__)
+        entry.Set("channelRoutingAvailable", Napi::Boolean::New(env, true));
+#else
+        entry.Set("channelRoutingAvailable", Napi::Boolean::New(env, false));
+#endif
         result.Set(static_cast<uint32_t>(index), entry);
     }
     return result;
@@ -94,6 +127,16 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
     std::string requestedDeviceId;
     if (info.Length() >= 1 && info[0].IsString()) {
         requestedDeviceId = info[0].As<Napi::String>().Utf8Value();
+    }
+
+    if (info.Length() >= 2 && info[1].IsObject()) {
+        const Napi::Object routing = info[1].As<Napi::Object>();
+        if (routing.Has("left") && routing.Has("right")
+            && routing.Get("left").IsNumber() && routing.Get("right").IsNumber()) {
+            activeCapture()->setChannelRouting(
+                routing.Get("left").As<Napi::Number>().Uint32Value(),
+                routing.Get("right").As<Napi::Number>().Uint32Value());
+        }
     }
 
     Prism::Capture::StartResult started;
@@ -107,9 +150,24 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
     Napi::Object result = Napi::Object::New(env);
     result.Set("sampleRate", Napi::Number::New(env, started.sampleRate));
     result.Set("channelCount", Napi::Number::New(env, started.channelCount));
+    result.Set("sourceChannelCount", Napi::Number::New(env, started.sourceChannelCount));
     result.Set("deviceId", Napi::String::New(env, started.deviceId));
     result.Set("deviceLabel", Napi::String::New(env, started.deviceLabel));
     return result;
+}
+
+Napi::Value SetChannelRouting(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsNumber()) {
+        Napi::TypeError::New(env, "Expected left and right channel indices.")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    return routingToNapi(
+        env,
+        activeCapture()->setChannelRouting(
+            info[0].As<Napi::Number>().Uint32Value(),
+            info[1].As<Napi::Number>().Uint32Value()));
 }
 
 Napi::Value Stop(const Napi::CallbackInfo& info) {
@@ -140,6 +198,9 @@ void RegisterCaptureObject(Napi::Env env, Napi::Object exports, const char* expo
     capture.Set("stop", Napi::Function::New(env, Stop));
     capture.Set("drain", Napi::Function::New(env, Drain));
     capture.Set("nowMilliseconds", Napi::Function::New(env, NowMilliseconds));
+#if defined(__APPLE__)
+    capture.Set("setChannelRouting", Napi::Function::New(env, SetChannelRouting));
+#endif
     exports.Set(exportName, capture);
 }
 

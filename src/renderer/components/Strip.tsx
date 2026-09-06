@@ -9,12 +9,21 @@ import { usePerformanceStore } from '../stores/performanceStore'
 import { FrameScheduler } from '../visualizers/frameScheduler'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getScopePopoutMinWidth } from '../../shared/scopeSizing'
+import type { LinkedAnalysisMessage, LinkedAnalysisProbe } from '../../types/analysis'
 
 interface StripProps {
   onMeasurementActiveChange?: (active: boolean) => void
+  linkedAnalysisEnabled?: boolean
+  linkedAnalysisProbe?: LinkedAnalysisProbe | null
+  onLinkedAnalysisMessage?: (message: LinkedAnalysisMessage) => void
 }
 
-export default function Strip({ onMeasurementActiveChange }: StripProps): JSX.Element {
+export default function Strip({
+  onMeasurementActiveChange,
+  linkedAnalysisEnabled = false,
+  linkedAnalysisProbe = null,
+  onLinkedAnalysisMessage,
+}: StripProps): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopePopouts = useSettingsStore((s) => s.scopePopouts)
@@ -28,6 +37,7 @@ export default function Strip({ onMeasurementActiveChange }: StripProps): JSX.El
   const stripRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const scopeRefs = useRef<Partial<Record<ScopeKind, HTMLDivElement | null>>>({})
+  const activeMeasurementScopesRef = useRef(new Set<ScopeKind>())
   const [handleOffsets, setHandleOffsets] = useState<number[]>([])
   const supportsGeometryPersistence = getRendererWindowCapabilities().supportsGeometryPersistence
   const dockedScopes = useMemo(
@@ -218,6 +228,15 @@ export default function Strip({ onMeasurementActiveChange }: StripProps): JSX.El
     popOutScope(kind, nextBounds)
   }, [popOutScope, supportsGeometryPersistence])
 
+  const handleScopeMeasurementActiveChange = useCallback((kind: ScopeKind, active: boolean): void => {
+    if (active) {
+      activeMeasurementScopesRef.current.add(kind)
+    } else {
+      activeMeasurementScopesRef.current.delete(kind)
+    }
+    onMeasurementActiveChange?.(activeMeasurementScopesRef.current.size > 0)
+  }, [onMeasurementActiveChange])
+
   return (
     <div ref={stripRef} className="scope-strip">
       <div ref={gridRef} className="scope-strip__grid" style={gridStyle}>
@@ -273,7 +292,10 @@ export default function Strip({ onMeasurementActiveChange }: StripProps): JSX.El
             <ScopeModule
               scopeKind={kind}
               frameScheduler={frameScheduler}
-              onMeasurementActiveChange={onMeasurementActiveChange}
+              onMeasurementActiveChange={(active) => handleScopeMeasurementActiveChange(kind, active)}
+              linkedAnalysisEnabled={linkedAnalysisEnabled}
+              linkedAnalysisProbe={linkedAnalysisProbe}
+              onLinkedAnalysisMessage={onLinkedAnalysisMessage}
             />
           </div>
         ))}

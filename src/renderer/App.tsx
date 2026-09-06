@@ -17,6 +17,7 @@ import { useWindowBackgroundStore } from './stores/windowBackgroundStore'
 import { useUpdateStore } from './stores/updateStore'
 import { useDesktopIntegrationStore } from './stores/desktopIntegrationStore'
 import { getRendererWindowCapabilities } from './windowCapabilities'
+import { useLinkedAnalysis } from './useLinkedAnalysis'
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -40,6 +41,7 @@ export default function App(): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopePopouts = useSettingsStore((s) => s.scopePopouts)
+  const linkedAnalysisEnabled = useSettingsStore((s) => s.analysisSettings.linkedAnalysis)
   const settingsOpen = useUiStore((s) => s.settingsOpen)
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
@@ -52,6 +54,7 @@ export default function App(): JSX.Element {
 
   const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
     && (scopeOrder.includes('nowPlaying') || scopePopouts.nowPlaying?.poppedOut === true)
+  const linkedAnalysis = useLinkedAnalysis(linkedAnalysisEnabled)
 
   // Auto-capture on launch
   useEffect(() => {
@@ -309,7 +312,12 @@ export default function App(): JSX.Element {
       </div>
 
       <div className="prism-strip-region">
-        <Strip onMeasurementActiveChange={setMeasurementActive} />
+        <Strip
+          onMeasurementActiveChange={setMeasurementActive}
+          linkedAnalysisEnabled={linkedAnalysisEnabled}
+          linkedAnalysisProbe={linkedAnalysis.probe}
+          onLinkedAnalysisMessage={linkedAnalysis.publish}
+        />
       </div>
 
       <ScopePopoutBridge />

@@ -47,6 +47,11 @@ async function handleTrayCommand(command: TrayRendererCommand): Promise<void> {
     await useAudioStore.getState().startCapture()
     return
   }
+  if (command.type === 'select-daw-source') {
+    await audio.selectDawSource(command.sourceId)
+    await useAudioStore.getState().startCapture()
+    return
+  }
   if (command.type === 'set-rolling-capture') {
     audio.setRollingCaptureSeconds(command.durationSeconds)
     return
@@ -66,12 +71,15 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
   const hasUnsavedProfileChanges = useSettingsStore((state) => state.hasUnsavedProfileChanges)
   const captureStatus = useAudioStore((state) => state.captureStatus)
   const activeSourceLabel = useAudioStore((state) => state.activeSourceLabel)
+  const activeSourceId = useAudioStore((state) => state.activeSourceId)
   const captureMode = useAudioStore((state) => state.captureMode)
   const selectedSystemSourceId = useAudioStore((state) => state.selectedSystemSourceId)
   const selectedDeviceId = useAudioStore((state) => state.selectedDeviceId)
+  const selectedDawSourceId = useAudioStore((state) => state.selectedDawSourceId)
   const rollingCaptureSeconds = useAudioStore((state) => state.rollingCaptureSeconds)
   const systemSources = useAudioStore((state) => state.systemSources)
   const devices = useAudioStore((state) => state.devices)
+  const dawSources = useAudioStore((state) => state.dawSources)
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.trayControls.onCommand((command) => {
@@ -99,6 +107,16 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
     const visibleSystemSources = systemSources.length > 0
       ? systemSources
       : [{ id: DEFAULT_SYSTEM_SOURCE_ID, label: 'Default Output', isDefault: true }]
+    const matchingDawSources = dawSources.filter((source) => (
+      source.id === selectedDawSourceId || source.persistentId === selectedDawSourceId
+    ))
+    const selectedDawLiveSourceId = captureMode === 'daw'
+      && activeSourceId
+      && dawSources.some((source) => source.id === activeSourceId)
+      ? activeSourceId
+      : matchingDawSources.length === 1
+        ? matchingDawSources[0]!.id
+        : null
     const state: TrayRendererState = {
       profiles: Object.entries(profiles).map(([id, profile]) => ({ id, name: profile.name })),
       activeProfileId,
@@ -108,6 +126,7 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
       captureMode,
       selectedSystemSourceId,
       selectedDeviceId,
+      selectedDawSourceId: selectedDawLiveSourceId,
       rollingCaptureSeconds,
       systemSources: visibleSystemSources.map((source) => ({
         id: source.id,
@@ -117,16 +136,21 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
       inputSources: [
         { id: '', label: 'Default Input', isDefault: true },
         ...devices
-          .filter((device) => device.deviceId !== 'default')
+          .filter((device) => device.id !== 'default')
           .map((device) => ({
-            id: device.deviceId,
-            label: device.label || `Input ${device.deviceId.slice(0, 8)}`,
+            id: device.id,
+            label: device.label || `Input ${device.id.slice(0, 8)}`,
           })),
       ],
+      dawSources: dawSources.map((source) => ({
+        id: source.id,
+        label: source.label,
+      })),
     }
     window.electronAPI.trayControls.publishState(state)
   }, [
     activeProfileId,
+    activeSourceId,
     activeSourceLabel,
     captureMode,
     captureStatus,
@@ -135,8 +159,10 @@ export default function TrayControlBridge({ ready }: TrayControlBridgeProps): JS
     profiles,
     rollingCaptureSeconds,
     selectedDeviceId,
+    selectedDawSourceId,
     selectedSystemSourceId,
     systemSources,
+    dawSources,
   ])
 
   return null

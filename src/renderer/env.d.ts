@@ -27,6 +27,7 @@ import type {
   ProfileLibrarySnapshot,
 } from '../types/profile'
 import type { ScopeKind } from '../types/scope'
+import type { LinkedAnalysisMessage } from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   LegacyThemeMigrationResult,
@@ -43,6 +44,7 @@ import type {
   TrayRendererCommand,
   TrayRendererState,
 } from '../types/desktopIntegration'
+import type { DawBridgeRendererAPI } from '../types/dawBridge'
 
 declare global {
   interface Window {
@@ -52,6 +54,7 @@ declare global {
       platform: string
       windowCapabilities: WindowCapabilities
       getAppBuildInfo: () => Promise<AppBuildInfo>
+      requestMicrophoneAccess: () => Promise<boolean>
       minimize: () => void
       close: () => void
       desktopIntegration: {
@@ -80,6 +83,7 @@ declare global {
       setWindowBackground: (state: WindowBackgroundState) => Promise<WindowBackgroundSnapshot>
       isCursorInsideWindow: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
+      dawBridge: DawBridgeRendererAPI
       audioClips: {
         startDrag: (payload: AudioClipDragPayload) => void
         revealFolder: () => Promise<void>
@@ -129,6 +133,8 @@ declare global {
       notifyScopePopoutReady: (kind: ScopeKind) => void
       requestScopePopIn: (kind: ScopeKind) => void
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
+      sendLinkedAnalysisMessage: (message: LinkedAnalysisMessage) => void
+      onLinkedAnalysisMessage: (callback: (message: LinkedAnalysisMessage) => void) => () => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
       onWindowBackgroundChanged: (callback: (snapshot: WindowBackgroundSnapshot) => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void

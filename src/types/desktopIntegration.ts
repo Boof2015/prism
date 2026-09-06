@@ -36,20 +36,23 @@ export interface TrayRendererState {
   profiles: TrayProfileOption[]
   activeProfileId: string | null
   hasUnsavedProfileChanges: boolean
-  captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
+  captureStatus: 'idle' | 'connecting' | 'waiting' | 'capturing' | 'error'
   activeSourceLabel: string | null
-  captureMode: 'system' | 'device'
+  captureMode: 'system' | 'device' | 'daw'
   selectedSystemSourceId: string | null
   selectedDeviceId: string | null
+  selectedDawSourceId: string | null
   rollingCaptureSeconds: RollingCaptureDurationSeconds | null
   systemSources: TrayAudioSourceOption[]
   inputSources: TrayAudioSourceOption[]
+  dawSources: TrayAudioSourceOption[]
 }
 
 export type TrayRendererCommand =
   | { type: 'load-profile'; profileId: string }
   | { type: 'select-system-source'; sourceId: string }
   | { type: 'select-input-source'; deviceId: string | null }
+  | { type: 'select-daw-source'; sourceId: string }
   | { type: 'set-rolling-capture'; durationSeconds: RollingCaptureDurationSeconds | null }
   | { type: 'set-capture-running'; running: boolean }
   | { type: 'open-settings' }
@@ -68,7 +71,9 @@ export const DEFAULT_TRAY_RENDERER_STATE: TrayRendererState = {
   captureMode: 'system',
   selectedSystemSourceId: null,
   selectedDeviceId: null,
+  selectedDawSourceId: null,
   rollingCaptureSeconds: null,
   systemSources: [],
   inputSources: [],
+  dawSources: [],
 }

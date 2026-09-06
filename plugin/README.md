@@ -2,7 +2,8 @@
 
 JUCE 8 plugins (VST3 / AU / Standalone) that render Prism's scopes inside a DAW —
 one plugin per scope: **spectrum, oscilloscope, vectorscope, spectrogram, VU meter,
-loudness meter, waveform**. They **reuse Prism's existing C++ DSP** (`native/src/*.cpp`)
+loudness meter, waveform** — plus the native **Prism Bridge** pass-through plugin.
+The analyzers **reuse Prism's existing C++ DSP** (`native/src/*.cpp`)
 and the **existing React canvas UI** (`src/plugin-ui`, importing the unchanged
 visualizers from `src/renderer/visualizers/`). VST3 is built for macOS, Windows,
 and Linux; AU is macOS-only.
@@ -35,13 +36,14 @@ cmake -B plugin/build -S plugin -DCMAKE_BUILD_TYPE=Release # embeds the bundle (
 cmake --build plugin/build --config Release
 ```
 
-`COPY_PLUGIN_AFTER_BUILD` installs all seven plugins into your user plugin folders:
+`COPY_PLUGIN_AFTER_BUILD` installs all seven analyzers plus Prism Bridge into your user plugin folders:
 - AU:   `~/Library/Audio/Plug-Ins/Components/Prism *.component`
 - VST3: `~/Library/Audio/Plug-Ins/VST3/Prism *.vst3`
 
 Load any `Prism *` AU / VST3 on a track in Ableton / FL / Logic / Reaper (or run the
 matching **Standalone** from `plugin/build/Prism*_artefacts/Release/Standalone/`),
 play audio, and the scope animates.
+(Prism Bridge has AU/VST3 targets only and no Standalone target.)
 (To use a local JUCE checkout instead of fetching: add `-DJUCE_PATH=/path/to/JUCE`.)
 
 ### UI development: dev-server mode (hot reload)
@@ -100,19 +102,30 @@ cmake --build plugin/build --target PrismInstallerPlugins --parallel
 ```
 
 Built bundles land under `plugin/build/Prism*_artefacts/Release/VST3/`. Copy the
-seven `Prism *.vst3` directories to one of the standard Linux VST3 scan paths:
+eight `Prism *.vst3` directories to one of the standard Linux VST3 scan paths:
 
 - User-local: `$HOME/.vst3`
 - System-wide: `/usr/lib/vst3`
 - System-wide local: `/usr/local/lib/vst3`
 
 The Linux `.deb` and `.rpm` release packages install Prism's VST3 bundles to
-`/usr/lib/vst3` and remove only those seven bundles on package removal. The Linux
+`/usr/lib/vst3` and remove only those eight bundles on package removal. The Linux
 `tar.gz` release includes `resources/plugins/install-vst3.sh`, which installs to
 `$HOME/.vst3` by default or `/usr/lib/vst3` with `--system`. The AppImage is
 portable app-only and does not install DAW plugins.
 
 ## Notes
+
+- **Prism Bridge:** start the standalone Prism application, insert Bridge on a
+  mono or stereo track/bus, then select that instance in Prism's **DAW Bridges**
+  input group. Bridge is bit-transparent, ignores offline rendering, and sends
+  audio and transport metadata only over `127.0.0.1:51789`. Its audio callback
+  only packetizes into a bounded lock-free queue; a background thread owns the
+  socket. The source UUID and custom name are saved in DAW state.
+- **Logic/AU validation:** `AU_SANDBOX_SAFE FALSE` is explicit because Bridge needs
+  loopback networking. Apple may host Audio Units out of process; AU loopback in
+  Logic is therefore a release-blocking host validation, not something the build
+  alone can prove.
 
 - **Refresh rate (macOS):** frames are emitted on `juce::VBlankAttachment` (synced to the
   display, adapts to 60/120/144 Hz) and the webview renders via the `display-sync`

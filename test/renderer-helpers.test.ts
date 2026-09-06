@@ -65,10 +65,19 @@ import {
   frequencyAtNormalizedPosition,
   resolveMeasurementReadoutPosition,
   resolveOscilloscopeMeasurement,
+  resolveOscilloscopeLinkedAnalysisProjection,
   resolveSpectrogramMeasurement,
+  resolveSpectrogramLinkedAnalysisProjection,
   resolveSpectrumMeasurement,
+  resolveSpectrumLinkedAnalysisProjection,
   resolveWaveformMeasurement,
+  resolveWaveformLinkedAnalysisProjection,
 } from '../src/renderer/scopeMeasurement'
+import {
+  normalizeLinkedAnalysisMessage,
+  type LinkedAnalysisProbe,
+} from '../src/types/analysis'
+import { reduceLinkedAnalysisProbe } from '../src/renderer/useLinkedAnalysis'
 import {
   applyInputGainToStereoSamples,
   inputGainDbToLinear,
@@ -92,6 +101,7 @@ import {
 } from '../src/renderer/visualizers/vuMeterBallistics'
 import { FrameScheduler } from '../src/renderer/visualizers/frameScheduler'
 import { VisualizerFrameLoop } from '../src/renderer/visualizers/visualizerFrameLoop'
+import { resolveTimelineSeam, ScrollingTimeline } from '../src/renderer/visualizers/scrollingTimeline'
 import {
   NativeVisualizerTransport,
   type NativeVisualizerTransportBridge,
@@ -467,6 +477,7 @@ function seedProfileDraftState(profile: Profile): void {
     hiddenScopes: new Set(profile.hiddenScopes),
     widthWeights: { ...profile.widthWeights },
     scopeSettings: JSON.parse(JSON.stringify(profile.scopeSettings)) as Profile['scopeSettings'],
+    analysisSettings: { ...profile.analysisSettings },
     scopePopouts: JSON.parse(JSON.stringify(profile.scopePopouts)) as Profile['scopePopouts'],
     windowBounds: profile.windowBounds,
     profiles: {
@@ -1891,6 +1902,162 @@ test('spectrogram measurement follows scale mode and rendered history speed', ()
     )
     assert.deepEqual(historyMeasurement.values.slice(0, 2), [expectedTime, '20.00Hz'])
   }
+})
+
+test('linked analysis projects exact semantic values through each target scale', () => {
+  const spectrumProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'spectrum-probe',
+    sourceKind: 'spectrum',
+    dimensions: { frequencyHz: 1000, spectralLevelDb: -42 },
+  }
+  const spectrumToSpectrogram = resolveSpectrogramLinkedAnalysisProjection(spectrumProbe, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleMode: 'log',
+    fftSize: 4096,
+    scrollSpeed: 2,
+    canvasPixelWidth: 121,
+  })
+  assert.ok(spectrumToSpectrogram)
+  assert.equal(spectrumToSpectrogram.label, '1.00kHz')
+  assertAlmostEqual(
+    spectrumToSpectrogram.guides[0].from.y,
+    1 - Math.log10(1000 / 20) / Math.log10(20000 / 20),
+    1e-12,
+    'spectrogram frequency guide',
+  )
+  assert.equal(spectrumToSpectrogram.guides[0].from.x, 0)
+  assert.equal(spectrumToSpectrogram.guides[0].to.x, 1)
+
+  const spectrogramProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'spectrogram-probe',
+    sourceKind: 'spectrogram',
+    dimensions: { frequencyHz: 1000, historySecondsAgo: 0.25 },
+  }
+  const spectrogramToSpectrum = resolveSpectrumLinkedAnalysisProjection(spectrogramProbe, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleType: 'linear',
+  })
+  assert.ok(spectrogramToSpectrum)
+  assertAlmostEqual(
+    spectrogramToSpectrum.guides[0].from.x,
+    (1000 - 20) / (20000 - 20),
+    1e-12,
+    'linear spectrum frequency guide',
+  )
+
+  const spectrogramToWaveform = resolveWaveformLinkedAnalysisProjection(spectrogramProbe, {
+    mode: 'mono',
+    scrollSpeed: 1,
+    canvasPixelWidth: 129,
+  })
+  assert.ok(spectrogramToWaveform)
+  assertAlmostEqual(spectrogramToWaveform.guides[0].from.x, 0.75, 1e-12, 'waveform history guide')
+
+  const waveformProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'waveform-probe',
+    sourceKind: 'waveform',
+    dimensions: { historySecondsAgo: 0.32, signedAmplitude: 0.5, channel: 'R' },
+  }
+  const waveformToSpectrogram = resolveSpectrogramLinkedAnalysisProjection(waveformProbe, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleMode: 'mel',
+    fftSize: 4096,
+    scrollSpeed: 4,
+    canvasPixelWidth: 121,
+  })
+  assert.ok(waveformToSpectrogram)
+  assertAlmostEqual(waveformToSpectrogram.guides[0].from.x, 0, 1e-12, 'spectrogram history guide')
+
+  const waveformToOscilloscope = resolveOscilloscopeLinkedAnalysisProjection(waveformProbe)
+  assert.ok(waveformToOscilloscope)
+  assertAlmostEqual(waveformToOscilloscope.guides[0].from.y, 0.25, 1e-12, 'oscilloscope amplitude guide')
+})
+
+test('linked analysis hides out-of-range values and duplicates unchanneled amplitude across stereo waveform lanes', () => {
+  const outOfRangeFrequency: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'frequency-outside',
+    sourceKind: 'spectrogram',
+    dimensions: { frequencyHz: 22000 },
+  }
+  assert.equal(resolveSpectrumLinkedAnalysisProjection(outOfRangeFrequency, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleType: 'log',
+  }), null)
+
+  const outOfRangeHistory: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'history-outside',
+    sourceKind: 'spectrogram',
+    dimensions: { historySecondsAgo: 1.01 },
+  }
+  assert.equal(resolveWaveformLinkedAnalysisProjection(outOfRangeHistory, {
+    mode: 'mono',
+    scrollSpeed: 1,
+    canvasPixelWidth: 129,
+  }), null)
+
+  const oscilloscopeProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'oscilloscope-probe',
+    sourceKind: 'oscilloscope',
+    dimensions: { signedAmplitude: 0.5, frameTimeSeconds: 0.01 },
+  }
+  const stereoProjection = resolveWaveformLinkedAnalysisProjection(oscilloscopeProbe, {
+    mode: 'stereo',
+    scrollSpeed: 1,
+    canvasPixelWidth: 129,
+  })
+  assert.ok(stereoProjection)
+  assert.equal(stereoProjection.guides.length, 2)
+  assertAlmostEqual(stereoProjection.guides[0].from.y, 0.13125, 1e-12, 'left waveform lane')
+  assertAlmostEqual(stereoProjection.guides[1].from.y, 0.63125, 1e-12, 'right waveform lane')
+  assert.equal(stereoProjection.label, '+0.500')
+})
+
+test('linked analysis messages normalize payloads and stale endings cannot clear newer probes', () => {
+  const first = normalizeLinkedAnalysisMessage({
+    active: true,
+    interactionId: 'first',
+    sourceKind: 'spectrum',
+    dimensions: { frequencyHz: 62, spectralLevelDb: -40, signedAmplitude: Number.NaN },
+  })
+  assert.ok(first?.active)
+  assert.deepEqual(first.dimensions, { frequencyHz: 62, spectralLevelDb: -40 })
+  assert.equal(normalizeLinkedAnalysisMessage({
+    active: true,
+    interactionId: '',
+    sourceKind: 'spectrum',
+    dimensions: {},
+  }), null)
+
+  const second: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'second',
+    sourceKind: 'waveform',
+    dimensions: { signedAmplitude: 0.25 },
+  }
+  assert.equal(reduceLinkedAnalysisProbe(second, {
+    active: false,
+    interactionId: 'first',
+    sourceKind: 'spectrum',
+  }), second)
+  assert.equal(reduceLinkedAnalysisProbe(second, {
+    active: false,
+    interactionId: 'second',
+    sourceKind: 'waveform',
+  }), null)
 })
 
 test('frequency scale transforms are monotonic, invertible, and Nyquist-safe', () => {
@@ -4199,6 +4366,7 @@ test('profile draft comparisons return to clean after reverting a change', () =>
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
     scopeSettings: baselineProfile.scopeSettings,
+    analysisSettings: baselineProfile.analysisSettings,
     scopePopouts: baselineProfile.scopePopouts,
     windowBounds: baselineProfile.windowBounds,
   }, baselineProfile.name)
@@ -4214,6 +4382,7 @@ test('profile draft comparisons return to clean after reverting a change', () =>
         scrollSpeed: baselineProfile.scopeSettings.waveform.scrollSpeed + 1,
       },
     },
+    analysisSettings: baselineProfile.analysisSettings,
     scopePopouts: baselineProfile.scopePopouts,
     windowBounds: baselineProfile.windowBounds,
   }, baselineProfile.name)
@@ -4223,12 +4392,42 @@ test('profile draft comparisons return to clean after reverting a change', () =>
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
     scopeSettings: baselineProfile.scopeSettings,
+    analysisSettings: baselineProfile.analysisSettings,
     scopePopouts: baselineProfile.scopePopouts,
     windowBounds: baselineProfile.windowBounds,
   }, baselineProfile.name)
 
   assert.equal(profilesMatch(baselineDraft, changedDraft), false)
   assert.equal(profilesMatch(baselineDraft, revertedDraft), true)
+
+  const linkedAnalysisDraft = buildProfileDraft({
+    scopeOrder: baselineProfile.scopeOrder,
+    hiddenScopes: baselineProfile.hiddenScopes,
+    widthWeights: baselineProfile.widthWeights,
+    scopeSettings: baselineProfile.scopeSettings,
+    analysisSettings: { linkedAnalysis: true },
+    scopePopouts: baselineProfile.scopePopouts,
+    windowBounds: baselineProfile.windowBounds,
+  }, baselineProfile.name)
+  assert.equal(profilesMatch(baselineDraft, linkedAnalysisDraft), false)
+})
+
+test('linked analysis is a profile-scoped setting that dirties and cleans with its baseline', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updateAnalysisSettings({ linkedAnalysis: true })
+    assert.equal(useSettingsStore.getState().analysisSettings.linkedAnalysis, true)
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, true)
+
+    useSettingsStore.getState().updateAnalysisSettings({ linkedAnalysis: false })
+    assert.equal(useSettingsStore.getState().analysisSettings.linkedAnalysis, false)
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+  }
 })
 
 test('buildProfileDraft omits theme metadata from the runtime draft', () => {
@@ -4239,6 +4438,7 @@ test('buildProfileDraft omits theme metadata from the runtime draft', () => {
     hiddenScopes: profile.hiddenScopes,
     widthWeights: profile.widthWeights,
     scopeSettings: profile.scopeSettings,
+    analysisSettings: profile.analysisSettings,
     scopePopouts: profile.scopePopouts,
     windowBounds: profile.windowBounds,
   }, profile.name)
@@ -4376,6 +4576,27 @@ test('BottomBar keeps Window controls on one row', async () => {
   assert.doesNotMatch(windowSection, /bottom-bar__inline--desktop-integration/)
   assert.match(stylesSource, /\.bottom-bar__section--window \{[\s\S]*min-width: 880px;/)
   assert.match(stylesSource, /\.bottom-bar__inline--window \{[\s\S]*gap: 8px;/)
+})
+
+test('BottomBar channel routing uses horizontal space without increasing the settings height', async () => {
+  const bottomBarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const matrixSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ChannelRoutingMatrix.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  const sourceSection = bottomBarSource.match(
+    /<section className="bottom-bar__section bottom-bar__section--source">([\s\S]*?)<\/section>/,
+  )?.[1]
+
+  assert.ok(sourceSection)
+  assert.doesNotMatch(sourceSection, /ChannelRoutingMatrix/)
+  assert.match(bottomBarSource, /bottom-bar__section--routing/)
+  assert.match(bottomBarSource, /<div className="bottom-bar__section-title">Channel Routing<\/div>/)
+  assert.doesNotMatch(matrixSource, /channel-routing__header/)
+  assert.match(matrixSource, /\{channel\.index \+ 1\}/)
+  assert.match(stylesSource, /\.bottom-bar__section--routing \{[\s\S]*gap: 1px;/)
+  assert.match(stylesSource, /\.channel-routing__scroll \{[\s\S]*height: 43px;/)
+  assert.match(stylesSource, /\.channel-routing__scroll \{[\s\S]*border: 1px solid var\(--control-border\);/)
+  assert.match(stylesSource, /\.channel-routing__cell \{[\s\S]*width: 28px;[\s\S]*height: 19px;/)
 })
 
 test('BottomBar close button uses flat themed control backgrounds', async () => {
@@ -4690,7 +4911,7 @@ test('detached scope interactions accept the first macOS click and hide chrome d
   assert.match(mainSource, /function createScopePopoutWindow\([\s\S]*?process\.platform === 'darwin' \? \{ acceptFirstMouse: true \} : \{\}/)
   assert.doesNotMatch(mainWindowFactorySource, /acceptFirstMouse/)
   assert.match(scopeModuleSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
-  assert.match(scopeModuleSource, /onActiveChange: onMeasurementActiveChange/)
+  assert.match(scopeModuleSource, /onMeasurementActiveChangeRef\.current\?\.\(analysisActive\)/)
   assert.match(popoutSource, /measurementActive \? 'is-measuring' : ''/)
   assert.match(popoutSource, /onMeasurementActiveChange=\{setMeasurementActive\}/)
   assert.match(stylesSource, /\.scope-popout__chrome:has\(:focus-visible\)/)
@@ -4703,10 +4924,28 @@ test('main window hides its toolbar while a docked scope measurement is active',
   const stripSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Strip.tsx'), 'utf8')
 
   assert.match(stripSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
-  assert.match(stripSource, /onMeasurementActiveChange=\{onMeasurementActiveChange\}/)
+  assert.match(stripSource, /handleScopeMeasurementActiveChange/)
   assert.match(appSource, /const \[measurementActive, setMeasurementActive\] = useState\(false\)/)
   assert.match(appSource, /toolbarVisible && !measurementActive \? 'is-visible' : ''/)
-  assert.match(appSource, /<Strip onMeasurementActiveChange=\{setMeasurementActive\} \/>/)
+  assert.match(appSource, /<Strip[\s\S]*?onMeasurementActiveChange=\{setMeasurementActive\}/)
+})
+
+test('linked analysis relays coalesced probes across docked and detached scopes', async () => {
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const preloadSource = await readFile(join(process.cwd(), 'src', 'preload', 'index.ts'), 'utf8')
+  const hookSource = await readFile(join(process.cwd(), 'src', 'renderer', 'useLinkedAnalysis.ts'), 'utf8')
+  const bridgeSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ScopePopoutBridge.tsx'), 'utf8')
+
+  assert.match(mainSource, /ipcMain\.on\('linked-analysis:update'/)
+  assert.match(mainSource, /normalizeLinkedAnalysisMessage\(rawMessage\)/)
+  assert.match(mainSource, /message\.sourceKind !== popoutKind/)
+  assert.match(mainSource, /sender\.once\('destroyed',[\s\S]*?broadcastLinkedAnalysisMessage/)
+  assert.match(preloadSource, /sendLinkedAnalysisMessage:[\s\S]*?linked-analysis:update/)
+  assert.match(preloadSource, /onLinkedAnalysisMessage:[\s\S]*?removeListener\('linked-analysis:update'/)
+  assert.match(hookSource, /window\.requestAnimationFrame/)
+  assert.match(hookSource, /const isNewInteraction[\s\S]*?sendLinkedAnalysisMessage\(message\)/)
+  assert.match(hookSource, /cancelPendingFrame\(\)[\s\S]*?sendLinkedAnalysisMessage\(message\)/)
+  assert.match(bridgeSource, /analysisSettings: useSettingsStore\.getState\(\)\.analysisSettings/)
 })
 
 test('programmatic top/bottom reposition flushes fresh bounds through persistence channels', async () => {
@@ -7043,5 +7282,103 @@ test('NativePolledCaptureBackend trims stale backlog to the newest live slice wh
     assert.equal(timers.pendingCount(), 0)
   } finally {
     timers.restore()
+  }
+})
+
+test('DAW timeline seams distinguish gaps, loops, seeks, and stopped resumption', () => {
+  const previous = {
+    sequence: 10,
+    frameCount: 512,
+    timeInSamples: 48000,
+    isPlaying: true,
+    isLooping: false,
+  }
+  const transport = {
+    sequence: 11,
+    timeInSamples: 48512,
+    isPlaying: true,
+    isRecording: false,
+    isLooping: false,
+  }
+
+  assert.equal(resolveTimelineSeam(previous, transport), undefined)
+  assert.equal(resolveTimelineSeam(previous, { ...transport, sequence: 12 }), 'Gap')
+  assert.equal(resolveTimelineSeam(previous, { ...transport, timeInSamples: 96000 }), 'Jump')
+  assert.equal(resolveTimelineSeam(previous, {
+    ...transport,
+    timeInSamples: 12000,
+    isLooping: true,
+  }), 'Loop')
+  assert.equal(resolveTimelineSeam({ ...previous, isPlaying: false }, transport), 'Jump')
+})
+
+test('DAW musical ruler labels every roomy beat and every bar in dense history', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    const roomyRecorder = createFakeCanvasRecorder()
+    const roomy = new ScrollingTimeline()
+    roomy.append({
+      frameCount: 192000,
+      sampleRate: 48000,
+      transport: {
+        sequence: 1,
+        timeInSamples: 0,
+        timeInSeconds: 0,
+        ppqPosition: 0,
+        ppqPositionOfLastBarStart: 0,
+        bpm: 120,
+        timeSignature: { numerator: 4, denominator: 4 },
+        isPlaying: true,
+        isRecording: false,
+        isLooping: false,
+      },
+    }, 800, 800)
+    roomy.draw(
+      createFakeCanvasContext(roomyRecorder),
+      800,
+      180,
+      'bars-beats',
+      'daw-bridge',
+      '#333',
+      '#fff',
+    )
+    assert.deepEqual(
+      roomyRecorder.fillTexts.slice(0, 7).map(({ text }) => text),
+      ['1|2', '1|3', '1|4', '2|1', '2|2', '2|3', '2|4'],
+    )
+
+    const denseRecorder = createFakeCanvasRecorder()
+    const dense = new ScrollingTimeline()
+    dense.append({
+      frameCount: 768000,
+      sampleRate: 48000,
+      transport: {
+        sequence: 1,
+        timeInSamples: 0,
+        timeInSeconds: 0,
+        ppqPosition: 0,
+        ppqPositionOfLastBarStart: 0,
+        bpm: 120,
+        timeSignature: { numerator: 4, denominator: 4 },
+        isPlaying: true,
+        isRecording: false,
+        isLooping: false,
+      },
+    }, 160, 160)
+    dense.draw(
+      createFakeCanvasContext(denseRecorder),
+      160,
+      180,
+      'bars-beats',
+      'daw-bridge',
+      '#333',
+      '#fff',
+    )
+    assert.deepEqual(
+      denseRecorder.fillTexts.map(({ text }) => text),
+      ['2', '3', '4', '5', '6', '7', '8', '9'],
+    )
+  } finally {
+    dom.restore()
   }
 })

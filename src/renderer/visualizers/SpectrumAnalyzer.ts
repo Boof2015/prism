@@ -20,9 +20,11 @@ import {
 } from './heatScale'
 import {
   SPECTRUM_MEASUREMENT_SMOOTHING,
+  resolveSpectrumLinkedAnalysisProjection,
   resolveSpectrumMeasurement,
   type ScopeMeasurement,
 } from '../scopeMeasurement'
+import type { LinkedAnalysisProbe, LinkedAnalysisProjection } from '../../types/analysis'
 import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 import {
   buildFrequencyGuides,
@@ -383,6 +385,15 @@ export class SpectrumAnalyzer {
       maxFrequency: this.options.maxFrequency,
       minDecibels: this.options.minDecibels,
       maxDecibels: this.options.maxDecibels,
+      scaleType: this.options.scaleType,
+    })
+  }
+
+  getLinkedAnalysisProjection(probe: LinkedAnalysisProbe): LinkedAnalysisProjection | null {
+    return resolveSpectrumLinkedAnalysisProjection(probe, {
+      sampleRate: this.sampleRate,
+      minFrequency: this.options.minFrequency,
+      maxFrequency: this.options.maxFrequency,
       scaleType: this.options.scaleType,
     })
   }

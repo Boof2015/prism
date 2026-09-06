@@ -3,18 +3,33 @@ export interface NativeCaptureSupport {
   reason: string | null
 }
 
+export interface NativeCaptureChannel {
+  index: number
+  label: string
+}
+
+export interface NativeCaptureChannelRouting {
+  left: number
+  right: number
+}
+
 export interface NativeCaptureSource {
   id: string
   label: string
-  kind: 'system'
+  kind: 'system' | 'device'
   isDefault: boolean
   sampleRate: number
   channelCount: number
+  channels: NativeCaptureChannel[]
+  channelRoutingAvailable: boolean
 }
 
 export interface NativeCaptureStartResult {
   sampleRate: number
+  /** Effective mono/stereo count emitted to the renderer. */
   channelCount: number
+  /** Physical channel count exposed by the selected source. */
+  sourceChannelCount: number
   deviceId: string
   deviceLabel: string
 }
@@ -36,7 +51,23 @@ export interface NativeCaptureDrainResult {
 export interface NativeSystemCaptureAPI {
   getSupport: () => NativeCaptureSupport
   listOutputDevices: () => NativeCaptureSource[]
-  start: (deviceId?: string) => NativeCaptureStartResult
+  start: (
+    deviceId?: string,
+    routing?: NativeCaptureChannelRouting,
+  ) => NativeCaptureStartResult
+  setChannelRouting?: (left: number, right: number) => NativeCaptureChannelRouting
+  stop: () => void
+  drain: (maxChunks?: number) => NativeCaptureDrainResult
+  nowMilliseconds: () => number
+}
+export interface NativeDeviceInputCaptureAPI {
+  getSupport: () => NativeCaptureSupport
+  listInputDevices: () => NativeCaptureSource[]
+  start: (
+    deviceId?: string,
+    routing?: NativeCaptureChannelRouting,
+  ) => NativeCaptureStartResult
+  setChannelRouting: (left: number, right: number) => NativeCaptureChannelRouting
   stop: () => void
   drain: (maxChunks?: number) => NativeCaptureDrainResult
   nowMilliseconds: () => number
@@ -67,4 +98,5 @@ export interface NativeCaptureAPI {
   macosCapture: NativeMacOSCaptureAPI
   windowsCapture: NativeWindowsCaptureAPI
   linuxCapture: NativeLinuxCaptureAPI
+  deviceInputCapture: NativeDeviceInputCaptureAPI
 }

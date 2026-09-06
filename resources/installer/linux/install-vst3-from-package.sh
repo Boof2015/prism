@@ -97,6 +97,7 @@ install_plugin "Prism Loudness Meter.vst3"
 install_plugin "Prism Vectorscope.vst3"
 install_plugin "Prism Spectrogram.vst3"
 install_plugin "Prism Waveform.vst3"
+install_plugin "Prism Bridge.vst3"
 
 chmod -R a+rX "$DEST_DIR"/Prism*.vst3 2>/dev/null || true
 echo "Prism VST3 plugins installed to $DEST_DIR"

@@ -24,6 +24,7 @@ import type {
   ProfileLibrarySnapshot,
 } from '../types/profile'
 import type { ScopeKind } from '../types/scope'
+import type { LinkedAnalysisMessage } from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   LegacyThemeMigrationResult,
@@ -43,6 +44,10 @@ import type {
 import type { VisualizerDSP } from '../renderer/audio/native/visualizer-dsp'
 import { resolveWindowCapabilities } from '../shared/windowCapabilities'
 import { getCaptureBackendSupport } from './captureSupport'
+import type {
+  DawBridgeAudioBatch,
+  DawBridgeSnapshot,
+} from '../types/dawBridge'
 
 type NativeAddonModule = VisualizerDSP & NativeCaptureAPI
 const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
@@ -57,6 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   windowCapabilities,
   getAppBuildInfo: () => ipcRenderer.invoke('app:get-build-info') as Promise<AppBuildInfo>,
+  requestMicrophoneAccess: () => ipcRenderer.invoke('audio:request-microphone-access') as Promise<boolean>,
   minimize: () => ipcRenderer.send('window:minimize'),
   close: () => ipcRenderer.send('window:close'),
   desktopIntegration: {
@@ -103,7 +109,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWindowBackground: () => ipcRenderer.invoke('window:get-background') as Promise<WindowBackgroundSnapshot>,
   setWindowBackground: (state: WindowBackgroundState) => ipcRenderer.invoke('window:set-background', state) as Promise<WindowBackgroundSnapshot>,
   isCursorInsideWindow: () => ipcRenderer.invoke('window:is-cursor-inside') as Promise<boolean>,
-  getCaptureBackendSupport: async () => getCaptureBackendSupport(process.platform, nativeCaptureAPI) as CaptureBackendSupport,
+  getCaptureBackendSupport: async () => {
+    const nativeSupport = getCaptureBackendSupport(process.platform, nativeCaptureAPI)
+    const bridgeSnapshot = await ipcRenderer.invoke('daw-bridge:get-snapshot') as DawBridgeSnapshot
+    return {
+      ...nativeSupport,
+      dawBridge: {
+        kind: 'daw-bridge',
+        available: bridgeSnapshot.available,
+        reason: bridgeSnapshot.reason,
+      },
+    } as CaptureBackendSupport
+  },
+  dawBridge: {
+    getSnapshot: () => ipcRenderer.invoke('daw-bridge:get-snapshot') as Promise<DawBridgeSnapshot>,
+    selectSource: (sourceId: string | null) => ipcRenderer.invoke(
+      'daw-bridge:select-source',
+      sourceId,
+    ) as Promise<DawBridgeSnapshot>,
+    onSnapshot: (callback: (snapshot: DawBridgeSnapshot) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: DawBridgeSnapshot): void => callback(snapshot)
+      ipcRenderer.on('daw-bridge:snapshot', handler)
+      return () => ipcRenderer.removeListener('daw-bridge:snapshot', handler)
+    },
+    onAudioBatch: (callback: (batch: DawBridgeAudioBatch) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, batch: DawBridgeAudioBatch): void => callback(batch)
+      ipcRenderer.on('daw-bridge:audio-batch', handler)
+      return () => ipcRenderer.removeListener('daw-bridge:audio-batch', handler)
+    },
+  },
   audioClips: {
     startDrag: (payload: AudioClipDragPayload) => ipcRenderer.send('audio-clips:start-drag', payload),
     revealFolder: () => ipcRenderer.invoke('audio-clips:reveal-folder') as Promise<void>,
@@ -167,6 +201,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   notifyScopePopoutReady: (kind: ScopeKind) => ipcRenderer.send('scope-popout:ready', kind),
   requestScopePopIn: (kind: ScopeKind) => ipcRenderer.send('scope-popout:request-pop-in', kind),
   sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => ipcRenderer.send('scope-popout:settings-update', kind, partial),
+  sendLinkedAnalysisMessage: (message: LinkedAnalysisMessage) => ipcRenderer.send('linked-analysis:update', message),
+  onLinkedAnalysisMessage: (callback: (message: LinkedAnalysisMessage) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: LinkedAnalysisMessage): void => callback(message)
+    ipcRenderer.on('linked-analysis:update', handler)
+    return () => ipcRenderer.removeListener('linked-analysis:update', handler)
+  },
   onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, isOnTop: boolean): void => callback(isOnTop)
     ipcRenderer.on('window:always-on-top-changed', handler)
@@ -315,6 +355,7 @@ const nativeCaptureAPI = nativeAddonModule
       macosCapture: nativeAddonModule.macosCapture,
       windowsCapture: nativeAddonModule.windowsCapture,
       linuxCapture: nativeAddonModule.linuxCapture,
+      deviceInputCapture: nativeAddonModule.deviceInputCapture,
     }
   : null
 

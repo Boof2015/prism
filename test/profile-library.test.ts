@@ -60,6 +60,7 @@ function createProfile(name: string): Profile {
   profile.scopeSettings.spectrogram.showGrid = true
   profile.scopeSettings.spectrogram.rotation = 90
   profile.scopeSettings.spectrogram.mirrorHorizontal = true
+  profile.analysisSettings.linkedAnalysis = true
   return profile
 }
 
@@ -69,6 +70,7 @@ test('profile file serialization excludes geometry and round-trips with local me
 
   assert.equal(file.format, PROFILE_FILE_FORMAT)
   assert.equal(file.version, PROFILE_FILE_VERSION)
+  assert.equal(file.version, 6)
   assert.equal('themeId' in file, false)
   assert.equal(JSON.stringify(file).includes('windowBounds'), false)
   assert.equal(JSON.stringify(file).includes('frameTarget'), false)
@@ -84,10 +86,13 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(file.scopeSettings.spectrogram.showGrid, true)
   assert.equal(file.scopeSettings.spectrogram.rotation, 90)
   assert.equal(file.scopeSettings.spectrogram.mirrorHorizontal, true)
+  assert.equal(file.scopeSettings.spectrogram.timelineUnit, 'bars-beats')
+  assert.equal(file.scopeSettings.waveform.timelineUnit, 'bars-beats')
   assert.equal('orientation' in file.scopeSettings.spectrogram, false)
   assert.equal(file.scopeOrder.includes('nowPlaying'), false)
   assert.equal(file.hiddenScopes.includes('nowPlaying'), true)
   assert.equal(file.widthWeights.nowPlaying, 1)
+  assert.equal(file.analysisSettings.linkedAnalysis, true)
 
   const restored = profileFileToProfile(file, extractLocalProfileMetadata(profile))
   assert.deepEqual(restored.windowBounds, profile.windowBounds)
@@ -105,6 +110,7 @@ test('profile file serialization excludes geometry and round-trips with local me
   assert.equal(restored.scopeSettings.spectrogram.rotation, 90)
   assert.equal(restored.scopeSettings.spectrogram.mirrorHorizontal, true)
   assert.equal(restored.scopeSettings.nowPlaying.showControls, true)
+  assert.equal(restored.analysisSettings.linkedAnalysis, true)
 })
 
 test('profile file waveform speed migration preserves legacy scroll feel', () => {
@@ -399,13 +405,16 @@ test('partial files normalize, unsupported versions fail, and import does not ch
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.showSideLine, false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrum.heatmapSmoothing, 0.5)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrogram.colorScheme, 'heat')
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.spectrogram.timelineUnit, 'bars-beats')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.lufsmeter.readout, 'shortTerm')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.mode, 'stereo')
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.scrollSpeed, 1)
     assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.multiband, true)
+    assert.equal(partialSnapshot.profiles.profile_partial.scopeSettings.waveform.timelineUnit, 'bars-beats')
     assert.equal(Object.hasOwn(partialSnapshot.profiles.profile_partial.scopeSettings.waveform, 'gainDb'), false)
     assert.equal(partialSnapshot.profiles.profile_partial.scopePopouts.spectrogram.poppedOut, true)
     assert.equal(partialSnapshot.profiles.profile_partial.widthWeights.spectrum, 1)
+    assert.equal(partialSnapshot.profiles.profile_partial.analysisSettings.linkedAnalysis, false)
 
     const badVersionPath = join(harness.rootDir, 'unsupported.prsm')
     await writeFile(badVersionPath, `${JSON.stringify({
@@ -501,6 +510,22 @@ test('version 3 profiles remain importable and migrate vertical spectrograms to 
     assert.equal(imported.scopeSettings.spectrogram.rotation, 90)
     assert.equal(imported.scopeSettings.spectrogram.mirrorHorizontal, false)
     assert.equal('orientation' in imported.scopeSettings.spectrogram, false)
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('version 4 profiles remain importable with linked analysis disabled', async () => {
+  const harness = await createHarness()
+
+  try {
+    const base = profileToFileData('profile_v4', createDefaultProfile('Version 4'))
+    const { analysisSettings: _analysisSettings, ...legacy } = base
+    const legacyPath = join(harness.rootDir, 'version-4.prsm')
+    await writeFile(legacyPath, `${JSON.stringify({ ...legacy, version: 4 }, null, 2)}\n`, 'utf8')
+
+    const snapshot = await harness.library.importProfileFromPath(legacyPath)
+    assert.equal(snapshot.profiles.profile_v4.analysisSettings.linkedAnalysis, false)
   } finally {
     await harness.cleanup()
   }

@@ -6,6 +6,8 @@ const testScripts = [
   'test:audio-store',
   'test:astra',
   'test:capture-support',
+  'test:capture-channel-selection-native',
+  'test:daw-bridge',
   'test:spotify-provider',
   'test:now-playing',
   'test:profiles',

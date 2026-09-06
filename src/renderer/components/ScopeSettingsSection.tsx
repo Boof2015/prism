@@ -608,6 +608,16 @@ export default function ScopeSettingsSection({
                 <option value="mono">Solid</option>
               </SelectControl>
 
+              <SelectControl
+                label="Timeline"
+                value={current.timelineUnit}
+                onChange={(value) => onUpdate('spectrogram', { timelineUnit: value as ScopeSettings['spectrogram']['timelineUnit'] })}
+              >
+                <option value="off">Off</option>
+                <option value="bars-beats">Bars + Beats</option>
+                <option value="seconds">Seconds</option>
+              </SelectControl>
+
               <ToggleGroup label="Overlay">
                 <ToggleChip
                   label="Frequency Grid"
@@ -742,6 +752,16 @@ export default function ScopeSettingsSection({
                   onClick={() => onUpdate('waveform', { multiband: !current.multiband })}
                 />
               </ToggleGroup>
+
+              <SelectControl
+                label="Timeline"
+                value={current.timelineUnit}
+                onChange={(value) => onUpdate('waveform', { timelineUnit: value as ScopeSettings['waveform']['timelineUnit'] })}
+              >
+                <option value="off">Off</option>
+                <option value="bars-beats">Bars + Beats</option>
+                <option value="seconds">Seconds</option>
+              </SelectControl>
 
               <RangeControl
                 label="Speed"
