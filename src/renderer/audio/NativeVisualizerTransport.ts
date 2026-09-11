@@ -29,6 +29,7 @@ export interface NativeVisualizerTransportBridge {
 }
 
 const EMPTY_DEMAND: Required<VisualizerConsumerDemand> = {
+  waterfall: false,
   spectrum: false,
   oscilloscope: false,
   vectorscope: false,
@@ -60,6 +61,7 @@ const defaultBridge: NativeVisualizerTransportBridge = {
 
 function normalizeDemand(demand: VisualizerConsumerDemand): Required<VisualizerConsumerDemand> {
   return {
+    waterfall: Boolean(demand.waterfall),
     spectrum: Boolean(demand.spectrum),
     oscilloscope: Boolean(demand.oscilloscope),
     vectorscope: Boolean(demand.vectorscope),
@@ -84,7 +86,8 @@ export class NativeVisualizerTransport {
   setDemand(demand: VisualizerConsumerDemand): void {
     const nextDemand = normalizeDemand(demand)
     if (
-      nextDemand.spectrum === this.demand.spectrum
+      nextDemand.waterfall === this.demand.waterfall
+      && nextDemand.spectrum === this.demand.spectrum
       && nextDemand.oscilloscope === this.demand.oscilloscope
       && nextDemand.vectorscope === this.demand.vectorscope
       && nextDemand.spectrogram === this.demand.spectrogram

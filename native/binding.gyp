@@ -13,6 +13,8 @@
         "src/capture_channel_selection_napi.cpp",
         "src/oscilloscope.cpp",
         "src/spectrum.cpp",
+        "src/waterfall.cpp",
+        "src/waterfall_napi.cpp",
         "src/spectrogram.cpp",
         "src/vectorscope.cpp",
         "src/multiband.cpp",

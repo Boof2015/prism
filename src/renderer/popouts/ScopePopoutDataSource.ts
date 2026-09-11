@@ -1,3 +1,4 @@
+import type { WaterfallDataSource } from '../visualizers/Waterfall'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -14,6 +15,7 @@ import type { VUMeterDataSource } from '../visualizers/VUMeter'
 import type { WaveformDataSource } from '../visualizers/Waveform'
 
 type AnyScopeDataSource =
+  & WaterfallDataSource
   & SpectrumAnalyzerDataSource
   & OscilloscopeDataSource
   & VectorscopeDataSource
@@ -36,7 +38,7 @@ function isStereoBatch(batch: ScopePopoutAudioBatch): batch is ScopePopoutStereo
 }
 
 function isStereoScope(kind: ScopeKind): boolean {
-  return kind === 'spectrogram' || kind === 'vectorscope' || kind === 'vumeter' || kind === 'lufsmeter'
+  return kind === 'waterfall' || kind === 'spectrogram' || kind === 'vectorscope' || kind === 'vumeter' || kind === 'lufsmeter'
 }
 
 export class ScopePopoutDataSource implements AnyScopeDataSource {
@@ -111,6 +113,12 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     }
   }
 
+
+  getPendingWaterfallSamples(): ScopePopoutStereoBatch {
+    const result = this.stereoQueue
+    this.stereoQueue = []
+    return result
+  }
 
   getPendingSpectrumSamples(): Float32Array[] {
     const batch = this.monoQueue

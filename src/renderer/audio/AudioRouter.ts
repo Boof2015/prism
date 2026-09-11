@@ -14,6 +14,7 @@ const MAX_PENDING_VECTORSCOPE_CHUNKS = 20
 const LATENCY_SAMPLE_WINDOW = 240
 
 const SCOPE_RING_CAPACITY: Record<AudioScopeKind, number> = {
+  waterfall: MAX_PENDING_SPECTRUM_CHUNKS,
   spectrum: MAX_PENDING_SPECTRUM_CHUNKS,
   oscilloscope: MAX_PENDING_CHUNKS,
   vectorscope: MAX_PENDING_VECTORSCOPE_CHUNKS,
@@ -33,6 +34,7 @@ export interface AudioSessionState {
 }
 
 export interface VisualizerConsumerDemand {
+  waterfall?: boolean
   spectrum?: boolean
   oscilloscope?: boolean
   vectorscope?: boolean
@@ -95,6 +97,7 @@ interface ScopeLatencyTracker {
 }
 
 type ScopeRingMap = {
+  waterfall: FixedChunkRing<StereoChunkRecord>
   spectrum: FixedChunkRing<StereoChunkRecord>
   oscilloscope: FixedChunkRing<MonoChunkRecord>
   vectorscope: FixedChunkRing<StereoChunkRecord>
@@ -196,6 +199,7 @@ class RollingLatencyWindow {
 
 function createEmptyDemand(): NormalizedVisualizerConsumerDemand {
   return {
+    waterfall: false,
     spectrum: false,
     oscilloscope: false,
     vectorscope: false,
@@ -217,6 +221,7 @@ function createScopeLatencyTracker(): ScopeLatencyTracker {
 
 export class AudioRouter {
   private readonly rings: ScopeRingMap = {
+    waterfall: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.waterfall),
     spectrum: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.spectrum),
     oscilloscope: new FixedChunkRing<MonoChunkRecord>(SCOPE_RING_CAPACITY.oscilloscope),
     vectorscope: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.vectorscope),
@@ -227,6 +232,7 @@ export class AudioRouter {
   }
 
   private readonly scopeLatency: Record<AudioScopeKind, ScopeLatencyTracker> = {
+    waterfall: createScopeLatencyTracker(),
     spectrum: createScopeLatencyTracker(),
     oscilloscope: createScopeLatencyTracker(),
     vectorscope: createScopeLatencyTracker(),
@@ -340,6 +346,7 @@ export class AudioRouter {
       spectrum: Boolean(demand.spectrum),
       oscilloscope: Boolean(demand.oscilloscope),
       vectorscope: Boolean(demand.vectorscope),
+      waterfall: Boolean(demand.waterfall),
       spectrogram: Boolean(demand.spectrogram),
       vumeter: Boolean(demand.vumeter),
       lufsmeter: Boolean(demand.lufsmeter),
@@ -384,7 +391,7 @@ export class AudioRouter {
 
     const activeDemand = this.getActiveDemand()
     const needsSpectrum = Boolean(activeDemand.spectrum)
-    const needsStereo = Boolean(activeDemand.spectrogram || activeDemand.vectorscope || activeDemand.vumeter || activeDemand.lufsmeter || activeDemand.waveform)
+    const needsStereo = Boolean(activeDemand.waterfall || activeDemand.spectrogram || activeDemand.vectorscope || activeDemand.vumeter || activeDemand.lufsmeter || activeDemand.waveform)
     const needsLeft = Boolean(activeDemand.oscilloscope)
 
     if (!needsSpectrum && !needsStereo && !needsLeft) {
@@ -403,6 +410,10 @@ export class AudioRouter {
 
     if (activeDemand.spectrum) {
       this.rings.spectrum.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
+    }
+
+    if (activeDemand.waterfall) {
+      this.rings.waterfall.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
     }
 
     if (activeDemand.spectrogram) {
@@ -424,6 +435,12 @@ export class AudioRouter {
     if (activeDemand.waveform) {
       this.rings.waveform.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
     }
+  }
+
+  flushPendingWaterfallSamples(): { left: Float32Array; right: Float32Array; sequence: number }[] {
+    const records = this.rings.waterfall.drain()
+    this.recordScopeDrain('waterfall', records)
+    return records.map(({ left, right, sequence }) => ({ left, right, sequence }))
   }
 
   flushPendingOscilloscopeSamples(): Float32Array[] {

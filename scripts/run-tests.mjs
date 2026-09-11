@@ -18,6 +18,7 @@ const testScripts = [
   'test:renderer-helpers',
   'test:build-metadata',
   'test:updates',
+  'test:waterfall-native',
   'test:spectrum-native',
   'test:spectrogram-native',
   'test:vectorscope-native',

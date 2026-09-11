@@ -341,6 +341,7 @@ try {
 const visualizerAPI = nativeAddonModule
   ? {
       oscilloscope: nativeAddonModule.oscilloscope,
+      waterfall: nativeAddonModule.waterfall,
       spectrum: nativeAddonModule.spectrum,
       spectrogram: nativeAddonModule.spectrogram,
       vectorscope: nativeAddonModule.vectorscope,

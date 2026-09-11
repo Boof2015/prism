@@ -1,3 +1,4 @@
+import { Waterfall, type WaterfallDataSource } from '../visualizers/Waterfall'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { isTransformableScopeKind, type ScopeKind } from '../../types/scope'
 import {
@@ -18,6 +19,7 @@ import type {
   ResolvedSpectrumTheme,
   ResolvedVectorscopeTheme,
   ResolvedVUMeterTheme,
+  ResolvedWaterfallTheme,
   ResolvedWaveformTheme,
 } from '../../types/theme'
 import type { SpectrumPeakInfo } from '../../types/spectrum'
@@ -54,6 +56,7 @@ type ScopeModuleTheme =
   | ResolvedSpectrogramTheme
   | ResolvedVUMeterTheme
   | ResolvedLUFSMeterTheme
+  | ResolvedWaterfallTheme
   | ResolvedWaveformTheme
   | ResolvedAstraTheme
 
@@ -67,6 +70,7 @@ interface ScopeModuleProps {
   linkedAnalysisProbe?: LinkedAnalysisProbe | null
   onLinkedAnalysisMessage?: (message: LinkedAnalysisMessage) => void
   dataSource?:
+    | WaterfallDataSource
     | SpectrumAnalyzerDataSource
     | OscilloscopeDataSource
     | VectorscopeDataSource
@@ -178,6 +182,11 @@ export function scopeSettingsToOptions(
   theme: ScopeModuleTheme,
 ): Record<string, unknown> {
   switch (kind) {
+    case 'waterfall': {
+      const s = settings as ScopeSettings['waterfall']
+      const t = theme as ResolvedWaterfallTheme
+      return { ...s, lineColor: t.line, heatColors: t.heatColors, backgroundColor: t.background, gridColor: t.guides, labelColor: t.labels }
+    }
     case 'spectrum': {
       const s = settings as ScopeSettings['spectrum']
       const t = theme as ResolvedSpectrumTheme
@@ -368,6 +377,8 @@ function createVisualizer(
     frameScheduler,
   }
   switch (scopeKind) {
+    case 'waterfall':
+      return new Waterfall(canvas, { ...opts, ...(dataSource ? { dataSource: dataSource as WaterfallDataSource } : {}) })
     case 'spectrum':
       return new SpectrumAnalyzer(canvas, {
         ...opts,

@@ -585,3 +585,19 @@ test('library falls back when legacy active theme ids target retired bundled the
     await harness.cleanup()
   }
 })
+
+
+test('Waterfall inherits Spectrum colors and its own optional tokens round-trip', () => {
+  const base = createDefaultTheme()
+  base.spectrum.line = '#123456'
+  base.spectrum.heatLow = '#112233'
+  const inherited = resolveTheme(base)
+  assert.equal(inherited.waterfall.line, inherited.spectrum.line)
+  assert.equal(inherited.waterfall.labels, inherited.interface.textMuted)
+  assert.deepEqual(inherited.waterfall.heatColors, inherited.spectrum.heatColors)
+  base.waterfall = { line: '#abcdef', heatHigh: '#fedcba', background: '#010203', guides: '#aabbcc' }
+  const text = serializeThemeFile(base)
+  assert.match(text, /\[Waterfall\]/)
+  const parsed = parseThemeFileContent(text, 'Waterfall')
+  assert.deepEqual(resolveTheme(parsed).waterfall, resolveTheme(base).waterfall)
+})

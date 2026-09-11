@@ -61,6 +61,11 @@ void AnalysisPipeline::process(const Prism::Capture::AudioChunk& chunk) {
         left = trimmedLeftScratch_.data();
         right = trimmedRightScratch_.data();
     }
+    if (waterfallEnabled_) {
+        if (chunk.sequence > 0 && waterfallLastSequence_ > 0 && chunk.sequence != waterfallLastSequence_ + 1) waterfall_.reset();
+        waterfallLastSequence_ = chunk.sequence;
+        waterfall_.processStereo(left, right, count);
+    }
     spectrum_.pushStereoSamples(left, right, count);
     vu_.pushSamples(left, right, count);
     lufs_.pushSamples(left, right, count);
@@ -96,8 +101,11 @@ void AnalysisPipeline::process(const Prism::Capture::AudioChunk& chunk) {
     }
 }
 
-AnalysisFrame AnalysisPipeline::snapshot() {
+AnalysisFrame AnalysisPipeline::snapshot(size_t waterfallRidges, size_t waterfallColumns) {
     AnalysisFrame frame;
+    if (waterfallEnabled_ && waterfallRidges > 0) {
+        frame.waterfall = waterfall_.getFrame(std::min(waterfallRidges_, waterfallRidges), waterfallColumns);
+    }
     frame.magnitudes = spectrum_.getChannelMaxMagnitudes();
     frame.spectrumPeak = spectrumPeakTracker_.select(
         frame.magnitudes, sampleRate_, fftSize_, spectrumTiltDbPerOctave_);
@@ -142,6 +150,8 @@ AnalysisFrame AnalysisPipeline::snapshot() {
 }
 
 void AnalysisPipeline::reset() {
+    waterfall_.reset();
+    waterfallLastSequence_ = 0;
     spectrum_.reset();
     vu_.reset();
     lufs_.reset();
@@ -164,6 +174,14 @@ void AnalysisPipeline::setInputTrimDb(float db) {
     const float normalized = std::clamp(
         std::isfinite(db) ? db : 0.0f, -12.0f, 12.0f);
     inputGainLinear_ = std::pow(10.0f, normalized / 20.0f);
+}
+
+void AnalysisPipeline::setWaterfallSettings(Visualizer::WaterfallConfig config, size_t ridges, bool enabled) {
+    config.sampleRate = sampleRate_;
+    if (enabled != waterfallEnabled_) { waterfall_.reset(); waterfallLastSequence_ = 0; }
+    waterfallEnabled_ = enabled;
+    waterfallRidges_ = ridges;
+    waterfall_.configure(config);
 }
 
 void AnalysisPipeline::setSpectrumTilt(float dbPerOctave) {

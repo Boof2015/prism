@@ -181,10 +181,13 @@ const NOW_PLAYING_SCHEMA = {
   status_error: 'statusError',
 } as const satisfies SectionSchema<ThemeNowPlayingTokens>
 
+const WATERFALL_SCHEMA = { background: 'background', line: 'line', heat_low: 'heatLow', heat_mid: 'heatMid', heat_high: 'heatHigh', guides: 'guides', labels: 'labels' } as const
+
 const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   app: 'app',
   controls: 'controls',
   scopes: 'scopes',
+  waterfall: 'waterfall',
   spectrum: 'spectrum',
   oscilloscope: 'oscilloscope',
   vectorscope: 'vectorscope',
@@ -200,6 +203,7 @@ const SECTION_LABEL_MAP: Record<ThemeSectionName, string> = {
   app: 'App',
   controls: 'Controls',
   scopes: 'Scopes',
+  waterfall: 'Waterfall',
   spectrum: 'Spectrum',
   oscilloscope: 'Oscilloscope',
   vectorscope: 'Vectorscope',
@@ -214,6 +218,7 @@ const SECTION_SCHEMAS = {
   app: APP_SCHEMA,
   controls: CONTROLS_SCHEMA,
   scopes: SCOPES_SCHEMA,
+  waterfall: WATERFALL_SCHEMA,
   spectrum: SPECTRUM_SCHEMA,
   oscilloscope: OSCILLOSCOPE_SCHEMA,
   vectorscope: VECTORSCOPE_SCHEMA,
@@ -434,6 +439,7 @@ function createEmptyTheme(): PrismTheme {
     app: {},
     controls: {},
     scopes: {},
+    waterfall: {},
     spectrum: {},
     oscilloscope: {},
     vectorscope: {},
@@ -1243,6 +1249,7 @@ export function normalizeTheme(
   normalized.app = normalizeSectionTokens(parsed.app, APP_SCHEMA)
   normalized.controls = normalizeSectionTokens(parsed.controls, CONTROLS_SCHEMA)
   normalized.scopes = normalizeSectionTokens(parsed.scopes, SCOPES_SCHEMA)
+  normalized.waterfall = normalizeSectionTokens(parsed.waterfall, WATERFALL_SCHEMA)
   normalized.spectrum = normalizeSectionTokens(parsed.spectrum, SPECTRUM_SCHEMA)
   normalized.oscilloscope = normalizeSectionTokens(parsed.oscilloscope, OSCILLOSCOPE_SCHEMA)
   normalized.vectorscope = normalizeSectionTokens(parsed.vectorscope, VECTORSCOPE_SCHEMA)
@@ -1522,6 +1529,12 @@ export function createTemplateThemeFile(): string {
   )
   scopesSection.splice(1, 0, '# Entire section optional. Uncomment tokens here only if you want to override Prism defaults.')
 
+  const waterfallSection = commentExampleTokens(serializeSection('Waterfall', {
+    ...base.waterfall, line: resolved.waterfall.line, background: resolved.waterfall.background,
+    guides: resolved.waterfall.guides, labels: resolved.waterfall.labels,
+    heatLow: resolved.waterfall.heatColors[0], heatMid: resolved.waterfall.heatColors[1], heatHigh: resolved.waterfall.heatColors[2],
+  }, WATERFALL_SCHEMA as SectionSchema<Record<string, string | undefined>>))
+
   const spectrumSection = commentExampleTokens(serializeSection('Spectrum', {
     ...base.spectrum,
     background: resolved.spectrum.background,
@@ -1601,6 +1614,7 @@ ${[
   scopesSection.join('\n'),
   '# Module sections below are optional overrides.',
   '# Uncomment the tokens you want to customize and leave the rest as examples.',
+  waterfallSection.join('\n'),
   spectrumSection.join('\n'),
   oscilloscopeSection.join('\n'),
   vectorscopeSection.join('\n'),
@@ -1964,6 +1978,13 @@ export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
     website: normalized.website,
     description: normalized.description,
     interface: resolveInterfaceTheme(app, controls, scopes),
+    waterfall: (() => {
+      const fallback = resolveSpectrumTheme(normalized, app, scopes)
+      const w = normalized.waterfall
+      return { line: w.line ?? fallback.line, background: w.background ?? fallback.background,
+        guides: w.guides ?? fallback.guides, labels: w.labels ?? w.guides ?? normalized.spectrum.labels ?? app.textMuted,
+        heatColors: [w.heatLow ?? fallback.heatColors[0], w.heatMid ?? fallback.heatColors[1], w.heatHigh ?? fallback.heatColors[2]] as [string, string, string] }
+    })(),
     spectrum: resolveSpectrumTheme(normalized, app, scopes),
     oscilloscope: resolveOscilloscopeTheme(normalized, app, scopes),
     vectorscope: resolveVectorscopeTheme(normalized, app, scopes),

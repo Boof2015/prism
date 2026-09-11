@@ -82,6 +82,10 @@ function appendTransformSummary(
 
 export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]): string {
   switch (kind) {
+    case 'waterfall': {
+      const s = settings as ScopeSettings['waterfall']
+      return `Spectrum history · ${s.historySeconds}s · ${s.density} · ${s.colorMode === 'heat' ? 'Heat' : 'Theme'}`
+    }
     case 'spectrum': {
       const scopeSettings = settings as ScopeSettings['spectrum']
       const summary = `${scopeSettings.scaleMode.toUpperCase()} · ${frequencyRangeLabel(scopeSettings.frequencyRangeMode)} · ${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
@@ -327,6 +331,31 @@ export default function ScopeSettingsSection({
       </div>
 
       <div className="settings-scope-section__controls">
+        {kind === 'waterfall' && (() => {
+          const current = settings as ScopeSettings['waterfall']
+          return <>
+            <RangeControl label="History" value={current.historySeconds} valueLabel={`${current.historySeconds}s`} min={1} max={30} step={1} fullWidth={false} onChange={(value) => onUpdate('waterfall', { historySeconds: value })} />
+            <SelectControl label="Ridges" value={current.density} onChange={(value) => onUpdate('waterfall', { density: value as ScopeSettings['waterfall']['density'] })}>
+              <option value="sparse">Sparse</option><option value="balanced">Balanced</option><option value="dense">Dense</option>
+            </SelectControl>
+            <SelectControl label="Color" value={current.colorMode} onChange={(value) => onUpdate('waterfall', { colorMode: value as ScopeSettings['waterfall']['colorMode'] })}>
+              <option value="theme">Theme</option><option value="heat">Heat</option>
+            </SelectControl>
+            <SelectControl label="FFT" value={String(current.fftSize)} onChange={(value) => onUpdate('waterfall', { fftSize: Number(value) })}>
+              {[1024, 2048, 4096, 8192, 16384].map((size) => <option key={size} value={size}>{size}</option>)}
+            </SelectControl>
+            <SelectControl label="Scale" value={current.scaleMode} onChange={(value) => onUpdate('waterfall', { scaleMode: value as ScopeSettings['waterfall']['scaleMode'] })}>
+              <option value="log">Log</option><option value="mel">Mel</option><option value="linear">Linear</option>
+            </SelectControl>
+            <SelectControl label="Range" value={current.frequencyRangeMode} onChange={(value) => onUpdate('waterfall', { frequencyRangeMode: value as ScopeSettings['waterfall']['frequencyRangeMode'] })}>
+              <option value="extended">Extended (10 Hz–up to 24 kHz)</option><option value="audible">Audible (20 Hz–20 kHz)</option>
+            </SelectControl>
+            <ToggleGroup label="Display"><ToggleChip label="Guides" active={current.showGrid} onClick={() => onUpdate('waterfall', { showGrid: !current.showGrid })} /></ToggleGroup>
+            <RangeControl label="Tilt" value={current.tiltDbPerOctave} valueLabel={`${current.tiltDbPerOctave.toFixed(1)} dB/oct`} min={-2} max={8} step={0.1} fullWidth={false} onChange={(value) => onUpdate('waterfall', { tiltDbPerOctave: value })} />
+            <RangeControl label="Smoothing" value={current.smoothing} valueLabel={current.smoothing.toFixed(2)} min={0} max={0.99} step={0.01} fullWidth={false} onChange={(value) => onUpdate('waterfall', { smoothing: value })} />
+          </>
+        })()}
+
         {kind === 'spectrum' && (() => {
           const current = settings as ScopeSettings['spectrum']
           return (

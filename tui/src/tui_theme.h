@@ -36,6 +36,9 @@ struct TuiTheme {
     ThemeColor scopeGuides;
     ThemeColor scopeGuidesSecondary;
 
+    ThemeColor waterfallBackground, waterfallLine, waterfallGuides, waterfallLabels;
+    std::array<ThemeColor, 3> waterfallHeat{};
+
     ThemeColor spectrumBackground;
     ThemeColor spectrumLine;
     ThemeColor spectrumLabels;

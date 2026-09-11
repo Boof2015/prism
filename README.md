@@ -20,11 +20,12 @@ Monitor system audio or an input with a configurable set of real-time scopes and
 
 ## Scopes
 
-Prism includes seven real-time scopes and meters:
+Prism includes eight real-time scopes and meters:
 
 * **Spectrum Analyzer** — FFT spectrum with calibrated dBFS levels, configurable FFT size, spectral tilt, Log/Mel/Linear scales, heatmap and fill modes, and peak/pitch readouts
 * **Oscilloscope** — Time-domain waveform with fundamental-frequency pitch locking and sub-sample triggering for a stable display
 * **Vectorscope** — Full-band stereo phase analysis with XY, Polar, and M/S Linear views, calibrated references, adjustable zoom, and optional multiband RGB
+* **Waterfall** — Layered spectrum history with 1–30 seconds of audio, adaptive ridge density, theme or heat colors, and frequency/time guides in the desktop app and TUI
 * **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, stereo-energy analysis, and frequency reassignment in Sharp and Sharper modes
 * **VU Meter** — 300 ms metering with adjustable 0 VU reference, stereo correlation, and needle or bar displays
 * **Loudness Meter** — ITU-R BS.1770 momentary, short-term, and integrated LUFS metering with BS.1770 true-peak activity
@@ -51,6 +52,19 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * Independent spectral and heatmap tilt around a 1 kHz reference
 * Peak analysis can report dBFS, frequency, musical note, octave, and cents offset
 * Interactive measurement overlay exposes frequency, level, and pitch directly from the graph
+
+### Waterfall
+
+* Independent native FFT analyzer with the same calibrated channel-max stereo spectrum as Spectrum
+* Stores 60 spectrum slices per second on the audio clock, independent of terminal or desktop refresh rate
+* Bounded 1–30 second history; defaults to 5 seconds
+* Sparse, Balanced, and Dense ridge settings adapt to panel size while retaining the selected history duration
+* Desktop shows a lightly softened live spectrum followed by its history, retaining distinct peaks and a common frequency axis
+* Frequency scale, FFT size, smoothing, range, and spectral tilt controls
+* Theme-colored ridges fading with age, or level-based heat colors
+* Foreground ridges hide covered sections of older lines
+* Available through the desktop add-scope menu and TUI layout editor (shortcut **8**)
+* Desktop popouts and saved profiles are supported; existing layouts stay unchanged
 
 ### Spectrogram
 
@@ -155,7 +169,7 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 
 ### Terminal UI
 
-* Native C++ frontend using the same Spectrum, Oscilloscope, Vectorscope, VU, Loudness, Spectrogram, Waveform, and system-capture implementations
+* Native C++ frontend using the same Spectrum, Waterfall, Oscilloscope, Vectorscope, VU, Loudness, Spectrogram, Waveform, and system-capture implementations
 * 60 FPS default rendering
 * Experimental 120 FPS mode
 * Compatibility mode uses 256-color output at up to 60 FPS

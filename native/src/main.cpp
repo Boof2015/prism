@@ -8,6 +8,7 @@
 #include "windows_capture.h"
 #include "oscilloscope.h"
 #include "spectrum.h"
+#include "waterfall_napi.h"
 #include "spectrogram.h"
 #include "vectorscope.h"
 #include "waveform.h"
@@ -788,6 +789,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     lufsExports.Set("reset", Napi::Function::New(env, LUFSMeterReset));
     exports.Set("lufsmeter", lufsExports);
 
+    RegisterWaterfall(env, exports);
     RegisterSystemAudioCapture(env, exports);
     RegisterDeviceInputCapture(env, exports);
     RegisterCaptureChannelSelection(env, exports);

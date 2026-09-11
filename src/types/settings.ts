@@ -1,3 +1,4 @@
+import { DEFAULT_WATERFALL_SETTINGS, type WaterfallSettings } from './waterfall'
 import type { VectorscopeMode } from '../renderer/visualizers/Vectorscope'
 import {
   DEFAULT_SPECTROGRAM_CONTRAST,
@@ -24,6 +25,7 @@ import { DEFAULT_VECTORSCOPE_ZOOM_DB } from './vectorscope'
 import { DEFAULT_TIMELINE_UNIT, type TimelineUnit } from './dawBridge'
 
 export interface ScopeSettings {
+  waterfall: WaterfallSettings
   spectrum: ScopeDisplayTransformSettings & {
     scaleMode: FrequencyScaleMode
     frequencyRangeMode: FrequencyRangeMode
@@ -91,6 +93,7 @@ export interface ScopeSettings {
 }
 
 export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
+  waterfall: { ...DEFAULT_WATERFALL_SETTINGS },
   spectrum: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, scaleMode: DEFAULT_FREQUENCY_SCALE_MODE, frequencyRangeMode: DEFAULT_FREQUENCY_RANGE_MODE, fftSize: 2048, tiltDbPerOctave: 2.0, heatmap: false, heatmapTiltDbPerOctave: 2.0, heatmapSmoothing: 0.5, showGrid: true, smoothing: 0.9, fillGradient: true, showSideLine: false, peakInfoMode: DEFAULT_SPECTRUM_PEAK_INFO_MODE },
   oscilloscope: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, pitchLock: true, underfillEnabled: false, showGrid: true, lineWidth: 2 },
   vectorscope: { mode: 'lissajous', zoomDb: DEFAULT_VECTORSCOPE_ZOOM_DB, multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },

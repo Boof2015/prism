@@ -1,3 +1,4 @@
+import type { WaterfallNativeAnalyzer } from '../../../types/waterfall'
 // Native visualizer DSP module loader
 // This loads the native C++ addon for high-performance audio visualization
 
@@ -461,4 +462,12 @@ export type {
   VectorscopePointsResult,
   VectorscopeMultibandPointsResult,
   VUMeterNativeSnapshot,
+}
+
+export const waterfall: WaterfallNativeAnalyzer = {
+  isAvailable: () => Boolean(nativeModule?.waterfall),
+  configure: (options) => nativeModule?.waterfall?.configure(options),
+  processStereo: (left, right) => nativeModule?.waterfall?.processStereo(left, right),
+  getFrame: (ridges, columns) => nativeModule?.waterfall?.getFrame(ridges, columns) ?? null,
+  reset: () => nativeModule?.waterfall?.reset(),
 }

@@ -21,6 +21,7 @@ enum class SettingsPage {
     LUFSMeter,
     Spectrogram,
     Waveform,
+    Waterfall,
 };
 
 enum class SettingId {
@@ -51,6 +52,16 @@ enum class SettingId {
     WaveformMode,
     WaveformScrollSpeed,
     WaveformMultiband,
+    WaterfallHistory,
+    WaterfallDensity,
+    WaterfallHeat,
+    WaterfallGuides,
+    WaterfallFft,
+    WaterfallScale,
+    WaterfallRange,
+    WaterfallSmoothing,
+    WaterfallTilt,
+
 };
 
 enum class VectorscopeDetail {
@@ -67,6 +78,16 @@ enum class WaveformMode { Mono, Stereo };
 enum class TerminalCompatibilityMode { Modern, Compatible, Safe };
 
 struct TuiSettings {
+    int waterfallHistorySeconds = 5;
+    int waterfallDensity = 1;
+    bool waterfallHeat = false;
+    bool waterfallGuides = true;
+    int waterfallFftSize = 2048;
+    SpectrogramScale waterfallScale = SpectrogramScale::Logarithmic;
+    bool waterfallAudibleRange = false;
+    float waterfallSmoothing = 0.9f;
+    float waterfallTiltDbPerOctave = 2.0f;
+
     std::string themeId = "Default";
     TerminalCompatibilityMode terminalCompatibility =
         TerminalCompatibilityMode::Modern;

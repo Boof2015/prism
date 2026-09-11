@@ -160,7 +160,7 @@ function normalizePersistedProfileBaselineSignature(raw: string): string | null 
     return JSON.stringify({
       name: typeof candidate.name === 'string' ? candidate.name : DEFAULT_PROFILE_NAME,
       scopeOrder: normalizeScopeOrder(candidate.scopeOrder),
-      hiddenScopes: normalizeHiddenScopes(candidate.hiddenScopes),
+      hiddenScopes: normalizeHiddenScopes(candidate.hiddenScopes, candidate.scopeOrder ?? []),
       widthWeights: normalizeWidthWeights(candidate.widthWeights),
       scopeSettings: mergeScopeSettings(candidate.scopeSettings),
       analysisSettings: normalizeAnalysisSettings(candidate.analysisSettings),
@@ -362,7 +362,7 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
 function createWorkingStateFromPersistedState(state: Partial<PersistedSettingsState>): WorkingSettingsState {
   return {
     scopeOrder: normalizeScopeOrder(state.scopeOrder),
-    hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(state.hiddenScopes)),
+    hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(state.hiddenScopes, state.scopeOrder ?? [])),
     widthWeights: normalizeWidthWeights(state.widthWeights),
     scopeSettings: mergeScopeSettings(state.scopeSettings),
     analysisSettings: state.analysisSettings === undefined

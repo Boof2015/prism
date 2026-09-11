@@ -67,6 +67,8 @@ export interface ThemeSpectrumTokens {
   labels?: string
 }
 
+export type ThemeWaterfallTokens = Pick<ThemeSpectrumTokens, 'background' | 'line' | 'heatLow' | 'heatMid' | 'heatHigh' | 'guides' | 'labels'>
+
 export interface ThemeOscilloscopeTokens {
   background?: string
   line?: string
@@ -150,6 +152,7 @@ export interface PrismTheme {
   app: ThemeAppTokens
   controls: ThemeControlsTokens
   scopes: ThemeScopesTokens
+  waterfall: ThemeWaterfallTokens
   spectrum: ThemeSpectrumTokens
   oscilloscope: ThemeOscilloscopeTokens
   vectorscope: ThemeVectorscopeTokens
@@ -259,6 +262,8 @@ export interface ResolvedSpectrumTheme {
   heatBase: string
 }
 
+export type ResolvedWaterfallTheme = Pick<ResolvedSpectrumTheme, 'line' | 'guides' | 'labels' | 'background' | 'heatColors'>
+
 export interface ResolvedOscilloscopeTheme {
   line: string
   guides: string
@@ -345,6 +350,7 @@ export interface PrismResolvedTheme {
   website?: string
   description?: string
   interface: ResolvedInterfaceTheme
+  waterfall: ResolvedWaterfallTheme
   spectrum: ResolvedSpectrumTheme
   oscilloscope: ResolvedOscilloscopeTheme
   vectorscope: ResolvedVectorscopeTheme

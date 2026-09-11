@@ -30,6 +30,8 @@ function buildConsumerDemand(kind: AudioScopeKind): Record<AudioScopeKind, boole
 
 function flushScopeAudioBatch(kind: AudioScopeKind, scopeSettings: ScopeSettings): ScopePopoutAudioBatch {
   switch (kind) {
+    case 'waterfall':
+      return audioRouter.flushPendingWaterfallSamples()
     case 'spectrum':
       return scopeSettings.spectrum.showSideLine
         ? audioRouter.flushPendingSpectrumStereoSamples()

@@ -12,6 +12,7 @@ import type {
   ResolvedSpectrumTheme,
   ResolvedVectorscopeTheme,
   ResolvedVUMeterTheme,
+  ResolvedWaterfallTheme,
   ResolvedWaveformTheme,
 } from './theme'
 
@@ -46,6 +47,7 @@ export interface ScopePopoutSessionState {
 }
 
 export interface ScopePopoutStereoChunk {
+  sequence?: number
   left: Float32Array
   right: Float32Array
   transport?: DawTransportSnapshot
@@ -62,6 +64,7 @@ export type ScopePopoutResolvedScopeTheme =
   | ResolvedSpectrogramTheme
   | ResolvedVUMeterTheme
   | ResolvedLUFSMeterTheme
+  | ResolvedWaterfallTheme
   | ResolvedWaveformTheme
   | ResolvedAstraTheme
 

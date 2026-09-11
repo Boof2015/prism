@@ -1,3 +1,4 @@
+import { normalizeWaterfallSettings } from '../types/waterfall'
 import type { ScopePopoutStateMap, WindowBounds } from '../types/popout'
 import {
   DEFAULT_PROFILE_NAME,
@@ -44,6 +45,7 @@ export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vector
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
 
 export const DEFAULT_SCOPE_WIDTH_WEIGHTS: Record<ScopeKind, number> = {
+  waterfall: 1,
   spectrum: 1,
   oscilloscope: 1,
   vectorscope: 1,
@@ -142,7 +144,7 @@ export function normalizeScopeOrder(raw: unknown): ScopeKind[] {
   return normalized
 }
 
-export function normalizeHiddenScopes(raw: unknown): ScopeKind[] {
+export function normalizeHiddenScopes(raw: unknown, originalOrder?: unknown): ScopeKind[] {
   if (!Array.isArray(raw)) {
     return SCOPE_KINDS.filter((kind) => !DEFAULT_VISIBLE.includes(kind))
   }
@@ -155,6 +157,7 @@ export function normalizeHiddenScopes(raw: unknown): ScopeKind[] {
     seen.add(kind)
     normalized.push(kind)
   }
+  if (Array.isArray(originalOrder) && !originalOrder.includes('waterfall') && !seen.has('waterfall')) normalized.push('waterfall')
   return normalized
 }
 
@@ -212,6 +215,7 @@ export function mergeScopeSettings(
     : (typeof legacyParsed.astra === 'object' && legacyParsed.astra !== null ? legacyParsed.astra : {})
 
   return {
+    waterfall: normalizeWaterfallSettings(parsed.waterfall),
     spectrum: {
       ...DEFAULT_SCOPE_SETTINGS.spectrum,
       ...rawSpectrum,
@@ -327,7 +331,7 @@ export function normalizeProfile(raw: unknown, fallbackName = DEFAULT_PROFILE_NA
   return {
     name: normalizeProfileName(parsed.name, fallbackName),
     scopeOrder: normalizeScopeOrder(parsed.scopeOrder),
-    hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
+    hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes, parsed.scopeOrder ?? []),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
     scopeSettings: mergeScopeSettings(parsed.scopeSettings),
     analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
@@ -370,7 +374,7 @@ export function normalizeProfileFile(
     id,
     name,
     scopeOrder: normalizeScopeOrder(parsed.scopeOrder),
-    hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes),
+    hiddenScopes: normalizeHiddenScopes(parsed.hiddenScopes, parsed.scopeOrder ?? []),
     widthWeights: normalizeWidthWeights(parsed.widthWeights),
     scopeSettings: mergeScopeSettings(parsed.scopeSettings, {
       legacyProfileFileScale: isLegacyProfileFileVersion(parsed.version),
@@ -485,7 +489,7 @@ export function profileFileToProfile(
   return {
     name: normalizeProfileName(file.name, DEFAULT_PROFILE_NAME),
     scopeOrder: normalizeScopeOrder(file.scopeOrder),
-    hiddenScopes: normalizeHiddenScopes(file.hiddenScopes),
+    hiddenScopes: normalizeHiddenScopes(file.hiddenScopes, file.scopeOrder ?? []),
     widthWeights: normalizeWidthWeights(file.widthWeights),
     scopeSettings: mergeScopeSettings(file.scopeSettings, {
       legacyProfileFileScale: isLegacyProfileFileVersion(file.version),

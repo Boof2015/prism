@@ -1,3 +1,4 @@
+import type { WaterfallNativeAnalyzer } from '../../../types/waterfall'
 // Type definitions for visualizer_dsp native addon
 
 export interface OscilloscopeResult {
@@ -162,6 +163,7 @@ export interface VUMeterModule {
 
 export interface VisualizerDSP {
   oscilloscope: OscilloscopeModule;
+  waterfall: WaterfallNativeAnalyzer;
   spectrum: SpectrumModule;
   spectrogram: SpectrogramModule;
   vectorscope: VectorscopeModule;

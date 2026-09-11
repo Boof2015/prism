@@ -1,3 +1,4 @@
+#include "waterfall_plot_model.h"
 #include "tui_runtime.h"
 
 #include "analysis_pipeline.h"
@@ -92,6 +93,20 @@ void applySpectrogramSettings(AnalysisPipeline& pipeline,
         spectrogramOrientationConfig(settings.spectrogramOrientation));
 }
 
+void applyWaterfallSettings(AnalysisPipeline& pipeline, const TuiSettings& settings) {
+    Visualizer::WaterfallConfig config;
+    config.historySeconds = static_cast<float>(settings.waterfallHistorySeconds);
+    config.fftSize = static_cast<size_t>(settings.waterfallFftSize);
+    config.smoothing = settings.waterfallSmoothing;
+    config.tiltDbPerOctave = settings.waterfallTiltDbPerOctave;
+    config.scaleMode = spectrogramScaleConfig(settings.waterfallScale);
+    config.minFrequency = settings.waterfallAudibleRange ? 20 : 10;
+    config.maxFrequency = settings.waterfallAudibleRange ? 20000 : 24000;
+    const auto panels = configuredPanelOrder(settings.rackLayout);
+    const bool enabled = std::find(panels.begin(), panels.end(), PanelId::Waterfall) != panels.end();
+    pipeline.setWaterfallSettings(config, size_t{16} << settings.waterfallDensity, enabled);
+}
+
 void applyWaveformSettings(AnalysisPipeline& pipeline,
                            const TuiSettings& settings) {
     pipeline.setWaveformSettings(
@@ -123,6 +138,7 @@ private:
 };
 
 struct DisplayFrame {
+    Visualizer::WaterfallFrame waterfall;
     std::vector<float> magnitudes;
     std::optional<SpectrumPeakInfo> spectrumPeak;
     Visualizer::VUMeterSnapshot vu{};
@@ -183,7 +199,7 @@ struct InterfaceState {
     bool settingsOpen = false;
     SettingsPage settingsPage = SettingsPage::Home;
     size_t settingsHomeSelection = 0;
-    std::array<size_t, 10> settingsSelections{};
+    std::array<size_t, static_cast<size_t>(SettingsPage::Waterfall) + 1> settingsSelections{};
     std::string settingsStatus;
     bool profilesOpen = false;
     ProfileOverlayMode profileMode = ProfileOverlayMode::Browse;
@@ -418,6 +434,7 @@ std::string panelName(PanelId panel) {
             return "LUFS Meter";
         case PanelId::Spectrogram:
             return "Spectrogram";
+        case PanelId::Waterfall: return "Waterfall";
         case PanelId::Waveform:
             return "Waveform";
     }
@@ -438,6 +455,7 @@ std::string panelNumber(PanelId panel) {
             return "5";
         case PanelId::Spectrogram:
             return "6";
+        case PanelId::Waterfall: return "8";
         case PanelId::Waveform:
             return "7";
     }
@@ -539,6 +557,7 @@ ThemeColor panelBackground(PanelId panel) {
         case PanelId::VUMeter: return theme.vuBackground;
         case PanelId::LUFSMeter: return theme.lufsBackground;
         case PanelId::Spectrogram: return theme.spectrogramBackground;
+        case PanelId::Waterfall: return theme.waterfallBackground;
         case PanelId::Waveform: return theme.waveformBackground;
     }
     return theme.background;
@@ -1651,6 +1670,54 @@ const PanelRect* findPanelRect(const DashboardLayout& layout, PanelId panel) {
     return found == layout.panels.end() ? nullptr : &*found;
 }
 
+ftxui::Element renderWaterfallPanel(const DisplayFrame& frame,
+                                    int width, int height, bool focused,
+                                    const TuiSettings& settings) {
+    using namespace ftxui;
+    const int contentWidth = std::max(1, width - 2);
+    const int margin = settings.waterfallGuides && contentWidth >= 40 ? 10 : 0;
+    auto plot = canvas([history = frame.waterfall, settings, margin, theme = palette()](Canvas& surface) {
+        fillCanvasBackground(surface, terminalColor(theme.waterfallBackground));
+        const int w = surface.width() - margin, h = surface.height();
+        if (w < 2 || h < 2) return;
+        if (settings.waterfallGuides) {
+            surface.DrawPointLine(margin, h - 1, surface.width() - 1, h - 1, terminalColor(theme.waterfallGuides));
+            if (margin > 0 && h >= 32) {
+                const auto geometry = waterfallPlotGeometry(h);
+                for (float fraction : {0.0f, 0.5f, 1.0f}) {
+                    const int y = std::max(0, static_cast<int>(std::lround(geometry.front - fraction * geometry.depth)));
+                    std::ostringstream label;
+                    if (fraction == 0) label << "NOW";
+                    else label << fraction * settings.waterfallHistorySeconds << 's';
+                    surface.DrawText(0, y, label.str(), terminalColor(theme.waterfallLabels));
+                }
+            }
+        }
+        const auto points = buildWaterfallPlot(history, w, h, static_cast<float>(settings.waterfallHistorySeconds));
+        // All eight dots share one foreground color. Resolve the foremost
+        // visible ridge once per cell so older dots cannot dim newer ones.
+        for (const auto& cell : buildWaterfallCells(points, w, h)) {
+            const auto color = terminalColor(waterfallRidgeColor(cell.db, cell.age,
+                static_cast<float>(settings.waterfallHistorySeconds), settings.waterfallHeat, theme));
+            for (int dot = 0; dot < 8; ++dot) {
+                if (cell.dots & (1 << dot)) {
+                    surface.DrawPoint(cell.x * 2 + dot % 2 + margin, cell.y * 4 + dot / 2, true, color);
+                }
+            }
+        }
+    }) | flex;
+    Elements content;
+    content.push_back(std::move(plot));
+    if (settings.waterfallGuides && height >= 5) {
+        content.push_back(text(std::string(margin / 2, ' ') + buildWaterfallFrequencyAxis(
+            frame.waterfall, static_cast<size_t>(std::max(1, contentWidth - margin / 2)))) | color(terminalColor(palette().waterfallLabels)));
+    }
+    auto panel = window(panelTitle(PanelId::Waterfall, focused,
+        std::to_string(settings.waterfallHistorySeconds) + "s " + (settings.waterfallHeat ? "Heat" : "Theme")), vbox(std::move(content)));
+    return stylePanel(std::move(panel), focused, PanelId::Waterfall) |
+        size(WIDTH, EQUAL, std::max(1, width)) | size(HEIGHT, EQUAL, std::max(1, height));
+}
+
 ftxui::Element renderLayoutNode(const LayoutNode& node,
                                 const DashboardLayout& layout,
                                 const DisplayFrame& frame,
@@ -1697,6 +1764,8 @@ ftxui::Element renderLayoutNode(const LayoutNode& node,
                     rect->height,
                     focused,
                     state.settings);
+            case PanelId::Waterfall:
+                return renderWaterfallPanel(frame, rect->width, rect->height, focused, state.settings);
             case PanelId::Waveform:
                 return renderWaveformPanel(
                     frame,
@@ -2380,6 +2449,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
 
     SnapshotStore<DisplayFrame> frameStore;
     SnapshotStore<TuiSettings> settingsStore;
+    SnapshotStore<WaterfallPlotRequest> waterfallPlotStore;
     SnapshotStore<OutputSwitchRequest> outputSwitchRequestStore;
     SnapshotStore<OutputSwitchNotice> outputSwitchNoticeStore;
     SnapshotStore<OutputListNotice> outputListNoticeStore;
@@ -2493,6 +2563,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 next->setOscilloscopePitchLock(
                     appliedSettings.oscilloscopePitchLock);
                 applySpectrogramSettings(*next, appliedSettings);
+                applyWaterfallSettings(*next, appliedSettings);
                 applyWaveformSettings(*next, appliedSettings);
                 return next;
             };
@@ -2565,6 +2636,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                         effectiveRefreshRate(
                             appliedSettings.refreshRate,
                             appliedSettings.terminalCompatibility);
+                    applyWaterfallSettings(*pipeline, requestedSettings);
                     pipeline->setInputTrimDb(requestedSettings.inputTrimDb);
                     pipeline->setSpectrumTilt(
                         requestedSettings.spectrumTiltDbPerOctave);
@@ -2595,7 +2667,8 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                 const auto now = std::chrono::steady_clock::now();
                 if (now >= nextFrameAt) {
                     DisplayFrame next;
-                    auto analyzed = pipeline->snapshot();
+                    const auto waterfallPlot = waterfallPlotStore.read();
+                    auto analyzed = pipeline->snapshot(waterfallPlot.ridges, waterfallPlot.columns);
                     next.magnitudes = std::move(analyzed.magnitudes);
                     next.spectrumPeak = std::move(analyzed.spectrumPeak);
                     next.vu = analyzed.vu;
@@ -2603,6 +2676,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
                     next.oscilloscope = std::move(analyzed.oscilloscope);
                     next.vectorscope = std::move(analyzed.vectorscope);
                     next.spectrogram = std::move(analyzed.spectrogram);
+                    next.waterfall = std::move(analyzed.waterfall);
                     next.waveform = std::move(analyzed.waveform);
                     next.sampleRate = activeStarted.sampleRate;
                     next.backend = capture->backendName();
@@ -2639,6 +2713,12 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
             std::chrono::steady_clock::now().time_since_epoch()).count();
         interfaceState.renderedFramesPerSecond =
             frameRateMeter.record(renderedAt);
+        const auto layout = buildDashboardLayout(screen.dimx(), screen.dimy(),
+            interfaceState.settings.rackLayout, interfaceState.expandedPanel);
+        const auto* waterfall = findPanelRect(layout, PanelId::Waterfall);
+        waterfallPlotStore.publish(waterfall ? waterfallPlotRequest(waterfall->width, waterfall->height,
+            interfaceState.settings.waterfallGuides, size_t{16} << interfaceState.settings.waterfallDensity)
+            : WaterfallPlotRequest{0, 2});
         return renderFrame(
             frameStore.read(), screen.dimx(), screen.dimy(), interfaceState) |
             color(terminalColor(interfaceState.theme.text)) |
@@ -2737,6 +2817,7 @@ int runInteractive(std::unique_ptr<Prism::Capture::SystemAudioCapture> capture,
         if (event == Event::Character('5')) return PanelId::LUFSMeter;
         if (event == Event::Character('6')) return PanelId::Spectrogram;
         if (event == Event::Character('7')) return PanelId::Waveform;
+        if (event == Event::Character('8')) return PanelId::Waterfall;
         return std::nullopt;
     };
     const auto addedScopeStatus = [&](PanelId panel) {

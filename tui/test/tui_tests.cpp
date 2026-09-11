@@ -14,6 +14,7 @@
 #include "system_audio_capture.h"
 #include "tui_settings.h"
 #include "tui_theme.h"
+#include "waterfall_plot_model.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +25,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -93,9 +95,9 @@ public:
         if (result) {
             *result = selected == "alternate"
                 ? Prism::Capture::StartResult{
-                    44100.0, 2, "alternate", "Alternate Output"}
+                    44100.0, 2, 2, "alternate", "Alternate Output"}
                 : Prism::Capture::StartResult{
-                    48000.0, 2, "fake", "Fake Output"};
+                    48000.0, 2, 2, "fake", "Fake Output"};
         }
         return true;
     }
@@ -358,7 +360,7 @@ void testProjectionAndLayout() {
         Prism::Tui::PanelId::Oscilloscope,
         "panel focus should cycle forward");
     require(Prism::Tui::nextPanel(Prism::Tui::PanelId::Spectrum, true) ==
-        Prism::Tui::PanelId::Waveform,
+        Prism::Tui::PanelId::Waterfall,
         "panel focus should cycle backward");
     const auto compactPanels = Prism::Tui::visiblePanelOrder(oneRow);
     require(compactPanels.size() == 3 &&
@@ -579,7 +581,7 @@ void testSettingsModelAndPersistence() {
         "settings normalization should enforce public ranges");
 
     const auto pages = Prism::Tui::settingsPages();
-    require(pages.size() == 9 &&
+    require(pages.size() == 10 &&
         Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::Appearance).size() == 2 &&
         Prism::Tui::settingsForPage(Prism::Tui::SettingsPage::General).size() == 2,
         "settings should expose shallow category pages");
@@ -1176,9 +1178,253 @@ void testFramePacing() {
         "120 FPS should remain bounded by the available coarse wakeups");
 }
 
+void testWaterfall() {
+    using namespace Prism::Tui;
+    TuiSettings settings;
+    require(!rackPanelLocation(settings.rackLayout, PanelId::Waterfall).has_value(), "Waterfall should not alter the default rack");
+    require(parseSettingsText("spectrum_peak=true\n").waterfallHistorySeconds == 5, "old TUI settings get Waterfall defaults");
+    require(addRackPanel(settings.rackLayout, PanelId::Waterfall, PanelId::Spectrum), "Waterfall can be added to the rack");
+    settings.waterfallHistorySeconds = 30;
+    settings.waterfallDensity = 2;
+    settings.waterfallHeat = true;
+    settings.waterfallFftSize = 8192;
+    settings.waterfallScale = SpectrogramScale::Mel;
+    settings.waterfallAudibleRange = true;
+    settings.waterfallSmoothing = 0.7f;
+    settings.waterfallTiltDbPerOctave = 4;
+    require(parseSettingsText(serializeSettingsText(settings)) == settings, "Waterfall settings and rack must round-trip");
+    for (const auto& descriptor : settingsForPage(SettingsPage::Waterfall)) {
+        require(!settingValue(settings, descriptor.id).empty(), "Waterfall controls have readable values");
+        resetSetting(settings, descriptor.id);
+        require(adjustSetting(settings, descriptor.id, 1), "Waterfall controls can be adjusted");
+    }
+    const auto invalid = parseSettingsText("waterfall_history=999\nwaterfall_fft=3\nwaterfall_smoothing=nan\nwaterfall_density=-4\n");
+    require(invalid.waterfallHistorySeconds == 30 && invalid.waterfallFftSize == 2048 && invalid.waterfallSmoothing == 0.9f && invalid.waterfallDensity == 0, "Waterfall settings enforce bounded defaults");
+    TuiTheme themed;
+    require(parseIroThemeText("[Spectrum]\nline=18, 52, 86\n[Waterfall]\nheat_high=254, 220, 186\n", "waterfall", themed), "Waterfall theme section parses");
+    require(themed.waterfallLine == themed.spectrumLine && themed.waterfallHeat[2] == ThemeColor{254, 220, 186}, "Waterfall themes inherit Spectrum and allow overrides");
+
+    Visualizer::WaterfallAnalyzer analyzer;
+    Visualizer::WaterfallConfig config;
+    config.fftSize = 16384;
+    config.historySeconds = 30;
+    analyzer.configure(config);
+    require(analyzer.capacitySlices() == 1802, "maximum native history allocation stays bounded");
+    config.fftSize = 2048;
+    config.historySeconds = 5;
+    config.smoothing = 0;
+    config.tiltDbPerOctave = 0;
+    analyzer.configure(config);
+    auto audio = sineChunk(1007.8125f, 0.5f, 48000 * 6, 48000);
+    analyzer.processStereo(audio.left.data(), audio.right.data(), audio.left.size());
+    const auto frame = analyzer.getFrame(64, 256);
+    require(analyzer.storedSlices() <= analyzer.capacitySlices() && frame.ages.back() > 4.8f, "Waterfall stores the selected history duration");
+    for (const auto size : {std::pair<int, int>{8, 8}, {100, 60}, {300, 180}}) {
+        const auto points = buildWaterfallPlot(frame, size.first, size.second, 5);
+        require(!points.empty(), "Waterfall renders in small and expanded panels");
+        for (const auto& point : points) require(point.x >= 0 && point.x < size.first && point.y >= 0 && point.y < size.second && std::isfinite(point.db), "Waterfall points remain inside the panel");
+    }
+    Visualizer::WaterfallFrame masked;
+    masked.columns = 2;
+    masked.ages = {0, 5};
+    masked.levels = {-10, -10, -90, -90};
+    // The rear baseline lies behind a sufficiently high front ridge in this custom history span.
+    const auto points = buildWaterfallPlot(masked, 40, 80, 30);
+    require(std::all_of(points.begin(), points.end(), [](const auto& p) { return p.age == 0; }), "foreground ridges mask older lines below them");
+    require(buildWaterfallFrequencyAxis(frame, 60).find("1k") != std::string::npos, "frequency guides follow the projected spectrum");
+
+    AnalysisPipeline pipeline(48000);
+    pipeline.setWaterfallSettings(config, 32, true);
+    auto chunk = sineChunk(1007.8125f, 0.5f, 48000, 48000);
+    chunk.sequence = 1;
+    pipeline.process(chunk);
+    require(pipeline.snapshot().waterfall.audioSeconds == 1, "TUI publishes Waterfall frames");
+    chunk.sequence = 3;
+    pipeline.process(chunk);
+    require(pipeline.snapshot().waterfall.audioSeconds == 1, "a missing capture sequence starts a distinct history");
+    chunk.sequence = 4;
+    pipeline.process(chunk);
+    require(pipeline.snapshot().waterfall.audioSeconds == 2, "history continues normally after a gap");
+    const auto compact = pipeline.snapshot(5, 40).waterfall;
+    require(compact.columns == 40 && compact.ages.size() <= 5 && compact.audioSeconds == 2,
+        "TUI snapshot requests only the visible plot resolution without resetting history");
+    require(pipeline.snapshot(0, 2).waterfall.ages.empty() && pipeline.snapshot().waterfall.audioSeconds == 2,
+        "covered panels can skip projection while retaining their audio history");
+    pipeline.setWaterfallSettings(config, 32, false);
+    require(pipeline.snapshot().waterfall.ages.empty(), "hidden Waterfall avoids snapshot work");
+}
+
+void testWaterfallRendering() {
+    using namespace Prism::Tui;
+    // A snapshot can have one fewer row when a new slice coincides with NOW.
+    // This must never cause the renderer to pick a different set of old rows.
+    Visualizer::WaterfallFrame frame;
+    frame.columns = 5;
+    for (int i = 0; i < 32; ++i) {
+        frame.ages.push_back(i * 3.0f / 32);
+        frame.levels.insert(frame.levels.end(), 5, -80.0f);
+    }
+    auto points = buildWaterfallPlot(frame, 80, 128, 3);
+    for (float age : frame.ages) {
+        require(std::any_of(points.begin(), points.end(), [age](const auto& point) {
+            return point.x == 0 && point.age == age;
+        }), "render every supplied historical slice without index-based resampling");
+    }
+    frame.ages.erase(frame.ages.begin() + 1);
+    frame.levels.erase(frame.levels.begin() + 5, frame.levels.begin() + 10);
+    const auto fewer = buildWaterfallPlot(frame, 80, 128, 3);
+    for (const auto& point : points) {
+        if (point.age <= 3.0f / 32) continue;
+        require(std::any_of(fewer.begin(), fewer.end(), [&](const auto& next) {
+            return next.x == point.x && next.y == point.y && next.age == point.age && next.db == point.db;
+        }), "a changing snapshot row count must not move or replace older ridges");
+    }
+
+    // Eight Braille dots share a color. Keep all visible dots but use the
+    // nearest ridge's strongest value regardless of insertion order.
+    std::vector<WaterfallPlotPoint> shared{{0, 0, -30, 0}, {1, 1, -20, 0}, {1, 3, -90, 3}};
+    const auto cells = buildWaterfallCells(shared, 2, 4);
+    std::reverse(shared.begin(), shared.end());
+    const auto reversed = buildWaterfallCells(shared, 2, 4);
+    require(cells.size() == 1 && cells[0].dots == 137 && cells[0].db == -20 && cells[0].age == 0,
+        "older dots cannot overwrite the foreground ridge color");
+    require(reversed[0].dots == cells[0].dots && reversed[0].db == cells[0].db && reversed[0].age == cells[0].age,
+        "Braille cell color is independent of dot drawing order");
+
+    Visualizer::WaterfallFrame touching;
+    touching.columns = 2;
+    const float dotAge = 3.0f / waterfallPlotGeometry(80).depth;
+    touching.ages = {0, 2 * dotAge, 6 * dotAge};
+    touching.levels.assign(6, -90);
+    const auto separated = buildWaterfallPlot(touching, 20, 80, 3);
+    require(std::none_of(separated.begin(), separated.end(), [](const auto& point) { return point.y == 77; }),
+        "leave an empty dot between touching foreground and historical strokes");
+    for (int x = 0; x < 20; ++x) {
+        for (int y : {72, 73, 76, 78, 79}) {
+            require(std::any_of(separated.begin(), separated.end(), [=](const auto& point) {
+                return point.x == x && point.y == y;
+            }), "clearance preserves the front stroke and history beyond the gap");
+        }
+    }
+    // These extra rows lie entirely inside the foreground's clearance. They
+    // must not eat another dot of history each just because they are present.
+    touching.ages.insert(touching.ages.begin() + 1, {dotAge, 1.1f * dotAge, 1.2f * dotAge});
+    touching.levels.assign(touching.ages.size() * 2, -90);
+    const auto hidden = buildWaterfallPlot(touching, 20, 80, 3);
+    require(hidden.size() == separated.size(), "invisible ridges do not accumulate extra clearance");
+    for (size_t i = 0; i < hidden.size(); ++i) {
+        require(hidden[i].x == separated[i].x && hidden[i].y == separated[i].y && hidden[i].age == separated[i].age,
+            "adding fully hidden slices cannot change the visible history");
+    }
+
+    frame.ages = {0};
+    frame.levels = {-100, -100, -20, -100, -100};
+    const auto peak = buildWaterfallPlot(frame, 5, 80, 3);
+    const auto tip = std::find_if(peak.begin(), peak.end(), [](const auto& point) { return point.x == 2; });
+    require(tip != peak.end() && tip->db > -22.22f && tip->db < -20,
+        "terminal softening retains a clear isolated peak within 2.22 dB");
+
+    frame.columns = 6;
+    frame.levels = {-85, -50, -70, -15, -30, -88};
+    for (int width : {6, 37, 80}) {
+        const auto forward = buildWaterfallPlot(frame, width, 80, 3);
+        std::reverse(frame.levels.begin(), frame.levels.end());
+        const auto backward = buildWaterfallPlot(frame, width, 80, 3);
+        std::reverse(frame.levels.begin(), frame.levels.end());
+        require(forward.size() == backward.size(), "rising and falling slopes have equal stroke weight");
+        for (const auto& point : forward) {
+            require(std::any_of(backward.begin(), backward.end(), [&](const auto& other) {
+                return other.x == width - 1 - point.x && other.y == point.y;
+            }), "ridge joins mirror cleanly without one-sided tails");
+        }
+        int previousTop = -1, previousBottom = -1;
+        for (int x = 0; x < width; ++x) {
+            int top = 80, bottom = -1, count = 0;
+            for (const auto& point : forward) if (point.x == x) {
+                top = std::min(top, point.y);
+                bottom = std::max(bottom, point.y);
+                ++count;
+            }
+            require(count >= 2 && count == bottom - top + 1,
+                "ridge strokes keep their weight and contain no gaps within a dot column");
+            require(x == 0 || (top <= previousBottom && bottom >= previousTop),
+                "adjacent dot columns stay connected even on steep slopes");
+            previousTop = top;
+            previousBottom = bottom;
+        }
+    }
+
+    const auto contrast = [](ThemeColor a, ThemeColor b) {
+        const auto luminance = [](ThemeColor color) {
+            const auto channel = [](uint8_t value) {
+                const double s = value / 255.0;
+                return s <= 0.04045 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * channel(color.red) + 0.7152 * channel(color.green) + 0.0722 * channel(color.blue);
+        };
+        const double x = luminance(a), y = luminance(b);
+        return (std::max(x, y) + 0.05) / (std::min(x, y) + 0.05);
+    };
+    auto theme = defaultTuiTheme();
+    for (auto background : {ThemeColor{7, 12, 16}, ThemeColor{245, 245, 245}}) {
+        theme.waterfallBackground = background;
+        for (bool heat : {false, true}) for (float db : {-100.0f, -60.0f, -20.0f}) {
+            require(contrast(waterfallRidgeColor(db, 0, 3, heat, theme), background) >= 4.49,
+                "current Braille ridge stays readable on dark and light themes");
+            require(contrast(waterfallRidgeColor(db, 3, 3, heat, theme), background) >= 2.99,
+                "older heat ridges retain visible contrast");
+        }
+    }
+
+    const auto small = waterfallPlotRequest(40, 10, true, 64);
+    const auto large = waterfallPlotRequest(100, 28, true, 64);
+    require(small.ridges < large.ridges && small.columns < large.columns,
+        "request history and frequency resolution that fit the terminal panel");
+    require(waterfallPlotRequest(200, 100, false, 16).ridges == 16 &&
+        waterfallPlotRequest(200, 100, false, 32).ridges == 32 &&
+        waterfallPlotRequest(200, 200, false, 64).ridges == 64,
+        "large panels respect every density preset");
+}
+
+void testWaterfallAnimation() {
+    using namespace Prism::Tui;
+    const auto request = waterfallPlotRequest(100, 28, true, 32);
+    const auto audio = sineChunk(1000, 0.5f, 48000 * 7, 48000);
+    for (size_t fps : {30, 60, 120}) {
+        Visualizer::WaterfallAnalyzer analyzer;
+        Visualizer::WaterfallConfig config;
+        config.historySeconds = 3;
+        analyzer.configure(config);
+        analyzer.processStereo(audio.left.data(), audio.right.data(), 48000 * 4);
+        std::map<long long, int> previous;
+        for (size_t offset = 48000 * 4; offset < audio.left.size(); offset += 48000 / fps) {
+            analyzer.processStereo(audio.left.data() + offset, audio.right.data() + offset, 48000 / fps);
+            const auto frame = analyzer.getFrame(request.ridges, request.columns);
+            require(frame.ages.back() > 3 - 3.0f / (request.ridges - 1) - 0.02f,
+                "adaptive density spans the selected duration at every refresh rate");
+            std::map<long long, int> current;
+            for (const auto& point : buildWaterfallPlot(frame, 186, 100, 3)) {
+                if (point.x == 0) current.emplace(std::llround((frame.audioSeconds - point.age) * 48000), point.y);
+            }
+            for (const auto& [stamp, y] : previous) {
+                const double age = frame.audioSeconds - stamp / 48000.0;
+                if (age < 0.5 || age > 2.5) continue;
+                const auto found = current.find(stamp);
+                require(found != current.end(), "interior history slices never flicker out during scrolling");
+                require(found->second <= y && y - found->second <= 1,
+                    "historical ridges move backward smoothly, never jump or reverse");
+            }
+            previous = std::move(current);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
+    testWaterfall();
+    testWaterfallRendering();
+    testWaterfallAnimation();
     testCli();
     testOutputSwitching();
     testProjectionAndLayout();

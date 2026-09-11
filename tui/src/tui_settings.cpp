@@ -23,6 +23,18 @@ const std::vector<SettingDescriptor> kGeneralSettings = {
     {SettingId::RefreshRate, "Refresh rate", "120 FPS is experimental and depends heavily on the terminal."},
 };
 
+const std::vector<SettingDescriptor> kWaterfallSettings = {
+    {SettingId::WaterfallHistory, "History", "Spectrum history in seconds."},
+    {SettingId::WaterfallDensity, "Ridges", "Sparse, Balanced, or Dense, adapted to panel size."},
+    {SettingId::WaterfallHeat, "Heat colors", "Color ridges by level using the theme heat palette."},
+    {SettingId::WaterfallGuides, "Guides", "Show frequency and history-time guides."},
+    {SettingId::WaterfallFft, "FFT size", "Frequency resolution of each spectrum slice."},
+    {SettingId::WaterfallScale, "Frequency scale", "Logarithmic, mel, or linear frequency spacing."},
+    {SettingId::WaterfallRange, "Audible range", "On: 20 Hz to 20 kHz. Off: 10 Hz to 24 kHz, clamped to Nyquist."},
+    {SettingId::WaterfallSmoothing, "Smoothing", "Smooth the live spectrum before storing its history."},
+    {SettingId::WaterfallTilt, "Display tilt", "Decibels per octave around 1 kHz."},
+};
+
 const std::vector<SettingDescriptor> kSpectrumSettings = {
     {SettingId::SpectrumPeakReadout, "Peak readout", "Shows the strongest stable spectral peak in the panel title."},
     {SettingId::SpectrumTilt, "Display tilt", "Offsets the spectrum by decibels per octave around 1 kHz."},
@@ -363,6 +375,12 @@ TuiSettings normalizeSettings(TuiSettings settings) {
         snap(settings.spectrogramContrast, 0.1f), 0.5f, 2.0f);
     settings.spectrogramTiltDbPerOctave = std::clamp(
         snap(settings.spectrogramTiltDbPerOctave, 0.5f), -2.0f, 8.0f);
+    settings.waterfallHistorySeconds = std::clamp(settings.waterfallHistorySeconds, 1, 30);
+    settings.waterfallDensity = std::clamp(settings.waterfallDensity, 0, 2);
+    if (settings.waterfallFftSize < 1024 || settings.waterfallFftSize > 16384 || (settings.waterfallFftSize & (settings.waterfallFftSize - 1))) settings.waterfallFftSize = 2048;
+    settings.waterfallSmoothing = std::isfinite(settings.waterfallSmoothing) ? std::clamp(snap(settings.waterfallSmoothing, 0.01f), 0.0f, 0.99f) : 0.9f;
+    settings.waterfallTiltDbPerOctave = std::isfinite(settings.waterfallTiltDbPerOctave) ? std::clamp(snap(settings.waterfallTiltDbPerOctave, 0.1f), -2.0f, 8.0f) : 2.0f;
+    if (static_cast<int>(settings.waterfallScale) < 0 || static_cast<int>(settings.waterfallScale) > 2) settings.waterfallScale = SpectrogramScale::Logarithmic;
     settings.waveformScrollSpeed = std::clamp(settings.waveformScrollSpeed, 1, 8);
     if (!settings.oscilloscopePitchLock) {
         settings.oscilloscopeFrequencyReadout = false;
@@ -371,7 +389,16 @@ TuiSettings normalizeSettings(TuiSettings settings) {
 }
 
 bool operator==(const TuiSettings& left, const TuiSettings& right) {
-    return left.themeId == right.themeId &&
+    return left.waterfallHistorySeconds == right.waterfallHistorySeconds &&
+        left.waterfallDensity == right.waterfallDensity &&
+        left.waterfallHeat == right.waterfallHeat &&
+        left.waterfallGuides == right.waterfallGuides &&
+        left.waterfallFftSize == right.waterfallFftSize &&
+        left.waterfallScale == right.waterfallScale &&
+        left.waterfallAudibleRange == right.waterfallAudibleRange &&
+        left.waterfallSmoothing == right.waterfallSmoothing &&
+        left.waterfallTiltDbPerOctave == right.waterfallTiltDbPerOctave &&
+        left.themeId == right.themeId &&
         left.terminalCompatibility == right.terminalCompatibility &&
         left.inputTrimDb == right.inputTrimDb &&
         left.refreshRate == right.refreshRate &&
@@ -416,6 +443,7 @@ std::vector<SettingsPage> settingsPages() {
         SettingsPage::LUFSMeter,
         SettingsPage::Spectrogram,
         SettingsPage::Waveform,
+        SettingsPage::Waterfall,
     };
 }
 
@@ -430,6 +458,7 @@ const char* settingsPageName(SettingsPage page) {
         case SettingsPage::VUMeter: return "VU meter";
         case SettingsPage::LUFSMeter: return "LUFS meter";
         case SettingsPage::Spectrogram: return "Spectrogram";
+        case SettingsPage::Waterfall: return "Waterfall";
         case SettingsPage::Waveform: return "Waveform";
     }
     return "Settings";
@@ -446,6 +475,7 @@ const char* settingsPageDescription(SettingsPage page) {
         case SettingsPage::VUMeter: return "Classic level, peak, and phase metering.";
         case SettingsPage::LUFSMeter: return "Loudness window and target presentation.";
         case SettingsPage::Spectrogram: return "Frequency history, color, and time direction.";
+        case SettingsPage::Waterfall: return "Layered spectrum history.";
         case SettingsPage::Waveform: return "Rolling amplitude envelope and band color.";
     }
     return {};
@@ -461,6 +491,7 @@ const std::vector<SettingDescriptor>& settingsForPage(SettingsPage page) {
         case SettingsPage::VUMeter: return kVUMeterSettings;
         case SettingsPage::LUFSMeter: return kLUFSMeterSettings;
         case SettingsPage::Spectrogram: return kSpectrogramSettings;
+        case SettingsPage::Waterfall: return kWaterfallSettings;
         case SettingsPage::Waveform: return kWaveformSettings;
         case SettingsPage::Home: break;
     }
@@ -470,6 +501,16 @@ const std::vector<SettingDescriptor>& settingsForPage(SettingsPage page) {
 
 std::string settingValue(const TuiSettings& settings, SettingId setting) {
     switch (setting) {
+        case SettingId::WaterfallHistory: return std::to_string(settings.waterfallHistorySeconds) + "s";
+        case SettingId::WaterfallDensity: return settings.waterfallDensity == 0 ? "Sparse" : settings.waterfallDensity == 2 ? "Dense" : "Balanced";
+        case SettingId::WaterfallHeat: return boolValue(settings.waterfallHeat);
+        case SettingId::WaterfallGuides: return boolValue(settings.waterfallGuides);
+        case SettingId::WaterfallFft: return std::to_string(settings.waterfallFftSize);
+        case SettingId::WaterfallScale: return spectrogramScaleName(settings.waterfallScale);
+        case SettingId::WaterfallRange: return settings.waterfallAudibleRange ? "Audible" : "Extended";
+        case SettingId::WaterfallSmoothing: return trimFloat(settings.waterfallSmoothing, 2);
+        case SettingId::WaterfallTilt: return trimFloat(settings.waterfallTiltDbPerOctave, 1) + " dB/oct";
+
         case SettingId::Theme:
             return settings.themeId;
         case SettingId::TerminalCompatibility:
@@ -535,7 +576,8 @@ std::string settingValue(const TuiSettings& settings, SettingId setting) {
 }
 
 bool settingIsBoolean(SettingId setting) {
-    return setting == SettingId::SpectrumPeakReadout ||
+    return setting == SettingId::WaterfallHeat || setting == SettingId::WaterfallGuides || setting == SettingId::WaterfallRange ||
+        setting == SettingId::SpectrumPeakReadout ||
         setting == SettingId::OscilloscopePitchLock ||
         setting == SettingId::OscilloscopeFrequencyReadout ||
         setting == SettingId::VectorscopeGuides ||
@@ -546,6 +588,16 @@ bool adjustSetting(TuiSettings& settings, SettingId setting, int direction) {
     if (direction == 0) return false;
     const TuiSettings before = settings;
     switch (setting) {
+        case SettingId::WaterfallHistory: settings.waterfallHistorySeconds += direction > 0 ? 1 : -1; break;
+        case SettingId::WaterfallDensity: settings.waterfallDensity = (settings.waterfallDensity + (direction > 0 ? 1 : 2)) % 3; break;
+        case SettingId::WaterfallHeat: settings.waterfallHeat = !settings.waterfallHeat; break;
+        case SettingId::WaterfallGuides: settings.waterfallGuides = !settings.waterfallGuides; break;
+        case SettingId::WaterfallFft: settings.waterfallFftSize = direction > 0 ? (settings.waterfallFftSize >= 16384 ? 1024 : settings.waterfallFftSize * 2) : (settings.waterfallFftSize <= 1024 ? 16384 : settings.waterfallFftSize / 2); break;
+        case SettingId::WaterfallScale: settings.waterfallScale = static_cast<SpectrogramScale>((static_cast<int>(settings.waterfallScale) + (direction > 0 ? 1 : 2)) % 3); break;
+        case SettingId::WaterfallRange: settings.waterfallAudibleRange = !settings.waterfallAudibleRange; break;
+        case SettingId::WaterfallSmoothing: settings.waterfallSmoothing += direction > 0 ? 0.01f : -0.01f; break;
+        case SettingId::WaterfallTilt: settings.waterfallTiltDbPerOctave += direction > 0 ? 0.1f : -0.1f; break;
+
         case SettingId::Theme:
             return false;
         case SettingId::TerminalCompatibility: {
@@ -686,6 +738,16 @@ bool resetSetting(TuiSettings& settings, SettingId setting) {
     const TuiSettings defaults;
     const TuiSettings before = settings;
     switch (setting) {
+        case SettingId::WaterfallHistory: settings.waterfallHistorySeconds = defaults.waterfallHistorySeconds; break;
+        case SettingId::WaterfallDensity: settings.waterfallDensity = defaults.waterfallDensity; break;
+        case SettingId::WaterfallHeat: settings.waterfallHeat = defaults.waterfallHeat; break;
+        case SettingId::WaterfallGuides: settings.waterfallGuides = defaults.waterfallGuides; break;
+        case SettingId::WaterfallFft: settings.waterfallFftSize = defaults.waterfallFftSize; break;
+        case SettingId::WaterfallScale: settings.waterfallScale = defaults.waterfallScale; break;
+        case SettingId::WaterfallRange: settings.waterfallAudibleRange = defaults.waterfallAudibleRange; break;
+        case SettingId::WaterfallSmoothing: settings.waterfallSmoothing = defaults.waterfallSmoothing; break;
+        case SettingId::WaterfallTilt: settings.waterfallTiltDbPerOctave = defaults.waterfallTiltDbPerOctave; break;
+
         case SettingId::Theme: settings.themeId = defaults.themeId; break;
         case SettingId::TerminalCompatibility: settings.terminalCompatibility = defaults.terminalCompatibility; break;
         case SettingId::InputTrim: settings.inputTrimDb = defaults.inputTrimDb; break;
@@ -762,6 +824,15 @@ TuiSettings parseSettingsText(const std::string& text,
         else if (key == "input_trim_db") settings.inputTrimDb = parseFloat(value, settings.inputTrimDb);
         else if (key == "refresh_rate") settings.refreshRate = parseInt(value, settings.refreshRate);
         else if (key == "rack_layout") settings.rackLayout = parseRackLayout(value, settings.rackLayout);
+        else if (key == "waterfall_history") settings.waterfallHistorySeconds = parseInt(value, settings.waterfallHistorySeconds);
+        else if (key == "waterfall_density") settings.waterfallDensity = parseInt(value, settings.waterfallDensity);
+        else if (key == "waterfall_heat") settings.waterfallHeat = parseBool(value, settings.waterfallHeat);
+        else if (key == "waterfall_guides") settings.waterfallGuides = parseBool(value, settings.waterfallGuides);
+        else if (key == "waterfall_fft") settings.waterfallFftSize = parseInt(value, settings.waterfallFftSize);
+        else if (key == "waterfall_scale") settings.waterfallScale = parseSpectrogramScale(value, settings.waterfallScale);
+        else if (key == "waterfall_audible") settings.waterfallAudibleRange = parseBool(value, settings.waterfallAudibleRange);
+        else if (key == "waterfall_smoothing") settings.waterfallSmoothing = parseFloat(value, settings.waterfallSmoothing);
+        else if (key == "waterfall_tilt") settings.waterfallTiltDbPerOctave = parseFloat(value, settings.waterfallTiltDbPerOctave);
         else if (key == "spectrum_peak") settings.spectrumPeakReadout = parseBool(value, settings.spectrumPeakReadout);
         else if (key == "spectrum_tilt") settings.spectrumTiltDbPerOctave = parseFloat(value, settings.spectrumTiltDbPerOctave);
         else if (key == "osc_pitch_lock") settings.oscilloscopePitchLock = parseBool(value, settings.oscilloscopePitchLock);
@@ -801,6 +872,15 @@ std::string serializeSettingsText(const TuiSettings& rawSettings,
     }
     output << "input_trim_db=" << settings.inputTrimDb << '\n'
            << "rack_layout=" << serializeRackLayout(settings.rackLayout) << '\n'
+           << "waterfall_history=" << settings.waterfallHistorySeconds << '\n'
+           << "waterfall_density=" << settings.waterfallDensity << '\n'
+           << "waterfall_heat=" << (settings.waterfallHeat ? "true" : "false") << '\n'
+           << "waterfall_guides=" << (settings.waterfallGuides ? "true" : "false") << '\n'
+           << "waterfall_fft=" << settings.waterfallFftSize << '\n'
+           << "waterfall_scale=" << serializeSpectrogramScale(settings.waterfallScale) << '\n'
+           << "waterfall_audible=" << (settings.waterfallAudibleRange ? "true" : "false") << '\n'
+           << "waterfall_smoothing=" << settings.waterfallSmoothing << '\n'
+           << "waterfall_tilt=" << settings.waterfallTiltDbPerOctave << '\n'
            << "spectrum_peak=" << (settings.spectrumPeakReadout ? "true" : "false") << '\n'
            << "spectrum_tilt=" << settings.spectrumTiltDbPerOctave << '\n'
            << "osc_pitch_lock=" << (settings.oscilloscopePitchLock ? "true" : "false") << '\n'

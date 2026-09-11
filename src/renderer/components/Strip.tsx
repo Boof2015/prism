@@ -87,6 +87,7 @@ export default function Strip({
   useEffect(() => {
     const visibleAudioScopeSet = new Set(dockedScopes.filter(isAudioScopeKind))
     audioRouter.setVisualizerConsumerDemand('docked-strip', {
+      waterfall: visibleAudioScopeSet.has('waterfall'),
       spectrum: visibleAudioScopeSet.has('spectrum'),
       oscilloscope: visibleAudioScopeSet.has('oscilloscope'),
       vectorscope: visibleAudioScopeSet.has('vectorscope'),

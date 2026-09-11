@@ -567,3 +567,25 @@ test('legacy migration writes managed files, preserves active profile, and store
     await harness.cleanup()
   }
 })
+
+
+test('Waterfall defaults preserve older racks and new settings and popouts round-trip', () => {
+  const old = normalizeProfileFile({ scopeOrder: ['spectrum', 'spectrogram'], hiddenScopes: [], scopeSettings: {} }, 'old')
+  assert.ok(old.hiddenScopes.includes('waterfall'))
+  assert.ok(normalizeProfileFile({ hiddenScopes: [] }, 'partial').hiddenScopes.includes('waterfall'))
+  assert.equal(old.scopeSettings.waterfall.historySeconds, 5)
+  const profile = createDefaultProfile()
+  profile.hiddenScopes = profile.hiddenScopes.filter((kind) => kind !== 'waterfall')
+  profile.scopeSettings.waterfall = { ...profile.scopeSettings.waterfall, historySeconds: 30, density: 'dense', colorMode: 'heat', scaleMode: 'mel', fftSize: 8192, showGrid: false }
+  profile.scopePopouts.waterfall = { poppedOut: true }
+  const restored = profileFileToProfile(normalizeProfileFile(profile, 'waterfall'))
+  assert.deepEqual(restored.scopeSettings.waterfall, profile.scopeSettings.waterfall)
+  assert.equal(restored.hiddenScopes.includes('waterfall'), false)
+  assert.equal(restored.scopePopouts.waterfall.poppedOut, true)
+  const invalid = mergeScopeSettings({ waterfall: { historySeconds: 90, density: 'bad', smoothing: -1, fftSize: 5, scaleMode: 'bad' } }).waterfall
+  assert.equal(invalid.historySeconds, 30)
+  assert.equal(invalid.density, 'balanced')
+  assert.equal(invalid.smoothing, 0)
+  assert.equal(invalid.fftSize, 2048)
+  assert.equal(invalid.scaleMode, 'log')
+})

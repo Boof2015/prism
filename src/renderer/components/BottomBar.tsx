@@ -23,6 +23,7 @@ import ThemedSelect from './ThemedSelect'
 import ChannelRoutingMatrix from './ChannelRoutingMatrix'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
+  waterfall: 'Waterfall',
   spectrum: 'Spectrum',
   oscilloscope: 'Oscilloscope',
   vectorscope: 'Vectorscope',

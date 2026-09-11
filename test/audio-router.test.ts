@@ -217,6 +217,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
   unsubscribe()
 
   assert.deepEqual(snapshots[0], {
+    waterfall: false,
     spectrum: false,
     oscilloscope: false,
     vectorscope: false,
@@ -226,6 +227,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
     waveform: false,
   })
   assert.deepEqual(snapshots[1], {
+    waterfall: false,
     spectrum: true,
     oscilloscope: true,
     vectorscope: false,
@@ -235,6 +237,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
     waveform: false,
   })
   assert.deepEqual(snapshots[2], {
+    waterfall: false,
     spectrum: true,
     oscilloscope: true,
     vectorscope: true,
@@ -244,6 +247,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
     waveform: false,
   })
   assert.deepEqual(snapshots[3], {
+    waterfall: false,
     spectrum: false,
     oscilloscope: false,
     vectorscope: true,
@@ -258,4 +262,24 @@ test('audio diagnostics stay scoped to audio-only visualizers', () => {
   const router = new AudioRouter()
 
   assert.equal('astra' in router.getDiagnosticsSnapshot().scopes, false)
+})
+
+
+test('Waterfall has independent stereo demand, a bounded queue, and preserves gap sequences', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'native-macos')
+  router.setVisualizerConsumerDemand('waterfall-test', { waterfall: true, spectrum: true, spectrogram: true })
+  for (let sequence = 1; sequence <= 100; sequence++) {
+    router.ingestChunk(createChunk(0.5), createChunk(-0.5), { sessionId, channelCount: 2, sequence })
+  }
+  const chunks = router.flushPendingWaterfallSamples()
+  assert.equal(chunks.length, 96)
+  assert.equal(chunks[0].sequence, 5)
+  assert.deepEqual(Array.from(chunks[0].right), [-0.5, -0.5, -0.5, -0.5])
+  assert.equal(router.flushPendingSpectrumStereoSamples().length, 96)
+  assert.equal(router.flushPendingSpectrogramStereoSamples().length, 96)
+  assert.equal(router.flushPendingWaterfallSamples().length, 0)
+  router.clearVisualizerConsumerDemand('waterfall-test')
+  router.ingestChunk(createChunk(1), createChunk(1), { sessionId, sequence: 101 })
+  assert.equal(router.flushPendingWaterfallSamples().length, 0)
 })

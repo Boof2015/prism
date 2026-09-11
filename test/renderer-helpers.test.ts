@@ -1,3 +1,6 @@
+import { Waterfall } from '../src/renderer/visualizers/Waterfall'
+import { softenWaterfallSpectra, waterfallRidgeHeight, waterfallPlotLayout } from '../src/renderer/visualizers/waterfallPlot'
+import type { WaterfallFrame } from '../src/types/waterfall'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -1709,6 +1712,7 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'vumeter',
     'lufsmeter',
     'waveform',
+    'waterfall',
     'nowPlaying',
   ])
 })
@@ -5845,6 +5849,7 @@ test('moveDockedScopeOrder preserves hidden scope positions in the full order', 
     'vumeter',
     'lufsmeter',
     'waveform',
+    'waterfall',
     'nowPlaying',
   ])
 })
@@ -5866,6 +5871,7 @@ test('moveDockedScopeOrder preserves popped-out scope positions in the full orde
     'vumeter',
     'lufsmeter',
     'waveform',
+    'waterfall',
     'nowPlaying',
   ])
 })
@@ -7381,4 +7387,151 @@ test('DAW musical ruler labels every roomy beat and every bar in dense history',
   } finally {
     dom.restore()
   }
+})
+
+
+test('Waterfall popouts preserve stereo samples and discontinuity sequence numbers', () => {
+  const source = new ScopePopoutDataSource('waterfall')
+  const left = new Float32Array([0.2, 0.4])
+  const right = new Float32Array([-0.2, -0.4])
+  source.pushAudioBatch([{ left, right, sequence: 17 }])
+  assert.deepEqual(source.getPendingWaterfallSamples(), [{ left, right, sequence: 17 }])
+  assert.equal(source.getPendingWaterfallSamples().length, 0)
+})
+
+
+test('Waterfall holds history and detaches rendering while capture is suspended', () => {
+  const raf = installFakeAnimationFrame()
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas()
+  canvas.getContext('2d')!.setTransform = () => {}
+  let session = { sessionId: 1, sampleRate: 48000, channelCount: 2, capturing: true, suspended: false, backendKind: null }
+  let notify: (state: typeof session) => void = () => {}
+  let pulls = 0, processed = 0, resets = 0
+  const waterfall = new Waterfall(canvas, {
+    frameScheduler: new FrameScheduler({ frameTarget: 'display-sync' }),
+    dataSource: {
+      getSampleRate: () => session.sampleRate,
+      isPlaying: () => true,
+      getPendingWaterfallSamples: () => [{ left: new Float32Array(10), right: new Float32Array(10), sequence: ++pulls }],
+      subscribeToSessionChanges: (callback) => { notify = callback; callback(session); return () => {} },
+    },
+    nativeAnalyzer: { configure: () => {}, processStereo: () => { processed++ }, getFrame: () => null, reset: () => { resets++ } },
+  })
+  try {
+    waterfall.start()
+    raf.runFrame(0)
+    assert.equal(processed, 1)
+    session = { ...session, suspended: true }
+    notify(session)
+    raf.runFrame(17)
+    assert.equal(processed, 1)
+    assert.equal(resets, 1, 'pausing must preserve native history')
+    assert.equal(raf.pendingCount(), 0, 'paused capture must release its frame subscription')
+    session = { ...session, suspended: false }
+    notify(session)
+    raf.runFrame(34)
+    assert.equal(processed, 2)
+    assert.equal(resets, 1)
+    session = { ...session, sessionId: 2, sampleRate: 96000 }
+    notify(session)
+    assert.equal(resets, 2, 'a new source session clears its history')
+  } finally {
+    waterfall.dispose()
+    dom.restore()
+    raf.restore()
+  }
+})
+
+test('Waterfall plot fits history and clear spectrum peaks inside large and small panels', () => {
+  for (const height of [55, 100, 140, 300, 600]) {
+    for (const density of ['sparse', 'balanced', 'dense'] as const) {
+      for (const guides of [false, true]) {
+        const layout = waterfallPlotLayout(height, density, guides)
+        assert.ok(layout.ridgeCount >= 2 && layout.ridgeCount <= 64)
+        assert.ok(layout.spacing >= 4)
+        assert.ok(layout.bottom - layout.historyHeight - layout.amplitude >= 8 - 1e-6, 'oldest peaks retain top clearance')
+        assert.equal(waterfallRidgeHeight(-100, layout.amplitude), 0)
+        assert.equal(waterfallRidgeHeight(0, layout.amplitude), layout.amplitude)
+      }
+    }
+  }
+  const normal = waterfallPlotLayout(300, 'balanced', true)
+  assert.ok(normal.spacing >= 4 && normal.spacing <= 7)
+  assert.ok(3 / (normal.ridgeCount - 1) >= 0.06 && 3 / (normal.ridgeCount - 1) <= 0.1)
+  assert.ok(waterfallPlotLayout(100, 'balanced', true).ridgeCount < normal.ridgeCount)
+  assert.ok(waterfallRidgeHeight(-40, normal.amplitude) > normal.spacing * 4, 'clear peaks must retain substantial relief')
+  assert.equal(waterfallPlotLayout(300, 'sparse', true).amplitude, waterfallPlotLayout(300, 'dense', true).amplitude, 'density must not flatten the spectrum')
+})
+
+function waterfallFrame(columns: number, ages: number[], levelAt: (column: number, ridge: number) => number): WaterfallFrame {
+  return {
+    columns, ages: new Float32Array(ages), frequencies: new Float32Array(columns), audioSeconds: 3,
+    levels: Float32Array.from({ length: columns * ages.length }, (_, i) => levelAt(i % columns, Math.floor(i / columns))),
+  }
+}
+
+test('Waterfall plot smoothing preserves constant levels and does not modify native snapshots', () => {
+  for (const columns of [2, 128, 512]) {
+    for (const db of [-100, -60, -20]) {
+      const frame = waterfallFrame(columns, [0, 0.07, 0.14], () => db)
+      const before = structuredClone(frame)
+      const result = softenWaterfallSpectra(frame)
+      assert.ok(result.every((value) => Math.abs(value - db) < 1e-4))
+      assert.deepEqual(frame, before)
+      assert.deepEqual(softenWaterfallSpectra(frame), result, 'redraws must not advance smoothing')
+    }
+  }
+  assert.equal(softenWaterfallSpectra(waterfallFrame(128, [], () => 0)).length, 0)
+})
+
+test('Waterfall plot softens fine bin jitter while retaining peak location and relief', () => {
+  const columns = 512
+  const frame = waterfallFrame(columns, [0], (column) => {
+    const x = column / (columns - 1)
+    return -75 + 30 * Math.exp(-0.5 * ((x - 0.3) / 0.055) ** 2) + (column % 2 ? 6 : -6)
+  })
+  const result = softenWaterfallSpectra(frame)
+  const roughness = (values: Float32Array): number => {
+    let total = 0
+    for (let i = 1; i < values.length - 1; ++i) total += Math.abs(values[i - 1] - 2 * values[i] + values[i + 1])
+    return total
+  }
+  assert.ok(roughness(result) < roughness(frame.levels) * 0.3)
+  const peak = Math.max(...result)
+  assert.ok(Math.abs(result.indexOf(peak) / (columns - 1) - 0.3) < 0.02)
+  assert.ok(peak - result[columns - 1] > 20, 'smoothing should retain a broad hill')
+})
+
+test('Waterfall plot preserves a spectrum as it moves from the live edge into history', () => {
+  const shape = (column: number) => column === 32 ? -20 : -60
+  const frame = waterfallFrame(128, [0, 0.05, 0.1, 0.15, 1], (column, ridge) => ridge === 2 ? shape(column) : -60)
+  const result = softenWaterfallSpectra(frame)
+  const live = softenWaterfallSpectra(waterfallFrame(128, [0], shape))
+  assert.deepEqual(result.subarray(128 * 2, 128 * 3), live, 'age and neighboring spectra must not reshape a captured trace')
+  for (const row of [0, 1, 3, 4]) {
+    assert.ok(result.subarray(row * 128, (row + 1) * 128).every((db) => Math.abs(db + 60) < 1e-4), 'a transient must not bleed into another moment')
+  }
+})
+
+test('Waterfall plot keeps narrow peaks distinct with only light attenuation', () => {
+  const columns = 512
+  const frame = waterfallFrame(columns, [0, 0.064, 0.128, 0.192], (column) => column === 200 ? -6 : -100)
+  const result = softenWaterfallSpectra(frame)
+  const newest = result.subarray(0, columns)
+  const peak = Math.max(...newest)
+  assert.ok(peak >= -8.3, 'even a single-column peak should lose less than 2.3 dB')
+  assert.ok(Math.abs(newest.indexOf(peak) - 200) <= 1)
+  assert.ok(newest[199] > -14 && newest[201] > -14, 'soften the immediate shoulders')
+  assert.ok(newest[197] < -80 && newest[203] < -80, 'retain a narrow peak rather than broadening it into a hill')
+  for (let row = 1; row < frame.ages.length; ++row) {
+    assert.ok(newest.every((value, column) => Math.abs(value - result[row * columns + column]) < 1e-4))
+  }
+})
+
+test('Waterfall plot smoothing retains its frequency shape across plot resolutions', () => {
+  const sample = (columns: number) => softenWaterfallSpectra(waterfallFrame(columns, [0], (column) =>
+    -70 + 25 * Math.exp(-0.5 * ((column / (columns - 1) - 0.4) / 0.08) ** 2)))
+  const small = sample(129), large = sample(513)
+  for (let i = 0; i < small.length; ++i) assert.ok(Math.abs(small[i] - large[i * 4]) < 0.75)
 })
