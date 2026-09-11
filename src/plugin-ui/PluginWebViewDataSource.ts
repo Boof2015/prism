@@ -85,6 +85,10 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     return []
   }
 
+  getPendingWaterfallSamples(): SpectrumStereoChunk[] {
+    return []
+  }
+
   getSampleRate(): number {
     return this.sessionState.sampleRate
   }

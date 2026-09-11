@@ -6,6 +6,7 @@
 #include "VectorscopeEngine.h"
 #include "SpectrogramEngine.h"
 #include "WaveformEngine.h"
+#include "WaterfallEngine.h"
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -131,7 +132,9 @@ namespace
 
     std::unique_ptr<ScopeEngine> makeEngine()
     {
-#if defined(PRISM_SCOPE_WAVEFORM) && PRISM_SCOPE_WAVEFORM
+#if defined(PRISM_SCOPE_WATERFALL) && PRISM_SCOPE_WATERFALL
+        return std::make_unique<WaterfallEngine>();
+#elif defined(PRISM_SCOPE_WAVEFORM) && PRISM_SCOPE_WAVEFORM
         return std::make_unique<WaveformEngine>();
 #elif defined(PRISM_SCOPE_SPECTROGRAM) && PRISM_SCOPE_SPECTROGRAM
         return std::make_unique<SpectrogramEngine>();
@@ -277,6 +280,7 @@ namespace
             .withEventListener("prismConfig", [&editor](juce::var v) { editor.onPrismConfig(std::move(v)); })
             .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); })
             .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
+            .withEventListener("prismWaterfallConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
             .withEventListener("prismScopeMeasurement", [&editor](juce::var v) { editor.onScopeMeasurement(std::move(v)); })
             .withEventListener("prismSettingsPanel", [&editor](juce::var v) { editor.onSettingsPanel(std::move(v)); });
 
@@ -596,6 +600,10 @@ void PrismSpectrumEditor::onPrismReady()
  #endif
 #endif
     webViewReady = true;
+#if defined(PRISM_SCOPE_WATERFALL) && PRISM_SCOPE_WATERFALL
+    // Samples buffered while the editor was closed are not current history.
+    processorRef.restartAudioHistory();
+#endif
     pushRestoreSettings();
     sendAppDefaults();
     startFrameDriver();
@@ -707,7 +715,16 @@ void PrismSpectrumEditor::renderFrame()
 
     const int drained = processorRef.drainStereo(drainLeft.data(), drainRight.data(), (int) drainLeft.size());
 
-#if JUCE_LINUX
+#if defined(PRISM_SCOPE_WATERFALL) && PRISM_SCOPE_WATERFALL
+    if (processorRef.consumeAudioDiscontinuity())
+    {
+        engine->resetAudioHistory();
+        webView->emitEventIfBrowserIsVisible(engine->frameEventId(), engine->buildFrame(sampleRate));
+        return;
+    }
+#endif
+
+#if JUCE_LINUX && !defined(PRISM_SCOPE_WATERFALL)
     if (drained <= 0)
         return;
 #endif

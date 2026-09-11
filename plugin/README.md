@@ -2,7 +2,7 @@
 
 JUCE 8 plugins (VST3 / AU / Standalone) that render Prism's scopes inside a DAW —
 one plugin per scope: **spectrum, oscilloscope, vectorscope, spectrogram, VU meter,
-loudness meter, waveform** — plus the native **Prism Bridge** pass-through plugin.
+loudness meter, waveform, waterfall** — plus the native **Prism Bridge** pass-through plugin.
 The analyzers **reuse Prism's existing C++ DSP** (`native/src/*.cpp`)
 and the **existing React canvas UI** (`src/plugin-ui`, importing the unchanged
 visualizers from `src/renderer/visualizers/`). VST3 is built for macOS, Windows,
@@ -12,14 +12,16 @@ and Linux; AU is macOS-only.
 
 ```
 DAW track audio
-  → processBlock (RT thread): mix to mono, write to lock-free FIFO     [Source/PluginProcessor.cpp]
-  → 60 Hz timer (message thread): drain FIFO → Visualizer::Spectrum    [Source/PluginEditor.cpp + native/src/spectrum.cpp]
-  → emit "spectrumFrame" (base64 Float32 magnitudes) to the webview
-  → juceBridge.ts decodes → BridgeSpectrumAnalyzer (a SpectrumNativeAnalyzer shim)
-  → SpectrumAnalyzer.ts renders to canvas (unchanged Electron code)    [src/plugin-ui]
+  → processBlock (RT thread): copy stereo into a lock-free FIFO       [Source/PluginProcessor.cpp]
+  → display callback (message thread): drain FIFO → native ScopeEngine [Source/PluginEditor.cpp]
+  → emit scope frames (compact base64 Float32 arrays) to the webview
+  → juceBridge.ts decodes → the scope's Bridge*Analyzer adapter
+  → the existing desktop visualizer renders to canvas                [src/plugin-ui]
 ```
 
 No DSP or allocation runs on the realtime audio thread; audio passes through unmodified.
+Waterfall records history at 60 slices per second of audio, independently of the
+display rate, and repaints when a native plot frame arrives.
 
 ## Build & run (macOS)
 
@@ -36,7 +38,7 @@ cmake -B plugin/build -S plugin -DCMAKE_BUILD_TYPE=Release # embeds the bundle (
 cmake --build plugin/build --config Release
 ```
 
-`COPY_PLUGIN_AFTER_BUILD` installs all seven analyzers plus Prism Bridge into your user plugin folders:
+`COPY_PLUGIN_AFTER_BUILD` installs all eight analyzers plus Prism Bridge into your user plugin folders:
 - AU:   `~/Library/Audio/Plug-Ins/Components/Prism *.component`
 - VST3: `~/Library/Audio/Plug-Ins/VST3/Prism *.vst3`
 
@@ -102,19 +104,33 @@ cmake --build plugin/build --target PrismInstallerPlugins --parallel
 ```
 
 Built bundles land under `plugin/build/Prism*_artefacts/Release/VST3/`. Copy the
-eight `Prism *.vst3` directories to one of the standard Linux VST3 scan paths:
+nine `Prism *.vst3` directories to one of the standard Linux VST3 scan paths:
 
 - User-local: `$HOME/.vst3`
 - System-wide: `/usr/lib/vst3`
 - System-wide local: `/usr/local/lib/vst3`
 
 The Linux `.deb` and `.rpm` release packages install Prism's VST3 bundles to
-`/usr/lib/vst3` and remove only those eight bundles on package removal. The Linux
+`/usr/lib/vst3` and remove only those nine bundles on package removal. The Linux
 `tar.gz` release includes `resources/plugins/install-vst3.sh`, which installs to
 `$HOME/.vst3` by default or `/usr/lib/vst3` with `--system`. The AppImage is
 portable app-only and does not install DAW plugins.
 
 ## Notes
+
+Waterfall's native engine/processor tests run with `ctest --test-dir plugin/build
+-C Release -R PrismWaterfallTests --output-on-failure` after building the
+`PrismWaterfallTests` target. Run that executable with `--ui` for a silent native
+editor smoke test of live rendering, color controls, and resizing; it saves canvas
+snapshots in the test application's temporary directory.
+
+- **Waterfall:** reuses the desktop Canvas renderer and the native 60-slice/second
+  stereo analyzer. The webview requests only the visible ridge count and frequency
+  resolution. History duration, density, Theme/Heat colors, guides, FFT, frequency
+  scale/range, smoothing, and tilt are saved per instance in DAW state. Audio gaps,
+  editor reopen, sample-rate changes, and FFT-size changes start fresh history;
+  duration and appearance changes preserve available history. Freeze/inspect and
+  angled 3D remain future work.
 
 - **Prism Bridge:** start the standalone Prism application, insert Bridge on a
   mono or stereo track/bus, then select that instance in Prism's **DAW Bridges**

@@ -49,6 +49,9 @@ public:
     /** Copy up to `maxSamples` of buffered L/R audio into the destinations; returns count. */
     int drainStereo(float* destLeft, float* destRight, int maxSamples) noexcept;
 
+    bool consumeAudioDiscontinuity() noexcept { return audioDiscontinuity.exchange(false); }
+    void restartAudioHistory() noexcept { audioDiscontinuity.store(true); }
+
     /** Persisted UI settings as a JSON string (set from the editor, read on save). */
     void setSettingsJson(const juce::String& json);
     juce::String getSettingsJson() const;
@@ -59,6 +62,7 @@ private:
     juce::AbstractFifo fifo { 1 << 16 };
     std::vector<float> leftBuffer, rightBuffer; // backing storage for `fifo`
     std::atomic<double> currentSampleRate { 48000.0 };
+    std::atomic<bool> audioDiscontinuity { true };
 
     juce::CriticalSection settingsLock;
     juce::String settingsJson;

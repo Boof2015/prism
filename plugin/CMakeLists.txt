@@ -126,6 +126,7 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         ${PRISM_NATIVE_DIR}/multiband.cpp
         ${PRISM_NATIVE_DIR}/spectrogram.cpp
         ${PRISM_NATIVE_DIR}/waveform.cpp
+        ${PRISM_NATIVE_DIR}/waterfall.cpp
         ${PRISM_NATIVE_DIR}/dsp_utils.cpp)
 
     target_include_directories(${TARGET} PRIVATE Source ${PRISM_NATIVE_DIR})
@@ -198,6 +199,7 @@ add_prism_scope(PrismLUFSMeter    "Prism Loudness Meter" Pluf "PRISM_SCOPE_LUFSM
 add_prism_scope(PrismVectorscope  "Prism Vectorscope"  Pvct "PRISM_SCOPE_VECTORSCOPE=1")
 add_prism_scope(PrismSpectrogram  "Prism Spectrogram"  Pspg "PRISM_SCOPE_SPECTROGRAM=1")
 add_prism_scope(PrismWaveform     "Prism Waveform"     Pwav "PRISM_SCOPE_WAVEFORM=1")
+add_prism_scope(PrismWaterfall    "Prism Waterfall"    Pwfl "PRISM_SCOPE_WATERFALL=1")
 
 # Prism Bridge is intentionally a small native-only pass-through plug-in. It has
 # no standalone target and never creates a webview or performs networking on the
@@ -233,15 +235,29 @@ target_link_libraries(PrismBridge PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
 
-if(APPLE AND TARGET PrismBridge_AU)
+if(APPLE)
     # Keep local/CI AU bundles structurally valid before the release pipeline
     # replaces this ad-hoc signature with the distribution identity.
-    add_custom_command(TARGET PrismBridge_AU POST_BUILD
-        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:PrismBridge_AU>"
-        VERBATIM)
+    foreach(au_target IN ITEMS PrismBridge_AU PrismWaterfall_AU)
+        if(TARGET ${au_target})
+            add_custom_command(TARGET ${au_target} POST_BUILD
+                COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${au_target}>"
+                VERBATIM)
+        endif()
+    endforeach()
 endif()
 
 if(BUILD_TESTING)
+    juce_add_console_app(PrismWaterfallTests PRODUCT_NAME "Prism Waterfall Tests")
+    target_sources(PrismWaterfallTests PRIVATE Tests/WaterfallTests.cpp)
+    target_include_directories(PrismWaterfallTests PRIVATE Source ${PRISM_NATIVE_DIR} ${JUCE_SOURCE_DIR}/modules)
+    target_compile_definitions(PrismWaterfallTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+        JUCE_WEB_BROWSER=1
+        JucePlugin_Name="Prism Waterfall")
+    target_link_libraries(PrismWaterfallTests PRIVATE PrismWaterfall)
+    add_test(NAME PrismWaterfallTests COMMAND PrismWaterfallTests)
+
     juce_add_console_app(PrismBridgeTests PRODUCT_NAME "Prism Bridge Tests")
     target_sources(PrismBridgeTests PRIVATE
         Tests/BridgeProcessorTests.cpp
@@ -267,6 +283,7 @@ set(PRISM_SCOPE_TARGETS
     PrismVectorscope
     PrismSpectrogram
     PrismWaveform
+    PrismWaterfall
     PrismBridge)
 
 add_custom_target(PrismInstallerPlugins)

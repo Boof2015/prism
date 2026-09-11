@@ -15,6 +15,7 @@ void PrismSpectrumProcessor::prepareToPlay(double sampleRate, int)
 {
     currentSampleRate.store(sampleRate);
     fifo.reset();
+    audioDiscontinuity.store(true);
 }
 
 bool PrismSpectrumProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -42,6 +43,7 @@ void PrismSpectrumProcessor::pushStereoToFifo(const float* left, const float* ri
         std::memcpy(rightBuffer.data() + start2, right + size1, (size_t) size2 * sizeof(float));
     }
     fifo.finishedWrite(size1 + size2);
+    if (size1 + size2 < num) audioDiscontinuity.store(true);
 }
 
 int PrismSpectrumProcessor::drainStereo(float* destLeft, float* destRight, int maxSamples) noexcept

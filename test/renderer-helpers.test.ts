@@ -132,7 +132,10 @@ import { LUFSMeter, formatMaxTruePeakDb } from '../src/renderer/visualizers/LUFS
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
 import { BridgeSpectrumAnalyzer } from '../src/plugin-ui/BridgeSpectrumAnalyzer'
-import { decodeLUFSMeterFrame, decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
+import { BridgeWaterfallAnalyzer } from '../src/plugin-ui/BridgeWaterfallAnalyzer'
+import { NativeFrameScheduler } from '../src/plugin-ui/NativeFrameScheduler'
+import { waterfallSettingsToOptions } from '../src/plugin-ui/waterfallOptions'
+import { decodeLUFSMeterFrame, decodeSpectrumFrame, decodeWaterfallFrame } from '../src/plugin-ui/juceBridge'
 import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
 import { spectrogramSettingsToOptions } from '../src/plugin-ui/spectrogramOptions'
 import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
@@ -7534,4 +7537,71 @@ test('Waterfall plot smoothing retains its frequency shape across plot resolutio
     -70 + 25 * Math.exp(-0.5 * ((column / (columns - 1) - 0.4) / 0.08) ** 2)))
   const small = sample(129), large = sample(513)
   for (let i = 0; i < small.length; ++i) assert.ok(Math.abs(small[i] - large[i * 4]) < 0.75)
+})
+
+test('Waterfall plugin decodes bounded native snapshots and rejects malformed frames', () => {
+  const encode = (values: number[]): string => Buffer.from(new Float32Array(values).buffer).toString('base64')
+  const payload = {
+    sampleRate: 48000, revision: 3, columns: 3, audioSeconds: 6,
+    ages: encode([0, 2.5, 5]), frequencies: encode([20, 1000, 20000]),
+    levels: encode([-80, -6, -80, -70, -6, -70, -60, -6, -60]),
+  }
+  const decoded = decodeWaterfallFrame(payload)
+  assert.ok(decoded)
+  assert.deepEqual(Array.from(decoded.ages), [0, 2.5, 5])
+  assert.equal(decoded.levels.length, 9)
+  assert.equal(decoded.levels[1], -6)
+  assert.equal(decoded.revision, 3)
+  assert.ok(decodeWaterfallFrame({ ...payload, ages: '', levels: '' }), 'empty history is a valid snapshot')
+  for (const invalid of [
+    null, {}, { ...payload, columns: 513 }, { ...payload, sampleRate: Infinity },
+    { ...payload, levels: 'invalid' }, { ...payload, ages: encode([2, 1]) },
+    { ...payload, levels: encode([NaN, ...new Array(8).fill(-80)]) },
+    { ...payload, frequencies: encode([20, 20000]) }, { ...payload, revision: -1 },
+    { ...payload, ages: encode([0, 31, 32]) },
+    { ...payload, levels: Buffer.from([0, 0, 0, 0, 1]).toString('base64') },
+    { ...payload, levels: 'A'.repeat(200000) },
+  ]) assert.equal(decodeWaterfallFrame(invalid), null)
+})
+
+test('Waterfall plugin retains one snapshot and ignores responses preceding a resize or reset', () => {
+  const commands: unknown[] = []
+  const analyzer = new BridgeWaterfallAnalyzer((command) => commands.push(command))
+  analyzer.configure({ sampleRate: 48000, fftSize: 2048, historySeconds: 5, smoothing: 0.9,
+    tiltDbPerOctave: 2, scaleMode: 'log', minFrequency: 10, maxFrequency: 24000 })
+  analyzer.getFrame(8, 3)
+  const frame = { ...waterfallFrame(3, [0, 2, 4], () => -30), sampleRate: 48000, revision: analyzer.getRequest().revision }
+  analyzer.pushFrame(frame)
+  assert.equal(analyzer.getFrame(8, 3), frame)
+  assert.equal(commands.length, 2, 'unchanged viewport does not send repeated requests')
+  assert.equal(analyzer.getFrame(16, 7), frame, 'keep available history while the native viewport catches up')
+  analyzer.pushFrame({ ...frame, audioSeconds: 999 })
+  assert.equal(analyzer.getFrame(16, 7), frame, 'stale response is discarded')
+  const resized = { ...waterfallFrame(7, [0, 2, 4], () => -20), sampleRate: 48000, revision: analyzer.getRequest().revision }
+  analyzer.pushFrame(resized)
+  assert.equal(analyzer.getFrame(16, 7), resized)
+  analyzer.reset()
+  analyzer.pushFrame(resized)
+  assert.equal(analyzer.getFrame(16, 7).ages.length, 0, 'late frames cannot resurrect cleared history')
+  assert.deepEqual(commands[commands.length - 1], { revision: analyzer.getRequest().revision, reset: true })
+})
+
+test('Waterfall plugin uses the desktop appearance and normalized settings', () => {
+  const profile = createDefaultProfile('Default')
+  const theme = resolveTheme(createDefaultTheme())
+  assert.deepEqual(waterfallSettingsToOptions(profile.scopeSettings.waterfall, theme.waterfall),
+    scopeSettingsToOptions('waterfall', profile.scopeSettings.waterfall, theme.waterfall))
+})
+
+test('plugin native frame clock paints without browser animation callbacks and stops on disposal', () => {
+  const scheduler = new NativeFrameScheduler()
+  let paints = 0
+  const unsubscribe = scheduler.subscribe(() => { paints++ })
+  assert.equal(paints, 0)
+  scheduler.dispatchFrame()
+  scheduler.dispatchFrame()
+  assert.equal(paints, 2)
+  unsubscribe()
+  scheduler.dispatchFrame()
+  assert.equal(paints, 2)
 })

@@ -25,7 +25,7 @@ Prism includes eight real-time scopes and meters:
 * **Spectrum Analyzer** — FFT spectrum with calibrated dBFS levels, configurable FFT size, spectral tilt, Log/Mel/Linear scales, heatmap and fill modes, and peak/pitch readouts
 * **Oscilloscope** — Time-domain waveform with fundamental-frequency pitch locking and sub-sample triggering for a stable display
 * **Vectorscope** — Full-band stereo phase analysis with XY, Polar, and M/S Linear views, calibrated references, adjustable zoom, and optional multiband RGB
-* **Waterfall** — Layered spectrum history with 1–30 seconds of audio, adaptive ridge density, theme or heat colors, and frequency/time guides in the desktop app and TUI
+* **Waterfall** — Layered spectrum history with 1–30 seconds of audio, adaptive ridge density, theme or heat colors, and frequency/time guides in the desktop app, TUI, and DAW plugin
 * **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, stereo-energy analysis, and frequency reassignment in Sharp and Sharper modes
 * **VU Meter** — 300 ms metering with adjustable 0 VU reference, stereo correlation, and needle or bar displays
 * **Loudness Meter** — ITU-R BS.1770 momentary, short-term, and integrated LUFS metering with BS.1770 true-peak activity
@@ -65,6 +65,7 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * Foreground ridges hide covered sections of older lines
 * Available through the desktop add-scope menu and TUI layout editor (shortcut **8**)
 * Desktop popouts and saved profiles are supported; existing layouts stay unchanged
+* Dedicated Prism Waterfall VST3/AU plugin shares the desktop renderer and native history, with settings saved in DAW projects
 
 ### Spectrogram
 
@@ -156,7 +157,7 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 
 ### DAW plugins
 
-* All seven Prism analyzers are built from the same native DSP source used by the desktop application
+* All eight Prism analyzers are built from the same native DSP source used by the desktop application
 * Prism Bridge streams one DAW track or bus into the standalone app without changing the track audio
 * VST3 on Windows, macOS, and Linux
 * AU on macOS
