@@ -3,12 +3,8 @@ import type {
   RollingCaptureDurationSeconds,
 } from '../../types/audioClip'
 
-function floatToPcm16(sample: number): number {
-  if (!Number.isFinite(sample)) return 0
-  const clamped = Math.max(-1, Math.min(1, sample))
-  return clamped < 0
-    ? Math.round(clamped * 32768)
-    : Math.round(clamped * 32767)
+function finiteSample(sample: number): number {
+  return Number.isFinite(sample) ? sample : 0
 }
 
 function normalizeChannelCount(channelCount: number): 1 | 2 {
@@ -16,7 +12,7 @@ function normalizeChannelCount(channelCount: number): 1 | 2 {
 }
 
 export class RollingAudioBuffer {
-  private samples: Int16Array
+  private samples: Float32Array
   private capacityFrames: number
   private writeFrameIndex = 0
   private bufferedFrames = 0
@@ -34,7 +30,7 @@ export class RollingAudioBuffer {
     this.sampleRate = Math.max(1, Math.floor(sampleRate) || 1)
     this.channelCount = normalizeChannelCount(channelCount)
     this.capacityFrames = Math.max(1, Math.floor(durationSeconds * this.sampleRate))
-    this.samples = new Int16Array(this.capacityFrames * this.channelCount)
+    this.samples = new Float32Array(this.capacityFrames * this.channelCount)
   }
 
   get durationSeconds(): RollingCaptureDurationSeconds {
@@ -75,9 +71,9 @@ export class RollingAudioBuffer {
       for (let offset = 0; offset < contiguousFrames; offset += 1) {
         const sourceIndex = sourceFrameIndex + offset
         const destinationIndex = (this.writeFrameIndex + offset) * this.channelCount
-        this.samples[destinationIndex] = floatToPcm16(left[sourceIndex] ?? 0)
+        this.samples[destinationIndex] = finiteSample(left[sourceIndex] ?? 0)
         if (this.channelCount === 2) {
-          this.samples[destinationIndex + 1] = floatToPcm16(right[sourceIndex] ?? 0)
+          this.samples[destinationIndex + 1] = finiteSample(right[sourceIndex] ?? 0)
         }
       }
 
@@ -96,7 +92,7 @@ export class RollingAudioBuffer {
 
     const nextCapacityFrames = Math.max(1, Math.floor(durationSeconds * this.sampleRate))
     const framesToKeep = Math.min(this.bufferedFrames, nextCapacityFrames)
-    const nextSamples = new Int16Array(nextCapacityFrames * this.channelCount)
+    const nextSamples = new Float32Array(nextCapacityFrames * this.channelCount)
 
     if (framesToKeep > 0) {
       const startFrame = (
@@ -115,7 +111,7 @@ export class RollingAudioBuffer {
   snapshot(): RollingAudioSnapshot | null {
     if (this.bufferedFrames <= 0) return null
 
-    const pcmSamples = new Int16Array(this.bufferedFrames * this.channelCount)
+    const pcmSamples = new Float32Array(this.bufferedFrames * this.channelCount)
     const startFrame = (
       this.writeFrameIndex - this.bufferedFrames + this.capacityFrames
     ) % this.capacityFrames
@@ -130,7 +126,7 @@ export class RollingAudioBuffer {
   }
 
   private copyFramesTo(
-    destination: Int16Array,
+    destination: Float32Array,
     startFrame: number,
     frameCount: number,
   ): void {

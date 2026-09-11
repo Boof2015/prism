@@ -149,9 +149,9 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 ### Rolling capture
 
 * Keeps the previous 5, 10, 30, or 60 seconds of audio available without starting a recording beforehand
-* Buffer is stored as PCM and exported as a standard RIFF/WAV file
+* Buffer retains 32-bit floating-point samples and exports standard RIFF/WAV files
 * Mono and stereo capture are supported
-* Exported clips use 16-bit PCM
+* Choose **16-bit PCM** (default) or **32-bit float** WAV export in Rolling Capture settings; the choice is remembered across launches
 * The export path supports source sample rates up to 384 kHz
 * Captured audio can be dragged directly out of Prism as a file
 
@@ -206,6 +206,10 @@ Prism can also live in the system tray, start automatically with your computer, 
 Prism can continuously keep the last **5, 10, 30, or 60 seconds** of audio in memory.
 
 When you hear something you want to keep, drag the buffered audio out of Prism as a WAV file. There is no need to start recording beforehand.
+
+Choose **16-bit PCM** for smaller files or **32-bit float** to preserve captured floating-point precision and samples above full scale for DAW editing. Changing the format applies to the next export without clearing buffered audio. Exports retain the source sample rate and do not normalize or dither audio.
+
+The float buffer uses approximately 23 MB for 60 seconds of stereo at 48 kHz. Rolling Capture allocates no recorder buffer while off.
 
 ## DAW Plugins
 

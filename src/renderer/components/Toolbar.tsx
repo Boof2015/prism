@@ -1,3 +1,4 @@
+import { AUDIO_CLIP_FORMAT_LABELS } from '../../types/audioClip'
 import {
   useState,
   useEffect,
@@ -181,6 +182,8 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const releaseName = useUpdateStore((s) => s.releaseName)
   const openReleasesPage = useUpdateStore((s) => s.openReleasesPage)
   const rollingCaptureSeconds = useAudioStore((s) => s.rollingCaptureSeconds)
+  const rollingCaptureFormat = useAudioStore((s) => s.rollingCaptureFormat)
+  const clipFormatLabel = AUDIO_CLIP_FORMAT_LABELS[rollingCaptureFormat]
   const rollingCaptureStatus = useAudioStore((s) => s.rollingCaptureStatus)
   const startRollingClipDrag = useAudioStore((s) => s.startRollingClipDrag)
   const [appBuildInfo, setAppBuildInfo] = useState<AppBuildInfo | null>(null)
@@ -561,11 +564,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           disabled={!rollingCaptureStatus.hasAudio}
           onDragStart={handleAudioClipDragStart}
           title={rollingCaptureStatus.ready
-            ? `Drag the latest ${rollingCaptureSeconds} seconds as a WAV file`
+            ? `Drag the latest ${rollingCaptureSeconds} seconds as a ${clipFormatLabel} WAV file`
             : rollingCaptureStatus.hasAudio
-              ? `Buffer filling; drag the audio captured so far (up to ${rollingCaptureSeconds} seconds)`
+              ? `Buffer filling; drag the audio captured so far (up to ${rollingCaptureSeconds} seconds) as a ${clipFormatLabel} WAV file`
               : 'Waiting for captured audio'}
-          aria-label={`Drag the latest ${rollingCaptureSeconds} seconds as a WAV file`}
+          aria-label={`Drag the latest ${rollingCaptureSeconds} seconds as a ${clipFormatLabel} WAV file`}
         >
           <span className="toolbar__clip-dot" aria-hidden="true" />
           <span className="toolbar__clip-prefix">Clip </span>{rollingCaptureSeconds}s

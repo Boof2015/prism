@@ -2,17 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { RollingAudioBuffer } from '../src/renderer/audio/RollingAudioBuffer'
 
-function pcm16(sample: number): number {
-  if (!Number.isFinite(sample)) return 0
-  const clamped = Math.max(-1, Math.min(1, sample))
-  return clamped < 0
-    ? Math.round(clamped * 32768)
-    : Math.round(clamped * 32767)
-}
-
-test('rolling audio buffer allocates exact fixed PCM capacity and quantizes stereo', () => {
+test('rolling audio buffer allocates exact fixed float capacity and preserves stereo headroom', () => {
   const buffer = new RollingAudioBuffer(5, 2, 2)
-  assert.equal(buffer.allocatedBytes, 5 * 2 * 2 * 2)
+  assert.equal(buffer.allocatedBytes, 5 * 2 * 2 * 4)
   assert.equal(buffer.frameCount, 0)
   assert.equal(buffer.snapshot(), null)
 
@@ -28,11 +20,11 @@ test('rolling audio buffer allocates exact fixed PCM capacity and quantizes ster
   assert.equal(snapshot.sampleRate, 2)
   assert.equal(snapshot.frameCount, 6)
   assert.deepEqual(Array.from(snapshot.pcmSamples), [
-    -32768, 32767,
-    -16384, 8192,
+    -2, 1,
+    -0.5, 0.25,
     0, 0,
-    16384, -8192,
-    32767, -32768,
+    0.5, -0.25,
+    2, -1,
     0, 0,
   ])
 })
@@ -52,7 +44,7 @@ test('rolling audio buffer keeps chronological newest frames across wrapping', (
 
   const expected: number[] = []
   for (let index = 2; index < 12; index += 1) {
-    expected.push(pcm16(left[index]), pcm16(right[index]))
+    expected.push(left[index], right[index])
   }
   assert.deepEqual(Array.from(snapshot.pcmSamples), expected)
 })
@@ -66,7 +58,7 @@ test('rolling audio buffer supports mono and ignores mismatched channel chunks',
   const snapshot = buffer.snapshot()
   assert.ok(snapshot)
   assert.equal(snapshot.channelCount, 1)
-  assert.deepEqual(Array.from(snapshot.pcmSamples), [8192, -8192])
+  assert.deepEqual(Array.from(snapshot.pcmSamples), [0.25, -0.25])
 })
 
 test('rolling audio buffer preserves newest audio while growing and shrinking', () => {
@@ -75,7 +67,7 @@ test('rolling audio buffer preserves newest audio while growing and shrinking', 
   buffer.append(initial, new Float32Array(), 1)
 
   buffer.resize(10)
-  assert.equal(buffer.allocatedBytes, 10 * 2 * 1 * 2)
+  assert.equal(buffer.allocatedBytes, 10 * 2 * 1 * 4)
   assert.equal(buffer.frameCount, 10)
   assert.equal(buffer.isReady, false)
 
@@ -89,7 +81,7 @@ test('rolling audio buffer preserves newest audio while growing and shrinking', 
   assert.equal(buffer.isReady, true)
   assert.deepEqual(
     Array.from(snapshot.pcmSamples),
-    Array.from(appended.subarray(2), pcm16),
+    Array.from(appended.subarray(2)),
   )
 })
 
@@ -102,7 +94,7 @@ test('rolling audio buffer keeps only the tail of chunks larger than capacity', 
   assert.ok(snapshot)
   assert.deepEqual(
     Array.from(snapshot.pcmSamples),
-    Array.from(input.subarray(4), pcm16),
+    Array.from(input.subarray(4)),
   )
 })
 

@@ -11,7 +11,7 @@ import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
-import { ROLLING_CAPTURE_DURATIONS } from '../../types/audioClip'
+import { AUDIO_CLIP_FORMAT_LABELS, ROLLING_CAPTURE_DURATIONS } from '../../types/audioClip'
 import { SCOPE_KINDS } from '../../types/scope'
 import {
   getCaptureRoutingStorageKey,
@@ -208,6 +208,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     captureNotice,
     inputGainDb,
     rollingCaptureSeconds,
+    rollingCaptureFormat,
     rollingCaptureStatus,
     channelRoutingBySource,
     clearCaptureNotice,
@@ -218,6 +219,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     setInputGain,
     setChannelRouting,
     setRollingCaptureSeconds,
+    setRollingCaptureFormat,
     revealRollingCaptureFolder,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
@@ -922,6 +924,23 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 >
                   Folder
                 </button>
+
+                <div className="bottom-bar__inline" role="group" aria-label="WAV format">
+                  <span className="bottom-bar__section-title">WAV format</span>
+                  <div className="bottom-bar__inline bottom-bar__inline--chips">
+                    {(['pcm16', 'float32'] as const).map((format) => (
+                      <button
+                        key={format}
+                        type="button"
+                        className={`settings-chip ${rollingCaptureFormat === format ? 'is-active' : ''}`.trim()}
+                        aria-pressed={rollingCaptureFormat === format}
+                        onClick={() => setRollingCaptureFormat(format)}
+                      >
+                        {AUDIO_CLIP_FORMAT_LABELS[format]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </section>

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { audioCapture } from '../src/renderer/audio/AudioCapture'
+import { RollingAudioBuffer } from '../src/renderer/audio/RollingAudioBuffer'
+import type { AudioClipDragPayload } from '../src/types/audioClip'
 import {
   loadAudioPreferences,
   normalizeAudioPreferences,
@@ -38,6 +40,7 @@ function audioPreferences(overrides: Partial<PersistedAudioState> = {}): Persist
     selectedDeviceId: null,
     selectedDawSourceId: null,
     rollingCaptureSeconds: null,
+    rollingCaptureFormat: 'pcm16',
     channelRoutingBySource: {},
     ...overrides,
   }
@@ -328,6 +331,7 @@ function resetStores(): void {
     activeSourceLabel: null,
     inputGainDb: 0,
     rollingCaptureSeconds: null,
+    rollingCaptureFormat: 'pcm16',
     rollingCaptureStatus: audioCapture.getRollingCaptureStatus(),
   })
 
@@ -626,6 +630,69 @@ test('normalizeRollingCaptureSeconds accepts only supported durations', () => {
   assert.equal(normalizeRollingCaptureSeconds(60), 60)
   assert.equal(normalizeRollingCaptureSeconds(15), null)
   assert.equal(normalizeRollingCaptureSeconds('10'), null)
+})
+
+test('audio clip format defaults legacy and invalid preferences to PCM16', () => {
+  for (const rollingCaptureFormat of [undefined, null, '', 'pcm32', 32]) {
+    assert.equal(normalizeAudioPreferences({ rollingCaptureFormat }).rollingCaptureFormat, 'pcm16')
+  }
+  for (const rollingCaptureFormat of ['pcm16', 'float32'] as const) {
+    assert.equal(loadAudioPreferences({
+      getItem: () => JSON.stringify({ rollingCaptureFormat }), setItem: () => {},
+    }).rollingCaptureFormat, rollingCaptureFormat)
+  }
+})
+
+test('format selection survives other audio preference changes and exports the same buffered audio', () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const payloads: AudioClipDragPayload[] = []
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { electronAPI: { audioClips: { startDrag: (payload: AudioClipDragPayload) => payloads.push(payload) } } },
+  })
+  // Feed the real capture snapshot path without starting an audio device.
+  const captureInternals = audioCapture as unknown as { rollingAudioBuffer: RollingAudioBuffer | null }
+  try {
+    useAudioStore.getState().setRollingCaptureSeconds(5)
+    const buffer = new RollingAudioBuffer(5, 48000, 2)
+    buffer.append(new Float32Array([1.25, 1e-8]), new Float32Array([-1.25, -1e-8]), 2)
+    captureInternals.rollingAudioBuffer = buffer
+    const before = audioCapture.takeRollingCaptureSnapshot()
+
+    useAudioStore.getState().setRollingCaptureFormat('float32')
+    const setCount = fakeStorage.getSetCount()
+    useAudioStore.getState().setRollingCaptureFormat('float32')
+    assert.equal(fakeStorage.getSetCount(), setCount)
+    useAudioStore.getState().setInputGain(3)
+    useAudioStore.getState().setCaptureMode('device')
+    useAudioStore.getState().setRollingCaptureSeconds(10)
+    assert.equal(loadAudioPreferences({ getItem: fakeStorage.getItem, setItem: () => {} }).rollingCaptureFormat, 'float32')
+    assert.equal(useAudioStore.getState().startRollingClipDrag(), true)
+    useAudioStore.getState().setRollingCaptureFormat('pcm16')
+    assert.equal(useAudioStore.getState().startRollingClipDrag(), true)
+    assert.deepEqual(audioCapture.takeRollingCaptureSnapshot(), before)
+    assert.equal(captureInternals.rollingAudioBuffer, buffer)
+    assert.deepEqual(payloads.map(({ format, frameCount, channelCount, sampleRate }) => ({ format, frameCount, channelCount, sampleRate })), [
+      { format: 'float32', frameCount: 2, channelCount: 2, sampleRate: 48000 },
+      { format: 'pcm16', frameCount: 2, channelCount: 2, sampleRate: 48000 },
+    ])
+    const floatView = new DataView(payloads[0].pcmBytes.buffer)
+    assert.equal(floatView.getFloat32(0, true), 1.25)
+    assert.equal(floatView.getFloat32(4, true), -1.25)
+    assert.equal(floatView.getFloat32(8, true), Math.fround(1e-8))
+    const intView = new DataView(payloads[1].pcmBytes.buffer)
+    assert.equal(intView.getInt16(0, true), 32767)
+    assert.equal(intView.getInt16(2, true), -32768)
+    assert.equal(intView.getInt16(4, true), 0)
+    assert.equal(loadAudioPreferences({ getItem: fakeStorage.getItem, setItem: () => {} }).rollingCaptureFormat, 'pcm16')
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+    fakeStorage.restore()
+    resetStores()
+  }
 })
 
 test('rolling capture opt-in does not allocate a buffer while capture is idle', () => {

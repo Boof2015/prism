@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { audioCapture, type CaptureManagerStatus } from '../audio/AudioCapture'
 import {
   isRollingCaptureDuration,
+  isAudioClipFormat,
+  type AudioClipFormat,
   type RollingCaptureDurationSeconds,
   type RollingCaptureStatus,
 } from '../../types/audioClip'
@@ -17,6 +19,7 @@ import {
   getCaptureRoutingStorageKey,
   normalizeCaptureChannelRouting,
 } from '../../types/capture'
+import { encodeAudioClipPayload } from '../../shared/audioClipEncoding'
 import { useUiStore } from './uiStore'
 
 const STORAGE_KEY = 'prism:audio'
@@ -33,6 +36,7 @@ export interface PersistedAudioState {
   selectedDeviceId: string | null
   selectedDawSourceId: string | null
   rollingCaptureSeconds: RollingCaptureDurationSeconds | null
+  rollingCaptureFormat: AudioClipFormat
   channelRoutingBySource: Record<string, CaptureChannelRouting>
 }
 
@@ -69,10 +73,12 @@ interface AudioState {
   activeSourceLabel: string | null
   inputGainDb: number
   rollingCaptureSeconds: RollingCaptureDurationSeconds | null
+  rollingCaptureFormat: AudioClipFormat
   rollingCaptureStatus: RollingCaptureStatus
   setInputGain: (db: number) => void
   setChannelRouting: (routing: CaptureChannelRouting) => void
   setRollingCaptureSeconds: (duration: RollingCaptureDurationSeconds | null) => void
+  setRollingCaptureFormat: (format: AudioClipFormat) => void
   startRollingClipDrag: () => boolean
   revealRollingCaptureFolder: () => Promise<void>
   clearCaptureNotice: () => void
@@ -286,6 +292,7 @@ export function normalizeAudioPreferences(raw: unknown): PersistedAudioState {
     selectedDeviceId: normalizeDeviceId(parsed.selectedDeviceId),
     selectedDawSourceId: normalizeDeviceId(parsed.selectedDawSourceId),
     rollingCaptureSeconds: normalizeRollingCaptureSeconds(parsed.rollingCaptureSeconds),
+    rollingCaptureFormat: isAudioClipFormat(parsed.rollingCaptureFormat) ? parsed.rollingCaptureFormat : 'pcm16',
     channelRoutingBySource: normalizeChannelRoutingMap(parsed.channelRoutingBySource),
   }
 }
@@ -298,6 +305,7 @@ function buildAudioPreferences(
   rollingCaptureSeconds: RollingCaptureDurationSeconds | null,
   selectedDawSourceId: string | null,
   channelRoutingBySource: Record<string, CaptureChannelRouting>,
+  rollingCaptureFormat: AudioClipFormat,
 ): PersistedAudioState {
   return normalizeAudioPreferences({
     inputGainDb,
@@ -306,6 +314,7 @@ function buildAudioPreferences(
     selectedDeviceId,
     selectedDawSourceId,
     rollingCaptureSeconds,
+    rollingCaptureFormat,
     channelRoutingBySource,
   })
 }
@@ -369,6 +378,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   activeSourceLabel: null,
   inputGainDb: storedPreferences.inputGainDb,
   rollingCaptureSeconds: storedPreferences.rollingCaptureSeconds,
+  rollingCaptureFormat: storedPreferences.rollingCaptureFormat,
   rollingCaptureStatus: audioCapture.getRollingCaptureStatus(),
 
   setInputGain: (db: number) => {
@@ -386,6 +396,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.rollingCaptureSeconds,
       currentState.selectedDawSourceId,
       currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     audioCapture.setInputGain(nextInputGainDb)
     set({ inputGainDb: nextInputGainDb })
@@ -411,6 +422,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.rollingCaptureSeconds,
       currentState.selectedDawSourceId,
       nextRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
 
     const routingActiveSource = currentState.isCapturing
@@ -438,6 +450,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       nextDuration,
       currentState.selectedDawSourceId,
       currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     audioCapture.setRollingCaptureSeconds(nextDuration)
     set({
@@ -446,21 +459,31 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     })
   },
 
+  setRollingCaptureFormat: (format) => {
+    const nextFormat = isAudioClipFormat(format) ? format : 'pcm16'
+    const currentState = get()
+    if (currentState.rollingCaptureFormat === nextFormat) return
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      currentState.captureMode,
+      currentState.selectedSystemSourceId,
+      currentState.selectedDeviceId,
+      currentState.rollingCaptureSeconds,
+      currentState.selectedDawSourceId,
+      currentState.channelRoutingBySource,
+      nextFormat,
+    ))
+    set({ rollingCaptureFormat: nextFormat })
+  },
+
   startRollingClipDrag: () => {
     if (typeof window === 'undefined' || !window.electronAPI?.audioClips) return false
     const snapshot = audioCapture.takeRollingCaptureSnapshot()
     if (!snapshot) return false
 
-    window.electronAPI.audioClips.startDrag({
-      pcmBytes: new Uint8Array(
-        snapshot.pcmSamples.buffer,
-        snapshot.pcmSamples.byteOffset,
-        snapshot.pcmSamples.byteLength,
-      ),
-      sampleRate: snapshot.sampleRate,
-      channelCount: snapshot.channelCount,
-      frameCount: snapshot.frameCount,
-    })
+    window.electronAPI.audioClips.startDrag(
+      encodeAudioClipPayload(snapshot, get().rollingCaptureFormat),
+    )
     return true
   },
 
@@ -506,6 +529,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         currentState.rollingCaptureSeconds,
         currentState.selectedDawSourceId,
         currentState.channelRoutingBySource,
+        currentState.rollingCaptureFormat,
       ))
     }
 
@@ -577,6 +601,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         currentState.rollingCaptureSeconds,
         currentState.selectedDawSourceId,
         currentState.channelRoutingBySource,
+        currentState.rollingCaptureFormat,
       ))
     }
 
@@ -643,6 +668,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.rollingCaptureSeconds,
       currentState.selectedDawSourceId,
       currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     set({
       selectedSystemSourceId: nextSelectedSystemSourceId,
@@ -664,6 +690,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.rollingCaptureSeconds,
       currentState.selectedDawSourceId,
       currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     set({
       selectedDeviceId: deviceId,
@@ -687,6 +714,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.rollingCaptureSeconds,
       persistentSourceId,
       currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     set({
       selectedDawSourceId: persistentSourceId,
@@ -707,6 +735,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.rollingCaptureSeconds,
       currentState.selectedDawSourceId,
       currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     set({ captureMode: mode })
   },
@@ -737,6 +766,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
           currentState.rollingCaptureSeconds,
           currentState.selectedDawSourceId,
           currentState.channelRoutingBySource,
+          currentState.rollingCaptureFormat,
         ))
         set({
           selectedDeviceId: null,
