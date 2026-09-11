@@ -33,6 +33,8 @@ Prism includes eight real-time scopes and meters:
 
 Every scope can be configured independently. Resize and rearrange them into a rack, rotate supported scopes, pop them into separate windows, or pin them on top of other applications.
 
+On Windows, enable **Reserve screen space** in the rack's Top/Bottom reposition menu or its tray equivalent to dock the main rack across one monitor. Maximized applications use the remaining workspace. Resize the edge facing the workspace, drag the grab handle to return to a floating rack, or disable the option to restore its previous position and size. Settings open in a separate panel beside the dock. Docking is remembered on this computer independently of profiles; minimizing or hiding Prism releases the reserved space.
+
 ![Prism customize](assets/prism-showcase-layout-readme.gif)
 
 Spectrum, Spectrogram, Oscilloscope, and Waveform also include interactive measurement overlays for inspecting frequency, level, pitch, amplitude, or time directly from the display. Optional Linked Analysis mirrors compatible frequency, history-time, and amplitude guides across docked and detached scopes.

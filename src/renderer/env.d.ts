@@ -1,4 +1,5 @@
 import type { SpectrumReferenceTransport } from '../types/spectrumReference'
+import type { WindowDockingSnapshot } from '../types/windowDocking'
 /// <reference types="vite/client" />
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
@@ -52,6 +53,14 @@ declare global {
     visualizerAPI: VisualizerDSP | null
     nativeCaptureAPI: NativeCaptureAPI | null
     electronAPI: {
+      docking: {
+        get(): Promise<WindowDockingSnapshot>
+        setEnabled(enabled: boolean): Promise<WindowDockingSnapshot | null>
+        onChanged(callback: (snapshot: WindowDockingSnapshot) => void): () => void
+        showSettings(height: number): Promise<boolean>
+        closeSettings(): void
+        onSettingsClosed(callback: () => void): () => void
+      }
       referenceTracks: SpectrumReferenceTransport
       platform: string
       windowCapabilities: WindowCapabilities

@@ -177,11 +177,11 @@ test('hidden login launch requires the login origin, tray preference, and no fil
 test('Linux autostart helpers use XDG paths, AppImage paths, and desktop-entry quoting', () => {
   assert.equal(
     resolveLinuxAutostartPath('/tmp/prism config', '/home/test'),
-    '/tmp/prism config/autostart/com.astra.prism.desktop',
+    join('/tmp/prism config', 'autostart', 'com.astra.prism.desktop'),
   )
   assert.equal(
     resolveLinuxAutostartPath('relative', '/home/test'),
-    '/home/test/.config/autostart/com.astra.prism.desktop',
+    join('/home/test', '.config', 'autostart', 'com.astra.prism.desktop'),
   )
   assert.equal(resolveLinuxLaunchExecutable('/apps/Prism.AppImage', '/tmp/.mount/prism'), '/apps/Prism.AppImage')
   assert.equal(resolveLinuxLaunchExecutable('relative', '/usr/bin/prism'), '/usr/bin/prism')
@@ -310,13 +310,13 @@ test('tray assets resolve for development and packaged builds', () => {
     isPackaged: true,
     resourcesPath: '/Applications/Prism.app/Contents/Resources',
     appPath: '/Applications/Prism.app/Contents/Resources/app.asar',
-  }), '/Applications/Prism.app/Contents/Resources/tray/prismTrayTemplate.png')
+  }), join('/Applications/Prism.app/Contents/Resources', 'tray', 'prismTrayTemplate.png'))
   assert.equal(resolveTrayAssetPath({
     platform: 'linux',
     isPackaged: false,
     resourcesPath: '/unused',
     appPath: '/workspace/prism',
-  }), '/workspace/prism/resources/tray/prism-tray.png')
+  }), join('/workspace/prism', 'resources', 'tray', 'prism-tray.png'))
 })
 
 test('generated tray assets have the expected sizes and transparent macOS mask', async () => {

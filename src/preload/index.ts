@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { WindowDockingSnapshot } from '../types/windowDocking'
 import type { SpectrumReferenceImportState } from '../types/spectrumReference'
 import type { AppBuildInfo } from '../types/appBuildInfo'
 import type { AudioClipDragPayload } from '../types/audioClip'
@@ -60,6 +61,21 @@ const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
 
 // Expose Electron API to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
+  docking: {
+    get: (): Promise<WindowDockingSnapshot> => ipcRenderer.invoke('window:docking-get'),
+    setEnabled: (enabled: boolean): Promise<WindowDockingSnapshot | null> => ipcRenderer.invoke('window:docking-set', enabled),
+    onChanged: (callback: (snapshot: WindowDockingSnapshot) => void) => {
+      const listener = (_event: unknown, snapshot: WindowDockingSnapshot): void => callback(snapshot)
+      ipcRenderer.on('window:docking-changed', listener)
+      return () => ipcRenderer.removeListener('window:docking-changed', listener)
+    },
+    showSettings: (height: number): Promise<boolean> => ipcRenderer.invoke('window:docked-settings-show', height),
+    closeSettings: (): void => ipcRenderer.send('window:docked-settings-close'),
+    onSettingsClosed: (callback: () => void) => {
+      ipcRenderer.on('window:docked-settings-closed', callback)
+      return () => ipcRenderer.removeListener('window:docked-settings-closed', callback)
+    },
+  },
   referenceTracks: {
     getState: () => ipcRenderer.invoke('reference-tracks:get-state') as Promise<SpectrumReferenceImportState>,
     choose: () => ipcRenderer.invoke('reference-tracks:choose') as Promise<void>,

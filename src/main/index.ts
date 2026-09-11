@@ -47,6 +47,9 @@ import { FileBackedProfileLibrary } from './profileLibrary'
 import { AudioClipLibrary } from './audioClipLibrary'
 import { loadNativeWindowsMediaApi } from './nativeWindowsMedia'
 import { loadNativeWindowChromeApi } from './nativeWindowChrome'
+import { WindowDockingService } from './windowDocking'
+import { DockingGeometryGuard } from './dockingGeometryGuard'
+import { normalizeWindowDocking } from '../shared/windowDocking'
 import { NowPlayingManager } from './services/nowPlayingManager'
 import { AstraIntegrationService } from './services/astraIntegration'
 import { TidalProvider } from './services/tidalProvider'
@@ -88,6 +91,8 @@ import { DawBridgeService } from './services/dawBridgeService'
 import type { DawBridgeAudioBatch, DawBridgeSnapshot } from '../types/dawBridge'
 
 let mainWindow: BrowserWindow | null = null
+let windowDocking: WindowDockingService | null = null
+const dockingGeometryGuard = new DockingGeometryGuard()
 let moveInterval: ReturnType<typeof setInterval> | null = null
 let moveStartCursor: { x: number; y: number } | null = null
 let moveStartBounds: WindowBounds | null = null
@@ -105,6 +110,7 @@ let suppressMainWindowSyncUntil = 0
 let mainWindowLogicalBounds: WindowBounds | null = null
 let windowRecreationPending = false
 let isAppQuitting = false
+let dockingQuitFlushed = false
 let appHiddenToTray = false
 let appTray: Tray | null = null
 let latestTrayMenuStateKey: string | null = null
@@ -615,6 +621,11 @@ function flushPendingTrayRendererCommands(): void {
 
 function repositionWindowToEdge(targetWindow: BrowserWindow, position: 'top' | 'bottom'): void {
   if (!supportsProgrammaticReposition() || targetWindow.isDestroyed()) return
+  if (position !== 'top' && position !== 'bottom') return
+  if (isMainRendererWindow(targetWindow)) {
+    windowDocking?.controller.setEdge(position)
+    if (windowDocking?.controller.ownsGeometry) return
+  }
 
   const display = screen.getDisplayMatching(targetWindow.getBounds())
   const workArea = display.workArea
@@ -743,6 +754,7 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
       label: 'Always on Top',
       type: 'checkbox',
       checked: model.alwaysOnTop,
+      enabled: !windowDocking?.controller.ownsGeometry,
       click: () => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           setWindowAlwaysOnTop(mainWindow, !mainWindow.isAlwaysOnTop())
@@ -766,6 +778,19 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
             if (mainWindow && !mainWindow.isDestroyed()) repositionWindowToEdge(mainWindow, 'bottom')
           },
         },
+        ...(windowDocking?.controller.snapshot.supported ? [
+          { type: 'separator' as const },
+          {
+            label: 'Reserve screen space', type: 'checkbox' as const,
+            checked: windowDocking.controller.ownsGeometry,
+            click: () => {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                flushMainWindowBoundsChanged(mainWindow)
+                windowDocking?.controller.setEnabled(!windowDocking.controller.ownsGeometry)
+              }
+            },
+          },
+        ] : []),
       ],
     },
     { type: 'separator' },
@@ -852,7 +877,7 @@ function refreshTrayMenu(): void {
     alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
     supportsReposition: supportsProgrammaticReposition(),
   })
-  const stateKey = createTrayMenuStateKey(model)
+  const stateKey = createTrayMenuStateKey(model) + JSON.stringify(windowDocking?.controller.snapshot)
   appTray!.setToolTip(model.tooltip)
   if (stateKey !== latestTrayMenuStateKey) {
     appTray!.setContextMenu(createNativeTrayMenu(model))
@@ -1067,6 +1092,7 @@ function clearPendingMainWindowBoundsSave(): void {
 }
 
 function sendMainWindowBoundsChanged(window: BrowserWindow): void {
+  if (windowDocking?.controller.ownsGeometry) return
   if (!isMainRendererWindow(window) || !mainRendererReady || !supportsGeometryPersistence()) return
   if (window.isDestroyed() || window.webContents.isDestroyed()) return
 
@@ -1173,6 +1199,7 @@ function normalizeMainWindowBounds(bounds: WindowBounds): WindowBounds {
 }
 
 function getDisplayWorkAreas(): WindowBounds[] {
+  if (windowDocking) return windowDocking.workAreas()
   return screen.getAllDisplays().map((display) => ({
     x: display.workArea.x,
     y: display.workArea.y,
@@ -1225,6 +1252,7 @@ function toLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): Wi
 }
 
 function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): void {
+  if (windowDocking?.controller.ownsGeometry) return
   if (!isMainRendererWindow(window)) {
     return
   }
@@ -1245,6 +1273,7 @@ function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getB
 }
 
 function applyMainWindowLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
+  if (windowDocking?.controller.ownsGeometry) return
   const logicalBounds = clampRestoredWindowBounds(
     normalizeMainWindowBounds(bounds),
     getDisplayWorkAreas(),
@@ -1295,6 +1324,7 @@ function setWindowHeight(window: BrowserWindow, bounds: WindowBounds, height: nu
 }
 
 function applySettingsHeight(window: BrowserWindow, rawNextHeight: number): void {
+  if (isMainRendererWindow(window) && windowDocking?.controller.ownsGeometry) return
   const currentSettingsHeight = getSettingsHeight(window)
   const nextSettingsHeight = Math.max(0, Math.round(rawNextHeight))
   const baseMinHeight = getBaseMinHeight(window)
@@ -1527,7 +1557,7 @@ function recreateWindowsForBackgroundChange(): void {
   mainWindow.once('closed', () => {
     try {
       createMainWindow(restoreBounds)
-      if (wasMaximized) {
+      if (wasMaximized && !windowDocking?.controller.ownsGeometry) {
         mainWindow?.maximize()
       }
     } finally {
@@ -1670,6 +1700,7 @@ async function persistAlwaysOnTopPreference(window: BrowserWindow, next: boolean
 }
 
 function setWindowAlwaysOnTop(window: BrowserWindow, next: boolean): void {
+  if (isMainRendererWindow(window) && windowDocking?.controller.ownsGeometry) return
   if (window.isDestroyed()) {
     return
   }
@@ -1851,10 +1882,12 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
     refreshTrayMenu()
   })
 
+  windowDocking?.attach(mainWindow)
   loadRendererTarget(mainWindow, { window: 'main', ...getWindowBackgroundQuery(background) })
 }
 
 function sendScopePopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
+  if (!dockingGeometryGuard.shouldPersist(window.id, Boolean(windowDocking?.controller.ownsGeometry))) return
   if (
     !mainWindow
     || mainWindow.isDestroyed()
@@ -1906,6 +1939,7 @@ function flushScopePopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): 
 }
 
 function flushRepositionedWindowBounds(window: BrowserWindow): void {
+  dockingGeometryGuard.userChange(window.id)
   if (isMainRendererWindow(window)) {
     flushMainWindowBoundsChanged(window)
     return
@@ -2023,6 +2057,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   })
 
   popoutWindow.on('closed', () => {
+    dockingGeometryGuard.forget(popoutWindow.id)
     if (resizeWindow === popoutWindow) {
       stopWindowResizeController()
     }
@@ -2038,6 +2073,8 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     }
   })
 
+  popoutWindow.on('will-move', () => dockingGeometryGuard.userChange(popoutWindow.id))
+  popoutWindow.on('will-resize', () => dockingGeometryGuard.userChange(popoutWindow.id))
   popoutWindow.on('move', () => emitPopoutBoundsChanged(kind, popoutWindow))
   popoutWindow.on('resize', () => emitPopoutBoundsChanged(kind, popoutWindow))
 
@@ -2225,6 +2262,21 @@ function setupPermissions(): void {
 }
 
 function setupIPC(): void {
+  ipcMain.handle('window:docking-get', () => windowDocking?.controller.snapshot
+    ?? { ...normalizeWindowDocking(undefined), supported: false, active: false, error: null })
+  ipcMain.handle('window:docking-set', (event, enabled: unknown) => {
+    if (!isMainRendererWindow(getWindowFromSender(event.sender)) || typeof enabled !== 'boolean') return null
+    if (mainWindow) flushMainWindowBoundsChanged(mainWindow)
+    windowDocking?.controller.setEnabled(enabled)
+    return windowDocking?.controller.snapshot ?? null
+  })
+  ipcMain.handle('window:docked-settings-show', (event, height: unknown) => {
+    if (!isMainRendererWindow(getWindowFromSender(event.sender)) || typeof height !== 'number') return false
+    return windowDocking?.showSettings(height) ?? false
+  })
+  ipcMain.on('window:docked-settings-close', event => {
+    if (isMainRendererWindow(getWindowFromSender(event.sender))) windowDocking?.closeSettings()
+  })
   ipcMain.on('window:minimize', (event) => {
     getWindowFromSender(event.sender)?.minimize()
   })
@@ -2248,6 +2300,12 @@ function setupIPC(): void {
       const current = screen.getCursorScreenPoint()
       const dx = current.x - moveStartCursor.x
       const dy = current.y - moveStartCursor.y
+      dockingGeometryGuard.userChange(targetWindow.id)
+
+      if (isMainRendererWindow(targetWindow) && windowDocking?.controller.ownsGeometry) {
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return
+        moveStartBounds = windowDocking.controller.undockForDrag(moveStartCursor) ?? targetWindow.getBounds()
+      }
 
       if (isMainRendererWindow(targetWindow)) {
         const nextBounds = clampDraggedMainWindowBounds({
@@ -2274,6 +2332,11 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || targetWindow.isDestroyed()) return
 
+    if (isMainRendererWindow(targetWindow) && windowDocking?.controller.ownsGeometry) {
+      const inwardEdge = windowDocking.controller.snapshot.edge === 'top' ? 's' : 'n'
+      if (rawEdge !== inwardEdge) return
+    }
+
     stopWindowMoveController()
     stopWindowResizeController()
 
@@ -2295,7 +2358,10 @@ function setupIPC(): void {
       }
 
       const currentCursor = screen.getCursorScreenPoint()
-      const [minWidth, minHeight] = resizeWindow.getMinimumSize()
+      dockingGeometryGuard.userChange(resizeWindow.id)
+      // A non-resizable Electron window reports its current size as its minimum.
+      const [minWidth, minHeight] = isMainRendererWindow(resizeWindow) && windowDocking?.controller.ownsGeometry
+        ? [WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight] : resizeWindow.getMinimumSize()
       const nextBounds = calculateResizedWindowBounds({
         edge: resizeEdge,
         startBounds: resizeStartBounds,
@@ -2305,7 +2371,11 @@ function setupIPC(): void {
         minHeight,
       })
 
-      resizeWindow.setBounds(nextBounds)
+      if (isMainRendererWindow(resizeWindow) && windowDocking?.controller.ownsGeometry) {
+        windowDocking.controller.resize(nextBounds.height)
+      } else {
+        resizeWindow.setBounds(nextBounds)
+      }
     }, 16)
   })
 
@@ -2661,6 +2731,7 @@ function setupIPC(): void {
 
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return null
+    if (isMainRendererWindow(targetWindow) && windowDocking?.controller.ownsGeometry) return null
 
     return toLogicalBounds(targetWindow)
   })
@@ -2737,6 +2808,7 @@ function setupIPC(): void {
     if (!isMainRendererWindow(targetWindow)) return
 
     mainRendererReady = true
+    windowDocking?.ready()
     void processPendingProfileOpenPaths()
   })
 
@@ -2845,6 +2917,21 @@ if (!hasSingleInstanceLock) {
     })
     await dawBridgeService.start()
     await getWindowStateStore().initialize()
+    windowDocking = new WindowDockingService({
+      store: getWindowStateStore(),
+      geometryChanging: () => dockingGeometryGuard.systemChange(),
+      logicalBounds: toLogicalBounds,
+      prepare: window => {
+        setSettingsHeightForWindow(window, 0)
+        window.setMinimumSize(WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight)
+      },
+      restore: (window, bounds) => {
+        setSettingsHeightForWindow(window, 0)
+        window.setMinimumSize(WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight)
+        applyMainWindowLogicalBounds(window, bounds)
+      },
+      changed: () => refreshTrayMenu(),
+    })
     desktopIntegrationPreferences = await loadDesktopIntegrationPreferences(
       getDesktopIntegrationPreferencesPath(),
     )
@@ -2901,8 +2988,15 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   isAppQuitting = true
+  if (windowDocking && !dockingQuitFlushed) {
+    event.preventDefault()
+    void windowDocking.shutdown().finally(() => {
+      dockingQuitFlushed = true
+      app.quit()
+    })
+  }
   dawBridgeService?.stop()
   dawBridgeService = null
   destroyAppTray()

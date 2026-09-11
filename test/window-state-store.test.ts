@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './window-docking.test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -62,6 +63,23 @@ test('main window always-on-top persists immediately and survives reload', async
   } finally {
     await harness.cleanup()
   }
+})
+
+test('docking preferences survive reload without changing pin preferences', async () => {
+  const harness = await createHarness()
+  try {
+    await harness.store.initialize()
+    const docking = { enabled: true, edge: 'top' as const, displayId: 2, height: 140,
+      floatingBounds: { x: 100, y: 200, width: 900, height: 180 } }
+    await harness.store.setDocking(docking)
+    const reloaded = new FileBackedWindowStateStore(harness.localStatePath)
+    await reloaded.initialize()
+    assert.deepEqual(reloaded.getDocking(), docking)
+    assert.equal(reloaded.getMainAlwaysOnTop(), false)
+    const copy = reloaded.getDocking()
+    copy.floatingBounds!.x = 999
+    assert.equal(reloaded.getDocking().floatingBounds!.x, 100)
+  } finally { await harness.cleanup() }
 })
 
 test('popout always-on-top persists independently per scope kind', async () => {

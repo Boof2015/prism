@@ -4723,7 +4723,7 @@ test('BottomBar close button uses flat themed control backgrounds', async () => 
 test('pin buttons use a persistent filled active state distinct from inactive hover', async () => {
   const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
   const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
-  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const stylesSource = (await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')).replace(/\r\n/g, '\n')
   const toolbarHoverBlock = stylesSource.match(
     /\.toolbar__icon-button--pin:hover:not\(:disabled\):not\(\.is-active\) \{([\s\S]*?)\n\}/,
   )?.[1]
@@ -4999,7 +4999,8 @@ test('main and detached windows keep frameless Prism chrome while enabling snap-
   // Blurred and clear windows drop the native thick frame on Windows, so the
   // JS resize overlay mounts for both; the now-playing config window always
   // keeps native semantics.
-  assert.match(appSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
+  assert.match(appSource, /docking\.enabled \|\| windowBackgroundMode !== 'solid'/)
+  assert.match(appSource, /directions=\{docking\.enabled \? \[docking\.edge === 'top' \? 's' : 'n'\]/)
   assert.match(popoutSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
   assert.doesNotMatch(nowPlayingSource, /WindowResizeOverlay/)
 })

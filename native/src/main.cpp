@@ -16,6 +16,7 @@
 #include "vumeter.h"
 #include "lufsmeter.h"
 #include "window_chrome.h"
+#include "window_docking.h"
 
 // Global instances
 static Visualizer::Oscilloscope oscilloscope;
@@ -810,6 +811,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     RegisterCaptureChannelSelection(env, exports);
     RegisterWindowsMedia(env, exports);
     RegisterWindowChrome(env, exports);
+    RegisterWindowDocking(env, exports);
 
     return exports;
 }

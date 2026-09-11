@@ -25,6 +25,7 @@
         "src/vumeter.cpp",
         "src/lufsmeter.cpp",
         "src/window_chrome.cpp",
+        "src/window_docking.cpp",
         "src/dsp_utils.cpp"
       ],
       "include_dirs": [
@@ -65,7 +66,9 @@
             "avrt.lib",
             "runtimeobject.lib",
             "uuid.lib",
-            "dwmapi.lib"
+            "dwmapi.lib",
+            "shell32.lib",
+            "comctl32.lib"
           ],
           "msvs_settings": {
             "VCCLCompilerTool": {

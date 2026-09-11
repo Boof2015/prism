@@ -131,6 +131,15 @@ select {
   position: relative;
 }
 
+.docked-settings {
+  height: 100vh;
+  overflow: auto;
+  background: var(--bg-primary);
+}
+
+.docked-settings__content { min-height: min-content; }
+.toolbar__docking-option { border-top: 1px solid var(--divider); white-space: nowrap; }
+
 .window-resize-overlay {
   position: absolute;
   inset: 0;
