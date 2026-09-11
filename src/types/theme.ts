@@ -58,6 +58,7 @@ export interface ThemeSpectrumTokens {
   background?: string
   line?: string
   sideLine?: string
+  referenceLine?: string
   fill?: string
   heatLow?: string
   heatMid?: string
@@ -252,6 +253,7 @@ export interface ResolvedInterfaceTheme {
 export interface ResolvedSpectrumTheme {
   line: string
   sideLine: string
+  referenceLine: string
   guides: string
   guidesSecondary: string
   labels: string

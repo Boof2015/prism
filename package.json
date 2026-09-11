@@ -30,6 +30,7 @@
     "test:desktop-integration": "node scripts/run-desktop-integration-tests.mjs",
     "test:renderer-helpers": "node scripts/run-renderer-helper-tests.mjs",
     "test:waterfall-native": "node --test test/waterfall-native.test.mjs",
+    "test:reference-tracks": "node scripts/run-reference-track-tests.mjs",
     "test:spectrum-native": "node --test test/spectrum-native.test.mjs",
     "test:spectrogram-native": "node --test test/spectrogram-native.test.mjs",
     "test:vectorscope-native": "node --test test/vectorscope-native.test.mjs",

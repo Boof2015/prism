@@ -8,6 +8,7 @@
 #include "windows_capture.h"
 #include "oscilloscope.h"
 #include "spectrum.h"
+#include "reference_napi.h"
 #include "waterfall_napi.h"
 #include "spectrogram.h"
 #include "vectorscope.h"
@@ -708,6 +709,9 @@ Napi::Value LUFSMeterReset(const Napi::CallbackInfo& info) {
 // ============== Module Init ==============
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    // Release the live resampler while r8brain's shared caches are still alive.
+    // Its process-static cache teardown order differs from this global analyzer.
+    env.AddCleanupHook([] { spectrum.setReferenceEnabled(false); });
     // Oscilloscope
     Napi::Object oscExports = Napi::Object::New(env);
     oscExports.Set("setSampleRate", Napi::Function::New(env, OscilloscopeSetSampleRate));
@@ -731,6 +735,17 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("pushSamples", Napi::Function::New(env, SpectrumPushSamples));
     specExports.Set("pushStereoSamples", Napi::Function::New(env, SpectrumPushStereoSamples));
     specExports.Set("fillRawMagnitudes", Napi::Function::New(env, SpectrumFillRawMagnitudes));
+    specExports.Set("setReferenceEnabled", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+        spectrum.setReferenceEnabled(info.Length() && info[0].IsBoolean() && info[0].As<Napi::Boolean>().Value());
+        return info.Env().Undefined();
+    }));
+    specExports.Set("getReferenceLevel", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+        auto result = Napi::Object::New(info.Env());
+        result.Set("meanSquare", spectrum.getReferenceMeanSquare());
+        result.Set("seconds", spectrum.getReferenceSeconds());
+        return result;
+    }));
+    initReferenceAnalysis(env, exports);
     specExports.Set("fillMagnitudes", Napi::Function::New(env, SpectrumFillMagnitudes));
     specExports.Set("fillSideMagnitudes", Napi::Function::New(env, SpectrumFillSideMagnitudes));
     specExports.Set("fillChannelMaxMagnitudes", Napi::Function::New(env, SpectrumFillChannelMaxMagnitudes));

@@ -1,3 +1,5 @@
+import { REFERENCE_SAMPLE_RATE, type SpectrumReferenceAsset, type SpectrumReferenceSettings, type SpectrumReferenceLevel } from '../../types/spectrumReference'
+import { referenceBins, referenceDbAt, differenceReferenceBins, ReferenceCurveTransition } from './referenceCurve'
 import { audioRouter } from '../audio/AudioRouter'
 import { spectrum as defaultNativeSpectrum, type SpectrumNativeAnalyzer } from '../audio/native'
 import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
@@ -44,6 +46,11 @@ export interface SpectrumAnalyzerDataSource extends VisualizerSessionSource {
 }
 
 export interface SpectrumAnalyzerOptions {
+  reference?: SpectrumReferenceSettings | null
+  referencePreview?: SpectrumReferenceAsset | null
+  referenceImporting?: boolean
+  referenceLineColor?: string
+  onReferenceLevel?: (level: SpectrumReferenceLevel | null) => void
   lineColor?: string
   secondaryLineColor?: string
   lineWidth?: number
@@ -192,6 +199,11 @@ function buildHeatLUT(colors: [string, string, string]): Uint8ClampedArray {
 }
 
 const defaultOptions: ResolvedSpectrumAnalyzerOptions = {
+  reference: null,
+  referencePreview: null,
+  referenceImporting: false,
+  referenceLineColor: '#ffffff',
+  onReferenceLevel: () => {},
   lineColor: '#00ffff',
   secondaryLineColor: 'rgba(0, 255, 255, 0.5)',
   lineWidth: 2,
@@ -226,6 +238,48 @@ const defaultSpectrumDataSource: SpectrumAnalyzerDataSource = {
 }
 
 export class SpectrumAnalyzer {
+  private referenceX = new Float32Array(0)
+  private referenceY = new Float32Array(0)
+  private differenceBuffer = new Float32Array(0)
+  private referenceTransition = new ReferenceCurveTransition()
+  private settlingReferenceId: string | null = null
+  private referenceSettleUntil = 0
+  private lastLevelReport = 0
+  private get referenceEnabled(): boolean { return !!this.options.reference || this.options.referenceImporting }
+  private get difference(): boolean { return this.options.reference?.view === 'difference' && !this.options.referenceImporting }
+  private get analysisSampleRate(): number { return this.referenceEnabled ? REFERENCE_SAMPLE_RATE : this.sampleRate }
+  private get plotMinDb(): number { return this.difference ? -24 : this.options.minDecibels }
+  private get plotMaxDb(): number { return this.difference ? 24 : this.options.maxDecibels }
+
+  private drawReference(asset: SpectrumReferenceAsset, trim: number, opacity: number, preview: boolean, minHz: number, maxHz: number): void {
+    const data = referenceBins(asset, this.options.fftSize)
+    const bins = preview ? this.referenceTransition.sample(data, performance.now(), window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false) : data
+    const count = Math.max(2, Math.floor(this.canvas.width))
+    if (this.referenceX.length !== count) { this.referenceX = new Float32Array(count); this.referenceY = new Float32Array(count) }
+    this.fillSpectrumPoints(bins, bins.length, this.canvas.width, this.canvas.height, minHz, maxHz, 24000,
+      this.options.tiltDbPerOctave, this.referenceX, this.referenceY, null, false, null, true, trim)
+    for (let i = 0; i < count; i++) {
+      if (this.frequencyAtPosition(i / (count - 1), minHz, maxHz) > asset.sourceNyquistHz) this.referenceY[i] = NaN
+    }
+    const dpr = window.devicePixelRatio || 1
+    this.ctx.save(); this.ctx.globalAlpha = opacity; this.ctx.setLineDash([])
+    this.renderStroke(this.referenceX, this.referenceY, count, this.options.referenceLineColor, dpr)
+    this.ctx.restore()
+  }
+
+  private drawReferences(minHz: number, maxHz: number): void {
+    if (this.difference) return
+    const reference = this.options.reference
+    if (reference) {
+      const settling = reference.asset.id === this.settlingReferenceId
+      const t = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 1
+        : Math.max(0, Math.min(1, 1 - (this.referenceSettleUntil - performance.now()) / 200))
+      this.drawReference(reference.asset, reference.trimDb, settling ? 0.32 + 0.33 * t : 0.65, settling, minHz, maxHz)
+      if (settling && t === 1) this.settlingReferenceId = null
+    }
+    if (this.options.referencePreview) this.drawReference(this.options.referencePreview, 0, 0.32, true, minHz, maxHz)
+  }
+
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
   private options: ResolvedSpectrumAnalyzerOptions
@@ -284,7 +338,7 @@ export class SpectrumAnalyzer {
     this.heatLut = buildHeatLUT(this.options.heatColors)
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
-      shouldRun: () => this.dataSource.isPlaying(),
+      shouldRun: () => this.dataSource.isPlaying() || this.options.referenceImporting || performance.now() < this.referenceSettleUntil,
       onFrame: this.drawFrame,
     })
     this.staticLayerCanvas = document.createElement('canvas')
@@ -312,6 +366,7 @@ export class SpectrumAnalyzer {
     this.lastSampleRate = 0
 
     if (this.isNativeAvailable() && !this.nativeInitialized) {
+      this.nativeAnalyzer?.setReferenceEnabled?.(this.referenceEnabled)
       this.nativeAnalyzer?.setFFTSize(this.options.fftSize)
       this.nativeAnalyzer?.setSampleRate(this.sampleRate)
       this.nativeAnalyzer?.setSmoothing(this.getNativeSmoothing())
@@ -379,18 +434,25 @@ export class SpectrumAnalyzer {
   }
 
   getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
-    return resolveSpectrumMeasurement(point, {
+    const measurement = resolveSpectrumMeasurement(point, {
       sampleRate: this.sampleRate,
       minFrequency: this.options.minFrequency,
       maxFrequency: this.options.maxFrequency,
-      minDecibels: this.options.minDecibels,
-      maxDecibels: this.options.maxDecibels,
+      minDecibels: this.plotMinDb,
+      maxDecibels: this.plotMaxDb,
       scaleType: this.options.scaleType,
     })
+    if (this.difference) {
+      delete measurement.dimensions.spectralLevelDb
+      measurement.values[0] = this.options.reference && referenceDbAt(this.options.reference.asset, this.options.fftSize, measurement.dimensions.frequencyHz ?? 0) !== null
+        ? measurement.values[0] + ' relative' : '-- dB relative'
+    }
+    return measurement
   }
 
   getLinkedAnalysisProjection(probe: LinkedAnalysisProbe): LinkedAnalysisProjection | null {
-    return resolveSpectrumLinkedAnalysisProjection(probe, {
+    const safeProbe = this.difference ? { ...probe, dimensions: { frequencyHz: probe.dimensions.frequencyHz } } : probe
+    return resolveSpectrumLinkedAnalysisProjection(safeProbe, {
       sampleRate: this.sampleRate,
       minFrequency: this.options.minFrequency,
       maxFrequency: this.options.maxFrequency,
@@ -426,15 +488,20 @@ export class SpectrumAnalyzer {
       nextOptions.heatmapTiltDbPerOctave = clampSpectrumHeatmapTiltDbPerOctave(optionUpdates.heatmapTiltDbPerOctave)
     }
 
-    const shouldResetForOptions = (
-      optionUpdates.fftSize !== undefined
-      || optionUpdates.smoothing !== undefined
-      || optionUpdates.heatmapSmoothing !== undefined
-      || optionUpdates.showSideLine !== undefined
-      || optionUpdates.capturePeakInfo !== undefined
-    )
+    const oldReferenceEnabled = this.referenceEnabled
+    if (this.options.referencePreview && nextOptions.reference?.asset.id === this.options.referencePreview.id
+      && !nextOptions.referenceImporting && this.options.referenceImporting) {
+      this.settlingReferenceId = nextOptions.reference.asset.id
+      this.referenceSettleUntil = performance.now() + 200
+    }
+    const shouldResetForOptions = (['fftSize', 'smoothing', 'heatmapSmoothing', 'showSideLine', 'capturePeakInfo'] as const)
+      .some(key => optionUpdates[key] !== undefined && optionUpdates[key] !== this.options[key])
 
     this.options = nextOptions
+    if (oldReferenceEnabled !== this.referenceEnabled) {
+      this.nativeAnalyzer?.setReferenceEnabled?.(this.referenceEnabled)
+      this.resetAnalyzerBuffers()
+    }
     this.heatLut = buildHeatLUT(this.options.heatColors)
     let didReset = false
 
@@ -517,7 +584,8 @@ export class SpectrumAnalyzer {
   }
 
   private frequencyAtPosition(t: number, minFrequency: number, maxFrequency: number): number {
-    return frequencyAtNormalizedPosition(t, minFrequency, maxFrequency, this.options.scaleType)
+    return Math.max(minFrequency, Math.min(maxFrequency,
+      frequencyAtNormalizedPosition(t, minFrequency, maxFrequency, this.options.scaleType)))
   }
 
   private resolvePeakInRange(
@@ -733,6 +801,8 @@ export class SpectrumAnalyzer {
     heatmapIntensityOut: Float32Array | null,
     capturePeakInfo = false,
     peakDbfsData: Float32Array | null = null,
+    drawingReference = false,
+    referenceTrim = 0,
   ): SpectrumPointFillResult {
     const bufferLength = Math.min(dataLength, frequencyData.length)
     if (bufferLength <= 0) {
@@ -740,6 +810,12 @@ export class SpectrumAnalyzer {
     }
     const binWidth = nyquist / bufferLength
     const numPoints = Math.max(2, Math.floor(width))
+    const relative = this.difference && !drawingReference && this.options.reference
+    let displayData = frequencyData
+    if (relative) {
+      if (this.differenceBuffer.length !== frequencyData.length) this.differenceBuffer = new Float32Array(frequencyData.length)
+      displayData = differenceReferenceBins(frequencyData, relative.asset, this.options.fftSize, relative.trimDb, this.differenceBuffer)
+    }
 
     for (let index = 0; index < numPoints; index += 1) {
       const t0 = index / (numPoints - 1)
@@ -759,19 +835,21 @@ export class SpectrumAnalyzer {
       const rawDb = binSpan <= 1
         ? this.getInterpolatedValue(frequencyData, Math.min(centerBin, bufferLength - 1))
         : (resolvedPeak?.rawDb ?? this.getInterpolatedValue(frequencyData, Math.min(centerBin, bufferLength - 1)))
-      const db = this.applyTilt(rawDb, centerFrequency, tiltDbPerOctave)
-
-      const normalized = (db - this.options.minDecibels) / (this.options.maxDecibels - this.options.minDecibels)
+      const absoluteDb = this.applyTilt(rawDb, centerFrequency, tiltDbPerOctave)
+      const displayPeak = relative && (capturePeakInfo || binSpan > 1) ? this.resolvePeakInRange(displayData, bin0, bin1, binWidth) : resolvedPeak
+      const relativeDb = binSpan <= 1 ? this.getInterpolatedValue(displayData, Math.min(centerBin, bufferLength - 1)) : displayPeak?.rawDb ?? NaN
+      const db = relative ? (Number.isFinite(relativeDb) && centerFrequency <= relative.asset.sourceNyquistHz ? relativeDb : NaN) : absoluteDb + referenceTrim
+      const normalized = (db - this.plotMinDb) / (this.plotMaxDb - this.plotMinDb)
       const clampedNormalized = Math.max(0, Math.min(1, normalized))
 
       xOut[index] = x
       yOut[index] = height - clampedNormalized * height
       if (heatmapIntensityOut) {
-        heatmapIntensityOut[index] = Math.pow(normalizeHeatDb(db), HEATMAP_GAMMA)
+        heatmapIntensityOut[index] = Math.pow(normalizeHeatDb(absoluteDb), HEATMAP_GAMMA)
       }
 
       if (capturePeakInfo) {
-        const peakFrequencyHz = resolvedPeak?.frequencyHz ?? centerFrequency
+        const peakFrequencyHz = displayPeak?.frequencyHz ?? centerFrequency
         this.primaryPointDb[index] = db
         this.primaryPointFrequency[index] = peakFrequencyHz
         const peakDbfsBin = Math.min(
@@ -804,7 +882,9 @@ export class SpectrumAnalyzer {
 
     const frequencyHz = this.primaryPointFrequency[index]
     const dbfs = this.primaryPointDbfs[index]
+    if (!Number.isFinite(this.primaryPointY[index])) return null
     return {
+      ...(this.difference ? { deltaDb: this.primaryPointDb[index] } : {}),
       dbfs,
       frequencyHz,
       normalizedX: this.primaryPointX[index] / Math.max(1, this.canvas.width),
@@ -814,6 +894,7 @@ export class SpectrumAnalyzer {
   }
 
   private isLocalPeak(index: number, pointCount: number): boolean {
+    if (!Number.isFinite(this.primaryPointY[index])) return false
     const currentDb = this.primaryPointDb[index]
     const previousDb = index > 0
       ? this.primaryPointDb[index - 1]
@@ -830,7 +911,7 @@ export class SpectrumAnalyzer {
   private getPeakSelectionScore(index: number): number {
     const frequencyHz = this.primaryPointFrequency[index]
     const db = this.primaryPointDb[index]
-    if (!Number.isFinite(frequencyHz) || frequencyHz <= 0 || !Number.isFinite(db)) {
+    if (!Number.isFinite(frequencyHz) || frequencyHz <= 0 || !Number.isFinite(db) || !Number.isFinite(this.primaryPointY[index])) {
       return Number.NEGATIVE_INFINITY
     }
 
@@ -963,10 +1044,13 @@ export class SpectrumAnalyzer {
 
     for (let index = 0; index < pointCount; index += 1) {
       const x = Math.floor(xPoints[index])
-      const y = yPoints[index]
+      const rawY = yPoints[index]
+      if (!Number.isFinite(rawY)) continue
+      const baseline = this.difference ? height / 2 : height
+      const y = Math.min(rawY, baseline)
       const nextX = index < pointCount - 1 ? Math.floor(xPoints[index + 1]) : width
       const columnWidth = Math.max(1, nextX - x)
-      const fillHeight = height - y
+      const fillHeight = Math.abs(baseline - rawY)
       if (fillHeight <= 0) {
         continue
       }
@@ -992,26 +1076,52 @@ export class SpectrumAnalyzer {
     }
   }
 
-  private renderGradientFill(xPoints: Float32Array, yPoints: Float32Array, pointCount: number, width: number, height: number): void {
+  private renderGradientFill(xPoints: Float32Array, yPoints: Float32Array, pointCount: number, _width: number, height: number): void {
     this.ctx.beginPath()
-    this.ctx.moveTo(xPoints[0], yPoints[0])
-
-    for (let index = 1; index < pointCount; index += 1) {
-      this.ctx.lineTo(xPoints[index], yPoints[index])
+    const baseline = this.difference ? height / 2 : height
+    let open = false, lastX = 0
+    for (let index = 0; index < pointCount; index++) {
+      if (!Number.isFinite(yPoints[index])) {
+        if (open) { this.ctx.lineTo(lastX, baseline); this.ctx.closePath(); open = false }
+        continue
+      }
+      if (!open) { this.ctx.moveTo(xPoints[index], baseline); open = true }
+      this.ctx.lineTo(xPoints[index], yPoints[index]); lastX = xPoints[index]
     }
+    if (open) { this.ctx.lineTo(lastX, baseline); this.ctx.closePath() }
 
-    this.ctx.lineTo(width, height)
-    this.ctx.lineTo(0, height)
-    this.ctx.closePath()
-
-    const gradient = this.ctx.createLinearGradient(0, height, 0, 0)
     const colors = this.options.gradientColors
-    for (let index = 0; index < colors.length; index += 1) {
-      gradient.addColorStop(index / (colors.length - 1), colors[index])
+    const gradient = this.difference
+      ? this.ctx.createLinearGradient(0, 0, 0, height)
+      : this.ctx.createLinearGradient(0, height, 0, 0)
+    if (this.difference) {
+      // The fill grows away from zero in both directions. A bottom-to-top
+      // gradient makes negative differences look like an absolute spectrum.
+      for (let index = 0; index < colors.length; index += 1)
+        gradient.addColorStop(index / (colors.length - 1) / 2, colors[colors.length - 1 - index])
+      for (let index = 1; index < colors.length; index += 1)
+        gradient.addColorStop(0.5 + index / (colors.length - 1) / 2, colors[index])
+    } else {
+      for (let index = 0; index < colors.length; index += 1)
+        gradient.addColorStop(index / (colors.length - 1), colors[index])
     }
 
     this.ctx.fillStyle = gradient
     this.ctx.fill()
+  }
+
+  private drawDifferenceZero(): void {
+    if (!this.difference) return
+    const { ctx, canvas, options } = this
+    ctx.save()
+    ctx.globalAlpha = 0.65
+    ctx.strokeStyle = options.lineColor
+    ctx.lineWidth = window.devicePixelRatio || 1
+    ctx.beginPath()
+    ctx.moveTo(0, canvas.height / 2)
+    ctx.lineTo(canvas.width, canvas.height / 2)
+    ctx.stroke()
+    ctx.restore()
   }
 
   private renderStroke(xPoints: Float32Array, yPoints: Float32Array, pointCount: number, color: string, lineWidth: number): void {
@@ -1020,9 +1130,12 @@ export class SpectrumAnalyzer {
     }
 
     this.ctx.beginPath()
-    this.ctx.moveTo(xPoints[0], yPoints[0])
-    for (let index = 1; index < pointCount; index += 1) {
-      this.ctx.lineTo(xPoints[index], yPoints[index])
+    let connected = false
+    for (let index = 0; index < pointCount; index += 1) {
+      if (!Number.isFinite(yPoints[index])) { connected = false; continue }
+      if (connected) this.ctx.lineTo(xPoints[index], yPoints[index])
+      else this.ctx.moveTo(xPoints[index], yPoints[index])
+      connected = true
     }
 
     this.ctx.lineWidth = lineWidth
@@ -1043,7 +1156,7 @@ export class SpectrumAnalyzer {
 
     this.updateSampleRateIfNeeded()
 
-    const nyquist = this.sampleRate / 2
+    const nyquist = this.analysisSampleRate / 2
     const range = clampFrequencyRangeToNyquist(this.sampleRate, options.minFrequency, options.maxFrequency)
     const { minFrequency, maxFrequency } = range
 
@@ -1054,6 +1167,8 @@ export class SpectrumAnalyzer {
       }
       this.resetAnalyzerBuffers()
       this.renderStaticLayer(minFrequency, maxFrequency)
+      this.drawReferences(minFrequency, maxFrequency)
+      this.options.onReferenceLevel(null)
       this.emitPeakInfo(null)
       return
     }
@@ -1070,6 +1185,8 @@ export class SpectrumAnalyzer {
       this.clearPendingSpectrumQueues()
       console.error('SpectrumAnalyzer: Native DSP required')
       this.renderStaticLayer(minFrequency, maxFrequency)
+      this.drawReferences(minFrequency, maxFrequency)
+      this.options.onReferenceLevel(null)
       this.emitPeakInfo(null)
       return
     }
@@ -1078,6 +1195,12 @@ export class SpectrumAnalyzer {
       ? this.pushPendingSpectrumStereoChunks(this.dataSource.getPendingSpectrumStereoSamples())
       : this.pushPendingSpectrumChunks(this.dataSource.getPendingSpectrumSamples())
 
+    const referenceLevel = this.referenceEnabled ? this.nativeAnalyzer?.getReferenceLevel?.() ?? null : null
+    const levelNow = performance.now()
+    if (levelNow - this.lastLevelReport >= 100) {
+      this.lastLevelReport = levelNow
+      this.options.onReferenceLevel(referenceLevel)
+    }
     this.ensureMagnitudeBufferSize()
     primaryData = this.nativeMagnitudeBuffer
     primaryDataLength = this.nativeAnalyzer?.fillMagnitudes(this.nativeMagnitudeBuffer) ?? 0
@@ -1106,8 +1229,14 @@ export class SpectrumAnalyzer {
       secondaryDataLength = this.nativeAnalyzer?.fillSideMagnitudes(this.nativeSideMagnitudeBuffer) ?? 0
     }
 
-    if (!primaryData || primaryDataLength === 0) {
+    const waitingForComparison = this.difference && (
+      (referenceLevel !== null && (referenceLevel.meanSquare <= 0 || referenceLevel.seconds * REFERENCE_SAMPLE_RATE < options.fftSize))
+      || (primaryData !== null && primaryData.every(db => db <= -119.9))
+    )
+    if (!primaryData || primaryDataLength === 0 || waitingForComparison) {
       this.renderStaticLayer(minFrequency, maxFrequency)
+      this.drawReferences(minFrequency, maxFrequency)
+      this.options.onReferenceLevel(null)
       this.emitPeakInfo(null)
       return
     }
@@ -1177,6 +1306,8 @@ export class SpectrumAnalyzer {
       this.renderGradientFill(this.primaryPointX, this.primaryPointY, primaryRender.pointCount, width, height)
     }
 
+    this.drawReferences(minFrequency, maxFrequency)
+    this.drawDifferenceZero()
     this.renderStroke(this.primaryPointX, this.primaryPointY, primaryRender.pointCount, options.lineColor, options.lineWidth * dpr)
     if (secondaryRender.pointCount > 0) {
       const secondaryLineWidth = Math.max(dpr, options.lineWidth * SIDE_LINE_WIDTH_RATIO * dpr)
@@ -1199,6 +1330,7 @@ export class SpectrumAnalyzer {
       canvas.height,
       options.backgroundColor,
       options.showGrid,
+      this.difference,
       options.gridColor,
       options.scaleType,
       minFrequency,
@@ -1222,6 +1354,21 @@ export class SpectrumAnalyzer {
       this.drawGrid(this.staticLayerCtx, minFrequency, maxFrequency)
     }
 
+    if (this.difference) {
+      const ctx = this.staticLayerCtx, dpr = window.devicePixelRatio || 1
+      ctx.strokeStyle = options.gridColor; ctx.fillStyle = options.lineColor
+      ctx.font = `${10 * dpr}px monospace`; ctx.textAlign = 'left'
+      for (let db = -24; db <= 24; db += 6) {
+        const y = (24 - db) / 48 * canvas.height
+        if (db === 0 || options.showGrid) {
+          ctx.globalAlpha = db === 0 ? 1 : 0.4
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke()
+          ctx.globalAlpha = 0.8
+          ctx.fillText(`${db > 0 ? '+' : ''}${db} dB`, 5 * dpr, Math.max(11 * dpr, Math.min(canvas.height - 5 * dpr, y - 3 * dpr)))
+        }
+      }
+      ctx.globalAlpha = 1
+    }
     this.staticLayerKey = key
   }
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_extra/juce_gui_extra.h>
+#include "ReferenceTrackManager.h"
 #include <atomic>
 #include <vector>
 
@@ -15,11 +17,11 @@
  * UI settings (JSON) are owned here so they survive editor open/close and DAW
  * session save/restore.
  */
-class PrismSpectrumProcessor : public juce::AudioProcessor
+class PrismSpectrumProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     PrismSpectrumProcessor();
-    ~PrismSpectrumProcessor() override = default;
+    ~PrismSpectrumProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -54,9 +56,16 @@ public:
 
     /** Persisted UI settings as a JSON string (set from the editor, read on save). */
     void setSettingsJson(const juce::String& json);
-    juce::String getSettingsJson() const;
+    juce::String getSettingsJson();
+    bool syncReferenceResult();
+    ReferenceTrackManager referenceTracks;
+    void handleReferenceTransfer(juce::var payload, juce::WebBrowserComponent* browser);
+    void retainReferenceTransfer(std::unique_ptr<juce::WebBrowserComponent> browser);
 
 private:
+    void timerCallback() override;
+    struct DetachedTransfer { juce::String id; std::unique_ptr<juce::DocumentWindow> window; };
+    std::vector<DetachedTransfer> detachedTransfers;
     void pushStereoToFifo(const float* left, const float* right, int num) noexcept;
 
     juce::AbstractFifo fifo { 1 << 16 };

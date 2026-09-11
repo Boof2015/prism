@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include <stdexcept>
 #include "SpectrumEngine.h"
 #include "OscilloscopeEngine.h"
 #include "VUMeterEngine.h"
@@ -272,17 +273,25 @@ namespace
     };
 #endif
 
-    juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor, const char* scopeId)
+    juce::WebBrowserComponent::Options makeWebOptions(PrismSpectrumEditor& editor, PrismSpectrumProcessor& processor,
+        const char* scopeId, std::shared_ptr<juce::WebBrowserComponent*> browser)
     {
+        const juce::Component::SafePointer<PrismSpectrumEditor> safe(&editor);
         auto options = juce::WebBrowserComponent::Options{}
             .withNativeIntegrationEnabled()
             .withInitialisationData("prismScope", juce::String(scopeId))
-            .withEventListener("prismConfig", [&editor](juce::var v) { editor.onPrismConfig(std::move(v)); })
-            .withEventListener("prismReady",  [&editor](juce::var)   { editor.onPrismReady(); })
-            .withEventListener("prismSpectrogramConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
-            .withEventListener("prismWaterfallConfig", [&editor](juce::var v) { editor.onScopeNativeConfig(std::move(v)); })
-            .withEventListener("prismScopeMeasurement", [&editor](juce::var v) { editor.onScopeMeasurement(std::move(v)); })
-            .withEventListener("prismSettingsPanel", [&editor](juce::var v) { editor.onSettingsPanel(std::move(v)); });
+            .withEventListener("prismReferenceCommand", [safe, &processor, browser](juce::var v) {
+                if (safe) safe->onReferenceCommand(std::move(v));
+                else processor.handleReferenceTransfer(std::move(v), *browser);
+            })
+            .withEventListener("prismSpectrumReferenceConfig", [safe](juce::var v) { if (safe) safe->onScopeNativeConfig(std::move(v)); })
+            .withEventListener("prismConfig", [safe](juce::var v) { if (safe) safe->onPrismConfig(std::move(v)); })
+            .withEventListener("prismReady",  [safe](juce::var)   { if (safe) safe->onPrismReady(); })
+            .withEventListener("prismSpectrogramConfig", [safe](juce::var v) { if (safe) safe->onScopeNativeConfig(std::move(v)); })
+            .withEventListener("prismWaterfallConfig", [safe](juce::var v) { if (safe) safe->onScopeNativeConfig(std::move(v)); })
+            .withEventListener("prismScopeMeasurement", [safe](juce::var v) { if (safe) safe->onScopeMeasurement(std::move(v)); })
+            .withEventListener("prismSettingsPanel", [safe](juce::var v) { if (safe) safe->onSettingsPanel(std::move(v)); });
+        if (juce::String(scopeId) == "spectrum") options = options.withKeepPageLoadedWhenBrowserIsHidden();
 
 #if JUCE_WINDOWS
         options = options.withBackend(juce::WebBrowserComponent::Options::Backend::webview2);
@@ -338,6 +347,11 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
 
 PrismSpectrumEditor::~PrismSpectrumEditor()
 {
+    webViewReady = false;
+    if (webView && processorRef.referenceTracks.activeUploadId().isNotEmpty()) {
+        if (auto* parent = webView->getParentComponent()) parent->removeChildComponent(webView.get());
+        processorRef.retainReferenceTransfer(std::move(webView));
+    }
 #if JUCE_WINDOWS || JUCE_LINUX
     stopTimer();
 #endif
@@ -391,7 +405,7 @@ void PrismSpectrumEditor::loadUi()
 
 bool PrismSpectrumEditor::createWebView()
 {
-    auto options = makeWebOptions(*this, engine->scopeId());
+    auto options = makeWebOptions(*this, processorRef, engine->scopeId(), referenceBrowserLink);
 
 #if JUCE_WINDOWS
     if (! juce::WebBrowserComponent::areOptionsSupported(options))
@@ -408,6 +422,7 @@ bool PrismSpectrumEditor::createWebView()
 #endif
 
     webView = std::make_unique<juce::WebBrowserComponent>(options);
+    *referenceBrowserLink = webView.get();
     return true;
 }
 
@@ -605,6 +620,7 @@ void PrismSpectrumEditor::onPrismReady()
     processorRef.restartAudioHistory();
 #endif
     pushRestoreSettings();
+    pushReferenceState();
     sendAppDefaults();
     startFrameDriver();
 }
@@ -694,6 +710,8 @@ void PrismSpectrumEditor::sendAppDefaults()
 
 void PrismSpectrumEditor::renderFrame()
 {
+    if (processorRef.syncReferenceResult()) pushRestoreSettings();
+    pushReferenceState();
     if (webView == nullptr || ! webViewReady)
         return;
 
@@ -714,6 +732,8 @@ void PrismSpectrumEditor::renderFrame()
     }
 
     const int drained = processorRef.drainStereo(drainLeft.data(), drainRight.data(), (int) drainLeft.size());
+    if (juce::String(engine->scopeId()) == "spectrum" && processorRef.consumeAudioDiscontinuity())
+        engine->resetAudioHistory();
 
 #if defined(PRISM_SCOPE_WATERFALL) && PRISM_SCOPE_WATERFALL
     if (processorRef.consumeAudioDiscontinuity())
@@ -732,4 +752,45 @@ void PrismSpectrumEditor::renderFrame()
     engine->process(drainLeft.data(), drainRight.data(), drained);
 
     webView->emitEventIfBrowserIsVisible(engine->frameEventId(), engine->buildFrame(sampleRate));
+}
+
+void PrismSpectrumEditor::pushReferenceState()
+{
+    if (webView == nullptr || !webViewReady || juce::String(engine->scopeId()) != "spectrum") return;
+    const auto revision = processorRef.referenceTracks.revision();
+    if (revision == referenceStateRevision) return;
+    referenceStateRevision = revision;
+    const auto state = processorRef.referenceTracks.snapshot();
+    webView->emitEventIfBrowserIsVisible("prismReferenceState", state);
+}
+
+void PrismSpectrumEditor::onReferenceCommand(juce::var payload)
+{
+    if (juce::String(engine->scopeId()) != "spectrum") return;
+    if (payload.getProperty("action", "").toString() != "choose") {
+        processorRef.handleReferenceTransfer(std::move(payload), webView.get());
+        pushReferenceState();
+        return;
+    }
+    auto* response = new juce::DynamicObject();
+    response->setProperty("requestId", payload.getProperty("requestId", juce::var()));
+    try {
+        auto& tracks = processorRef.referenceTracks;
+        {
+            const auto generation = tracks.generation();
+            referenceChooser = std::make_unique<juce::FileChooser>("Load spectrum reference", juce::File(), "*.wav;*.wave;*.aif;*.aiff;*.aifc;*.flac;*.mp3");
+            referenceChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [safe = juce::Component::SafePointer<PrismSpectrumEditor>(this), generation](const juce::FileChooser& chooser) {
+                    if (!safe || !chooser.getResult().existsAsFile() || generation != safe->processorRef.referenceTracks.generation()) return;
+                    safe->processorRef.referenceTracks.start(chooser.getResult());
+                    safe->pushReferenceState();
+                });
+        }
+        response->setProperty("ok", true);
+    } catch (const std::exception& error) {
+        response->setProperty("ok", false); response->setProperty("error", juce::String::fromUTF8(error.what()));
+        processorRef.referenceTracks.cancelUpload(payload.getProperty("uploadId", "").toString());
+    }
+    if (webView != nullptr) webView->emitEventIfBrowserIsVisible("prismReferenceResponse", juce::var(response));
+    pushReferenceState();
 }

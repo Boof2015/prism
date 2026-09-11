@@ -70,7 +70,7 @@ test('profile file serialization excludes geometry and round-trips with local me
 
   assert.equal(file.format, PROFILE_FILE_FORMAT)
   assert.equal(file.version, PROFILE_FILE_VERSION)
-  assert.equal(file.version, 6)
+  assert.equal(file.version, 7)
   assert.equal('themeId' in file, false)
   assert.equal(JSON.stringify(file).includes('windowBounds'), false)
   assert.equal(JSON.stringify(file).includes('frameTarget'), false)

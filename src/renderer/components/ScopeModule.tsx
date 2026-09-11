@@ -1,3 +1,4 @@
+import { ReferenceImportStatus, useReferenceDrop, useSpectrumReference } from './SpectrumReference'
 import { Waterfall, type WaterfallDataSource } from '../visualizers/Waterfall'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { isTransformableScopeKind, type ScopeKind } from '../../types/scope'
@@ -192,8 +193,10 @@ export function scopeSettingsToOptions(
       const t = theme as ResolvedSpectrumTheme
       const range = nominalFrequencyBoundsForRange(s.frequencyRangeMode)
       return {
+        reference: s.reference ?? null,
         lineColor: t.line,
         secondaryLineColor: t.sideLine,
+        referenceLineColor: t.referenceLine,
         gradientColors: t.fillGradient,
         heatColors: t.heatColors,
         heatBaseColor: t.heatBase,
@@ -435,6 +438,8 @@ export default function ScopeModule({
   dataSource,
 }: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const referenceController = useSpectrumReference()
+  const referenceDrop = useReferenceDrop(scopeKind === 'spectrum')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visualizerRef = useRef<Visualizer | null>(null)
   const initializedRef = useRef(false)
@@ -618,7 +623,7 @@ export default function ScopeModule({
   }, [dataSource, frameScheduler, handleSpectrumPeakInfo, scopeKind])
 
   useEffect(() => {
-    if (!visualizerRef.current || !initializedRef.current) return
+    if (!visualizerRef.current) return
     const opts = {
       ...applyWindowBackgroundAlphaToOptions(
         scopeSettingsToOptions(scopeKind, mySettings, myTheme),
@@ -727,6 +732,14 @@ export default function ScopeModule({
     }
   }, [rotation])
 
+  useEffect(() => {
+    if (scopeKind !== 'spectrum') return
+    const analyzer = visualizerRef.current as SpectrumAnalyzer | null
+    analyzer?.setOptions({ referencePreview: referenceController?.state.preview ?? null,
+      referenceImporting: referenceController?.busy ?? false,
+      onReferenceLevel: referenceController?.reportLevel ?? (() => {}) })
+  }, [scopeKind, referenceController?.state.preview, referenceController?.busy, referenceController?.reportLevel])
+
   const spectrumPeakOverlayStyle = scopeKind === 'spectrum'
     && spectrumPeakMode === 'following'
     && spectrumPeakInfo
@@ -743,11 +756,13 @@ export default function ScopeModule({
     <div
       className={[
         'scope-module',
+        referenceDrop.dragging ? 'is-reference-drop' : '',
         measurementEnabled ? 'scope-measurement-surface' : '',
         analysisActive ? 'is-measuring' : '',
       ].filter(Boolean).join(' ')}
       ref={containerRef}
       {...measurementController.pointerBindings}
+      {...referenceDrop.bindings}
       style={{
         minWidth: 0,
         height: '100%',
@@ -761,6 +776,8 @@ export default function ScopeModule({
           ...getScopeCanvasTransformStyle(rotation, mirrorHorizontal),
         }}
       />
+      {scopeKind === 'spectrum' && <ReferenceImportStatus />}
+      {referenceDrop.dragging && <div className="reference-drop-label">Drop audio to use as reference</div>}
       <ScopeMeasurementOverlay
         containerRef={containerRef}
         measurement={measurementController.measurement}
@@ -782,7 +799,7 @@ export default function ScopeModule({
           ].join(' ')}
           style={spectrumPeakOverlayStyle}
         >
-          <span className="scope-module__peak-info-value">{formatSpectrumPeakDbfs(spectrumPeakInfo.dbfs)}</span>
+          <span className="scope-module__peak-info-value">{spectrumPeakInfo.deltaDb !== undefined ? `${spectrumPeakInfo.deltaDb >= 0 ? '+' : ''}${spectrumPeakInfo.deltaDb.toFixed(1)} dB relative` : formatSpectrumPeakDbfs(spectrumPeakInfo.dbfs)}</span>
           <span className="scope-module__peak-info-separator">/</span>
           <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(spectrumPeakInfo.frequencyHz)}</span>
           <span className="scope-module__peak-info-separator">/</span>

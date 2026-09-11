@@ -139,6 +139,7 @@ import { decodeLUFSMeterFrame, decodeSpectrumFrame, decodeWaterfallFrame } from 
 import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
 import { spectrogramSettingsToOptions } from '../src/plugin-ui/spectrogramOptions'
 import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
+import { REFERENCE_FFT_SIZES, encodeReferencePower, type SpectrumReferenceSettings, type SpectrumReferenceAsset } from '../src/types/spectrumReference'
 import { vectorscopeSettingsToOptions } from '../src/plugin-ui/vectorscopeOptions'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
 import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
@@ -625,6 +626,7 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
 }
 
 interface FakeCanvasRecorder {
+  gradients: Array<{ coordinates: number[]; stops: Array<{ offset: number; color: string }> }>
   fillRects: Array<{ x: number; y: number; width: number; height: number; fillStyle: string }>
   fillTexts: Array<{ text: string; x: number; y: number; fillStyle: string; font: string }>
   lineStrokes: Array<{
@@ -653,6 +655,7 @@ interface FakeCanvasRecorder {
 
 function createFakeCanvasRecorder(): FakeCanvasRecorder {
   return {
+    gradients: [],
     fillRects: [],
     fillTexts: [],
     lineStrokes: [],
@@ -728,9 +731,11 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     getLineDash() {
       return [...currentLineDash]
     },
-    createLinearGradient() {
+    createLinearGradient(...coordinates: number[]) {
+      const gradient = { coordinates, stops: [] as Array<{ offset: number; color: string }> }
+      recorder?.gradients.push(gradient)
       return {
-        addColorStop() {},
+        addColorStop(offset: number, color: string) { gradient.stops.push({ offset, color }) },
       } as CanvasGradient
     },
     measureText(text: string) {
@@ -1356,6 +1361,100 @@ function projectSpectrumDb(options: Partial<SpectrumAnalyzerOptions>, db: number
     dom.restore()
   }
 }
+
+function flatReference(db = -20, view: SpectrumReferenceSettings['view'] = 'difference', trimDb = 0): SpectrumReferenceSettings {
+  const asset: SpectrumReferenceAsset = { version: 1, id: 'renderer-reference', name: 'Reference.wav', sampleRate: 48000,
+    sourceNyquistHz: 24000, durationSeconds: 10, meanSquare: 10 ** (db / 10),
+    curves: Object.fromEntries(REFERENCE_FFT_SIZES.map(size => [size, encodeReferencePower(new Float32Array(size / 2).fill(10 ** (db / 10)))])) as SpectrumReferenceAsset['curves'] }
+  return { asset, trimDb, view }
+}
+
+test('Spectrum reference Difference centers equality and applies trim before clipping', () => {
+  const equal = projectSpectrumDb({ reference: flatReference() }, -20)
+  assert.ok(equal.yPoints.every(y => Math.abs(y - 50) < 0.001))
+  const offset = projectSpectrumDb({ reference: flatReference(-20, 'difference', -6) }, -20)
+  assert.ok(offset.yPoints.every(y => Math.abs(y - 37.5) < 0.001))
+  const low = projectSpectrumDb({ reference: flatReference(-100), minDecibels: -80 }, -110)
+  assert.ok(low.yPoints.every(y => Math.abs(y - (50 + 1000 / 48)) < 0.001))
+  const overlay = projectSpectrumDb({ reference: flatReference(-20, 'overlay'), minDecibels: -80, maxDecibels: 0 }, -20)
+  const preview = projectSpectrumDb({ reference: flatReference(-20), referenceImporting: true, minDecibels: -80, maxDecibels: 0 }, -20)
+  assert.deepEqual(preview.yPoints, overlay.yPoints)
+  assert.deepEqual(equal.heatmapIntensity, offset.heatmapIntensity)
+})
+
+test('Spectrum Difference cancels display tilt and exports only frequency to linked analysis', () => {
+  const reference = flatReference(-40)
+  const a = renderSpectrumSnapshot({ reference, tiltDbPerOctave: 0 })
+  const b = renderSpectrumSnapshot({ reference, tiltDbPerOctave: 6 })
+  assert.deepEqual(a.primaryPointY, b.primaryPointY)
+  const dom = installFakeCanvasDom()
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), { reference,
+    dataSource: { getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [], getSampleRate: () => 48000, isPlaying: () => false, subscribeToSessionChanges: () => () => {} },
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer() })
+  try {
+    const measurement = analyzer.getMeasurementAt({ x: 0.5, y: 0.25 })
+    assert.equal(measurement.dimensions.spectralLevelDb, undefined)
+    assert.ok(measurement.dimensions.frequencyHz! > 0)
+    assert.equal(measurement.values[0], '+12.00dB relative')
+  } finally { analyzer.dispose(); dom.restore() }
+})
+
+test('Spectrum Difference draws both signs from zero and leaves no floor trace during silence or startup', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const heatmapFill of [false, true]) {
+      const recorder = createFakeCanvasRecorder()
+      const native = createFakeSpectrumNativeAnalyzer()
+      let db = -100, seconds = 0, meanSquare = 0
+      native.getReferenceLevel = () => ({ seconds, meanSquare })
+      native.fillMagnitudes = native.fillRawMagnitudes = output => { output.fill(db); return output.length }
+      const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder, 320, 180), {
+        reference: flatReference(-20), nativeAnalyzer: native, heatmapFill, fillGradient: !heatmapFill,
+        showSideLine: false, showGrid: false, heatBaseColor: '#123456',
+        gradientColors: ['transparent', '#567890'],
+        dataSource: { getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+          getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {} },
+      })
+      const state = analyzer as unknown as { drawFrame(): void; primaryPointY: Float32Array }
+      try {
+        for (const sample of [
+          { db: -100, seconds: 0, meanSquare: 0 },
+          { db: -40, seconds: 0.01, meanSquare: 0.01 },
+          { db: -120, seconds: 3, meanSquare: 0.01 },
+        ]) {
+          ;({ db, seconds, meanSquare } = sample)
+          state.drawFrame()
+          assert.equal(recorder.lineStrokes.length, 0, 'no fabricated trace along the lower edge')
+          assert.equal(recorder.fillRects.length, 0)
+          assert.equal(recorder.fills.length, 0)
+        }
+        seconds = 3; meanSquare = 0.01
+        for (const delta of [0, 6, -6]) {
+          db = -20 + delta
+          recorder.lineStrokes.length = recorder.fillRects.length = recorder.fills.length = 0
+          state.drawFrame()
+          const expectedY = 90 - delta * 180 / 48
+          assert.ok(state.primaryPointY.every(y => Math.abs(y - expectedY) < 0.001), `delta ${delta}: ${Array.from(state.primaryPointY).filter(y => Math.abs(y - expectedY) >= 0.001 || !Number.isFinite(y)).slice(0, 8)}`)
+          const zero = recorder.lineStrokes[0]
+          assert.deepEqual(zero.commands, [{ kind: 'moveTo', x: 0, y: 90 }, { kind: 'lineTo', x: 320, y: 90 }])
+          if (heatmapFill) {
+            const fills = recorder.fillRects.filter(rect => rect.fillStyle === '#123456')
+            if (delta === 0) assert.equal(fills.length, 0, 'equality has no shaded area')
+            else assert.ok(fills.every(rect => rect.y === Math.floor(Math.min(90, expectedY)) && rect.height === Math.ceil(Math.abs(90 - expectedY))))
+          } else {
+            const commands = recorder.fills[0].commands
+            assert.equal(commands[0].y, 90)
+            assert.equal(commands.at(-1)!.y, 90)
+            assert.ok(commands.slice(1, -1).every(point => Math.abs(point.y - expectedY) < 0.001))
+            assert.deepEqual(recorder.gradients.at(-1)!.stops, [
+              { offset: 0, color: '#567890' }, { offset: 0.5, color: 'transparent' }, { offset: 1, color: '#567890' },
+            ])
+          }
+        }
+      } finally { analyzer.dispose() }
+    }
+  } finally { dom.restore() }
+})
 
 function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, values: number[]): number[] {
   const recorder = createFakeCanvasRecorder()

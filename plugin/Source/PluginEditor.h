@@ -32,6 +32,8 @@ public:
     // Called by the webview event listeners (message thread).
     void onPrismConfig(juce::var payload);
     void onPrismReady();
+    void onReferenceCommand(juce::var);
+    void pushReferenceState();
 
     // Scope-specific native config (e.g. the spectrogram's canvas-derived rowCount).
     void onScopeNativeConfig(juce::var payload);
@@ -70,6 +72,8 @@ private:
     PrismSpectrumProcessor& processorRef;
 
     std::unique_ptr<ScopeEngine> engine;
+    std::unique_ptr<juce::FileChooser> referenceChooser;
+    uint64_t referenceStateRevision = UINT64_MAX;
     std::vector<float> drainLeft, drainRight;
     double lastSampleRate = 0.0;
 
@@ -83,6 +87,7 @@ private:
     int uncapAttempts = 0;
 
     std::unique_ptr<juce::WebBrowserComponent> webView;
+    std::shared_ptr<juce::WebBrowserComponent*> referenceBrowserLink = std::make_shared<juce::WebBrowserComponent*>(nullptr);
 #if JUCE_LINUX
     std::unique_ptr<juce::DocumentWindow> floatingWebViewWindow;
 #endif

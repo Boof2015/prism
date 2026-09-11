@@ -1,3 +1,4 @@
+import { normalizeSpectrumReference } from '../types/spectrumReference'
 import { normalizeWaterfallSettings } from '../types/waterfall'
 import type { ScopePopoutStateMap, WindowBounds } from '../types/popout'
 import {
@@ -10,7 +11,7 @@ import {
   type ProfileLocalMetadata,
   type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV6,
+  type PrismProfileFileV7,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
@@ -223,6 +224,7 @@ export function mergeScopeSettings(
       scaleMode: normalizeFrequencyScaleMode(rawSpectrum.scaleMode),
       frequencyRangeMode: normalizeFrequencyRangeMode(rawSpectrum.frequencyRangeMode),
       peakInfoMode: normalizeSpectrumPeakInfoMode(rawSpectrum.peakInfoMode),
+      reference: normalizeSpectrumReference(rawSpectrum.reference),
     },
     oscilloscope: {
       ...DEFAULT_SCOPE_SETTINGS.oscilloscope,
@@ -357,9 +359,9 @@ export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-) : PrismProfileFileV6 {
+) : PrismProfileFileV7 {
   const parsed = typeof raw === 'object' && raw !== null
-    ? raw as Omit<Partial<PrismProfileFileV6>, 'version'> & { version?: unknown }
+    ? raw as Omit<Partial<PrismProfileFileV7>, 'version'> & { version?: unknown }
     : {}
 
   const id = typeof parsed.id === 'string' && parsed.id.trim()
@@ -384,7 +386,7 @@ export function normalizeProfileFile(
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV6 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV7 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {

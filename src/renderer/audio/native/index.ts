@@ -1,4 +1,5 @@
 import type { WaterfallNativeAnalyzer } from '../../../types/waterfall'
+import type { SpectrumReferenceLevel } from '../../../types/spectrumReference'
 // Native visualizer DSP module loader
 // This loads the native C++ addon for high-performance audio visualization
 
@@ -41,6 +42,8 @@ export function getNativeLoadError(): Error | null {
 export const OSCILLOSCOPE_BUFFER_SIZE = 32768
 
 export interface SpectrumNativeAnalyzer {
+  setReferenceEnabled?: (enabled: boolean) => void
+  getReferenceLevel?: () => SpectrumReferenceLevel
   setFFTSize(size: number): void
   getFFTSize(): number
   setSampleRate(sampleRate: number): void
@@ -138,6 +141,8 @@ export const oscilloscope = {
 }
 
 export const spectrum: SpectrumNativeAnalyzer = {
+  setReferenceEnabled: (enabled: boolean): void => { nativeModule?.spectrum.setReferenceEnabled?.(enabled) },
+  getReferenceLevel: (): SpectrumReferenceLevel => nativeModule?.spectrum.getReferenceLevel?.() ?? { meanSquare: 0, seconds: 0 },
   isAvailable: (): boolean => {
     return Boolean(nativeModule?.spectrum)
   },

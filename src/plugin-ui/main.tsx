@@ -209,6 +209,7 @@ function buildApp(): JSX.Element {
   connectSpectrumBridge({
     onFrame: (frame) => {
       analyzer.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax)
+      analyzer.setReferenceLevel(frame.referenceMeanSquare ?? 0, frame.referenceSeconds ?? 0)
       dataSource.setSampleRate(frame.sampleRate)
       dataSource.setPlaying(true)
     },

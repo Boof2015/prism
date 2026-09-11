@@ -1,3 +1,4 @@
+import { registerReferenceTracks, referenceTrackJobs } from './referenceTracks'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { execFileSync } from 'child_process'
@@ -2413,6 +2414,8 @@ function setupIPC(): void {
     }
   })
 
+  registerReferenceTracks()
+
   ipcMain.handle('audio-clips:reveal-folder', async (event) => {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || !isMainRendererWindow(targetWindow)) {
@@ -2481,6 +2484,7 @@ function setupIPC(): void {
   })
 
   ipcMain.handle('profiles:load', async (_event, id: string) => {
+    referenceTrackJobs.cancel()
     return getProfileLibrary().loadProfile(id)
   })
 

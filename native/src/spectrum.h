@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dsp_utils.h"
+#include "reference_analysis.h"
 #include <vector>
 #include <memory>
 
@@ -14,6 +15,10 @@ public:
     void setFFTSize(size_t size);
     size_t getFFTSize() const { return fftSize_; }
     void setSampleRate(float sampleRate);
+    void setReferenceEnabled(bool enabled);
+    bool isReferenceEnabled() const { return referenceEnabled_; }
+    double getReferenceMeanSquare() const { return referenceLive_ ? referenceLive_->meanSquare() : 0; }
+    double getReferenceSeconds() const { return referenceLive_ ? referenceLive_->seconds() : 0; }
     void setSmoothing(float smoothing); // 0.0 - 1.0
 
     // Feed new samples into the rolling history and update the latest magnitudes.
@@ -39,6 +44,11 @@ public:
     void reset();
 
 private:
+    bool referenceEnabled_ = false;
+    bool processingReference_ = false;
+    bool referenceSmoothingPrimed_ = false;
+    size_t referenceSignalSamples_ = 0;
+    std::unique_ptr<ReferenceLiveState> referenceLive_;
     size_t fftSize_;
     float sampleRate_;
     float smoothing_;

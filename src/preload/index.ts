@@ -1,4 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { SpectrumReferenceImportState } from '../types/spectrumReference'
 import type { AppBuildInfo } from '../types/appBuildInfo'
 import type { AudioClipDragPayload } from '../types/audioClip'
 import type { CaptureBackendSupport } from '../types/capture'
@@ -59,6 +60,17 @@ const windowCapabilities: WindowCapabilities = resolveWindowCapabilities({
 
 // Expose Electron API to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
+  referenceTracks: {
+    getState: () => ipcRenderer.invoke('reference-tracks:get-state') as Promise<SpectrumReferenceImportState>,
+    choose: () => ipcRenderer.invoke('reference-tracks:choose') as Promise<void>,
+    importFile: (file: File) => ipcRenderer.invoke('reference-tracks:import', webUtils.getPathForFile(file)) as Promise<void>,
+    cancel: () => ipcRenderer.invoke('reference-tracks:cancel') as Promise<void>,
+    subscribe: (callback: (state: SpectrumReferenceImportState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: SpectrumReferenceImportState): void => callback(state)
+      ipcRenderer.on('reference-tracks:state', handler)
+      return () => ipcRenderer.removeListener('reference-tracks:state', handler)
+    },
+  },
   platform: process.platform,
   windowCapabilities,
   getAppBuildInfo: () => ipcRenderer.invoke('app:get-build-info') as Promise<AppBuildInfo>,

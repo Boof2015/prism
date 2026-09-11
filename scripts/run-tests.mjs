@@ -22,6 +22,7 @@ const testScripts = [
   'test:updates',
   'test:waterfall-native',
   'test:spectrum-native',
+  'test:reference-tracks',
   'test:spectrogram-native',
   'test:vectorscope-native',
   'test:lufsmeter-native',

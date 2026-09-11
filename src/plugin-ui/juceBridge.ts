@@ -14,6 +14,8 @@ import { frequencyAtNormalizedPosition } from '../types/frequencyScale'
  */
 
 export interface SpectrumFrame {
+  referenceMeanSquare?: number
+  referenceSeconds?: number
   /** Host sample rate in Hz. */
   sampleRate: number
   /** Mid (mono) magnitudes in dB, length = fftSize/2. */
@@ -25,6 +27,8 @@ export interface SpectrumFrame {
 }
 
 interface SpectrumFramePayload {
+  referenceMeanSquare?: number
+  referenceSeconds?: number
   sampleRate?: number
   magnitudes?: string
   side?: string
@@ -192,13 +196,15 @@ export function connectWaterfallBridge(handlers: {
 
 export function decodeSpectrumFrame(payload: unknown): SpectrumFrame | null {
   if (typeof payload !== 'object' || payload === null) return null
-  const { sampleRate, magnitudes, side, channelMax } = payload as SpectrumFramePayload
+  const { sampleRate, magnitudes, side, channelMax, referenceMeanSquare, referenceSeconds } = payload as SpectrumFramePayload
   if (typeof magnitudes !== 'string' || magnitudes.length === 0) return null
   const decodedMagnitudes = base64ToFloat32Array(magnitudes)
   const decodedChannelMax = typeof channelMax === 'string'
     ? base64ToFloat32Array(channelMax)
     : new Float32Array(0)
   return {
+    referenceMeanSquare: referenceMeanSquare ?? 0,
+    referenceSeconds: referenceSeconds ?? 0,
     sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,
     magnitudes: decodedMagnitudes,
     side: typeof side === 'string' ? base64ToFloat32Array(side) : new Float32Array(0),

@@ -52,6 +52,11 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * Independent spectral and heatmap tilt around a 1 kHz reference
 * Peak analysis can report dBFS, frequency, musical note, octave, and cents offset
 * Interactive measurement overlay exposes frequency, level, and pitch directly from the graph
+* One whole-track reference: drop a mono/stereo WAV, AIFF, FLAC, or MP3 onto the spectrum, or use **Spectrum settings → Reference → Load track**
+* Dashed Overlay and a centered ±24 dB Difference view, with ±24 dB reference trim and one-shot **Match level** using the latest three seconds of live Mid audio
+* Cancellable background analysis with an evolving preview; analyzed curves are saved with profiles and Spectrum plugin state, so recall does not need the original file
+
+Spectrum settings have **General** and **Reference** tabs. Matching requires at least one second of current, non-silent audio. During import, the spectrum temporarily shows Overlay; the previous reference remains available if loading fails or is canceled. Reference analysis uses a shared 48 kHz path with all five FFT sizes cached, while respecting the original file's bandwidth. This affects analysis only.
 
 ### Waterfall
 

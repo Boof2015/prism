@@ -1,3 +1,4 @@
+import DesktopReferenceProvider from './components/DesktopReferenceProvider'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
@@ -37,7 +38,7 @@ if (windowMode === 'dialog') {
     ? <ScopePopoutWindow scopeKind={scopeKind} />
     : <div>Invalid scope popout</div>
 } else {
-  root = <App />
+  root = <DesktopReferenceProvider><App /></DesktopReferenceProvider>
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

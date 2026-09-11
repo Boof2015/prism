@@ -23,6 +23,20 @@ No DSP or allocation runs on the realtime audio thread; audio passes through unm
 Waterfall records history at 60 slices per second of audio, independently of the
 display rate, and repaints when a native plot frame arrives.
 
+Spectrum accepts one reference track through **Settings → Reference** or a file
+drop onto its graph (mono/stereo WAV, AIFF, FLAC, or MP3). Overlay shows its average
+curve; Difference shows live Mid minus reference minus trim on a ±24 dB scale.
+Match level sets trim once from the latest three seconds of live Mid power.
+Import workers belong to the processor and continue when the editor closes.
+Analyzed curves are stored per instance in DAW state; the source file is not
+needed for recall, and desktop profile references are never inherited.
+Pinned decoder/resampler sources and licenses are in `native/vendor`.
+
+Reference validation: build `PrismReferenceTests` and run
+`ctest --test-dir plugin/build -R PrismReferenceTests --output-on-failure`.
+`PrismReferenceTests --ui [audio-file]` opens a native editor with a quiet test
+tone for file-drop, picker, loading, and narrow-window checks.
+
 ## Build & run (macOS)
 
 Prereqs: CMake ≥ 3.22, Xcode command-line tools, Node.

@@ -99,6 +99,7 @@ const SPECTRUM_SCHEMA = {
   background: 'background',
   line: 'line',
   side_line: 'sideLine',
+  reference_line: 'referenceLine',
   fill: 'fill',
   heat_low: 'heatLow',
   heat_mid: 'heatMid',
@@ -1537,6 +1538,7 @@ export function createTemplateThemeFile(): string {
 
   const spectrumSection = commentExampleTokens(serializeSection('Spectrum', {
     ...base.spectrum,
+    referenceLine: resolved.spectrum.referenceLine,
     background: resolved.spectrum.background,
     guides: resolved.spectrum.guides,
     labels: resolved.spectrum.labels,
@@ -1603,6 +1605,7 @@ export function createTemplateThemeFile(): string {
 # Module sections show the full set of supported tokens for each module.
 # Spectrum and Spectrogram heat token alpha is honored directly.
 # Leave Spectrum heat_base commented unless you want an explicit underlay beneath the heatmap.
+# Spectrum reference_line sets the reference track curve; it defaults to the theme's text color.
 #
 # Comment out any optional token to let Prism inherit or derive it.
 # Leave an entire optional section commented if that area should use Prism's defaults.
@@ -1814,6 +1817,7 @@ function resolveSpectrumTheme(
   return {
     line,
     sideLine,
+    referenceLine: section.referenceLine ?? app.text,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
     labels: section.labels ?? guides,

@@ -117,8 +117,11 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
 
     target_sources(${TARGET} PRIVATE
         Source/PluginProcessor.cpp
+        Source/ReferenceTrackManager.cpp
         Source/PluginEditor.cpp
         ${PRISM_NATIVE_DIR}/spectrum.cpp
+        ${PRISM_NATIVE_DIR}/reference_analysis.cpp
+        ${PRISM_NATIVE_DIR}/reference_decode.cpp
         ${PRISM_NATIVE_DIR}/oscilloscope.cpp
         ${PRISM_NATIVE_DIR}/vumeter.cpp
         ${PRISM_NATIVE_DIR}/lufsmeter.cpp
@@ -248,6 +251,14 @@ if(APPLE)
 endif()
 
 if(BUILD_TESTING)
+    juce_add_console_app(PrismReferenceTests PRODUCT_NAME "Prism Reference Tests")
+    target_sources(PrismReferenceTests PRIVATE Tests/ReferenceTrackTests.cpp)
+    target_include_directories(PrismReferenceTests PRIVATE Source ${PRISM_NATIVE_DIR} ${JUCE_SOURCE_DIR}/modules)
+    target_compile_definitions(PrismReferenceTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_WEB_BROWSER=1 JucePlugin_Name="Prism Spectrum")
+    target_link_libraries(PrismReferenceTests PRIVATE PrismSpectrum)
+    add_test(NAME PrismReferenceTests COMMAND PrismReferenceTests)
+
     juce_add_console_app(PrismWaterfallTests PRODUCT_NAME "Prism Waterfall Tests")
     target_sources(PrismWaterfallTests PRIVATE Tests/WaterfallTests.cpp)
     target_include_directories(PrismWaterfallTests PRIVATE Source ${PRISM_NATIVE_DIR} ${JUCE_SOURCE_DIR}/modules)

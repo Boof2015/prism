@@ -1,3 +1,4 @@
+import { SpectrumReferenceControls } from './SpectrumReference'
 import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS, isTransformableScopeKind } from '../../types/scope'
@@ -318,11 +319,14 @@ interface ScopeSettingsSectionProps {
   onUpdate: <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>) => void
 }
 
+let spectrumSettingsTab: 'general' | 'reference' = 'general'
+
 export default function ScopeSettingsSection({
   kind,
   settings,
   onUpdate,
 }: ScopeSettingsSectionProps): JSX.Element {
+  const [tab, setTab] = useState(spectrumSettingsTab)
   return (
     <section className="settings-scope-section">
       <div className="settings-scope-section__header">
@@ -330,7 +334,24 @@ export default function ScopeSettingsSection({
         <div className="settings-scope-section__summary">{scopeSummary(kind, settings)}</div>
       </div>
 
-      <div className="settings-scope-section__controls">
+      {kind === 'spectrum' && <div className="settings-scope-tabs" role="tablist" aria-label="Spectrum settings">
+        {(['general', 'reference'] as const).map(value => <button type="button" role="tab" key={value}
+          className={`settings-chip ${tab === value ? 'is-active' : ''}`}
+          aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} aria-controls={`spectrum-${value}-settings`}
+          onClick={() => { spectrumSettingsTab = value; setTab(value) }}
+          onKeyDown={event => {
+            if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+              event.preventDefault()
+              const next = event.key === 'Home' ? 'general' : event.key === 'End' ? 'reference' : tab === 'general' ? 'reference' : 'general'
+              spectrumSettingsTab = next; setTab(next)
+              const buttons = event.currentTarget.parentElement?.querySelectorAll('button')
+              buttons?.[next === 'general' ? 0 : 1]?.focus()
+            }
+          }}>{value === 'general' ? 'General' : 'Reference'}</button>)}
+      </div>}
+      {kind === 'spectrum' && tab === 'reference' && <div role="tabpanel" id="spectrum-reference-settings"><SpectrumReferenceControls /></div>}
+      <div className="settings-scope-section__controls" id={kind === 'spectrum' ? 'spectrum-general-settings' : undefined}
+        role={kind === 'spectrum' ? 'tabpanel' : undefined} hidden={kind === 'spectrum' && tab !== 'general'}>
         {kind === 'waterfall' && (() => {
           const current = settings as ScopeSettings['waterfall']
           return <>

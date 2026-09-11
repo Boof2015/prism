@@ -1,3 +1,4 @@
+import type { SpectrumReferenceLevel } from '../../../types/spectrumReference'
 import type { WaterfallNativeAnalyzer } from '../../../types/waterfall'
 // Type definitions for visualizer_dsp native addon
 
@@ -101,6 +102,8 @@ export interface OscilloscopeModule {
 }
 
 export interface SpectrumModule {
+  setReferenceEnabled(enabled: boolean): void;
+  getReferenceLevel(): SpectrumReferenceLevel;
   setFFTSize(size: number): void;
   getFFTSize(): number;
   setSampleRate(sampleRate: number): void;

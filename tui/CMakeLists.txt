@@ -45,6 +45,7 @@ add_library(prism_tui_analysis STATIC
     src/tui_theme.cpp
     src/tui_settings.cpp
     ${PRISM_NATIVE_DIR}/spectrum.cpp
+    ${PRISM_NATIVE_DIR}/reference_analysis.cpp
     ${PRISM_NATIVE_DIR}/waterfall.cpp
     ${PRISM_NATIVE_DIR}/oscilloscope.cpp
     ${PRISM_NATIVE_DIR}/vectorscope.cpp

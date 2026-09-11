@@ -1,3 +1,4 @@
+import type { SpectrumReferenceTransport } from '../types/spectrumReference'
 /// <reference types="vite/client" />
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
@@ -51,6 +52,7 @@ declare global {
     visualizerAPI: VisualizerDSP | null
     nativeCaptureAPI: NativeCaptureAPI | null
     electronAPI: {
+      referenceTracks: SpectrumReferenceTransport
       platform: string
       windowCapabilities: WindowCapabilities
       getAppBuildInfo: () => Promise<AppBuildInfo>

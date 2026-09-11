@@ -1,6 +1,52 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <cstring>
+#include <stdexcept>
+
+PrismSpectrumProcessor::~PrismSpectrumProcessor() {
+    stopTimer();
+    referenceTracks.cancel();
+    detachedTransfers.clear();
+}
+
+void PrismSpectrumProcessor::retainReferenceTransfer(std::unique_ptr<juce::WebBrowserComponent> browser) {
+    const auto id = referenceTracks.activeUploadId();
+    if (id.isEmpty() || !browser) return;
+    // Keep the File/Blob and its acknowledged reads alive until the native temp
+    // file is complete, even if the DAW destroys the visible editor meanwhile.
+    auto window = std::make_unique<juce::DocumentWindow>("Prism reference import", juce::Colours::black, 0);
+    window->setContentOwned(browser.release(), false);
+    window->setSize(1, 1);
+    detachedTransfers.push_back({ id, std::move(window) });
+    startTimer(100);
+}
+
+void PrismSpectrumProcessor::timerCallback() {
+    const auto active = referenceTracks.activeUploadId();
+    detachedTransfers.erase(std::remove_if(detachedTransfers.begin(), detachedTransfers.end(),
+        [&active](const auto& transfer) { return transfer.id != active; }), detachedTransfers.end());
+    if (detachedTransfers.empty()) stopTimer();
+}
+
+void PrismSpectrumProcessor::handleReferenceTransfer(juce::var payload, juce::WebBrowserComponent* browser) {
+    auto* response = new juce::DynamicObject();
+    response->setProperty("requestId", payload.getProperty("requestId", juce::var()));
+    try {
+        const auto action = payload.getProperty("action", "").toString();
+        if (action == "getState") response->setProperty("state", referenceTracks.snapshot());
+        else if (action == "cancel") referenceTracks.cancel();
+        else if (action == "cancelUpload") referenceTracks.cancelUpload(payload.getProperty("uploadId", "").toString());
+        else if (action == "beginUpload") response->setProperty("uploadId", referenceTracks.beginUpload(payload.getProperty("name", "audio").toString(), static_cast<juce::int64>(payload.getProperty("size", 0))));
+        else if (action == "appendUpload") referenceTracks.appendUpload(payload.getProperty("uploadId", "").toString(), static_cast<juce::int64>(payload.getProperty("offset", 0)), payload.getProperty("data", "").toString());
+        else if (action == "finishUpload") referenceTracks.finishUpload(payload.getProperty("uploadId", "").toString());
+        else throw std::runtime_error("Unknown reference command.");
+        response->setProperty("ok", true);
+    } catch (const std::exception& error) {
+        response->setProperty("ok", false); response->setProperty("error", juce::String::fromUTF8(error.what()));
+        referenceTracks.cancelUpload(payload.getProperty("uploadId", "").toString());
+    }
+    if (browser) browser->emitEventIfBrowserIsVisible("prismReferenceResponse", juce::var(response));
+}
 
 PrismSpectrumProcessor::PrismSpectrumProcessor()
     : juce::AudioProcessor(BusesProperties()
@@ -84,13 +130,34 @@ void PrismSpectrumProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 void PrismSpectrumProcessor::setSettingsJson(const juce::String& json)
 {
     const juce::ScopedLock sl(settingsLock);
-    settingsJson = json;
+    auto settings = juce::JSON::parse(json);
+    if (settings.isObject() && settings.hasProperty("reference")) {
+        settings.getDynamicObject()->setProperty("reference", normalizeSpectrumReference(settings.getProperty("reference", juce::var())));
+        settingsJson = juce::JSON::toString(settings);
+    } else settingsJson = json;
 }
 
-juce::String PrismSpectrumProcessor::getSettingsJson() const
+juce::String PrismSpectrumProcessor::getSettingsJson()
 {
+    syncReferenceResult();
     const juce::ScopedLock sl(settingsLock);
     return settingsJson;
+}
+
+bool PrismSpectrumProcessor::syncReferenceResult()
+{
+    const juce::ScopedLock sl(settingsLock);
+    auto asset = referenceTracks.takeCompletedAsset();
+    if (!asset.isObject()) return false;
+    auto settings = juce::JSON::parse(settingsJson);
+    if (!settings.isObject()) settings = juce::var(new juce::DynamicObject());
+    const auto previous = settings.getProperty("reference", juce::var());
+    auto* reference = new juce::DynamicObject();
+    reference->setProperty("asset", asset); reference->setProperty("trimDb", 0.0);
+    reference->setProperty("view", previous.getProperty("view", "overlay"));
+    settings.getDynamicObject()->setProperty("reference", juce::var(reference));
+    settingsJson = juce::JSON::toString(settings);
+    return true;
 }
 
 void PrismSpectrumProcessor::getStateInformation(juce::MemoryBlock& destData)
@@ -104,6 +171,8 @@ void PrismSpectrumProcessor::setStateInformation(const void* data, int sizeInByt
 {
     if (data == nullptr || sizeInBytes <= 0)
         return;
+    referenceTracks.cancel();
+    audioDiscontinuity.store(true);
     setSettingsJson(juce::String::fromUTF8(static_cast<const char*>(data), sizeInBytes));
 
     // If the editor is already open (host restored state after opening it), push
