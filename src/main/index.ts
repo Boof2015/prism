@@ -48,6 +48,7 @@ import { loadNativeWindowsMediaApi } from './nativeWindowsMedia'
 import { loadNativeWindowChromeApi } from './nativeWindowChrome'
 import { NowPlayingManager } from './services/nowPlayingManager'
 import { AstraIntegrationService } from './services/astraIntegration'
+import { TidalProvider } from './services/tidalProvider'
 import { MacSpotifyProvider } from './services/macSpotifyProvider'
 import { SecretVault } from './services/secretVault'
 import { checkForUpdates, resolveSafeReleaseUrl } from './services/updates'
@@ -975,6 +976,9 @@ function getNowPlayingManager(): NowPlayingManager {
           secretVault: getSecretVault(),
         }),
         new MacSpotifyProvider({
+          windowsMediaApi: getNativeWindowsMediaApi(),
+        }),
+        new TidalProvider({
           windowsMediaApi: getNativeWindowsMediaApi(),
         }),
       ],

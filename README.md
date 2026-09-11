@@ -324,6 +324,18 @@ The TUI build downloads the pinned FTXUI source through CMake. Linux also requir
 
 The DAW plugins build with CMake from the [`plugin/`](plugin/) directory. See [`plugin/README.md`](plugin/README.md) for per-platform build and installation details.
 
+## TIDAL Now Playing
+
+Prism reads playback from a local TIDAL client without account setup in Prism or additional helper software. Open the Now Playing configuration to set provider priority or retry detection.
+
+| Platform | Track information and progress | Playback controls | Artwork |
+| --- | --- | --- | --- |
+| macOS | TIDAL desktop, while it owns system Now Playing | Use the TIDAL app | Only when supplied by macOS |
+| Windows | TIDAL desktop media session | Play, pause, next, previous | When supplied by TIDAL |
+| Linux | Dedicated TIDAL clients exposing MPRIS, including TIDAL Hi-Fi | Play, pause, next, previous | When supplied by the client |
+
+Linux requires `gdbus`, a desktop session bus, and MPRIS enabled in the client; generic browser tabs are excluded. On macOS, Prism uses a small built-in script to read Apple's private MediaRemote interface. OS updates can affect compatibility; the provider reports errors and can be retried. Missing artwork, album names, or duration do not prevent track display. This integration does not stream music or browse the TIDAL catalog.
+
 ## Astra Integration
 
 Prism can optionally connect to [Astra](https://github.com/Boof2015/astra) through its local API to show currently playing music, cover art, track information, and playback controls alongside your scopes.

@@ -34,6 +34,7 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -226,24 +227,38 @@ private:
     bool usable_;
 };
 
-bool isSpotifySession(const GlobalSystemMediaTransportControlsSession& session) {
+template <typename Operation>
+auto awaitMediaOperation(const Operation& operation) {
+    if (operation.wait_for(std::chrono::seconds(5)) == winrt::Windows::Foundation::AsyncStatus::Started) {
+        operation.Cancel();
+        throw std::runtime_error("Windows media request timed out. Retry after checking the player.");
+    }
+    return operation.GetResults();
+}
+
+bool isProviderSession(const GlobalSystemMediaTransportControlsSession& session, const std::string& provider) {
     if (!session) {
         return false;
     }
 
     const std::string sourceId = toLowerAscii(winrt::to_string(session.SourceAppUserModelId()));
-    return sourceId.find("spotify") != std::string::npos;
+    if (provider == "spotify") return sourceId.find("spotify") != std::string::npos;
+    if (provider != "tidal") return false;
+    return sourceId == "com.squirrel.tidal.tidal" || sourceId == "tidal" ||
+        sourceId == "tidal.exe" || sourceId == "com.tidal.desktop" ||
+        (sourceId.rfind("tidalmusicas.tidal_", 0) == 0 &&
+         sourceId.size() > 6 && sourceId.compare(sourceId.size() - 6, 6, "!tidal") == 0);
 }
 
-std::optional<GlobalSystemMediaTransportControlsSession> findSpotifySession(
-    const GlobalSystemMediaTransportControlsSessionManager& manager) {
+std::optional<GlobalSystemMediaTransportControlsSession> findProviderSession(
+    const GlobalSystemMediaTransportControlsSessionManager& manager, const std::string& provider) {
     const auto currentSession = manager.GetCurrentSession();
-    if (isSpotifySession(currentSession)) {
+    if (isProviderSession(currentSession, provider)) {
         return currentSession;
     }
 
     for (const auto& session : manager.GetSessions()) {
-        if (isSpotifySession(session)) {
+        if (isProviderSession(session, provider)) {
             return session;
         }
     }
@@ -284,30 +299,35 @@ std::string base64Encode(const std::vector<uint8_t>& data) {
 // Thumbnail is fetched on a background thread to avoid blocking the NAPI call
 // thread with cross-process WinRT async I/O.
 std::mutex s_thumbMutex;
-std::string s_thumbTrackKey;
-std::string s_thumbDataUrl;
-bool s_thumbFetching = false;
+struct ThumbnailCache {
+    std::string trackKey;
+    std::string dataUrl;
+    bool fetching = false;
+    std::chrono::steady_clock::time_point retryAfter{};
+};
+// One slot per provider; Spotify and TIDAL must not evict each other's artwork.
+std::map<std::string, ThumbnailCache> s_thumbnailCaches;
 
 void launchThumbnailFetch(
-    const std::string& trackKey,
+    const std::string& provider, const std::string& trackKey,
     winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
     const auto thumbnailRef = props.Thumbnail();
     if (!thumbnailRef) {
         std::lock_guard<std::mutex> lock(s_thumbMutex);
-        s_thumbFetching = false;
+        s_thumbnailCaches[provider].fetching = false;
         return;
     }
-    std::thread([trackKey, thumbnailRef]() {
+    std::thread([provider, trackKey, thumbnailRef]() {
         std::string result;
         try {
             using winrt::Windows::Storage::Streams::DataReader;
-            const HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
-            if (SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE) {
-                const auto stream = thumbnailRef.OpenReadAsync().get();
+            ScopedRoInit init;
+            if (init.usable()) {
+                const auto stream = awaitMediaOperation(thumbnailRef.OpenReadAsync());
                 const uint64_t size = stream.Size();
                 if (size > 0 && size <= 4u * 1024u * 1024u) {
                     const auto reader = DataReader(stream);
-                    const uint32_t loaded = reader.LoadAsync(static_cast<uint32_t>(size)).get();
+                    const uint32_t loaded = awaitMediaOperation(reader.LoadAsync(static_cast<uint32_t>(size)));
                     if (loaded > 0) {
                         std::vector<uint8_t> bytes(loaded);
                         reader.ReadBytes(bytes);
@@ -318,39 +338,40 @@ void launchThumbnailFetch(
                         result = "data:" + mimeType + ";base64," + base64Encode(bytes);
                     }
                 }
-                if (SUCCEEDED(hr)) {
-                    RoUninitialize();
-                }
             }
         } catch (...) {}
         std::lock_guard<std::mutex> lock(s_thumbMutex);
-        if (s_thumbTrackKey == trackKey) {
-            s_thumbDataUrl = std::move(result);
+        auto& cache = s_thumbnailCaches[provider];
+        if (cache.trackKey == trackKey) {
+            cache.dataUrl = std::move(result);
+            cache.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         }
-        s_thumbFetching = false;
+        cache.fetching = false;
     }).detach();
 }
 
 std::string getOrFetchThumbnail(
-    const std::string& trackKey,
+    const std::string& provider, const std::string& trackKey,
     winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
     bool shouldFetch = false;
     std::string result;
     {
         std::lock_guard<std::mutex> lock(s_thumbMutex);
-        if (s_thumbTrackKey == trackKey) {
-            result = s_thumbDataUrl;
-        } else {
-            s_thumbTrackKey = trackKey;
-            s_thumbDataUrl.clear();
-            if (!s_thumbFetching) {
-                s_thumbFetching = true;
-                shouldFetch = true;
-            }
+        auto& cache = s_thumbnailCaches[provider];
+        if (cache.trackKey != trackKey) {
+            cache.trackKey = trackKey;
+            cache.dataUrl.clear();
+            cache.retryAfter = {};
+        }
+        result = cache.dataUrl;
+        if (result.empty() && !cache.fetching && std::chrono::steady_clock::now() >= cache.retryAfter) {
+            cache.fetching = true;
+            cache.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            shouldFetch = true;
         }
     }
     if (shouldFetch) {
-        launchThumbnailFetch(trackKey, std::move(props));
+        launchThumbnailFetch(provider, trackKey, std::move(props));
     }
     return result;
 }
@@ -1061,7 +1082,7 @@ Napi::Value WindowsMediaGetSupport(const Napi::CallbackInfo& info) {
                 hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
         }
 
-        auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        auto manager = awaitMediaOperation(GlobalSystemMediaTransportControlsSessionManager::RequestAsync());
         (void)manager;
         return createWindowsMediaSupport(env, true);
     } catch (const winrt::hresult_error& error) {
@@ -1076,7 +1097,7 @@ Napi::Value WindowsMediaGetSupport(const Napi::CallbackInfo& info) {
     }
 }
 
-Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) {
+Napi::Value WindowsMediaGetPlaybackState(const Napi::CallbackInfo& info, const std::string& provider) {
     Napi::Env env = info.Env();
 
     try {
@@ -1086,15 +1107,15 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
                 hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
         }
 
-        const auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-        const auto session = findSpotifySession(manager);
+        const auto manager = awaitMediaOperation(GlobalSystemMediaTransportControlsSessionManager::RequestAsync());
+        const auto session = findProviderSession(manager, provider);
         if (!session.has_value()) {
             return env.Null();
         }
 
         const auto playbackInfo = session->GetPlaybackInfo();
         const auto timeline = session->GetTimelineProperties();
-        const auto mediaProperties = session->TryGetMediaPropertiesAsync().get();
+        const auto mediaProperties = awaitMediaOperation(session->TryGetMediaPropertiesAsync());
 
         const auto durationMs = std::max<int64_t>(
             0,
@@ -1102,23 +1123,17 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
                 timeline.EndTime() - timeline.StartTime())
                 .count());
 
-        // Position() is stamped at LastUpdatedTime(); extrapolate forward when playing.
-        int64_t positionMs;
-        if (playbackInfo.PlaybackStatus() ==
-            GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
-            const auto elapsed = winrt::clock::now() - timeline.LastUpdatedTime();
-            const auto extrapolated = timeline.Position() + elapsed;
-            positionMs = std::min(
-                durationMs,
-                std::max<int64_t>(
-                    0,
-                    std::chrono::duration_cast<std::chrono::milliseconds>(extrapolated).count()));
-        } else {
-            positionMs = std::max<int64_t>(
-                0,
-                std::chrono::duration_cast<std::chrono::milliseconds>(timeline.Position())
-                    .count());
+        // Position() is stamped at LastUpdatedTime(). Some players omit the timeline;
+        // never extrapolate from the default Windows epoch or clamp unknown duration to zero.
+        int64_t positionMs = std::max<int64_t>(0,
+            std::chrono::duration_cast<std::chrono::milliseconds>(timeline.Position()).count());
+        if (playbackInfo.PlaybackStatus() == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing &&
+            timeline.LastUpdatedTime().time_since_epoch().count() > 0) {
+            positionMs += std::max<int64_t>(0,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    winrt::clock::now() - timeline.LastUpdatedTime()).count());
         }
+        if (durationMs > 0) positionMs = std::min(durationMs, positionMs);
 
         Napi::Object payload = Napi::Object::New(env);
         payload.Set(
@@ -1136,9 +1151,10 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
             Napi::String::New(env, winrt::to_string(session->SourceAppUserModelId())));
 
         const std::string trackKey =
+            provider + "\n" + winrt::to_string(session->SourceAppUserModelId()) + "\n" +
             winrt::to_string(mediaProperties.Title()) + "\n" +
-            winrt::to_string(mediaProperties.Artist());
-        const std::string artworkDataUrl = getOrFetchThumbnail(trackKey, mediaProperties);
+            winrt::to_string(mediaProperties.Artist()) + "\n" + winrt::to_string(mediaProperties.AlbumTitle());
+        const std::string artworkDataUrl = getOrFetchThumbnail(provider, trackKey, mediaProperties);
         payload.Set(
             "artworkDataUrl",
             artworkDataUrl.empty() ? env.Null() : Napi::String::New(env, artworkDataUrl));
@@ -1158,10 +1174,10 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
     }
 }
 
-Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
+Napi::Value WindowsMediaSendControl(const Napi::CallbackInfo& info, const std::string& provider) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsString()) {
-        Napi::TypeError::New(env, "Expected a Spotify control command.").ThrowAsJavaScriptException();
+        Napi::TypeError::New(env, "Expected a media control command.").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -1174,27 +1190,27 @@ Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
                 hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
         }
 
-        const auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-        const auto session = findSpotifySession(manager);
+        const auto manager = awaitMediaOperation(GlobalSystemMediaTransportControlsSessionManager::RequestAsync());
+        const auto session = findProviderSession(manager, provider);
         if (!session.has_value()) {
-            throw std::runtime_error("Spotify is not running.");
+            throw std::runtime_error(provider + " is not running.");
         }
 
         bool accepted = false;
         if (command == "play") {
-            accepted = session->TryPlayAsync().get();
+            accepted = awaitMediaOperation(session->TryPlayAsync());
         } else if (command == "pause") {
-            accepted = session->TryPauseAsync().get();
+            accepted = awaitMediaOperation(session->TryPauseAsync());
         } else if (command == "next") {
-            accepted = session->TrySkipNextAsync().get();
+            accepted = awaitMediaOperation(session->TrySkipNextAsync());
         } else if (command == "previous") {
-            accepted = session->TrySkipPreviousAsync().get();
+            accepted = awaitMediaOperation(session->TrySkipPreviousAsync());
         } else {
-            throw std::runtime_error("Unsupported Spotify control command.");
+            throw std::runtime_error("Unsupported media control command.");
         }
 
         if (!accepted) {
-            throw std::runtime_error("Spotify did not allow Prism to complete that request.");
+            throw std::runtime_error(provider + " did not allow Prism to complete that request.");
         }
 
         return Napi::Boolean::New(env, true);
@@ -1211,6 +1227,19 @@ Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 }
+Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) {
+    return WindowsMediaGetPlaybackState(info, "spotify");
+}
+Napi::Value WindowsMediaGetTidalPlaybackState(const Napi::CallbackInfo& info) {
+    return WindowsMediaGetPlaybackState(info, "tidal");
+}
+Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
+    return WindowsMediaSendControl(info, "spotify");
+}
+Napi::Value WindowsMediaSendTidalControl(const Napi::CallbackInfo& info) {
+    return WindowsMediaSendControl(info, "tidal");
+}
+
 #endif
 
 }  // namespace
@@ -1225,6 +1254,8 @@ void RegisterWindowsMedia(Napi::Env env, Napi::Object exports) {
     mediaExports.Set(
         "sendSpotifyControl",
         Napi::Function::New(env, WindowsMediaSendSpotifyControl));
+    mediaExports.Set("getTidalPlaybackState", Napi::Function::New(env, WindowsMediaGetTidalPlaybackState));
+    mediaExports.Set("sendTidalControl", Napi::Function::New(env, WindowsMediaSendTidalControl));
     exports.Set("windowsMedia", mediaExports);
 }
 #endif

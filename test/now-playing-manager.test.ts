@@ -47,7 +47,7 @@ function cloneProviderState(state: NowPlayingProviderState): NowPlayingProviderS
   }
 }
 
-class StubProviderService<K extends 'astra' | 'spotify'> implements NowPlayingProviderService<K> {
+class StubProviderService<K extends NowPlayingProviderId> implements NowPlayingProviderService<K> {
   readonly providerId: K
   publicConfig: NowPlayingProviderConfigMap[K]
   providerState: NowPlayingProviderState
@@ -136,11 +136,14 @@ async function createHarness(options?: {
   astraConfig?: AstraIntegrationPublicConfig
   astraState?: Partial<NowPlayingProviderState>
   spotifyState?: Partial<NowPlayingProviderState>
+  tidalState?: Partial<NowPlayingProviderState>
 }): Promise<{
   astra: StubProviderService<'astra'>
   cleanup: () => Promise<void>
   manager: NowPlayingManager
   spotify: StubProviderService<'spotify'>
+  tidal: StubProviderService<'tidal'>
+  localStatePath: string
 }> {
   const rootDir = await mkdtemp(join(tmpdir(), 'prism-now-playing-manager-'))
   const astra = new StubProviderService('astra', {
@@ -164,12 +167,19 @@ async function createHarness(options?: {
     }),
   })
 
+  const tidal = new StubProviderService('tidal', {
+    publicConfig: {},
+    providerState: createProviderState('tidal', options?.tidalState),
+  })
+  const localStatePath = join(rootDir, 'now-playing-state.json')
   return {
+    tidal,
+    localStatePath,
     astra,
     cleanup: () => rm(rootDir, { recursive: true, force: true }),
     manager: new NowPlayingManager({
       localStatePath: join(rootDir, 'now-playing-state.json'),
-      providerServices: [astra, spotify],
+      providerServices: [astra, spotify, tidal],
     }),
     spotify,
   }
@@ -334,4 +344,44 @@ test('manager forwards save, retry, and controls to the active provider services
   } finally {
     await harness.cleanup()
   }
+})
+
+
+test('TIDAL participates in priority, configuration, lifecycle, retry and controls', async () => {
+  const active = {
+    available: true, isConfigured: true, supportsTransportControls: true,
+    connectionState: 'connected' as const,
+    snapshot: {
+      playbackState: 'playing' as const, currentTime: 3, duration: 120, queueLength: 0,
+      outputDeviceLabel: null, visualizerLineColor: '#fff', updatedAt: 100,
+      currentTrack: { id: 'track', title: 'Track', artist: '', album: '', isFavorite: false, artworkDataUrl: null },
+    },
+  }
+  const harness = await createHarness({ spotifyState: active, tidalState: active })
+  try {
+    await harness.manager.initialize()
+    assert.equal(harness.manager.getState().activeProviderId, 'spotify')
+    await harness.manager.setProviderPriority(['tidal', 'spotify', 'astra'])
+    assert.equal(harness.manager.getState().activeProviderId, 'tidal')
+    assert.equal(harness.manager.getState().onboardingRequired, false)
+    await harness.manager.setConsumerActive(99, true)
+    await harness.manager.retryProvider('tidal')
+    await harness.manager.sendControl('next')
+    assert.equal(harness.tidal.initializeCalls, 1)
+    assert.deepEqual(harness.tidal.consumerCalls, [{ consumerId: 99, active: true }])
+    assert.equal(harness.tidal.retryCalls, 1)
+    assert.equal(harness.spotify.retryCalls, 0)
+    assert.deepEqual(harness.tidal.controlCalls, ['next'])
+    assert.deepEqual(harness.spotify.controlCalls, [])
+    const restored = new NowPlayingManager({ localStatePath: harness.localStatePath, providerServices: [harness.tidal] })
+    await restored.initialize()
+    assert.deepEqual(restored.getState().providerPriority, ['tidal', 'spotify', 'astra'])
+    harness.tidal.providerState.supportsTransportControls = false
+    await assert.rejects(harness.manager.sendControl('pause'), /controls are unavailable/)
+    harness.tidal.providerState.snapshot = null
+    harness.tidal.emit()
+    assert.equal(harness.manager.getState().activeProviderId, 'spotify')
+    await harness.manager.dispose()
+    assert.equal(harness.tidal.disposeCalls, 1)
+  } finally { await harness.cleanup() }
 })
