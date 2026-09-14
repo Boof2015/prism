@@ -23,6 +23,14 @@ struct PCMBufferView {
     uint32_t channelCount = 0;
 };
 
+/** Writes one finite absolute peak per source channel, before stereo routing. */
+void measureSourceChannelPeaks(const PCMBufferView* buffers,
+                               size_t bufferCount,
+                               const PCMFormat& format,
+                               size_t frameCount,
+                               uint32_t sourceChannelCount,
+                               float* peaksOutput);
+
 /**
  * Selects a stereo pair from one or more interleaved or planar PCM buffers.
  * The output arrays must each have room for frameCount samples. Invalid routes

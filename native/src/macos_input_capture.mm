@@ -1,4 +1,5 @@
 #include "device_input_capture.h"
+#include "capture_channel_selection.h"
 
 #if defined(__APPLE__)
 
@@ -445,6 +446,10 @@ private:
             audioUnit_, actionFlags, timestamp, 1, frameCount, renderBufferList_);
         if (status != noErr) return status;
 
+        for (UInt32 index = 0; index < sourceChannelCount_; ++index) {
+            activityBufferViews_[index].byteLength = renderBufferList_->mBuffers[index].mDataByteSize;
+        }
+
         const uint32_t leftChannel = std::min<uint32_t>(
             routeLeft_.load(std::memory_order_acquire), sourceChannelCount_ - 1);
         const uint32_t rightChannel = std::min<uint32_t>(
@@ -453,6 +458,11 @@ private:
         const auto* right = static_cast<const Float32*>(renderBufferList_->mBuffers[rightChannel].mData);
 
         Prism::Capture::AudioChunk chunk;
+        chunk.sourceChannelPeaks.resize(sourceChannelCount_);
+        Prism::Capture::measureSourceChannelPeaks(
+            activityBufferViews_.data(), activityBufferViews_.size(),
+            {Prism::Capture::SampleEncoding::Float, 32, false},
+            frameCount, sourceChannelCount_, chunk.sourceChannelPeaks.data());
         chunk.left.assign(left, left + frameCount);
         chunk.right.assign(right, right + frameCount);
         chunk.channelCount = sourceChannelCount_ > 1 ? 2u : 1u;
@@ -477,12 +487,16 @@ private:
         renderSampleStorage_.assign(
             static_cast<size_t>(sourceChannelCount_) * maximumFramesPerSlice_,
             0.0f);
+        activityBufferViews_.resize(sourceChannelCount_);
         for (UInt32 index = 0; index < sourceChannelCount_; ++index) {
             auto& buffer = renderBufferList_->mBuffers[index];
             buffer.mNumberChannels = 1;
             buffer.mDataByteSize = maximumFramesPerSlice_ * sizeof(Float32);
             buffer.mData = renderSampleStorage_.data()
                 + static_cast<size_t>(index) * maximumFramesPerSlice_;
+            activityBufferViews_[index] = {
+                static_cast<const uint8_t*>(buffer.mData), buffer.mDataByteSize, 1,
+            };
         }
     }
 
@@ -497,6 +511,7 @@ private:
         renderBufferList_ = nullptr;
         renderBufferListStorage_.clear();
         renderSampleStorage_.clear();
+        activityBufferViews_.clear();
         activeDeviceId_.clear();
         activeDeviceLabel_.clear();
         sampleRate_ = 48000.0;
@@ -521,6 +536,7 @@ private:
     AudioStreamBasicDescription clientFormat_{};
     std::vector<uint8_t> renderBufferListStorage_;
     std::vector<Float32> renderSampleStorage_;
+    std::vector<Prism::Capture::PCMBufferView> activityBufferViews_;
     AudioBufferList* renderBufferList_ = nullptr;
     UInt32 maximumFramesPerSlice_ = kFallbackMaximumFramesPerSlice;
     uint32_t sourceChannelCount_ = 2;

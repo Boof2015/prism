@@ -68,6 +68,7 @@ struct CapturedChunk {
     UInt32 channelCount = 2;
     double capturedAtMilliseconds = 0.0;
     uint64_t sequence = 0;
+    std::vector<float> sourceChannelPeaks;
 };
 
 double monotonicMilliseconds() {
@@ -386,6 +387,7 @@ public:
                 static_cast<uint32_t>(chunk.channelCount),
                 chunk.capturedAtMilliseconds,
                 chunk.sequence,
+                std::move(chunk.sourceChannelPeaks),
             });
         }
         return result;
@@ -470,14 +472,19 @@ private:
             : (format.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0
                 ? Prism::Capture::SampleEncoding::SignedInteger
                 : Prism::Capture::SampleEncoding::Unsupported;
+        const Prism::Capture::PCMFormat pcmFormat{
+            encoding,
+            format.mBitsPerChannel,
+            (format.mFormatFlags & kAudioFormatFlagIsBigEndian) != 0,
+        };
+        chunk.sourceChannelPeaks.resize(channelCount);
+        Prism::Capture::measureSourceChannelPeaks(
+            buffers.data(), inputData->mNumberBuffers, pcmFormat,
+            frames, channelCount, chunk.sourceChannelPeaks.data());
         Prism::Capture::selectStereoChannels(
             buffers.data(),
             inputData->mNumberBuffers,
-            {
-                encoding,
-                format.mBitsPerChannel,
-                (format.mFormatFlags & kAudioFormatFlagIsBigEndian) != 0,
-            },
+            pcmFormat,
             frames,
             channelCount,
             leftChannel,

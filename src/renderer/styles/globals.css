@@ -2283,11 +2283,16 @@ button.toolbar__version:hover {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 2px 5px;
+  scrollbar-width: none;
+  padding: 1px 5px;
   border: 1px solid var(--control-border);
   border-radius: 10px;
   background: linear-gradient(180deg, var(--panel-surface), var(--control-bg));
   box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+.channel-routing__scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .channel-routing__grid {
@@ -2316,6 +2321,8 @@ button.toolbar__version:hover {
 }
 
 .channel-routing__cell {
+  position: relative;
+  isolation: isolate;
   width: 28px;
   height: 19px;
   padding: 0;
@@ -2329,14 +2336,29 @@ button.toolbar__version:hover {
   cursor: pointer;
 }
 
+.channel-routing__cell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: var(--channel-activity-opacity, 0);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.channel-routing__cell-label {
+  position: relative;
+}
+
 .channel-routing__cell:hover {
   border-color: var(--input-border-focus);
   background: var(--input-bg-focus);
 }
 
 .channel-routing__cell.is-selected {
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--input-border));
-  background: color-mix(in srgb, var(--accent) 22%, var(--input-bg));
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
   color: var(--text-primary);
 }
 

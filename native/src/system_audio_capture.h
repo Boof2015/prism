@@ -46,6 +46,8 @@ struct AudioChunk {
     uint32_t channelCount = 2;
     double capturedAtMilliseconds = 0.0;
     uint64_t sequence = 0;
+    // Empty when the backend does not provide activity for every source channel.
+    std::vector<float> sourceChannelPeaks;
 };
 
 struct DrainResult {

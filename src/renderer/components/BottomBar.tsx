@@ -223,6 +223,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     revealRollingCaptureFolder,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
+  const settingsOpen = useUiStore((s) => s.settingsOpen)
   const desktopIntegration = useDesktopIntegrationStore((s) => s.snapshot)
   const desktopIntegrationBusy = useDesktopIntegrationStore((s) => s.busy)
   const desktopIntegrationError = useDesktopIntegrationStore((s) => s.error)
@@ -870,6 +871,8 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 <div className="bottom-bar__section-title">Channel Routing</div>
                 <div className="bottom-bar__section-body">
                   <ChannelRoutingMatrix
+                    activityEnabled={settingsOpen}
+                    sourceKey={routingKey}
                     channels={routingChannels}
                     routing={selectedChannelRouting}
                     onChange={setChannelRouting}

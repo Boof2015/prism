@@ -150,6 +150,11 @@ Napi::Value Drain(const Napi::CallbackInfo& info) {
         entry.Set("channelCount", Napi::Number::New(env, chunk.channelCount));
         entry.Set("capturedAtMilliseconds", Napi::Number::New(env, chunk.capturedAtMilliseconds));
         entry.Set("sequence", Napi::Number::New(env, static_cast<double>(chunk.sequence)));
+        if (!chunk.sourceChannelPeaks.empty()) {
+            auto peaks = Napi::Float32Array::New(env, chunk.sourceChannelPeaks.size());
+            std::memcpy(peaks.Data(), chunk.sourceChannelPeaks.data(), chunk.sourceChannelPeaks.size() * sizeof(float));
+            entry.Set("sourceChannelPeaks", peaks);
+        }
         chunks.Set(static_cast<uint32_t>(index), entry);
     }
 

@@ -1,4 +1,5 @@
 import { Waterfall } from '../src/renderer/visualizers/Waterfall'
+import { ChannelActivity, sourcePeakToOpacity } from '../src/renderer/audio/ChannelActivity'
 import { softenWaterfallSpectra, waterfallRidgeHeight, waterfallPlotLayout } from '../src/renderer/visualizers/waterfallPlot'
 import type { WaterfallFrame } from '../src/types/waterfall'
 import assert from 'node:assert/strict'
@@ -7160,6 +7161,135 @@ test('LUFSMeter drains audio and renders silence when native DSP is unavailable'
   }
 })
 
+test('channel activity maps the dB floor and ceiling to bounded fill opacity', () => {
+  for (const peak of [0, -1, 0.0005, 0.001, NaN, Infinity, -Infinity]) {
+    assert.equal(sourcePeakToOpacity(peak), 0)
+  }
+  assertAlmostEqual(sourcePeakToOpacity(10 ** (-30 / 20)), 0.25, 1e-6, '-30 dBFS')
+  assertAlmostEqual(sourcePeakToOpacity(0.1), 1 / 3, 1e-6, '-20 dBFS')
+  assert.equal(sourcePeakToOpacity(1), 0.5)
+  assert.equal(sourcePeakToOpacity(2), 0.5)
+})
+
+test('channel activity retains brief signals and releases by elapsed time rather than frame count', () => {
+  const activity = new ChannelActivity()
+  activity.beginSession(1, 'device:interface', 3)
+  activity.ingest(new Float32Array([1, 0.01, 0]), 100)
+  activity.ingest(new Float32Array([0, 0, 0]), 110)
+  const firstPaint = activity.getSnapshot(120)!
+  assertAlmostEqual(firstPaint.opacities[0], 0.5 * Math.exp(-20 / 300), 1e-6, 'brief pulse retained')
+  assert.equal(firstPaint.opacities[2], 0)
+  // Reading does not consume activity or change its release curve.
+  activity.getSnapshot(200)
+  const afterRelease = activity.getSnapshot(400)!
+  assertAlmostEqual(afterRelease.opacities[0], 0.5 / Math.E, 1e-6, '300 ms release')
+  activity.ingest(new Float32Array([1, 0, 0]), 410)
+  assert.equal(activity.getSnapshot(410)!.opacities[0], 0.5, 'attack is immediate')
+  assert.equal(activity.getSnapshot(1410), null, 'stale activity expires')
+  activity.ingest(new Float32Array([0, 0, 0]), 1411)
+  assert.deepEqual(activity.getSnapshot(1411)!.opacities, [0, 0, 0], 'expired signals do not return')
+})
+
+test('channel activity isolates sessions and sources and resets on channel-count or metadata changes', () => {
+  const activity = new ChannelActivity()
+  assert.equal(activity.getSnapshot(0), null)
+  activity.beginSession(1, 'system:first', 2)
+  activity.ingest(new Float32Array([1, 1]), 10)
+  const oldSnapshot = activity.getSnapshot(10)!
+  activity.beginSession(2, 'device:second', 2)
+  assert.equal(activity.getSnapshot(11), null)
+  activity.ingest(new Float32Array([0, 0.1]), 20)
+  const next = activity.getSnapshot(20)!
+  assert.equal(next.sourceKey, 'device:second')
+  assert.equal(next.sessionId, 2)
+  assert.equal(next.opacities[0], 0)
+  assert.deepEqual(oldSnapshot.opacities, [0.5, 0.5], 'snapshots do not share mutable buffers')
+  activity.ingest(new Float32Array([0, 0, 0]), 30)
+  assert.deepEqual(activity.getSnapshot(30)!.opacities, [0, 0, 0])
+  activity.ingest(new Float32Array([NaN, Infinity, -1]), 40)
+  assert.deepEqual(activity.getSnapshot(40)!.opacities, [0, 0, 0])
+  activity.ingest(new Float32Array([1, 1, 1]), 39)
+  assert.deepEqual(activity.getSnapshot(40)!.opacities, [0, 0, 0], 'out-of-order data is ignored')
+  activity.ingest(undefined, 50)
+  assert.equal(activity.getSnapshot(50), null, 'older backends need no activity metadata')
+  activity.ingest(new Float32Array([1, 0, 0]), 60)
+  activity.reset()
+  assert.equal(activity.getSnapshot(60), null)
+  activity.ingest(new Float32Array([1, 1, 1]), 70)
+  assert.equal(activity.getSnapshot(70), null, 'late chunks cannot restore stopped activity')
+})
+
+test('AudioCapture keeps activity before gain, preserves it across routing, and clears it on restart and stop', async () => {
+  const timers = installFakeTimeouts()
+  const { audioCapture } = await import('../src/renderer/audio/AudioCapture')
+  const { audioRouter } = await import('../src/renderer/audio/AudioRouter')
+  const originalSupport = audioCapture.getStatus().backendSupport
+  const originalSource = audioCapture.getSelectedSystemSourceId()
+  const originalMode = audioCapture.getCaptureMode()
+  const originalGain = useAudioStore.getState().inputGainDb
+  const pending: import('../src/types/nativeCapture').NativeCapturedChunk[] = []
+  const routes: Array<{ left: number; right: number }> = []
+  window.nativeCaptureAPI = {
+    macosCapture: {
+      getSupport: () => ({ available: true, reason: null }),
+      listOutputDevices: () => [],
+      start: (deviceId = 'first') => ({ sampleRate: 48000, channelCount: 2, sourceChannelCount: 3, deviceId, deviceLabel: deviceId }),
+      setChannelRouting: (left, right) => { routes.push({ left, right }); return { left, right } },
+      stop: () => {},
+      drain: () => ({ chunks: pending.splice(0), overwriteCount: 0, queueDepth: 0 }),
+      nowMilliseconds: () => 1000,
+    },
+  } as typeof window.nativeCaptureAPI
+  const support = {
+    nativeBackend: { kind: 'native-macos' as const, available: true, reason: null, channelRoutingAvailable: true },
+    deviceInput: { kind: 'device-input' as const, available: false, reason: null },
+    dawBridge: { kind: 'daw-bridge' as const, available: false, reason: null },
+  }
+  window.electronAPI.getCaptureBackendSupport = async () => support
+  try {
+    await audioCapture.refreshBackendSupport()
+    audioCapture.setInputGain(20 * Math.log10(2))
+    audioRouter.setVisualizerConsumerDemand('channel-activity-test', { vectorscope: true })
+    await audioCapture.startSystemAudio('first', { channelRouting: { left: 0, right: 1 } })
+    const peaks = new Float32Array([0.25, 0.5, 1])
+    pending.push({ left: new Float32Array([0.25]), right: new Float32Array([0.5]), sourceChannelPeaks: peaks,
+      channelCount: 2, capturedAtMilliseconds: 1000, sequence: 1 })
+    timers.runNext()
+    const snapshot = audioCapture.getChannelActivity()!
+    assert.equal(snapshot.sourceKey, 'system:first')
+    assertAlmostEqual(snapshot.opacities[0], sourcePeakToOpacity(0.25), 0.01, 'pre-gain activity')
+    assert.deepEqual([...peaks], [0.25, 0.5, 1])
+    const [stereo] = audioRouter.flushPendingVectorscopeSamples()
+    assert.deepEqual([...stereo.left], [0.5])
+    assert.deepEqual([...stereo.right], [1])
+    audioCapture.setChannelRouting({ left: 2, right: 2 })
+    assert.deepEqual(routes.at(-1), { left: 2, right: 2 })
+    assert.deepEqual(audioCapture.getChannelActivity(snapshot.updatedAt)!.opacities,
+      [sourcePeakToOpacity(0.25), sourcePeakToOpacity(0.5), 0.5].map(Math.fround))
+    await audioCapture.startSystemAudio('second')
+    assert.equal(audioCapture.getChannelActivity(), null)
+    pending.push({ left: new Float32Array([0]), right: new Float32Array([0]), sourceChannelPeaks: new Float32Array([0, 0, 0]),
+      channelCount: 2, capturedAtMilliseconds: 1000, sequence: 1 })
+    timers.runNext()
+    const restarted = audioCapture.getChannelActivity()!
+    assert.equal(restarted.sourceKey, 'system:second')
+    assert.notEqual(restarted.sessionId, snapshot.sessionId)
+    assert.deepEqual(restarted.opacities, [0, 0, 0])
+    audioCapture.stop()
+    assert.equal(audioCapture.getChannelActivity(), null)
+    assert.equal(timers.pendingCount(), 0)
+  } finally {
+    audioCapture.stop()
+    audioCapture.setInputGain(originalGain)
+    audioCapture.setSelectedSystemSourceId(originalSource)
+    audioCapture.setCaptureMode(originalMode)
+    audioRouter.clearVisualizerConsumerDemand('channel-activity-test')
+    window.electronAPI.getCaptureBackendSupport = async () => originalSupport ?? support
+    await audioCapture.refreshBackendSupport()
+    timers.restore()
+  }
+})
+
 test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-document backoff, and cancels on stop', async () => {
   const timers = installFakeTimeouts()
 
@@ -7175,6 +7305,7 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
             channelCount: 2,
             capturedAtMilliseconds: 5,
             sequence: 1,
+            sourceChannelPeaks: new Float32Array([0.25, 0.5, 0.75]),
           },
           {
             left: new Float32Array([0.5, 0.6]),
@@ -7236,9 +7367,11 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
     })
     const receivedSequences: number[] = []
     const receivedChunkTimes: number[] = []
+    const receivedPeaks: Array<Float32Array | undefined> = []
     backend.subscribe((chunk) => {
       receivedSequences.push(chunk.sequence)
       receivedChunkTimes.push(chunk.capturedAt)
+      receivedPeaks.push(chunk.sourceChannelPeaks)
     })
 
     await backend.start()
@@ -7247,6 +7380,7 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
     timers.runNext()
     assert.deepEqual(receivedSequences, [1, 2])
     assert.equal(receivedChunkTimes.length, 2)
+    assert.deepEqual(receivedPeaks, [new Float32Array([0.25, 0.5, 0.75]), undefined])
     assert.equal(timers.nextDelay(), 0)
 
     timers.runNext()

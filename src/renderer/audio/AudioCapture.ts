@@ -8,6 +8,7 @@
 import { audioRouter } from './AudioRouter'
 import { nativeVisualizerTransport } from './NativeVisualizerTransport'
 import { RollingAudioBuffer } from './RollingAudioBuffer'
+import { ChannelActivity, type ChannelActivitySnapshot } from './ChannelActivity'
 import { applyInputGainToStereoSamples, inputGainDbToLinear } from './inputGain'
 import type {
   RollingAudioSnapshot,
@@ -24,6 +25,7 @@ import type {
 } from '../../types/capture'
 import {
   createDefaultCaptureChannelRouting,
+  getCaptureRoutingStorageKey,
   normalizeCaptureChannelRouting,
   resolveNativeBackendKind,
 } from '../../types/capture'
@@ -48,6 +50,7 @@ interface CaptureChunk {
   channelCount: number
   capturedAt: number
   sequence: number
+  sourceChannelPeaks?: Float32Array
   transport?: DawTransportSnapshot
 }
 
@@ -600,6 +603,7 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
               channelCount: Math.max(1, Math.floor(chunk.channelCount) || 1),
               capturedAt: chunk.capturedAtMilliseconds + this.performanceOffsetMilliseconds,
               sequence: Math.max(1, Math.floor(chunk.sequence) || 1),
+              sourceChannelPeaks: chunk.sourceChannelPeaks,
             }
 
             for (const listener of this.chunkListeners) {
@@ -942,6 +946,7 @@ class AudioCapture {
   private captureMode: CaptureMode = 'system'
   private selectedChannelRouting: CaptureChannelRouting = createDefaultCaptureChannelRouting(2)
   private sessionId: number | null = null
+  private readonly channelActivity = new ChannelActivity()
   private inputGainDb = 0
   private inputGainLinear = 1
   private statusListeners = new Set<StatusListener>()
@@ -1051,6 +1056,16 @@ class AudioCapture {
       backendStatus.channelCount,
       backendStatus.kind,
     )
+    if (backendStatus.channelRoutingAvailable && backendStatus.activeSourceId) {
+      this.channelActivity.beginSession(
+        this.sessionId,
+        getCaptureRoutingStorageKey(
+          backendStatus.kind === 'device-input' ? 'device' : 'system',
+          backendStatus.activeSourceId,
+        ),
+        backendStatus.sourceChannelCount,
+      )
+    }
     this.beginRollingCaptureSession(
       backendStatus.sampleRate,
       backendStatus.channelCount,
@@ -1149,6 +1164,11 @@ class AudioCapture {
 
   getSampleRate(): number {
     return this.activeBackend?.getStatus().sampleRate ?? 48000
+  }
+
+  getChannelActivity(now = performance.now()): ChannelActivitySnapshot | null {
+    if (!this.activeBackend?.getStatus().active) return null
+    return this.channelActivity.getSnapshot(now)
   }
 
   getStatus(): CaptureManagerStatus {
@@ -1257,6 +1277,7 @@ class AudioCapture {
   }
 
   private async stopActiveCapture(): Promise<void> {
+    this.channelActivity.reset()
     if (this.rollingAudioBuffer) {
       this.rollingAudioBuffer = null
       this.emitRollingCaptureStatus()
@@ -1279,6 +1300,8 @@ class AudioCapture {
     if (!this.activeBackend || this.activeBackend.kind !== originKind || this.sessionId === null) {
       return
     }
+
+    this.channelActivity.ingest(chunk.sourceChannelPeaks, chunk.capturedAt)
 
     const nativeDeviceInput = originKind === 'device-input'
       && this.activeBackend instanceof NativeDeviceInputCaptureBackend

@@ -40,6 +40,8 @@ export interface NativeCapturedChunk {
   channelCount: number
   capturedAtMilliseconds: number
   sequence: number
+  /** Absolute peaks for all physical source channels, before routing or gain. */
+  sourceChannelPeaks?: Float32Array
 }
 
 export interface NativeCaptureDrainResult {

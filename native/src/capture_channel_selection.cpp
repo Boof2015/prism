@@ -75,6 +75,51 @@ float readChannelFrame(const PCMBufferView* buffers,
 
 }  // namespace
 
+void measureSourceChannelPeaks(const PCMBufferView* buffers,
+                               size_t bufferCount,
+                               const PCMFormat& format,
+                               size_t frameCount,
+                               uint32_t sourceChannelCount,
+                               float* peaksOutput) {
+    if (peaksOutput == nullptr) return;
+    std::fill_n(peaksOutput, sourceChannelCount, 0.0f);
+    const bool supported = (format.encoding == SampleEncoding::Float
+            && (format.bitsPerChannel == 32 || format.bitsPerChannel == 64))
+        || (format.encoding == SampleEncoding::SignedInteger
+            && format.bitsPerChannel >= 8 && format.bitsPerChannel <= 32
+            && format.bitsPerChannel % 8 == 0);
+    if (buffers == nullptr || !supported) return;
+
+    const size_t bytesPerSample = format.bitsPerChannel / 8;
+    uint32_t channelBase = 0;
+    for (size_t bufferIndex = 0; bufferIndex < bufferCount && channelBase < sourceChannelCount; ++bufferIndex) {
+        const auto& buffer = buffers[bufferIndex];
+        const uint32_t channelsInBuffer = std::max<uint32_t>(1, buffer.channelCount);
+        const uint32_t channelsToRead = std::min(channelsInBuffer, sourceChannelCount - channelBase);
+        if (buffer.data != nullptr) {
+            const size_t sampleCount = buffer.byteLength / bytesPerSample;
+            for (uint32_t channel = 0; channel < channelsToRead; ++channel) {
+                float peak = 0.0f;
+                for (size_t frame = 0; frame < frameCount; ++frame) {
+                    const size_t sampleIndex = frame * channelsInBuffer + channel;
+                    if (sampleIndex >= sampleCount) break;
+                    const float sample = decodeSample(buffer.data + sampleIndex * bytesPerSample, format);
+                    // Inspect IEEE bits: std::isfinite can be optimized away by -ffast-math.
+                    uint32_t magnitudeBits = 0;
+                    std::memcpy(&magnitudeBits, &sample, sizeof(sample));
+                    magnitudeBits &= 0x7fffffffu;
+                    if (magnitudeBits >= 0x7f800000u) continue;
+                    float magnitude = 0.0f;
+                    std::memcpy(&magnitude, &magnitudeBits, sizeof(magnitude));
+                    peak = std::max(peak, magnitude);
+                }
+                peaksOutput[channelBase + channel] = peak;
+            }
+        }
+        channelBase += channelsToRead;
+    }
+}
+
 bool selectStereoChannels(const PCMBufferView* buffers,
                           size_t bufferCount,
                           const PCMFormat& format,

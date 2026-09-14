@@ -72,6 +72,12 @@ Napi::Value SelectFloat32(const Napi::CallbackInfo& info) {
         right.Data());
 
     Napi::Object result = Napi::Object::New(env);
+    const uint32_t sourceChannelCount = info[2].As<Napi::Number>().Uint32Value();
+    auto peaks = Napi::Float32Array::New(env, sourceChannelCount);
+    Prism::Capture::measureSourceChannelPeaks(
+        buffers.data(), buffers.size(), {Prism::Capture::SampleEncoding::Float, 32, false},
+        frameCount, sourceChannelCount, peaks.Data());
+    result.Set("sourceChannelPeaks", peaks);
     result.Set("valid", Napi::Boolean::New(env, valid));
     result.Set("left", left);
     result.Set("right", right);
