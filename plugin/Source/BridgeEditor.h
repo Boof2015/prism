@@ -16,15 +16,24 @@ public:
 
 private:
     void timerCallback() override;
-    void commitName();
+
+    class ConnectionDot final : public juce::Component,
+                                public juce::SettableTooltipClient
+    {
+    public:
+        void setStatus(bool connected, bool selected, const juce::String& description);
+        void paint(juce::Graphics&) override;
+
+    private:
+        juce::Colour colour { 0xff64748b };
+    };
 
     PrismBridgeProcessor& bridgeProcessor;
     juce::Label title;
     juce::Label nameLabel;
-    juce::TextEditor nameEditor;
-    juce::Label sourceInfo;
-    juce::Label connectionInfo;
-    juce::Label droppedInfo;
+    juce::Label instanceTag;
+    ConnectionDot connectionDot;
+    juce::TooltipWindow tooltip { this, 500 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PrismBridgeEditor)
 };

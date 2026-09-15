@@ -43,6 +43,10 @@ public:
     void setCustomName(const juce::String&);
     juce::String getCustomName() const;
     juce::String getDisplayName() const;
+    juce::String getInstanceTag() const;
+    juce::String getInstanceId() const { return instanceId; }
+    bool isConnectedToPrism() const noexcept { return connected.load(); }
+    bool isSelectedInPrism() const noexcept { return selected.load(); }
     juce::String getHostName() const;
     juce::String getTrackName() const;
     juce::String getConnectionDescription() const;

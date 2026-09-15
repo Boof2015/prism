@@ -825,7 +825,7 @@ class DawBridgeCaptureBackend implements CaptureBackend {
     return this.snapshot.sources.map((source) => ({
       id: source.id,
       persistentId: source.persistentId,
-      label: source.hostName ? `${source.label} — ${source.hostName}` : source.label,
+      label: source.label,
       kind: 'daw',
       sampleRate: source.sampleRate,
       channelCount: source.channelCount,

@@ -503,7 +503,7 @@ void PrismBridgeProcessor::updateTrackProperties(const TrackProperties& properti
 {
     {
         const juce::ScopedLock lock(identityLock);
-        trackName = properties.name;
+        trackName = properties.name.trim().substring(0, 160);
     }
     identityDirty.store(true);
 }
@@ -512,7 +512,9 @@ void PrismBridgeProcessor::setCustomName(const juce::String& value)
 {
     {
         const juce::ScopedLock lock(identityLock);
-        customName = value.trim().substring(0, 160);
+        const auto nextName = value.trim().substring(0, 160);
+        if (customName == nextName) return;
+        customName = nextName;
     }
     identityDirty.store(true);
     updateHostDisplay(ChangeDetails().withNonParameterStateChanged(true));
@@ -529,7 +531,12 @@ juce::String PrismBridgeProcessor::getDisplayName() const
     const juce::ScopedLock lock(identityLock);
     if (customName.isNotEmpty()) return customName;
     if (trackName.isNotEmpty()) return trackName;
-    return "Prism Bridge " + sourceId.substring(0, 8);
+    return "Bridge " + getInstanceTag();
+}
+
+juce::String PrismBridgeProcessor::getInstanceTag() const
+{
+    return instanceId.substring(0, 8).toUpperCase();
 }
 
 juce::String PrismBridgeProcessor::getHostName() const
@@ -547,7 +554,7 @@ juce::String PrismBridgeProcessor::getTrackName() const
 juce::String PrismBridgeProcessor::getConnectionDescription() const
 {
     if (!connected.load()) return "Waiting for Prism";
-    return selected.load() ? "Connected · selected in Prism" : "Connected · available in Prism";
+    return selected.load() ? "Selected in Prism" : "Available in Prism";
 }
 
 void PrismBridgeProcessor::getStateInformation(juce::MemoryBlock& destination)

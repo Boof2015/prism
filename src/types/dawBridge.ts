@@ -20,6 +20,7 @@ export interface DawBridgeSourceDescriptor {
   id: string
   persistentId: string
   instanceId: string
+  /** Display label including host and, when needed, a distinguishing instance tag. */
   label: string
   customName: string | null
   trackName: string | null

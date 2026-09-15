@@ -272,6 +272,7 @@ if(BUILD_TESTING)
     juce_add_console_app(PrismBridgeTests PRODUCT_NAME "Prism Bridge Tests")
     target_sources(PrismBridgeTests PRIVATE
         Tests/BridgeProcessorTests.cpp
+        Tests/BridgeEditorTests.cpp
         Source/BridgeProcessor.cpp
         Source/BridgeEditor.cpp)
     target_include_directories(PrismBridgeTests PRIVATE Source)

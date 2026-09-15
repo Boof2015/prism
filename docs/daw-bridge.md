@@ -9,13 +9,24 @@ backoff from 250 ms to 5 seconds.
 
 1. Open the standalone Prism application.
 2. Insert **Prism Bridge** on each track or bus you may want to inspect.
-3. Optionally give each instance a custom source name in its native editor.
+3. Bridge uses the DAW track name automatically when supplied. To override it,
+   open its compact nameplate and click the name. Enter or clicking away saves;
+   Escape cancels. Clearing the name restores automatic naming.
 4. In Prism's audio selector, choose an instance under **DAW Bridges**.
 
 Only the selected instance transmits audio. If it disconnects, Prism stays in
 DAW mode and displays **Waiting** without falling back to another input. A
 same-format reconnect preserves scope history; a sample-rate or channel-layout
 change begins a new analysis session.
+
+The nameplate is optional: Bridge runs with its editor closed. Its status dot is
+gray while waiting for Prism, blue when available, and green when selected;
+hover for the status text. Custom names save with the DAW project. Unnamed
+sources use `Bridge` plus the nameplate's eight-character live instance tag.
+Prism includes the host in source labels and adds the matching tag when names
+would otherwise be identical. Tags identify live instances and can change when
+a project is reopened; saved source UUIDs and custom names remain unchanged.
+Renaming or opening the nameplate does not select a source in Prism.
 
 Waveform and Spectrogram have a **Timeline** setting with Off, Bars + Beats, and
 Seconds choices. The ruler is drawn only for DAW Bridge input. Bars + Beats uses
@@ -54,6 +65,13 @@ duplicates that state, Prism assigns distinct live keys to all duplicates and
 requires an explicit choice instead of guessing which instance was intended.
 
 ## Formats and validation
+
+Run `npm run test:daw-bridge` for source naming and connection tests. Build
+`PrismBridgeTests`, then run `ctest --test-dir plugin/build -R PrismBridgeProcessorTests
+--output-on-failure` for state and pass-through checks. `PrismBridgeTests --ui-test`
+exercises the native name editor and writes PNGs to the temporary
+`prism-bridge-nameplate-qa` directory; `--ui` leaves the nameplate open for manual
+inspection.
 
 Bridge ships as VST3 on macOS, Windows, and Linux, and as AU on macOS. It has no
 Standalone target. `AU_SANDBOX_SAFE FALSE` is intentional because the AU needs

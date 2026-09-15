@@ -152,6 +152,10 @@ snapshots in the test application's temporary directory.
   audio and transport metadata only over `127.0.0.1:51789`. Its audio callback
   only packetizes into a bounded lock-free queue; a background thread owns the
   socket. The source UUID and custom name are saved in DAW state.
+  Its compact native nameplate follows the DAW track name automatically. Click
+  the name to override it; Enter or clicking away saves, Escape cancels, and
+  clearing restores the track name. The small instance tag matches duplicate
+  names in Prism. The editor can stay closed while Bridge is in use.
 - **Logic/AU validation:** `AU_SANDBOX_SAFE FALSE` is explicit because Bridge needs
   loopback networking. Apple may host Audio Units out of process; AU loopback in
   Logic is therefore a release-blocking host validation, not something the build

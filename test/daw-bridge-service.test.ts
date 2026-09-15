@@ -9,6 +9,7 @@ import {
   DAW_BRIDGE_MESSAGE,
   DAW_BRIDGE_PROTOCOL_VERSION,
   type DawBridgeAudioBatch,
+  type DawBridgeHelloPayload,
 } from '../src/types/dawBridge'
 
 function frame(messageType: number, payload = Buffer.alloc(0), version = DAW_BRIDGE_PROTOCOL_VERSION): Buffer {
@@ -174,5 +175,155 @@ test('port conflicts surface an unavailable reason without changing ports', asyn
   } finally {
     blocked.stop()
     owner.stop()
+  }
+})
+
+
+function updateSource(payload: DawBridgeHelloPayload): Buffer {
+  return frame(DAW_BRIDGE_MESSAGE.sourceUpdate, Buffer.from(JSON.stringify(payload)))
+}
+
+test('names follow host metadata, preserve overrides, and clear without changing selection', async () => {
+  const service = new DawBridgeService({ port: 0 })
+  await service.start()
+  const socket = await openClient(service.getListeningPort()!)
+  const identity = { sourceId: 'track-source', instanceId: 'a1b2c3d4-live', hostName: 'Test DAW' }
+  try {
+    socket.write(hello(identity.sourceId, identity.instanceId, '  Drums  '))
+    await waitFor(() => service.getSnapshot().sources.length === 1)
+    service.selectSource(identity.sourceId)
+    assert.equal(service.getSnapshot().sources[0]!.label, 'Drums — Test DAW')
+
+    for (const [trackName, customName, expected] of [
+      ['Percussion', '', 'Percussion — Test DAW'],
+      ['Percussion', '  Drum Bus  ', 'Drum Bus — Test DAW'],
+      ['Rhythm', 'Drum Bus', 'Drum Bus — Test DAW'],
+      ['Rhythm', '   ', 'Rhythm — Test DAW'],
+      ['', '', 'Bridge A1B2C3D4 — Test DAW'],
+      ['', '🎵'.repeat(180), `${'🎵'.repeat(160)} — Test DAW`],
+    ]) {
+      socket.write(updateSource({ ...identity, trackName, customName }))
+      await waitFor(() => service.getSnapshot().sources[0]?.label === expected)
+      assert.equal(service.getSnapshot().selectedSourceId, identity.sourceId)
+      assert.equal(service.getSnapshot().sources[0]!.connectionState, 'selected')
+    }
+  } finally {
+    socket.destroy()
+    service.stop()
+  }
+})
+
+test('identical names gain matching instance tags and lose them when renamed', async () => {
+  const service = new DawBridgeService({ port: 0 })
+  await service.start()
+  const first = await openClient(service.getListeningPort()!)
+  const second = await openClient(service.getListeningPort()!)
+  try {
+    first.write(hello('first-source', 'a1b2c3d4-live'))
+    await waitFor(() => service.getSnapshot().sources.length === 1)
+    service.selectSource('first-source')
+    second.write(hello('second-source', 'e5f6a7b8-live'))
+    await waitFor(() => service.getSnapshot().sources.length === 2)
+    const snapshot = service.getSnapshot()
+    assert.deepEqual(snapshot.sources.map(source => source.label), [
+      'Drums · A1B2C3D4 — Test DAW',
+      'Drums · E5F6A7B8 — Test DAW',
+    ])
+    assert.equal(snapshot.selectedSourceId, 'first-source')
+    // Formatting a snapshot must not accumulate suffixes on the stored names.
+    assert.deepEqual(service.getSnapshot(), snapshot)
+
+    second.write(updateSource({
+      sourceId: 'second-source', instanceId: 'e5f6a7b8-live',
+      trackName: 'Drums', customName: 'Room', hostName: 'Test DAW',
+    }))
+    await waitFor(() => service.getSnapshot().sources.some(source => source.label === 'Room — Test DAW'))
+    assert.deepEqual(service.getSnapshot().sources.map(source => source.label), ['Drums — Test DAW', 'Room — Test DAW'])
+    assert.equal(service.getSnapshot().selectedSourceId, 'first-source')
+  } finally {
+    first.destroy()
+    second.destroy()
+    service.stop()
+  }
+})
+
+test('unnamed copies have distinct live labels and metadata updates preserve an explicitly selected copy', async () => {
+  const service = new DawBridgeService({ port: 0 })
+  await service.start()
+  const first = await openClient(service.getListeningPort()!)
+  const second = await openClient(service.getListeningPort()!)
+  try {
+    first.write(hello('saved-source', 'a1b2c3d4-live', ''))
+    await waitFor(() => service.getSnapshot().sources.length === 1)
+    service.selectSource('saved-source')
+    second.write(hello('saved-source', 'e5f6a7b8-live', ''))
+    await waitFor(() => service.getSnapshot().sources.length === 2)
+    assert.equal(service.getSnapshot().selectedSourceId, null)
+    assert.deepEqual(service.getSnapshot().sources.map(source => source.label), [
+      'Bridge A1B2C3D4 — Test DAW', 'Bridge E5F6A7B8 — Test DAW',
+    ])
+    const chosenId = service.getSnapshot().sources.find(source => source.instanceId === 'e5f6a7b8-live')!.id
+    service.selectSource(chosenId)
+    const rename = { sourceId: 'saved-source', instanceId: 'e5f6a7b8-live', customName: 'Bus', hostName: 'Test DAW' }
+    second.write(updateSource(rename))
+    await waitFor(() => service.getSnapshot().sources.some(source => source.label === 'Bus — Test DAW'))
+    assert.equal(service.getSnapshot().selectedSourceId, chosenId)
+
+    first.destroy()
+    await waitFor(() => service.getSnapshot().sources.length === 1)
+    second.write(updateSource({ ...rename, customName: 'Master' }))
+    await waitFor(() => service.getSnapshot().sources[0]?.label === 'Master — Test DAW')
+    assert.equal(service.getSnapshot().sources[0]!.id, chosenId)
+    assert.equal(service.getSnapshot().selectedSourceId, chosenId)
+    assert.equal(service.getSnapshot().sources[0]!.connectionState, 'selected')
+  } finally {
+    first.destroy()
+    second.destroy()
+    service.stop()
+  }
+})
+
+test('reconnecting instances keep their names and persistent source selection', async () => {
+  const service = new DawBridgeService({ port: 0 })
+  await service.start()
+  const first = await openClient(service.getListeningPort()!)
+  let reconnected: Socket | null = null
+  const identity = { sourceId: 'saved-source', instanceId: 'a1b2c3d4-live', customName: 'Master' }
+  try {
+    first.write(updateSource(identity))
+    await waitFor(() => service.getSnapshot().sources.length === 1)
+    service.selectSource(identity.sourceId)
+    first.destroy()
+    await waitFor(() => service.getSnapshot().sources.length === 0)
+    assert.equal(service.getSnapshot().selectedSourceId, identity.sourceId)
+    reconnected = await openClient(service.getListeningPort()!)
+    reconnected.write(updateSource(identity))
+    await waitFor(() => service.getSnapshot().sources.length === 1)
+    assert.equal(service.getSnapshot().sources[0]!.label, 'Master')
+    assert.equal(service.getSnapshot().sources[0]!.connectionState, 'selected')
+  } finally {
+    first.destroy()
+    reconnected?.destroy()
+    service.stop()
+  }
+})
+
+test('short-tag collisions use the full instance identifier without changing live keys', async () => {
+  const service = new DawBridgeService({ port: 0 })
+  await service.start()
+  const first = await openClient(service.getListeningPort()!)
+  const second = await openClient(service.getListeningPort()!)
+  try {
+    first.write(hello('first-source', 'a1b2c3d4-alpha'))
+    second.write(hello('second-source', 'a1b2c3d4-beta'))
+    await waitFor(() => service.getSnapshot().sources.length === 2)
+    assert.deepEqual(service.getSnapshot().sources.map(source => source.label), [
+      'Drums · a1b2c3d4-alpha — Test DAW', 'Drums · a1b2c3d4-beta — Test DAW',
+    ])
+    assert.deepEqual(service.getSnapshot().sources.map(source => source.id), ['first-source', 'second-source'])
+  } finally {
+    first.destroy()
+    second.destroy()
+    service.stop()
   }
 })

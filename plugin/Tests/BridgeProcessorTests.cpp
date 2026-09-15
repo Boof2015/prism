@@ -35,8 +35,12 @@ void expectBitIdentical(const juce::AudioBuffer<float>& actual,
 }
 }
 
-int main()
+int runBridgeEditorTests(bool interactive);
+
+int main(int argc, char** argv)
 {
+    if (argc > 1 && juce::String(argv[1]) == "--ui") return runBridgeEditorTests(true);
+    if (argc > 1 && juce::String(argv[1]) == "--ui-test") return runBridgeEditorTests(false);
     PrismBridgeProcessor processor;
     processor.prepareToPlay(48000.0, 1024);
     processor.setSelectedForTesting(true);
@@ -117,12 +121,43 @@ int main()
     decodedLeft = juce::ByteOrder::swapIfBigEndian(decodedLeft);
     expect(decodedLeft == 0.25f, "protocol audio must be planar Float32");
 
-    processor.setCustomName("Drum Bus");
+    expect(processor.getDisplayName() == "Bridge " + processor.getInstanceTag(),
+           "an unnamed bridge must show its live instance tag");
+    juce::AudioProcessor::TrackProperties track;
+    track.name = "  Drums  ";
+    processor.updateTrackProperties(track);
+    expect(processor.getDisplayName() == "Drums", "automatic names must use the trimmed host track name");
+    track.name = "Percussion";
+    processor.updateTrackProperties(track);
+    expect(processor.getDisplayName() == "Percussion", "automatic names must follow track renames");
+    processor.setCustomName("  Drum Bus  ");
+    track.name = "Rhythm";
+    processor.updateTrackProperties(track);
+    expect(processor.getDisplayName() == "Drum Bus", "a custom name must override later host track renames");
     juce::MemoryBlock state;
     processor.getStateInformation(state);
     PrismBridgeProcessor restored;
     restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
     expect(restored.getCustomName() == "Drum Bus", "custom source names must restore from DAW state");
+    expect(restored.getInstanceId() != processor.getInstanceId(), "restoring state must not copy the live instance ID");
+    juce::MemoryBlock restoredState;
+    restored.getStateInformation(restoredState);
+    expect(state == restoredState, "existing saved source IDs and custom names must round-trip unchanged");
+    processor.setCustomName("   ");
+    expect(processor.getDisplayName() == "Rhythm", "clearing a custom name must restore the current track name");
+    track.name = {};
+    processor.updateTrackProperties(track);
+    expect(processor.getDisplayName() == "Bridge " + processor.getInstanceTag(), "missing host names must restore the generated name");
+    restored.setCustomName(juce::String::repeatedString("x", 180));
+    expect(restored.getCustomName().length() == 160, "custom names must remain bounded");
+
+    processor.clearQueuedPacketsForTesting();
+    processor.setSelectedForTesting(false);
+    processor.processBlock(stereo, midi);
+    expectBitIdentical(stereo, stereoCopy, "unselected processing must remain bit-identical");
+    expect(processor.getQueuedPacketCountForTesting() == 0, "unselected instances must not enqueue audio");
+    processor.processBlockBypassed(stereo, midi);
+    expectBitIdentical(stereo, stereoCopy, "host bypass must remain bit-identical");
 
     processor.releaseResources();
     if (failures == 0)

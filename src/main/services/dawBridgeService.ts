@@ -48,7 +48,8 @@ function finiteNumber(value: unknown, fallback: number): number {
 function optionalString(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
-  return trimmed ? trimmed.slice(0, 160) : null
+  // JUCE String limits names by Unicode code point, not UTF-16 code unit.
+  return trimmed ? Array.from(trimmed).slice(0, 160).join('') : null
 }
 
 function isHelloPayload(value: unknown): value is DawBridgeHelloPayload {
@@ -63,7 +64,35 @@ function isHelloPayload(value: unknown): value is DawBridgeHelloPayload {
 function sourceLabel(payload: DawBridgeHelloPayload): string {
   return optionalString(payload.customName)
     ?? optionalString(payload.trackName)
-    ?? `Prism Bridge ${payload.sourceId.slice(0, 8)}`
+    ?? `Bridge ${instanceTag(payload.instanceId)}`
+}
+
+// Keep in sync with PrismBridgeProcessor::getInstanceTag(). Tags identify a
+// live plug-in, including copies which share the same saved source UUID.
+function instanceTag(instanceId: string): string {
+  return instanceId.slice(0, 8).toUpperCase()
+}
+
+function displaySources(sources: DawBridgeSourceDescriptor[]): DawBridgeSourceDescriptor[] {
+  return sources.map((source) => {
+    const matching = sources.filter((other) => (
+      other.label === source.label && other.hostName === source.hostName
+    ))
+    let label = source.label
+    if (matching.length > 1) {
+      let tag = instanceTag(source.instanceId)
+      // Rare short-tag collisions can be matched against the full instance ID
+      // in the nameplate tooltip. Do not change either source's selection key.
+      if (matching.some((other) => other.id !== source.id && instanceTag(other.instanceId) === tag)) {
+        tag = source.instanceId
+        if (matching.some((other) => other.id !== source.id && other.instanceId === source.instanceId)) {
+          tag = source.id
+        }
+      }
+      label = `${label} · ${tag}`
+    }
+    return { ...source, label: source.hostName ? `${label} — ${source.hostName}` : label }
+  }).sort((left, right) => left.label.localeCompare(right.label))
 }
 
 function isLoopbackAddress(address: string | undefined): boolean {
@@ -161,9 +190,8 @@ export class DawBridgeService {
       available: this.available,
       reason: this.unavailableReason,
       selectedSourceId: this.selectedSourceId,
-      sources: [...this.sources.values()]
-        .flatMap((client) => client.source ? [client.source] : [])
-        .sort((left, right) => left.label.localeCompare(right.label)),
+      sources: displaySources([...this.sources.values()]
+        .flatMap((client) => client.source ? [client.source] : [])),
     }
   }
 
@@ -262,11 +290,17 @@ export class DawBridgeService {
     }
     if (!isHelloPayload(payload)) return false
 
-    if (client.source) {
-      this.sources.delete(client.source.id)
+    const previousSource = client.source
+    if (previousSource) {
+      this.sources.delete(previousSource.id)
     }
 
-    let liveId = payload.sourceId
+    // A metadata update must retain the explicitly chosen live key, even if
+    // another copy has disconnected since that key was allocated.
+    let liveId = previousSource?.persistentId === payload.sourceId
+      && previousSource.instanceId === payload.instanceId
+      ? previousSource.id
+      : payload.sourceId
     const conflictingClient = [...this.sources.values()].find((candidate) => (
       candidate !== client && candidate.source?.persistentId === payload.sourceId
     ))
