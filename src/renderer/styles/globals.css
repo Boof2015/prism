@@ -2042,6 +2042,17 @@ button.toolbar__version:hover {
   min-width: 100%;
 }
 
+.bottom-bar__group {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+
+.bottom-bar__group > .bottom-bar__inline-divider {
+  align-self: flex-end;
+  margin: 0 16px 6px 0;
+}
+
 .bottom-bar__section {
   display: flex;
   flex-direction: column;
@@ -2057,16 +2068,23 @@ button.toolbar__version:hover {
 }
 
 .bottom-bar__section--theme {
+  width: 480px;
   min-width: 480px;
 }
 
-.bottom-bar__section--astra,
 .bottom-bar__section--now-playing {
+  width: 420px;
   min-width: 420px;
 }
 
 .bottom-bar__section--window {
-  min-width: 880px;
+  width: 440px;
+  min-width: 440px;
+}
+
+.bottom-bar__section--startup {
+  width: 480px;
+  min-width: 480px;
 }
 
 .bottom-bar__section--source {
@@ -2088,6 +2106,10 @@ button.toolbar__version:hover {
 
 .bottom-bar__section--trim {
   min-width: 196px;
+}
+
+.bottom-bar__section--trim .bottom-bar__inline {
+  min-height: 34px;
 }
 
 .bottom-bar__section-body {
@@ -2114,6 +2136,11 @@ button.toolbar__version:hover {
   white-space: nowrap;
 }
 
+.bottom-bar__section-subtitle {
+  margin-left: 12px;
+  color: var(--text-tertiary);
+}
+
 .bottom-bar__inline {
   display: flex;
   align-items: center;
@@ -2136,7 +2163,8 @@ button.toolbar__version:hover {
 }
 
 .bottom-bar__inline--theme .settings-chip,
-.bottom-bar__inline--window .settings-chip {
+.bottom-bar__inline--window .settings-chip,
+.bottom-bar__inline--startup .settings-chip {
   flex: 0 0 auto;
   max-width: none;
 }
@@ -2145,7 +2173,8 @@ button.toolbar__version:hover {
   gap: 6px;
 }
 
-.bottom-bar__inline--window {
+.bottom-bar__inline--window,
+.bottom-bar__inline--startup {
   gap: 8px;
 }
 
@@ -2163,25 +2192,12 @@ button.toolbar__version:hover {
 }
 
 .bottom-bar__desktop-status {
+  min-width: 0;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.bottom-bar__window-metadata {
-  min-width: 0;
-  margin-left: auto;
-  display: flex;
-  align-items: baseline;
-  justify-content: flex-end;
-  gap: 6px;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.bottom-bar__metadata-separator {
-  color: var(--text-muted);
+  text-align: right;
 }
 
 .bottom-bar__theme-metadata {

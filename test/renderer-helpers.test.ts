@@ -4671,18 +4671,29 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
 })
 
-test('BottomBar keeps Window controls on one row', async () => {
+test('BottomBar separates appearance from startup behavior while keeping controls on one row', async () => {
   const componentSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
   const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
 
-  const windowSection = componentSource.match(
-    /<section className="bottom-bar__section bottom-bar__section--window">([\s\S]*?)<div className="bottom-bar__divider" \/>/,
+  const appearanceSection = componentSource.match(
+    /<section className="bottom-bar__group" aria-label="Appearance">([\s\S]*?)<\/section>/,
   )?.[1]
-  assert.ok(windowSection)
-  assert.equal(windowSection.match(/bottom-bar__inline--window/g)?.length, 1)
-  assert.doesNotMatch(windowSection, /bottom-bar__inline--desktop-integration/)
-  assert.match(stylesSource, /\.bottom-bar__section--window \{[\s\S]*min-width: 880px;/)
-  assert.match(stylesSource, /\.bottom-bar__inline--window \{[\s\S]*gap: 8px;/)
+  const startupSection = componentSource.match(
+    /<section className="bottom-bar__section bottom-bar__section--startup" aria-label="Startup & Tray">([\s\S]*?)<\/section>/,
+  )?.[1]
+  assert.ok(appearanceSection)
+  assert.ok(startupSection)
+  assert.equal(appearanceSection.match(/bottom-bar__inline--window/g)?.length, 1)
+  assert.match(appearanceSection, /Window snapping is disabled/)
+  assert.doesNotMatch(appearanceSection, /desktopIntegration|loginItemStatusMessage/)
+  assert.equal(startupSection.match(/bottom-bar__inline--startup/g)?.length, 1)
+  assert.match(startupSection, /loginItemStatusMessage/)
+  assert.doesNotMatch(startupSection, /windowBackground/)
+  assert.ok(startupSection.indexOf('Open at login') < startupSection.indexOf('Login: Show Prism'))
+  assert.ok(startupSection.indexOf('Login: Show Prism') < startupSection.indexOf('Close to tray'))
+  assert.match(stylesSource, /\.bottom-bar__section--window \{[\s\S]*?min-width: 440px;/)
+  assert.match(stylesSource, /\.bottom-bar__section--startup \{[\s\S]*?min-width: 480px;/)
+  assert.match(stylesSource, /\.bottom-bar__inline--window,[\s\S]*?\.bottom-bar__inline--startup \{[\s\S]*?gap: 8px;/)
 })
 
 test('BottomBar channel routing uses horizontal space without increasing the settings height', async () => {
@@ -4691,7 +4702,7 @@ test('BottomBar channel routing uses horizontal space without increasing the set
   const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
 
   const sourceSection = bottomBarSource.match(
-    /<section className="bottom-bar__section bottom-bar__section--source">([\s\S]*?)<\/section>/,
+    /<div className="bottom-bar__section bottom-bar__section--source">([\s\S]*?)\n            <\/div>/,
   )?.[1]
 
   assert.ok(sourceSection)

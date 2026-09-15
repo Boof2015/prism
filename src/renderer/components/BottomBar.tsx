@@ -510,381 +510,193 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     <div className="bottom-bar" ref={rootRef}>
       <div className="bottom-bar__rail" aria-label="Global settings" onWheel={handleRailWheel}>
         <div className="bottom-bar__rail-content">
-          <section className="bottom-bar__section bottom-bar__section--modules">
+          <section className="bottom-bar__section bottom-bar__section--modules" aria-label="Modules">
             <div className="bottom-bar__section-title">Modules</div>
             <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--chips">
-                {SCOPE_KINDS.map((kind) => {
-                  const active = scopeOrder.includes(kind) && !hiddenScopes.has(kind)
-                  return (
-                    <button
-                      key={kind}
-                      type="button"
-                      className={`settings-chip ${active ? 'is-active' : ''}`.trim()}
-                      onClick={() => toggleScope(kind)}
-                      title={SCOPE_LABELS[kind]}
-                    >
-                      {SCOPE_LABELS[kind]}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--analysis">
-            <div className="bottom-bar__section-title">Analysis</div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--chips">
-                <button
-                  type="button"
-                  className={`settings-chip ${linkedAnalysis ? 'is-active' : ''}`.trim()}
-                  onClick={() => updateAnalysisSettings({ linkedAnalysis: !linkedAnalysis })}
-                  aria-pressed={linkedAnalysis}
-                  title="Link compatible frequency, history, and amplitude guides across scopes"
-                >
-                  Linked Analysis
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--theme">
-            <div className="bottom-bar__section-header">
-              <div className="bottom-bar__section-title">Theme</div>
-              {themeCredit.credit ? (
-                <span className="bottom-bar__theme-metadata">
-                  {themeCredit.url ? (
-                    <a
-                      className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
-                      href={themeCredit.url}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        void handleOpenThemeWebsite(themeCredit.url!)
-                      }}
-                    >
-                      By {themeCredit.credit}
-                    </a>
-                  ) : (
-                    <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
-                  )}
-                  {themeCredit.description ? (
-                    <span className="bottom-bar__theme-description">
-                      <span className="bottom-bar__theme-separator" aria-hidden="true">·</span>
-                      <span>{themeCredit.description}</span>
-                    </span>
-                  ) : null}
-                </span>
-              ) : null}
-            </div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--theme">
-                <ThemedSelect
-                  value={activeThemeId ?? ''}
-                  onChange={(event) => {
-                    void handleThemeChange(event.target.value)
-                  }}
-                  className="bottom-bar__select"
-                >
-                  {themeEntries.map(([id, theme]) => (
-                    <option key={id} value={id}>
-                      {resolveThemeOptionLabel(theme)}
-                    </option>
-                  ))}
-                </ThemedSelect>
-                <button
-                  type="button"
-                  className="settings-chip"
-                  onClick={() => {
-                    void handleReloadThemes()
-                  }}
-                  disabled={isRefreshingThemes}
-                >
-                  {isRefreshingThemes ? 'Refreshing...' : 'Refresh'}
-                </button>
-                <button
-                  type="button"
-                  className="settings-chip"
-                  onClick={() => {
-                    void handleShowThemesFolder()
-                  }}
-                >
-                  Folder
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--window">
-            <div className="bottom-bar__section-header">
-              <div className="bottom-bar__section-title">Window</div>
-              {windowBackground.mode !== 'solid' || loginItemStatusMessage ? (
-                <span className="bottom-bar__window-metadata">
-                  {windowBackground.mode !== 'solid' ? (
-                    <span className="bottom-bar__window-note">
-                      Window snapping is disabled in this mode
-                    </span>
-                  ) : null}
-                  {windowBackground.mode !== 'solid' && loginItemStatusMessage ? (
-                    <span className="bottom-bar__metadata-separator" aria-hidden="true">·</span>
-                  ) : null}
-                  {loginItemStatusMessage ? (
-                    <span
-                      className={`${desktopIntegrationError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__desktop-status`.trim()}
-                      role="status"
-                    >
-                      {loginItemStatusMessage}
-                    </span>
-                  ) : null}
-                </span>
-              ) : null}
-            </div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--window">
+              <div className="bottom-bar__inline">
                 <div className="bottom-bar__inline bottom-bar__inline--chips">
-                  {WINDOW_BACKGROUND_MODES.map((mode) => {
-                    const unsupported = mode === 'blurred' && !supportsBlurredBackground
+                  {SCOPE_KINDS.map((kind) => {
+                    const active = scopeOrder.includes(kind) && !hiddenScopes.has(kind)
                     return (
                       <button
-                        key={mode}
+                        key={kind}
                         type="button"
-                        className={`settings-chip ${windowBackground.mode === mode ? 'is-active' : ''}`.trim()}
-                        onClick={() => handleWindowBackgroundMode(mode)}
-                        disabled={unsupported}
-                        title={unsupported
-                          ? 'Blurred background requires Windows 11'
-                          : WINDOW_BACKGROUND_MODE_TITLES[mode]}
+                        className={`settings-chip ${active ? 'is-active' : ''}`.trim()}
+                        onClick={() => toggleScope(kind)}
+                        title={SCOPE_LABELS[kind]}
                       >
-                        {WINDOW_BACKGROUND_MODE_LABELS[mode]}
+                        {SCOPE_LABELS[kind]}
                       </button>
                     )
                   })}
                 </div>
-                <span className="bottom-bar__trim-value">
-                  {windowBackground.transparency}%
-                </span>
-                <input
-                  className="settings-control__range bottom-bar__trim-slider"
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={windowBackground.transparency}
-                  disabled={windowBackground.mode === 'solid'}
-                  style={{ '--range-percent': `${windowBackground.transparency}%` } as CSSProperties}
-                  onChange={(event) => {
-                    queueWindowBackgroundSave({
-                      ...windowBackground,
-                      transparency: Number(event.target.value),
-                    })
-                  }}
-                  title="How much of the desktop shows through"
-                />
                 <span className="bottom-bar__inline-divider" aria-hidden="true" />
-                <button
-                  type="button"
-                  className={`settings-chip ${desktopIntegration.closeToTray ? 'is-active' : ''}`.trim()}
-                  disabled={desktopIntegrationBusy}
-                  onClick={() => void setCloseToTray(!desktopIntegration.closeToTray)}
-                  title="Closing Prism hides every Prism window; use the tray menu to quit"
-                >
-                  Close to tray
-                </button>
-                <button
-                  type="button"
-                  className={`settings-chip ${desktopIntegration.openAtLogin ? 'is-active' : ''}`.trim()}
-                  disabled={desktopIntegrationBusy || desktopIntegration.loginItemStatus === 'unavailable'}
-                  onClick={() => void setOpenAtLogin(!desktopIntegration.openAtLogin)}
-                >
-                  Open at login
-                </button>
-                <ThemedSelect
-                  value={desktopIntegration.loginLaunchMode}
-                  disabled={desktopIntegrationBusy || !desktopIntegration.openAtLogin}
-                  onChange={(event) => {
-                    void setLoginLaunchMode(event.target.value === 'tray' ? 'tray' : 'show')
-                  }}
-                  className="bottom-bar__login-select"
-                  title="What Prism should show when opened automatically at login"
-                >
-                  <option value="show">Login: Show Prism</option>
-                  <option value="tray">Login: Start in tray</option>
-                </ThemedSelect>
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--now-playing">
-            <div className="bottom-bar__section-header bottom-bar__section-header--now-playing">
-              <div className="bottom-bar__section-title">Now Playing</div>
-              <div
-                className={`${nowPlayingErrorMessage ? 'bottom-bar__now-playing-summary is-error' : 'bottom-bar__now-playing-summary'}`.trim()}
-                title={nowPlayingDetail}
-              >
-                {nowPlayingDetail}
-              </div>
-            </div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--now-playing">
-                <div className={`settings-status-pill ${currentNowPlayingProvider?.connectionState === 'disabled' || !currentNowPlayingProvider ? '' : `is-${currentNowPlayingProvider.connectionState}`}`.trim()}>
-                  <span className="settings-status-pill__dot" />
-                  <span>{nowPlayingStatusLabel}</span>
-                </div>
-
-                {nowPlayingErrorMessage ? (
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
                   <button
                     type="button"
-                    className="settings-chip"
-                    onClick={() => {
-                      void handleRetryNowPlaying()
-                    }}
+                    className={`settings-chip ${linkedAnalysis ? 'is-active' : ''}`.trim()}
+                    onClick={() => updateAnalysisSettings({ linkedAnalysis: !linkedAnalysis })}
+                    aria-pressed={linkedAnalysis}
+                    title="Link compatible frequency, history, and amplitude guides across scopes"
                   >
-                    Retry
+                    Linked Analysis
                   </button>
-                ) : null}
-
-                <button
-                  type="button"
-                  className="settings-chip"
-                  onClick={() => {
-                    void openNowPlayingConfigWindow()
-                  }}
-                >
-                  Configure...
-                </button>
+                </div>
               </div>
             </div>
           </section>
 
           <div className="bottom-bar__divider" />
 
-          <section className="bottom-bar__section bottom-bar__section--source">
-            <div className="bottom-bar__section-title">Audio Source</div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline">
-                <ThemedSelect
-                  value={selectedSourceValue}
-                  onChange={(event) => {
-                    void handleSourceChange(event.target.value)
-                  }}
-                  className="bottom-bar__select"
-                >
-                  <optgroup label="Output Devices">
-                    {visibleSystemSources.map((source) => (
-                      <option key={source.id} value={`system:${source.id}`}>
-                        {source.isDefault && !source.label.toLowerCase().includes('default')
-                          ? `${source.label} (Default)`
-                          : source.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Input Devices">
-                    <option value={`device:${DEFAULT_INPUT_DEVICE_ID}`}>Default Input</option>
-                    {devices.filter((device) => device.id !== 'default').map((device) => (
-                      <option key={device.id} value={`device:${device.id}`}>
-                        {device.label || `Input ${device.id.slice(0, 8)}`}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="DAW Bridges">
-                    {captureMode === 'daw'
-                      && selectedDawSourceId
-                      && !selectedDawLiveSourceId ? (
-                        <option value={`daw:${selectedDawSourceId}`}>
-                          Waiting for selected bridge…
-                        </option>
-                      ) : null}
-                    {dawSources.length === 0 && captureMode !== 'daw' ? (
-                      <option value="daw:" disabled>No bridges connected</option>
-                    ) : null}
-                    {dawSources.map((source) => (
-                      <option key={source.id} value={`daw:${source.id}`}>
-                        {source.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                </ThemedSelect>
-
-                <div className={`settings-status-pill is-${captureStatus}`.trim()}>
-                  <span className="settings-status-pill__dot" />
-                  <span>{indicatorLabel}</span>
-                </div>
+          <section className="bottom-bar__group" aria-label="Audio">
+            <div className="bottom-bar__section bottom-bar__section--source">
+              <div className="bottom-bar__section-title">
+                Audio <span className="bottom-bar__section-subtitle">Source</span>
               </div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline">
+                  <ThemedSelect
+                    aria-label="Audio source"
+                    value={selectedSourceValue}
+                    onChange={(event) => {
+                      void handleSourceChange(event.target.value)
+                    }}
+                    className="bottom-bar__select"
+                  >
+                    <optgroup label="Output Devices">
+                      {visibleSystemSources.map((source) => (
+                        <option key={source.id} value={`system:${source.id}`}>
+                          {source.isDefault && !source.label.toLowerCase().includes('default')
+                            ? `${source.label} (Default)`
+                            : source.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Input Devices">
+                      <option value={`device:${DEFAULT_INPUT_DEVICE_ID}`}>Default Input</option>
+                      {devices.filter((device) => device.id !== 'default').map((device) => (
+                        <option key={device.id} value={`device:${device.id}`}>
+                          {device.label || `Input ${device.id.slice(0, 8)}`}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="DAW Bridges">
+                      {captureMode === 'daw'
+                        && selectedDawSourceId
+                        && !selectedDawLiveSourceId ? (
+                          <option value={`daw:${selectedDawSourceId}`}>
+                            Waiting for selected bridge…
+                          </option>
+                        ) : null}
+                      {dawSources.length === 0 && captureMode !== 'daw' ? (
+                        <option value="daw:" disabled>No bridges connected</option>
+                      ) : null}
+                      {dawSources.map((source) => (
+                        <option key={source.id} value={`daw:${source.id}`}>
+                          {source.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </ThemedSelect>
 
-              {captureMessage ? (
-                <>
-                  <div className={`${captureError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__error-text`.trim()}>
-                    {captureMessage}
+                  <div className={`settings-status-pill is-${captureStatus}`.trim()}>
+                    <span className="settings-status-pill__dot" />
+                    <span>{indicatorLabel}</span>
                   </div>
-                  <div className="settings-inline-actions">
-                    <button
-                      type="button"
-                      className="settings-chip"
-                      onClick={() => {
-                        void handleRetryCapture()
-                      }}
-                    >
-                      Retry
-                    </button>
-                    {canUseDefaultSource ? (
+                </div>
+
+                {captureMessage ? (
+                  <>
+                    <div className={`${captureError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__error-text`.trim()}>
+                      {captureMessage}
+                    </div>
+                    <div className="settings-inline-actions">
                       <button
                         type="button"
                         className="settings-chip"
                         onClick={() => {
-                          void handleUseDefaultSource()
+                          void handleRetryCapture()
                         }}
                       >
-                        Use Default
+                        Retry
                       </button>
-                    ) : null}
-                    {!captureError && captureNotice ? (
-                      <button
-                        type="button"
-                        className="settings-chip"
-                        onClick={clearCaptureNotice}
-                      >
-                        Dismiss
-                      </button>
-                    ) : null}
+                      {canUseDefaultSource ? (
+                        <button
+                          type="button"
+                          className="settings-chip"
+                          onClick={() => {
+                            void handleUseDefaultSource()
+                          }}
+                        >
+                          Use Default
+                        </button>
+                      ) : null}
+                      {!captureError && captureNotice ? (
+                        <button
+                          type="button"
+                          className="settings-chip"
+                          onClick={clearCaptureNotice}
+                        >
+                          Dismiss
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </div>
+
+            {routingChannels.length > 0 ? (
+              <>
+                <span className="bottom-bar__inline-divider" aria-hidden="true" />
+
+                <div
+                  className="bottom-bar__section bottom-bar__section--routing"
+                  style={routingSectionStyle}
+                >
+                  <div className="bottom-bar__section-title">Channel Routing</div>
+                  <div className="bottom-bar__section-body">
+                    <ChannelRoutingMatrix
+                      activityEnabled={settingsOpen}
+                      sourceKey={routingKey}
+                      channels={routingChannels}
+                      routing={selectedChannelRouting}
+                      onChange={setChannelRouting}
+                    />
                   </div>
-                </>
-              ) : null}
+                </div>
+              </>
+            ) : null}
+
+            <span className="bottom-bar__inline-divider" aria-hidden="true" />
+
+            <div className="bottom-bar__section bottom-bar__section--trim">
+              <div className="bottom-bar__section-title">Trim</div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline">
+                  <span className="bottom-bar__trim-value">
+                    {inputGainDb > 0 ? '+' : ''}{inputGainDb.toFixed(1)}dB
+                  </span>
+                  <input
+                    className="settings-control__range bottom-bar__trim-slider"
+                    type="range"
+                    min={-12}
+                    max={12}
+                    step={0.5}
+                    aria-label="Input trim"
+                    value={inputGainDb}
+                    style={{ '--range-percent': `${trimPercent}%` } as CSSProperties}
+                    onChange={(event) => setInputGain(Number(event.target.value))}
+                    onDoubleClick={() => setInputGain(0)}
+                  />
+                </div>
+              </div>
             </div>
           </section>
 
-          {routingChannels.length > 0 ? (
-            <>
-              <div className="bottom-bar__divider" />
-
-              <section
-                className="bottom-bar__section bottom-bar__section--routing"
-                style={routingSectionStyle}
-              >
-                <div className="bottom-bar__section-title">Channel Routing</div>
-                <div className="bottom-bar__section-body">
-                  <ChannelRoutingMatrix
-                    activityEnabled={settingsOpen}
-                    sourceKey={routingKey}
-                    channels={routingChannels}
-                    routing={selectedChannelRouting}
-                    onChange={setChannelRouting}
-                  />
-                </div>
-              </section>
-            </>
-          ) : null}
-
           <div className="bottom-bar__divider" />
 
-          <section className="bottom-bar__section bottom-bar__section--rolling-capture">
+          <section className="bottom-bar__section bottom-bar__section--rolling-capture" aria-label="Rolling Capture">
             <div className="bottom-bar__section-title">Rolling Capture</div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--rolling-capture">
@@ -950,7 +762,236 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
 
           <div className="bottom-bar__divider" />
 
-          <section className="bottom-bar__section bottom-bar__section--performance">
+          <section className="bottom-bar__group" aria-label="Appearance">
+            <div className="bottom-bar__section bottom-bar__section--theme">
+              <div className="bottom-bar__section-header">
+                <div className="bottom-bar__section-title">
+                  Appearance <span className="bottom-bar__section-subtitle">Theme</span>
+                </div>
+                {themeCredit.credit ? (
+                  <span
+                    className="bottom-bar__theme-metadata"
+                    title={[themeCredit.credit, themeCredit.description].filter(Boolean).join(' · ')}
+                  >
+                    {themeCredit.url ? (
+                      <a
+                        className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
+                        href={themeCredit.url}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          void handleOpenThemeWebsite(themeCredit.url!)
+                        }}
+                      >
+                        By {themeCredit.credit}
+                      </a>
+                    ) : (
+                      <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
+                    )}
+                    {themeCredit.description ? (
+                      <span className="bottom-bar__theme-description">
+                        <span className="bottom-bar__theme-separator" aria-hidden="true">·</span>
+                        <span>{themeCredit.description}</span>
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline bottom-bar__inline--theme">
+                  <ThemedSelect
+                    aria-label="Theme"
+                    value={activeThemeId ?? ''}
+                    onChange={(event) => {
+                      void handleThemeChange(event.target.value)
+                    }}
+                    className="bottom-bar__select"
+                  >
+                    {themeEntries.map(([id, theme]) => (
+                      <option key={id} value={id}>
+                        {resolveThemeOptionLabel(theme)}
+                      </option>
+                    ))}
+                  </ThemedSelect>
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      void handleReloadThemes()
+                    }}
+                    disabled={isRefreshingThemes}
+                  >
+                    {isRefreshingThemes ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      void handleShowThemesFolder()
+                    }}
+                  >
+                    Folder
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <span className="bottom-bar__inline-divider" aria-hidden="true" />
+
+            <div className="bottom-bar__section bottom-bar__section--window">
+              <div className="bottom-bar__section-header">
+                <div className="bottom-bar__section-title">Background</div>
+                {windowBackground.mode !== 'solid' ? (
+                  <span className="bottom-bar__window-note" title="Window snapping is disabled in this mode">
+                    Window snapping is disabled in this mode
+                  </span>
+                ) : null}
+              </div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline bottom-bar__inline--window">
+                  <div className="bottom-bar__inline bottom-bar__inline--chips">
+                    {WINDOW_BACKGROUND_MODES.map((mode) => {
+                      const unsupported = mode === 'blurred' && !supportsBlurredBackground
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`settings-chip ${windowBackground.mode === mode ? 'is-active' : ''}`.trim()}
+                          onClick={() => handleWindowBackgroundMode(mode)}
+                          disabled={unsupported}
+                          title={unsupported
+                            ? 'Blurred background requires Windows 11'
+                            : WINDOW_BACKGROUND_MODE_TITLES[mode]}
+                        >
+                          {WINDOW_BACKGROUND_MODE_LABELS[mode]}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <span className="bottom-bar__trim-value">
+                    {windowBackground.transparency}%
+                  </span>
+                  <input
+                    className="settings-control__range bottom-bar__trim-slider"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    aria-label="Window transparency"
+                    value={windowBackground.transparency}
+                    disabled={windowBackground.mode === 'solid'}
+                    style={{ '--range-percent': `${windowBackground.transparency}%` } as CSSProperties}
+                    onChange={(event) => {
+                      queueWindowBackgroundSave({
+                        ...windowBackground,
+                        transparency: Number(event.target.value),
+                      })
+                    }}
+                    title="How much of the desktop shows through"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--now-playing" aria-label="Now Playing">
+            <div className="bottom-bar__section-header bottom-bar__section-header--now-playing">
+              <div className="bottom-bar__section-title">Now Playing</div>
+              <div
+                className={`${nowPlayingErrorMessage ? 'bottom-bar__now-playing-summary is-error' : 'bottom-bar__now-playing-summary'}`.trim()}
+                title={nowPlayingDetail}
+              >
+                {nowPlayingDetail}
+              </div>
+            </div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--now-playing">
+                <div className={`settings-status-pill ${currentNowPlayingProvider?.connectionState === 'disabled' || !currentNowPlayingProvider ? '' : `is-${currentNowPlayingProvider.connectionState}`}`.trim()}>
+                  <span className="settings-status-pill__dot" />
+                  <span>{nowPlayingStatusLabel}</span>
+                </div>
+
+                {nowPlayingErrorMessage ? (
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      void handleRetryNowPlaying()
+                    }}
+                  >
+                    Retry
+                  </button>
+                ) : null}
+
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void openNowPlayingConfigWindow()
+                  }}
+                >
+                  Configure...
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--startup" aria-label="Startup & Tray">
+            <div className="bottom-bar__section-header">
+              <div className="bottom-bar__section-title">Startup &amp; Tray</div>
+              {loginItemStatusMessage ? (
+                <span
+                  className={`${desktopIntegrationError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__desktop-status`.trim()}
+                  role="status"
+                  title={loginItemStatusMessage}
+                >
+                  {loginItemStatusMessage}
+                </span>
+              ) : null}
+            </div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--startup">
+                <button
+                  type="button"
+                  className={`settings-chip ${desktopIntegration.openAtLogin ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy || desktopIntegration.loginItemStatus === 'unavailable'}
+                  onClick={() => void setOpenAtLogin(!desktopIntegration.openAtLogin)}
+                >
+                  Open at login
+                </button>
+                <ThemedSelect
+                  aria-label="Login behavior"
+                  value={desktopIntegration.loginLaunchMode}
+                  disabled={desktopIntegrationBusy || !desktopIntegration.openAtLogin}
+                  onChange={(event) => {
+                    void setLoginLaunchMode(event.target.value === 'tray' ? 'tray' : 'show')
+                  }}
+                  className="bottom-bar__login-select"
+                  title="What Prism should show when opened automatically at login"
+                >
+                  <option value="show">Login: Show Prism</option>
+                  <option value="tray">Login: Start in tray</option>
+                </ThemedSelect>
+                <span className="bottom-bar__inline-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className={`settings-chip ${desktopIntegration.closeToTray ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy}
+                  onClick={() => void setCloseToTray(!desktopIntegration.closeToTray)}
+                  title="Closing Prism hides every Prism window; use the tray menu to quit"
+                >
+                  Close to tray
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--performance" aria-label="Performance">
             <div className="bottom-bar__section-title">Performance</div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--performance">
@@ -971,30 +1012,6 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 <div className="settings-status-pill bottom-bar__fps-pill" title="Docked visualizer render FPS">
                   <span>{roundedDockedRenderFps} FPS</span>
                 </div>
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--trim">
-            <div className="bottom-bar__section-title">Trim</div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline">
-                <span className="bottom-bar__trim-value">
-                  {inputGainDb > 0 ? '+' : ''}{inputGainDb.toFixed(1)}dB
-                </span>
-                <input
-                  className="settings-control__range bottom-bar__trim-slider"
-                  type="range"
-                  min={-12}
-                  max={12}
-                  step={0.5}
-                  value={inputGainDb}
-                  style={{ '--range-percent': `${trimPercent}%` } as CSSProperties}
-                  onChange={(event) => setInputGain(Number(event.target.value))}
-                  onDoubleClick={() => setInputGain(0)}
-                />
               </div>
             </div>
           </section>
