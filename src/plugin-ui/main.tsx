@@ -208,7 +208,7 @@ function buildApp(): JSX.Element {
   const analyzer = new BridgeSpectrumAnalyzer(2048)
   connectSpectrumBridge({
     onFrame: (frame) => {
-      analyzer.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax)
+      analyzer.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax, frame.hasSpectrumData)
       analyzer.setReferenceLevel(frame.referenceMeanSquare ?? 0, frame.referenceSeconds ?? 0)
       dataSource.setSampleRate(frame.sampleRate)
       dataSource.setPlaying(true)

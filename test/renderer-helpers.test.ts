@@ -1110,6 +1110,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
 
   const analyzer: FakeSpectrumNativeAnalyzer = {
     calls,
+    hasSpectrumData: () => bufferedSamples > 0,
     isAvailable: () => true,
     setFFTSize: (size) => {
       if (size !== fftSize) {
@@ -1407,6 +1408,7 @@ test('Spectrum Difference draws both signs from zero and leaves no floor trace d
       const recorder = createFakeCanvasRecorder()
       const native = createFakeSpectrumNativeAnalyzer()
       let db = -100, seconds = 0, meanSquare = 0
+      native.hasSpectrumData = () => true
       native.getReferenceLevel = () => ({ seconds, meanSquare })
       native.fillMagnitudes = native.fillRawMagnitudes = output => { output.fill(db); return output.length }
       const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder, 320, 180), {
@@ -3343,6 +3345,195 @@ test('SpectrumAnalyzer tilt can change the visible peak while each readout stays
   } finally {
     dom.restore()
   }
+})
+
+test('SpectrumAnalyzer leaves idle startup and settled silence empty across display options', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const sampleRate of [44100, 48000]) {
+      for (const tiltDbPerOctave of [-2, 8]) {
+        for (const showSideLine of [false, true]) {
+          for (const heatmapFill of [false, true]) {
+            for (const capturePeakInfo of [false, true]) {
+              const recorder = createFakeCanvasRecorder()
+              const native = createFakeSpectrumNativeAnalyzer()
+              const peaks: Array<SpectrumPeakInfo | null> = []
+              let sessionChanged = () => {}
+              const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+                nativeAnalyzer: native, showGrid: true, showSideLine, heatmapFill,
+                fillGradient: !heatmapFill, heatBaseColor: '#123456', capturePeakInfo,
+                tiltDbPerOctave, heatmapTiltDbPerOctave: tiltDbPerOctave, smoothing: 0,
+                onPeakInfo: peak => peaks.push(peak),
+                dataSource: {
+                  getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+                  getSampleRate: () => sampleRate, isPlaying: () => true,
+                  subscribeToSessionChanges: listener => {
+                    sessionChanged = () => listener({ sessionId: 2, sampleRate, channelCount: 2,
+                      capturing: true, suspended: false, backendKind: null })
+                    return () => {}
+                  },
+                },
+              })
+              const state = analyzer as unknown as { drawFrame(): void }
+              try {
+                state.drawFrame()
+                state.drawFrame()
+                assert.equal(native.calls.fillMagnitudes, 0, 'startup placeholders must not be read as measurements')
+                native.pushStereoSamples(new Float32Array(2048), new Float32Array(2048))
+                assert.equal(native.hasSpectrumData(), true)
+                state.drawFrame()
+                assert.ok(native.calls.fillMagnitudes > 0, 'actual silence must reach the silence-floor check')
+                sessionChanged()
+                state.drawFrame()
+                analyzer.setOptions({ fftSize: 4096 })
+                state.drawFrame()
+                assert.ok(recorder.drawImageCalls.length >= 5, 'the background and guides still render')
+                assert.equal(recorder.lineStrokes.length, 0, 'no tilted live trace')
+                assert.equal(recorder.fills.length, 0, 'no gradient fill')
+                assert.equal(recorder.fillRects.length, 0, 'no heatmap fill')
+                assert.ok(peaks.length >= 5 && peaks.every(peak => peak === null), 'no fabricated peak tooltip')
+              } finally { analyzer.dispose() }
+            }
+          }
+        }
+      }
+    }
+  } finally { dom.restore() }
+})
+
+test('SpectrumAnalyzer preserves reference curves while waiting for its first audio block', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const native = createFakeSpectrumNativeAnalyzer()
+  const reference = flatReference(-20, 'overlay')
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+    nativeAnalyzer: native, reference, showGrid: false, referenceLineColor: '#abcdef',
+    dataSource: {
+      getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+      getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+    },
+  })
+  try {
+    ;(analyzer as unknown as { drawFrame(): void }).drawFrame()
+    assert.equal(recorder.lineStrokes.length, 1)
+    assert.equal(recorder.lineStrokes[0].strokeStyle, '#abcdef')
+    assert.equal(recorder.fills.length, 0)
+  } finally { analyzer.dispose(); dom.restore() }
+})
+
+test('SpectrumAnalyzer renders quiet real audio and retains it between blocks until reset', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const dbfs of [-40, -100, -105]) {
+      const native = createFakeSpectrumNativeAnalyzer()
+      const recorder = createFakeCanvasRecorder()
+      const peaks: Array<SpectrumPeakInfo | null> = []
+      let pending: Array<{ left: Float32Array; right: Float32Array }> = []
+      const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+        nativeAnalyzer: native, fftSize: 2048, smoothing: 0, tiltDbPerOctave: 0,
+        minFrequency: 900, maxFrequency: 1100,
+        minDecibels: -120, showGrid: false, fillGradient: false, capturePeakInfo: true,
+        onPeakInfo: peak => peaks.push(peak),
+        dataSource: {
+          getPendingSpectrumSamples: () => [],
+          getPendingSpectrumStereoSamples: () => { const chunks = pending; pending = []; return chunks },
+          getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+        },
+      })
+      const state = analyzer as unknown as { drawFrame(): void; primaryPointY: Float32Array }
+      try {
+        state.drawFrame()
+        assert.equal(peaks.at(-1), null)
+        const tone = Float32Array.from({ length: 2048 }, (_, index) =>
+          Math.sin(2 * Math.PI * 42 * index / 2048) * 10 ** (dbfs / 20))
+        pending = [{ left: tone, right: tone }]
+        state.drawFrame()
+        const peak = peaks.at(-1)
+        assert.ok(peak)
+        assertAlmostEqual(peak.dbfs, dbfs, 0.3, 'quiet-tone dBFS')
+        assert.ok(state.primaryPointY.some(y => y < 180), 'the quiet tone remains visible')
+        const points = Array.from(state.primaryPointY)
+        state.drawFrame()
+        assert.deepEqual(peaks.at(-1), peak)
+        assert.deepEqual(Array.from(state.primaryPointY), points, 'no new block must not clear valid data')
+        const strokeCount = recorder.lineStrokes.length
+        native.reset()
+        state.drawFrame()
+        assert.equal(peaks.at(-1), null)
+        assert.equal(recorder.lineStrokes.length, strokeCount, 'reset removes the old live trace')
+      } finally { analyzer.dispose() }
+    }
+  } finally { dom.restore() }
+})
+
+test('SpectrumAnalyzer keeps an active side channel when the mid channel is at the silence floor', () => {
+  const dom = installFakeCanvasDom()
+  const native = createFakeSpectrumNativeAnalyzer()
+  const recorder = createFakeCanvasRecorder()
+  const tone = Float32Array.from({ length: 2048 }, (_, index) => Math.sin(2 * Math.PI * 42 * index / 2048) * 0.1)
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+    nativeAnalyzer: native, smoothing: 0, showSideLine: true, showGrid: false, fillGradient: false,
+    secondaryLineColor: '#abcdef',
+    dataSource: {
+      getPendingSpectrumSamples: () => [],
+      getPendingSpectrumStereoSamples: () => [{ left: tone, right: tone.map(value => -value) }],
+      getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+    },
+  })
+  try {
+    ;(analyzer as unknown as { drawFrame(): void }).drawFrame()
+    assert.ok(native.getMagnitudes()?.every(db => db <= -119.9))
+    const side = recorder.lineStrokes.find(stroke => stroke.strokeStyle === '#abcdef')
+    assert.ok(side?.commands.some(point => point.y < 180), 'side audio prevents the empty-spectrum path')
+  } finally { analyzer.dispose(); dom.restore() }
+})
+
+test('spectrum plugin bridge carries readiness and renders host frames without renderer PCM', () => {
+  const dom = installFakeCanvasDom()
+  const bridge = new BridgeSpectrumAnalyzer()
+  const recorder = createFakeCanvasRecorder()
+  const magnitudes = new Float32Array(1024).fill(-100)
+  const peaks: Array<SpectrumPeakInfo | null> = []
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+    nativeAnalyzer: bridge, capturePeakInfo: true, showGrid: false, fillGradient: false,
+    onPeakInfo: peak => peaks.push(peak),
+    dataSource: {
+      getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+      getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+    },
+  })
+  const state = analyzer as unknown as { drawFrame(): void }
+  const receive = (hasSpectrumData?: boolean) => {
+    const frame = decodeSpectrumFrame({
+      magnitudes: Buffer.from(magnitudes.buffer).toString('base64'), hasSpectrumData,
+    })
+    assert.ok(frame)
+    assert.equal(frame.hasSpectrumData, hasSpectrumData)
+    bridge.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax, frame.hasSpectrumData)
+  }
+  try {
+    state.drawFrame()
+    receive(false)
+    state.drawFrame()
+    assert.equal(bridge.hasSpectrumData(), false)
+    assert.equal(recorder.lineStrokes.length, 0)
+    assert.equal(peaks.at(-1), null)
+    magnitudes[42] = -20
+    for (const ready of [true, undefined]) {
+      receive(ready)
+      assert.equal(bridge.hasSpectrumData(), true, 'legacy frames become ready on receipt')
+      state.drawFrame()
+      assert.ok(peaks.at(-1))
+      bridge.reset()
+      assert.equal(bridge.hasSpectrumData(), false)
+    }
+    receive(true)
+    bridge.setFFTSize(4096)
+    assert.equal(bridge.hasSpectrumData(), false)
+    receive(false)
+    state.drawFrame()
+    assert.equal(peaks.at(-1), null)
+  } finally { analyzer.dispose(); dom.restore() }
 })
 
 test('spectrum plugin bridge carries channel-max data and falls back for legacy frames', () => {

@@ -54,6 +54,7 @@ public:
     {
         auto* obj = new juce::DynamicObject();
         obj->setProperty("sampleRate", sampleRate);
+        obj->setProperty("hasSpectrumData", spectrum.hasSpectrumData());
         obj->setProperty("referenceEnabled", spectrum.isReferenceEnabled());
         obj->setProperty("referenceMeanSquare", spectrum.getReferenceMeanSquare());
         obj->setProperty("referenceSeconds", spectrum.getReferenceSeconds());

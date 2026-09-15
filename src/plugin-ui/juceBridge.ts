@@ -14,6 +14,8 @@ import { frequencyAtNormalizedPosition } from '../types/frequencyScale'
  */
 
 export interface SpectrumFrame {
+  /** Absent in legacy frames, which are treated as ready on receipt. */
+  hasSpectrumData?: boolean
   referenceMeanSquare?: number
   referenceSeconds?: number
   /** Host sample rate in Hz. */
@@ -27,6 +29,7 @@ export interface SpectrumFrame {
 }
 
 interface SpectrumFramePayload {
+  hasSpectrumData?: boolean
   referenceMeanSquare?: number
   referenceSeconds?: number
   sampleRate?: number
@@ -196,13 +199,14 @@ export function connectWaterfallBridge(handlers: {
 
 export function decodeSpectrumFrame(payload: unknown): SpectrumFrame | null {
   if (typeof payload !== 'object' || payload === null) return null
-  const { sampleRate, magnitudes, side, channelMax, referenceMeanSquare, referenceSeconds } = payload as SpectrumFramePayload
+  const { sampleRate, magnitudes, side, channelMax, referenceMeanSquare, referenceSeconds, hasSpectrumData } = payload as SpectrumFramePayload
   if (typeof magnitudes !== 'string' || magnitudes.length === 0) return null
   const decodedMagnitudes = base64ToFloat32Array(magnitudes)
   const decodedChannelMax = typeof channelMax === 'string'
     ? base64ToFloat32Array(channelMax)
     : new Float32Array(0)
   return {
+    hasSpectrumData: typeof hasSpectrumData === 'boolean' ? hasSpectrumData : undefined,
     referenceMeanSquare: referenceMeanSquare ?? 0,
     referenceSeconds: referenceSeconds ?? 0,
     sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,

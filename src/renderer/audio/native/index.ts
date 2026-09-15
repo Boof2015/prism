@@ -42,6 +42,7 @@ export function getNativeLoadError(): Error | null {
 export const OSCILLOSCOPE_BUFFER_SIZE = 32768
 
 export interface SpectrumNativeAnalyzer {
+  hasSpectrumData(): boolean
   setReferenceEnabled?: (enabled: boolean) => void
   getReferenceLevel?: () => SpectrumReferenceLevel
   setFFTSize(size: number): void
@@ -141,6 +142,7 @@ export const oscilloscope = {
 }
 
 export const spectrum: SpectrumNativeAnalyzer = {
+  hasSpectrumData: (): boolean => nativeModule?.spectrum.hasSpectrumData() ?? false,
   setReferenceEnabled: (enabled: boolean): void => { nativeModule?.spectrum.setReferenceEnabled?.(enabled) },
   getReferenceLevel: (): SpectrumReferenceLevel => nativeModule?.spectrum.getReferenceLevel?.() ?? { meanSquare: 0, seconds: 0 },
   isAvailable: (): boolean => {

@@ -46,6 +46,32 @@ function interpolatePeakDb(magnitudes) {
   return y2 - (0.25 * (y1 - y3) * offset)
 }
 
+test('spectrum readiness tracks audio rather than allocated magnitude buffers', () => {
+  assert.equal(spectrum.hasSpectrumData(), false, 'a fresh analyzer has only placeholders')
+  spectrum.getMagnitudes()
+  spectrum.pushSamples(new Float32Array(0))
+  spectrum.pushStereoSamples(new Float32Array(0), new Float32Array(0))
+  assert.equal(spectrum.hasSpectrumData(), false, 'reads and empty pushes do not supply audio')
+
+  spectrum.pushSamples(new Float32Array([0]))
+  assert.equal(spectrum.hasSpectrumData(), true, 'even a partial silent PCM block is real data')
+  spectrum.getMagnitudes()
+  spectrum.pushSamples(new Float32Array(0))
+  assert.equal(spectrum.hasSpectrumData(), true, 'data remains ready between audio blocks')
+  spectrum.setFFTSize(spectrum.getFFTSize())
+  assert.equal(spectrum.hasSpectrumData(), true, 'unchanged FFT size preserves data')
+
+  spectrum.reset()
+  assert.equal(spectrum.hasSpectrumData(), false)
+  spectrum.pushStereoSamples(new Float32Array([0.25]), new Float32Array([0.5]))
+  assert.equal(spectrum.hasSpectrumData(), true)
+  spectrum.setFFTSize(spectrum.getFFTSize() * 2)
+  assert.equal(spectrum.hasSpectrumData(), false, 'FFT resizing replaces the audio history')
+  spectrum.process(new Float32Array([0.25]))
+  assert.equal(spectrum.hasSpectrumData(), true)
+  spectrum.reset()
+})
+
 test('native capture exports preserve the renderer-facing API shape', () => {
   for (const exportName of ['macosCapture', 'windowsCapture', 'linuxCapture']) {
     const capture = nativeAddon[exportName]

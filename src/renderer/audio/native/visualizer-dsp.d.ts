@@ -102,6 +102,7 @@ export interface OscilloscopeModule {
 }
 
 export interface SpectrumModule {
+  hasSpectrumData(): boolean;
   setReferenceEnabled(enabled: boolean): void;
   getReferenceLevel(): SpectrumReferenceLevel;
   setFFTSize(size: number): void;

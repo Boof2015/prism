@@ -18,6 +18,12 @@ const FFT_SILENCE_DB = -100
  * through the webview.
  */
 export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
+  private spectrumDataReady = false
+
+  hasSpectrumData(): boolean {
+    return this.spectrumDataReady
+  }
+
   private referenceEnabled = false
   private referenceLevel: SpectrumReferenceLevel = { meanSquare: 0, seconds: 0 }
   private referenceFrameTime = 0
@@ -46,7 +52,8 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
   }
 
   /** Called by the bridge whenever the host emits a new frame. */
-  setMagnitudes(magnitudes: Float32Array, side?: Float32Array, channelMax?: Float32Array): void {
+  setMagnitudes(magnitudes: Float32Array, side?: Float32Array, channelMax?: Float32Array, hasSpectrumData = true): void {
+    this.spectrumDataReady = hasSpectrumData && magnitudes.length > 0
     if (magnitudes.length !== this.magnitudes.length) {
       this.magnitudes = new Float32Array(magnitudes.length)
     }
@@ -72,6 +79,7 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
 
   setFFTSize(size: number): void {
     if (size > 0 && size !== this.fftSize) {
+      this.spectrumDataReady = false
       this.fftSize = size
       this.magnitudes = new Float32Array(size / 2).fill(FFT_SILENCE_DB)
       this.sideMagnitudes = new Float32Array(size / 2).fill(FFT_SILENCE_DB)
@@ -149,6 +157,7 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
   }
 
   reset(): void {
+    this.spectrumDataReady = false
     this.referenceLevel = { meanSquare: 0, seconds: 0 }
     this.magnitudes.fill(FFT_SILENCE_DB)
     this.sideMagnitudes.fill(FFT_SILENCE_DB)

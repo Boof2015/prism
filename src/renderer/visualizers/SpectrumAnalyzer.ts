@@ -103,6 +103,7 @@ const LEGACY_DEFAULT_HEAT_COLORS: [string, string, string] = [
 
 const HEATMAP_GAMMA = 1.4
 const FFT_SILENCE_DB = -100
+const FFT_SILENCE_FLOOR_THRESHOLD_DB = -119.9
 const SIDE_LINE_WIDTH_RATIO = 0.75
 const PEAK_SELECTION_MAX_DISTANCE_OCTAVES = 0.5
 const PEAK_SELECTION_SWITCH_THRESHOLD_DB = 4
@@ -112,6 +113,14 @@ const NOOP_SPECTRUM_PEAK_INFO_CALLBACK = (_peakInfo: SpectrumPeakInfo | null): v
 
 function clampSmoothing(value: number): number {
   return Math.min(0.99, Math.max(0, value))
+}
+
+function isAtSpectrumSilenceFloor(data: Float32Array, length: number): boolean {
+  const count = Math.min(length, data.length)
+  for (let index = 0; index < count; index += 1) {
+    if (!(data[index] <= FFT_SILENCE_FLOOR_THRESHOLD_DB)) return false
+  }
+  return true
 }
 
 function isLegacyDefaultHeatColors(colors: [string, string, string]): boolean {
@@ -1195,6 +1204,17 @@ export class SpectrumAnalyzer {
       ? this.pushPendingSpectrumStereoChunks(this.dataSource.getPendingSpectrumStereoSamples())
       : this.pushPendingSpectrumChunks(this.dataSource.getPendingSpectrumSamples())
 
+    // Capture can be active before its first PCM block arrives (notably on macOS
+    // while the output is idle). Tilting reset magnitudes fabricates a peak.
+    if (!this.nativeAnalyzer?.hasSpectrumData()) {
+      this.resetAnalyzerBuffers()
+      this.renderStaticLayer(minFrequency, maxFrequency)
+      this.drawReferences(minFrequency, maxFrequency)
+      this.options.onReferenceLevel(null)
+      this.emitPeakInfo(null)
+      return
+    }
+
     const referenceLevel = this.referenceEnabled ? this.nativeAnalyzer?.getReferenceLevel?.() ?? null : null
     const levelNow = performance.now()
     if (levelNow - this.lastLevelReport >= 100) {
@@ -1231,9 +1251,11 @@ export class SpectrumAnalyzer {
 
     const waitingForComparison = this.difference && (
       (referenceLevel !== null && (referenceLevel.meanSquare <= 0 || referenceLevel.seconds * REFERENCE_SAMPLE_RATE < options.fftSize))
-      || (primaryData !== null && primaryData.every(db => db <= -119.9))
+      || (primaryData !== null && isAtSpectrumSilenceFloor(primaryData, primaryDataLength))
     )
-    if (!primaryData || primaryDataLength === 0 || waitingForComparison) {
+    const silentSpectrum = isAtSpectrumSilenceFloor(primaryData, primaryDataLength)
+      && (!secondaryData || isAtSpectrumSilenceFloor(secondaryData, secondaryDataLength))
+    if (!primaryData || primaryDataLength === 0 || waitingForComparison || silentSpectrum) {
       this.renderStaticLayer(minFrequency, maxFrequency)
       this.drawReferences(minFrequency, maxFrequency)
       this.options.onReferenceLevel(null)

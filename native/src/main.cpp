@@ -735,6 +735,9 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     specExports.Set("setSmoothing", Napi::Function::New(env, SpectrumSetSmoothing));
     specExports.Set("pushSamples", Napi::Function::New(env, SpectrumPushSamples));
     specExports.Set("pushStereoSamples", Napi::Function::New(env, SpectrumPushStereoSamples));
+    specExports.Set("hasSpectrumData", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+        return Napi::Boolean::New(info.Env(), spectrum.hasSpectrumData());
+    }));
     specExports.Set("fillRawMagnitudes", Napi::Function::New(env, SpectrumFillRawMagnitudes));
     specExports.Set("setReferenceEnabled", Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
         spectrum.setReferenceEnabled(info.Length() && info[0].IsBoolean() && info[0].As<Napi::Boolean>().Value());

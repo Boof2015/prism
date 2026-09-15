@@ -25,6 +25,9 @@ public:
     void pushSamples(const float* input, size_t length);
     void pushStereoSamples(const float* left, const float* right, size_t length);
 
+    // Initial/reset magnitudes are placeholders until audio has been processed.
+    bool hasSpectrumData() const { return bufferedSamples_ > 0; }
+
     // Read the latest raw clamped dB magnitudes without mutating analyzer state.
     const std::vector<float>& getRawMagnitudes() const { return rawMagnitudes_; }
 
