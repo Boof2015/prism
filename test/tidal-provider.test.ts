@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { syncBuiltinESMExports } from 'node:module'
 import test from 'node:test'
 import { setImmediate } from 'node:timers/promises'
 import { parseTidalMacStatus, TidalProvider, isTidalWindowsSession } from '../src/main/services/tidalProvider'
@@ -247,21 +248,43 @@ test('dispose aborts active requests and suppresses late results', async () => {
   assert.equal(provider.getProviderState().snapshot, null)
 })
 
-test('removing the final consumer cancels reads without affecting other consumers', async () => {
-  const provider = macProvider()
-  try {
-    await provider.setConsumerActive(1, true)
-    await provider.setConsumerActive(2, true)
-    await provider.initialize()
-    await until(() => provider.getProviderState().connectionState === 'connected')
-    await provider.setConsumerActive(1, false)
-    assert.ok(provider.getProviderState().snapshot)
-    await provider.setConsumerActive(2, false)
-    assert.equal(provider.getProviderState().snapshot, null)
-    await provider.setConsumerActive(3, true)
-    await until(() => provider.getProviderState().connectionState === 'connected')
-  } finally { await provider.dispose() }
-})
+for (const firstRemoved of [1, 2]) {
+  test(`TIDAL polls until both consumers close (remove ${firstRemoved} first)`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    syncBuiltinESMExports()
+    let reads = 0
+    const provider = macProvider(() => { reads++; return JSON.stringify(mac) })
+    try {
+      await provider.setConsumerActive(1, true)
+      await provider.setConsumerActive(2, true)
+      await provider.initialize()
+      await setImmediate()
+      assert.equal(provider.getProviderState().connectionState, 'connected')
+      await provider.setConsumerActive(firstRemoved, false)
+      assert.ok(provider.getProviderState().snapshot)
+      const initialReads = reads
+      t.mock.timers.tick(1500)
+      await setImmediate()
+      assert.equal(reads, initialReads + 1)
+
+      await provider.setConsumerActive(firstRemoved === 1 ? 2 : 1, false)
+      assert.equal(provider.getProviderState().connectionState, 'disabled')
+      assert.equal(provider.getProviderState().snapshot, null)
+      t.mock.timers.tick(10000)
+      await setImmediate()
+      assert.equal(reads, initialReads + 1)
+
+      await provider.setConsumerActive(3, true)
+      await setImmediate()
+      assert.equal(provider.getProviderState().connectionState, 'connected')
+      assert.equal(reads, initialReads + 2)
+    } finally {
+      await provider.dispose()
+      t.mock.timers.reset()
+      syncBuiltinESMExports()
+    }
+  })
+}
 
 
 test('shared MPRIS parsing preserves quotes, escapes, Unicode and artist arrays', () => {

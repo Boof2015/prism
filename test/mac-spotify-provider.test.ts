@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { syncBuiltinESMExports } from 'node:module'
+import { setImmediate } from 'node:timers/promises'
 import test from 'node:test'
 import { MacSpotifyProvider } from '../src/main/services/macSpotifyProvider'
 import type {
@@ -170,6 +172,50 @@ test('provider stays unavailable on unsupported platforms', async () => {
     await provider.dispose()
   }
 })
+
+for (const firstRemoved of [1, 2]) {
+  test(`Spotify polls until both consumers close (remove ${firstRemoved} first)`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    syncBuiltinESMExports()
+    const runner = new StubSpotifyRunner([createStatusPayload({
+      playbackState: 'playing', id: 'spotify:track:123', title: 'Track', artist: 'Artist',
+    })])
+    const provider = new MacSpotifyProvider({
+      platform: 'darwin', accessImpl: async () => undefined,
+      runner: script => runner.run(script),
+    })
+
+    try {
+      await provider.initialize()
+      await provider.setConsumerActive(1, true)
+      await setImmediate()
+      assert.equal(provider.getProviderState().connectionState, 'connected')
+      await provider.setConsumerActive(2, true)
+      await provider.setConsumerActive(firstRemoved, false)
+      assert.equal(provider.getProviderState().connectionState, 'connected')
+      const initialReads = runner.statusCalls
+      t.mock.timers.tick(1500)
+      await setImmediate()
+      assert.equal(runner.statusCalls, initialReads + 1)
+
+      await provider.setConsumerActive(firstRemoved === 1 ? 2 : 1, false)
+      assert.equal(provider.getProviderState().connectionState, 'disabled')
+      assert.equal(provider.getProviderState().snapshot, null)
+      t.mock.timers.tick(10000)
+      await setImmediate()
+      assert.equal(runner.statusCalls, initialReads + 1)
+
+      await provider.setConsumerActive(3, true)
+      await setImmediate()
+      assert.equal(provider.getProviderState().connectionState, 'connected')
+      assert.equal(runner.statusCalls, initialReads + 2)
+    } finally {
+      await provider.dispose()
+      t.mock.timers.reset()
+      syncBuiltinESMExports()
+    }
+  })
+}
 
 test('provider reads local macOS Spotify playback and hydrates artwork while active', async () => {
   const runner = new StubSpotifyRunner([

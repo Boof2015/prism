@@ -51,6 +51,7 @@ import { WindowDockingService } from './windowDocking'
 import { DockingGeometryGuard } from './dockingGeometryGuard'
 import { normalizeWindowDocking } from '../shared/windowDocking'
 import { NowPlayingManager } from './services/nowPlayingManager'
+import { bindNowPlayingWindowConsumer } from './services/nowPlayingWindowConsumer'
 import { AstraIntegrationService } from './services/astraIntegration'
 import { TidalProvider } from './services/tidalProvider'
 import { MacSpotifyProvider } from './services/macSpotifyProvider'
@@ -2211,6 +2212,10 @@ function createNowPlayingConfigWindow(): BrowserWindow {
   applyFlatFramelessChrome(nowPlayingConfigWindow)
 
   const configWindow = nowPlayingConfigWindow
+
+  bindNowPlayingWindowConsumer(configWindow.webContents, getNowPlayingManager(), (error) => {
+    console.warn('Could not update now-playing config window activity:', error)
+  })
 
   configWindow.once('ready-to-show', () => {
     if (!configWindow.isDestroyed() && !appHiddenToTray) {
