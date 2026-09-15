@@ -111,6 +111,21 @@ int main(int argc, char** argv) {
     if (argc == 1 && juce::File::getSpecialLocation(juce::File::currentApplicationFile).hasFileExtension("app")) return showEditor({});
 #endif
     if (argc > 1 && juce::String(argv[1]) == "--ui") return showEditor(argc > 2 ? juce::File(argv[2]) : juce::File());
+    {
+        PrismSpectrumProcessor untouched, restored;
+        juce::MemoryBlock initial, roundTrip;
+        untouched.getStateInformation(initial);
+        expect(initial.getSize() == 2 && std::memcmp(initial.getData(), "{}", 2) == 0,
+               "unopened analyzer saves a nonempty JSON state for CLAP");
+        restored.setStateInformation(initial.getData(), static_cast<int>(initial.getSize()));
+        restored.getStateInformation(roundTrip);
+        expect(initial == roundTrip, "initial state round trips without opening an editor");
+        const juce::String populated = R"({"fftSize":4096,"smoothing":0.75,"colorMode":"theme"})";
+        untouched.setSettingsJson(populated);
+        untouched.getStateInformation(initial);
+        restored.setStateInformation(initial.getData(), static_cast<int>(initial.getSize()));
+        expect(restored.getSettingsJson() == populated, "populated analyzer settings round trip exactly");
+    }
     const auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("prism-reference-test-" + juce::Uuid().toString());
     directory.createDirectory();
     const auto file = makeAudio(directory);

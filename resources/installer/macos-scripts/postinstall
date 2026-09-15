@@ -1,6 +1,6 @@
 #!/bin/bash
 # Postinstall: after the macOS Installer drops Prism.app into /Applications, copy
-# the bundled VST3 / AU plugins out of the app's Resources into the system
+# the bundled VST3 / AU / CLAP plugins out of the app's Resources into the system
 # Audio Plug-Ins folders so DAWs find them, and expose prism-tui on PATH.
 #
 # Standard pkg postinstall args:
@@ -19,6 +19,7 @@ APP_PATH="${2:-/Applications}/Prism.app"
 PLUGINS_SRC="$APP_PATH/Contents/Resources/plugins"
 VST3_DEST="${PRISM_VST3_DEST_DIR:-/Library/Audio/Plug-Ins/VST3}"
 AU_DEST="${PRISM_AU_DEST_DIR:-/Library/Audio/Plug-Ins/Components}"
+CLAP_DEST="${PRISM_CLAP_DEST_DIR:-/Library/Audio/Plug-Ins/CLAP}"
 TUI_SOURCE="$APP_PATH/Contents/Resources/tui/prism-tui"
 TUI_LINK="${PRISM_TUI_LINK_PATH:-/usr/local/bin/prism-tui}"
 
@@ -29,6 +30,19 @@ if [ -d "$PLUGINS_SRC/VST3" ]; then
 fi
 if [ -d "$PLUGINS_SRC/AU" ]; then
   cp -R "$PLUGINS_SRC/AU/"*.component "$AU_DEST/" 2>/dev/null || true
+fi
+
+if [ -d "$PLUGINS_SRC/CLAP" ]; then
+  for name in Spectrum Oscilloscope "VU Meter" "Loudness Meter" Vectorscope Spectrogram Waveform Waterfall Bridge; do
+    if [ ! -d "$PLUGINS_SRC/CLAP/Prism $name.clap" ]; then
+      echo "Prism postinstall: missing CLAP bundle: Prism $name.clap" >&2
+      exit 1
+    fi
+  done
+  mkdir -p "$CLAP_DEST"
+  for name in Spectrum Oscilloscope "VU Meter" "Loudness Meter" Vectorscope Spectrogram Waveform Waterfall Bridge; do
+    cp -R "$PLUGINS_SRC/CLAP/Prism $name.clap" "$CLAP_DEST/"
+  done
 fi
 
 if [ -f "$TUI_SOURCE" ]; then

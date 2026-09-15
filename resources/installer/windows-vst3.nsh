@@ -1,24 +1,18 @@
-; Custom NSIS include for electron-builder.
-;
-; Wizard installer (oneClick=false, perMachine=true) with an optional VST3
-; install step. After the directory page, we add a custom page with a checkbox:
-;
-;   [x] Install Prism VST3 plugins (recommended)
-;
-; If checked, customInstall xcopies the bundled .vst3 bundles from
-; $INSTDIR\resources\plugins\VST3\ into $COMMONFILES64\VST3\. The whole
-; installer already runs elevated (perMachine=true → UAC at launch), so writes
-; to Common Files succeed without a second elevation. On uninstall, the bundles
-; are removed unconditionally (harmless if the user opted out at install time).
+; Custom NSIS include for electron-builder. Retained at its original path.
+; Independent VST3/CLAP options default on, including silent installs.
+; /VST3=0|1 and /CLAP=0|1 allow scripted selection and installer smoke tests.
 
 !include "LogicLib.nsh"
 !include "WinMessages.nsh"
 
 !ifndef BUILD_UNINSTALLER
   !include "nsDialogs.nsh"
+  !include "FileFunc.nsh"
 
   Var PRISM_VST_CHECKBOX
   Var PRISM_VST_STATE
+  Var PRISM_CLAP_CHECKBOX
+  Var PRISM_CLAP_STATE
 
   !macro customHeader
     ; electron-builder disables the standard NSIS details view in common.nsh.
@@ -40,6 +34,30 @@
   !macro customInit
     ; Silent installs skip the options page, so default to installing plugins.
     StrCpy $PRISM_VST_STATE ${BST_CHECKED}
+    StrCpy $PRISM_CLAP_STATE ${BST_CHECKED}
+    ${GetParameters} $0
+    ClearErrors
+    ${GetOptions} $0 "/VST3=" $1
+    ${IfNot} ${Errors}
+      ${If} $1 == "0"
+        StrCpy $PRISM_VST_STATE ${BST_UNCHECKED}
+      ${ElseIf} $1 != "1"
+        MessageBox MB_OK|MB_ICONSTOP "Expected /VST3=0 or /VST3=1." /SD IDOK
+        SetErrorLevel 2
+        Abort
+      ${EndIf}
+    ${EndIf}
+    ClearErrors
+    ${GetOptions} $0 "/CLAP=" $1
+    ${IfNot} ${Errors}
+      ${If} $1 == "0"
+        StrCpy $PRISM_CLAP_STATE ${BST_UNCHECKED}
+      ${ElseIf} $1 != "1"
+        MessageBox MB_OK|MB_ICONSTOP "Expected /CLAP=0 or /CLAP=1." /SD IDOK
+        SetErrorLevel 2
+        Abort
+      ${EndIf}
+    ${EndIf}
   !macroend
 
   ; NOTE on parse order: this file is `!include`d before electron-builder's main
@@ -48,7 +66,7 @@
     Page custom prismVstOptionsPage prismVstOptionsPageLeave
 
     Function prismVstOptionsPage
-      !insertmacro MUI_HEADER_TEXT "VST3 Plugins" "Choose whether to install the Prism scope plugins."
+      !insertmacro MUI_HEADER_TEXT "Audio Plugins" "Choose the Prism plugin formats to install."
 
       nsDialogs::Create 1018
       Pop $0
@@ -58,9 +76,13 @@
 
       ${NSD_CreateCheckBox} 0 0u 100% 12u "Install Prism VST3 plugins (recommended)"
       Pop $PRISM_VST_CHECKBOX
-      ${NSD_Check} $PRISM_VST_CHECKBOX
+      ${NSD_SetState} $PRISM_VST_CHECKBOX $PRISM_VST_STATE
 
-      ${NSD_CreateLabel} 0 22u 100% 80u "Installs eight Prism analyzer plugins plus Prism Bridge to:$\r$\n$\r$\n    $COMMONFILES64\VST3$\r$\n$\r$\nDAWs (FL Studio, Ableton, Logic, Reaper, etc.) will find them on the next plugin rescan.$\r$\n$\r$\nPrism Bridge sends one inserted track or bus to the standalone Prism app. Uncheck to install only the desktop app."
+      ${NSD_CreateCheckBox} 0 20u 100% 12u "Install Prism CLAP plugins (recommended)"
+      Pop $PRISM_CLAP_CHECKBOX
+      ${NSD_SetState} $PRISM_CLAP_CHECKBOX $PRISM_CLAP_STATE
+
+      ${NSD_CreateLabel} 0 42u 100% 90u "Each format includes eight analyzers plus Prism Bridge.$\r$\n$\r$\nVST3: $COMMONFILES64\VST3$\r$\nCLAP: $COMMONFILES64\CLAP$\r$\n$\r$\nRescan plugins in a DAW that supports the selected format.$\r$\nPrism Bridge sends a track or bus to the Prism app.$\r$\nUncheck both to install only the app and prism-tui."
       Pop $0
 
       nsDialogs::Show
@@ -68,6 +90,7 @@
 
     Function prismVstOptionsPageLeave
       ${NSD_GetState} $PRISM_VST_CHECKBOX $PRISM_VST_STATE
+      ${NSD_GetState} $PRISM_CLAP_CHECKBOX $PRISM_CLAP_STATE
     FunctionEnd
   !macroend
 
@@ -130,6 +153,80 @@
       DetailPrint "Step 3 of 4: Prism VST3 plugins skipped (opted out)."
     ${EndIf}
 
+    ${If} $PRISM_CLAP_STATE == ${BST_CHECKED}
+      DetailPrint "Step 3 of 4: Installing Prism CLAP plugins to $COMMONFILES64\CLAP..."
+      ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\*.clap"
+        DetailPrint "WARNING: bundled Prism CLAP plugins were not found; skipping CLAP installation"
+        MessageBox MB_OK|MB_ICONEXCLAMATION "Prism was installed, but this package does not contain the optional CLAP plugins." /SD IDOK
+      ${Else}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Spectrum.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Spectrum.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Oscilloscope.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Oscilloscope.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism VU Meter.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism VU Meter.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Loudness Meter.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Loudness Meter.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Vectorscope.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Vectorscope.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Spectrogram.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Spectrogram.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Waveform.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Waveform.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Waterfall.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Waterfall.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        ${IfNot} ${FileExists} "$INSTDIR\resources\plugins\CLAP\Prism Bridge.clap"
+          MessageBox MB_OK|MB_ICONSTOP "Missing bundled CLAP plugin: Prism Bridge.clap" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        CreateDirectory "$COMMONFILES64\CLAP"
+        ClearErrors
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Spectrum.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Oscilloscope.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism VU Meter.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Loudness Meter.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Vectorscope.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Spectrogram.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Waveform.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Waterfall.clap" "$COMMONFILES64\CLAP"
+        CopyFiles /SILENT "$INSTDIR\resources\plugins\CLAP\Prism Bridge.clap" "$COMMONFILES64\CLAP"
+        ${If} ${Errors}
+          DetailPrint "ERROR: Prism CLAP plugin copy failed"
+          MessageBox MB_OK|MB_ICONSTOP "Prism CLAP plugin installation failed while copying files to:$\r$\n$COMMONFILES64\CLAP" /SD IDOK
+          SetErrorLevel 1
+          Abort
+        ${EndIf}
+        DetailPrint "Installed Prism CLAP plugins."
+      ${EndIf}
+    ${Else}
+      DetailPrint "Step 3 of 4: Prism CLAP plugins skipped (opted out)."
+    ${EndIf}
+
     DetailPrint "Step 4 of 4: Finishing Prism installation..."
   !macroend
 !endif
@@ -161,4 +258,13 @@
   RMDir /r "$COMMONFILES64\VST3\Prism Waveform.vst3"
   RMDir /r "$COMMONFILES64\VST3\Prism Waterfall.vst3"
   RMDir /r "$COMMONFILES64\VST3\Prism Bridge.vst3"
+  Delete "$COMMONFILES64\CLAP\Prism Spectrum.clap"
+  Delete "$COMMONFILES64\CLAP\Prism Oscilloscope.clap"
+  Delete "$COMMONFILES64\CLAP\Prism VU Meter.clap"
+  Delete "$COMMONFILES64\CLAP\Prism Loudness Meter.clap"
+  Delete "$COMMONFILES64\CLAP\Prism Vectorscope.clap"
+  Delete "$COMMONFILES64\CLAP\Prism Spectrogram.clap"
+  Delete "$COMMONFILES64\CLAP\Prism Waveform.clap"
+  Delete "$COMMONFILES64\CLAP\Prism Waterfall.clap"
+  Delete "$COMMONFILES64\CLAP\Prism Bridge.clap"
 !macroend

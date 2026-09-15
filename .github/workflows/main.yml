@@ -169,6 +169,8 @@ jobs:
             libxrandr-dev \
             libxrender-dev \
             libwebkit2gtk-4.1-dev \
+            xvfb \
+            xauth \
             libglu1-mesa-dev \
             mesa-common-dev
 
@@ -232,10 +234,11 @@ jobs:
           cmake -B plugin/build -S plugin -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
-            -DPRISM_PLUGIN_FORMATS="AU;VST3" \
+            -DPRISM_PLUGIN_FORMATS="AU;VST3;CLAP" \
             -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          node scripts/check-plugin-formats.mjs
 
       - name: Configure JUCE plugins (Linux)
         if: runner.os == 'Linux'
@@ -243,8 +246,9 @@ jobs:
           cmake -B plugin/build -S plugin -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DJUCE_PATH="$GITHUB_WORKSPACE/.ci-cache/juce/JUCE-${PRISM_JUCE_VERSION}" \
-            -DPRISM_PLUGIN_FORMATS=VST3 \
+            -DPRISM_PLUGIN_FORMATS="VST3;CLAP" \
             -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF
+          node scripts/check-plugin-formats.mjs
 
       - name: Configure JUCE plugins (Windows)
         if: runner.os == 'Windows'
@@ -252,7 +256,8 @@ jobs:
         run: |
           for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="%GITHUB_WORKSPACE%\.ci-cache\juce\JUCE-%PRISM_JUCE_VERSION%" -DPRISM_PLUGIN_FORMATS=VST3 -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF -DJUCE_WEBVIEW2_PACKAGE_LOCATION="%JUCE_WEBVIEW2_PACKAGE_LOCATION%" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="%GITHUB_WORKSPACE%\.ci-cache\juce\JUCE-%PRISM_JUCE_VERSION%" -DPRISM_PLUGIN_FORMATS="VST3;CLAP" -DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF -DJUCE_WEBVIEW2_PACKAGE_LOCATION="%JUCE_WEBVIEW2_PACKAGE_LOCATION%" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          node scripts/check-plugin-formats.mjs
 
       - name: Build JUCE plugins (macOS)
         if: runner.os == 'macOS'
@@ -269,30 +274,59 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build plugin/build --target PrismInstallerPlugins --config Release --parallel 4
-          cmake --build plugin/build --target PrismBridgeTests PrismWaterfallTests --config Release --parallel 4
-          ctest --test-dir plugin/build -C Release --output-on-failure -R "Prism(BridgeProcessor|Waterfall)Tests"
+          cmake --build plugin/build --target PrismReferenceTests PrismBridgeTests PrismWaterfallTests --config Release --parallel 4
+          ctest --test-dir plugin/build -C Release --output-on-failure -R "Prism(Reference|BridgeProcessor|Waterfall)Tests"
 
-      - name: Test Prism Bridge and Waterfall plugins
+      - name: Test Prism Reference, Bridge, and Waterfall plugins
         if: runner.os != 'Windows'
         run: |
-          cmake --build plugin/build --target PrismBridgeTests PrismWaterfallTests --config Release --parallel 4
-          ctest --test-dir plugin/build -C Release --output-on-failure -R "Prism(BridgeProcessor|Waterfall)Tests"
+          cmake --build plugin/build --target PrismReferenceTests PrismBridgeTests PrismWaterfallTests --config Release --parallel 4
+          ctest --test-dir plugin/build -C Release --output-on-failure -R "Prism(Reference|BridgeProcessor|Waterfall)Tests"
 
-      - name: Stage plugins for Windows installer
-        if: runner.os == 'Windows'
+      - name: Stage plugins for installer
+        run: node scripts/build/stage-plugins.mjs
+
+      - name: Setup Rust for CLAP validation
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95.0'
+
+      - name: Cache CLAP validator
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .ci-cache/clap-validator/target
+          key: ${{ runner.os }}-clap-validator-b2f1d9b-rust-1.95.0
+
+      - name: Build pinned CLAP validator
         shell: bash
         run: |
-          rm -rf plugin/dist-installer
-          mkdir -p plugin/dist-installer/VST3
-          for art in PrismSpectrum PrismOscilloscope PrismVUMeter PrismLUFSMeter PrismVectorscope PrismSpectrogram PrismWaveform PrismWaterfall PrismBridge; do
-            vst3_dir="plugin/build/${art}_artefacts/Release/VST3"
-            [ -d "$vst3_dir" ] && find "$vst3_dir" -maxdepth 1 -name "*.vst3" -exec cp -R {} plugin/dist-installer/VST3/ \;
-          done
-          vst3_count="$(find plugin/dist-installer/VST3 -maxdepth 1 -name "*.vst3" | wc -l | tr -d ' ')"
-          if [ "$vst3_count" -ne 9 ]; then
-            echo "ERROR: expected 9 VST3 plugins, found $vst3_count"
-            exit 1
+          git clone https://github.com/free-audio/clap-validator.git .ci-cache/clap-validator-source
+          git -C .ci-cache/clap-validator-source checkout b2f1d9b79b1d264a5747f46707d72b1aa40a02ef
+          cargo build --release --locked --package clap-validator --manifest-path .ci-cache/clap-validator-source/Cargo.toml --target-dir .ci-cache/clap-validator/target
+          echo "$GITHUB_WORKSPACE/.ci-cache/clap-validator/target/release" >> "$GITHUB_PATH"
+
+      - name: Validate all CLAP plugins
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a node scripts/validate-clap.mjs
+          else
+            node scripts/validate-clap.mjs
           fi
+
+      - name: Retain CLAP validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clap-validation-${{ runner.os }}
+          path: plugin/build/clap-validation/
+          if-no-files-found: ignore
+
+      - name: Test plugin staging and Unix installer hooks
+        run: node --test test/plugin-packaging.test.mjs
 
       - name: Stage Prism TUI for Windows installer
         if: runner.os == 'Windows'
@@ -304,7 +338,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Smoke-test Windows installer PATH integration
+      - name: Smoke-test Windows installer plugins and PATH integration
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/test-windows-installer.ps1

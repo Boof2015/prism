@@ -90,9 +90,13 @@ namespace
                         "\n");
     }
 
-    juce::String wrapperTypeName()
+    juce::String wrapperTypeName(const PrismSpectrumProcessor& processor)
     {
-        switch (juce::PluginHostType::getPluginLoadedAs())
+#if defined(HAS_CLAP_JUCE_EXTENSIONS) && HAS_CLAP_JUCE_EXTENSIONS
+        if (processor.is_clap)
+            return "CLAP";
+#endif
+        switch (processor.wrapperType)
         {
             case juce::AudioProcessor::wrapperType_VST3:       return "VST3";
             case juce::AudioProcessor::wrapperType_VST:        return "VST2";
@@ -106,13 +110,13 @@ namespace
         }
     }
 
-    juce::String linuxHostDisplayContext()
+    juce::String linuxHostDisplayContext(const PrismSpectrumProcessor& processor)
     {
         const juce::PluginHostType host;
         juce::String context;
         context << "mode=" << PRISM_LINUX_UI_MODE_NAME
                 << " host=\"" << host.getHostDescription() << "\""
-                << " wrapper=" << wrapperTypeName()
+                << " wrapper=" << wrapperTypeName(processor)
                 << " display=" << envValue("DISPLAY")
                 << " waylandDisplay=" << envValue("WAYLAND_DISPLAY")
                 << " sessionType=" << envValue("XDG_SESSION_TYPE")
@@ -331,7 +335,7 @@ PrismSpectrumEditor::PrismSpectrumEditor(PrismSpectrumProcessor& p)
 #if JUCE_LINUX
  #if PRISM_LINUX_UI_DIAGNOSTICS
     logLinuxDiagnostic("editor constructed scope=" + juce::String(engine->scopeId())
-                       + " " + linuxHostDisplayContext()
+                       + " " + linuxHostDisplayContext(processorRef)
                        + " logFile=" + linuxDiagnosticLogFile().getFullPathName());
  #endif
 #endif
@@ -385,7 +389,7 @@ void PrismSpectrumEditor::loadUi()
 {
 #if JUCE_LINUX
  #if PRISM_LINUX_UI_DIAGNOSTICS
-    logLinuxDiagnostic("loadUi " + linuxHostDisplayContext());
+    logLinuxDiagnostic("loadUi " + linuxHostDisplayContext(processorRef));
  #endif
 
    #if defined(PRISM_LINUX_UI_MODE_NATIVE_SMOKE) && PRISM_LINUX_UI_MODE_NATIVE_SMOKE

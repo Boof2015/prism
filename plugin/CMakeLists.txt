@@ -37,19 +37,23 @@ option(PRISM_DEV_SERVER "Load the webview UI from the Vite dev server instead of
 
 # Build controls. Defaults preserve the full local build; CI narrows these to
 # the formats that are actually packaged. AU is macOS-only, so Linux/Windows
-# default to the portable VST3 + Standalone set.
+# default to the portable VST3 + CLAP + Standalone set.
 if(APPLE)
-    set(PRISM_DEFAULT_PLUGIN_FORMATS "AU;VST3;Standalone")
+    set(PRISM_DEFAULT_PLUGIN_FORMATS "AU;VST3;CLAP;Standalone")
 else()
-    set(PRISM_DEFAULT_PLUGIN_FORMATS "VST3;Standalone")
+    set(PRISM_DEFAULT_PLUGIN_FORMATS "VST3;CLAP;Standalone")
 endif()
-set(PRISM_PLUGIN_FORMATS "${PRISM_DEFAULT_PLUGIN_FORMATS}" CACHE STRING "JUCE plugin formats to build")
+set(PRISM_PLUGIN_FORMATS "${PRISM_DEFAULT_PLUGIN_FORMATS}" CACHE STRING "Plugin formats to build (including CLAP)")
 option(PRISM_COPY_PLUGIN_AFTER_BUILD "Copy built plugins into user plugin folders after build" ON)
+
+set(PRISM_JUCE_PLUGIN_FORMATS ${PRISM_PLUGIN_FORMATS})
+list(REMOVE_ITEM PRISM_JUCE_PLUGIN_FORMATS CLAP)
+include(cmake/PrismClap.cmake)
 
 set(PRISM_LINUX_UI_MODE "webview" CACHE STRING "Linux-only UI diagnostic mode: webview, web_smoke, native_smoke, or floating_webview")
 set_property(CACHE PRISM_LINUX_UI_MODE PROPERTY STRINGS webview web_smoke native_smoke floating_webview)
 set(PRISM_VALID_LINUX_UI_MODES webview web_smoke native_smoke floating_webview)
-option(PRISM_LINUX_UI_DIAGNOSTICS "Write Linux VST UI diagnostic logs" OFF)
+option(PRISM_LINUX_UI_DIAGNOSTICS "Write Linux plugin UI diagnostic logs" OFF)
 
 if(UNIX AND NOT APPLE)
     list(FIND PRISM_VALID_LINUX_UI_MODES "${PRISM_LINUX_UI_MODE}" PRISM_LINUX_UI_MODE_INDEX)
@@ -107,7 +111,7 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         BUNDLE_ID com.astra.prism.${TARGET}
         PLUGIN_MANUFACTURER_CODE Prsm
         PLUGIN_CODE ${PLUGIN_CODE}
-        FORMATS ${PRISM_PLUGIN_FORMATS}
+        FORMATS ${PRISM_JUCE_PLUGIN_FORMATS}
         IS_SYNTH FALSE
         NEEDS_MIDI_INPUT FALSE
         NEEDS_MIDI_OUTPUT FALSE
@@ -193,6 +197,8 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         # crashed during pluginval/DAW editor creation.
         juce_link_with_embedded_linux_subprocess(${TARGET})
     endif()
+
+    prism_add_clap(${TARGET} analyzer)
 endfunction()
 
 add_prism_scope(PrismSpectrum     "Prism Spectrum"     Pspc "")
@@ -207,7 +213,7 @@ add_prism_scope(PrismWaterfall    "Prism Waterfall"    Pwfl "PRISM_SCOPE_WATERFA
 # Prism Bridge is intentionally a small native-only pass-through plug-in. It has
 # no standalone target and never creates a webview or performs networking on the
 # audio thread.
-set(PRISM_BRIDGE_FORMATS ${PRISM_PLUGIN_FORMATS})
+set(PRISM_BRIDGE_FORMATS ${PRISM_JUCE_PLUGIN_FORMATS})
 list(REMOVE_ITEM PRISM_BRIDGE_FORMATS Standalone)
 
 juce_add_plugin(PrismBridge
@@ -237,6 +243,8 @@ target_link_libraries(PrismBridge PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+
+prism_add_clap(PrismBridge utility)
 
 if(APPLE)
     # Keep local/CI AU bundles structurally valid before the release pipeline
@@ -300,6 +308,10 @@ set(PRISM_SCOPE_TARGETS
 
 add_custom_target(PrismInstallerPlugins)
 foreach(PRISM_SCOPE_TARGET IN LISTS PRISM_SCOPE_TARGETS)
+    if("CLAP" IN_LIST PRISM_PLUGIN_FORMATS)
+        add_dependencies(PrismInstallerPlugins ${PRISM_SCOPE_TARGET}_CLAP)
+    endif()
+
     if("VST3" IN_LIST PRISM_PLUGIN_FORMATS)
         add_dependencies(PrismInstallerPlugins ${PRISM_SCOPE_TARGET}_VST3)
     endif()

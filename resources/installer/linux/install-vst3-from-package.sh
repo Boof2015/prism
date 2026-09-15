@@ -1,11 +1,10 @@
 #!/bin/sh
 # Package post-install hook for Linux .deb/.rpm builds. The app package installs
 # Prism under /opt, then this exposes prism-tui on PATH and copies the bundled
-# native Linux VST3 bundles into the global VST3 scan path used by Linux DAWs.
+# native Linux VST3 bundles and CLAP files into their global DAW scan paths.
 
 set -eu
 
-DEST_DIR="${PRISM_VST3_DEST_DIR:-/usr/lib/vst3}"
 TUI_LINK="${PRISM_TUI_LINK_PATH:-/usr/bin/prism-tui}"
 
 find_tui() {
@@ -47,58 +46,46 @@ install_tui() {
   echo "Prism TUI installed at $TUI_LINK"
 }
 
-find_source_dir() {
-  if [ -n "${PRISM_VST3_SOURCE_DIR:-}" ] && [ -d "$PRISM_VST3_SOURCE_DIR" ]; then
-    printf '%s\n' "$PRISM_VST3_SOURCE_DIR"
+# Kept at the original hook path for compatibility with package configuration.
+install_format() {
+  format="$1"
+  extension="$2"
+  source_dir="$3"
+  dest_dir="$4"
+  if [ -z "$source_dir" ]; then
+    for dir in "/opt/Prism/resources/plugins/$format" "/opt/prism/resources/plugins/$format"; do
+      if [ -d "$dir" ]; then source_dir="$dir"; break; fi
+    done
+  fi
+  if [ -z "$source_dir" ] || [ ! -d "$source_dir" ]; then
+    echo "Prism $format install: bundled directory not found; skipping this format." >&2
     return 0
   fi
 
-  for dir in \
-    /opt/Prism/resources/plugins/VST3 \
-    /opt/prism/resources/plugins/VST3
-  do
-    if [ -d "$dir" ]; then
-      printf '%s\n' "$dir"
-      return 0
+  # Preflight the entire format before replacing any installed products.
+  for name in Spectrum Oscilloscope "VU Meter" "Loudness Meter" Vectorscope Spectrogram Waveform Waterfall Bridge; do
+    source_plugin="$source_dir/Prism $name.$extension"
+    if { [ "$format" = VST3 ] && [ ! -d "$source_plugin" ]; } ||
+       { [ "$format" = CLAP ] && [ ! -f "$source_plugin" ]; }; then
+      echo "Prism $format install: missing bundled plugin: $source_plugin" >&2
+      return 1
     fi
   done
 
-  return 1
-}
-
-install_plugin() {
-  plugin_name="$1"
-  source_plugin="$SOURCE_DIR/$plugin_name"
-  dest_plugin="$DEST_DIR/$plugin_name"
-
-  if [ ! -d "$source_plugin" ]; then
-    echo "Prism VST3 install: missing bundled plugin: $source_plugin" >&2
-    return 1
-  fi
-
-  rm -rf "$dest_plugin"
-  cp -a "$source_plugin" "$DEST_DIR/"
+  mkdir -p "$dest_dir"
+  for name in Spectrum Oscilloscope "VU Meter" "Loudness Meter" Vectorscope Spectrogram Waveform Waterfall Bridge; do
+    plugin="Prism $name.$extension"
+    if [ "$format" = VST3 ]; then
+      rm -rf "$dest_dir/$plugin"
+      cp -a "$source_dir/$plugin" "$dest_dir/"
+    else
+      cp -p "$source_dir/$plugin" "$dest_dir/$plugin"
+    fi
+    chmod -R a+rX "$dest_dir/$plugin"
+  done
+  echo "Prism $format plugins installed to $dest_dir"
 }
 
 install_tui
-
-SOURCE_DIR="$(find_source_dir || true)"
-if [ -z "$SOURCE_DIR" ]; then
-  echo "Prism VST3 install: bundled VST3 directory not found; skipping plugin install." >&2
-  exit 0
-fi
-
-mkdir -p "$DEST_DIR"
-
-install_plugin "Prism Spectrum.vst3"
-install_plugin "Prism Oscilloscope.vst3"
-install_plugin "Prism VU Meter.vst3"
-install_plugin "Prism Loudness Meter.vst3"
-install_plugin "Prism Vectorscope.vst3"
-install_plugin "Prism Spectrogram.vst3"
-install_plugin "Prism Waveform.vst3"
-install_plugin "Prism Waterfall.vst3"
-install_plugin "Prism Bridge.vst3"
-
-chmod -R a+rX "$DEST_DIR"/Prism*.vst3 2>/dev/null || true
-echo "Prism VST3 plugins installed to $DEST_DIR"
+install_format VST3 vst3 "${PRISM_VST3_SOURCE_DIR:-}" "${PRISM_VST3_DEST_DIR:-/usr/lib/vst3}"
+install_format CLAP clap "${PRISM_CLAP_SOURCE_DIR:-}" "${PRISM_CLAP_DEST_DIR:-/usr/lib/clap}"

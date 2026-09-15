@@ -20,6 +20,7 @@ const testScripts = [
   'test:renderer-helpers',
   'test:build-metadata',
   'test:updates',
+  'test:plugin-packaging',
   'test:waterfall-native',
   'test:spectrum-native',
   'test:reference-tracks',

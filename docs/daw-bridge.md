@@ -73,7 +73,7 @@ exercises the native name editor and writes PNGs to the temporary
 `prism-bridge-nameplate-qa` directory; `--ui` leaves the nameplate open for manual
 inspection.
 
-Bridge ships as VST3 on macOS, Windows, and Linux, and as AU on macOS. It has no
+Bridge ships as VST3 and CLAP on macOS, Windows, and Linux, and as AU on macOS. It has no
 Standalone target. `AU_SANDBOX_SAFE FALSE` is intentional because the AU needs
 loopback networking. Logic may load Audio Units in `AUHostingServiceXPC`, so a
 successful build or `auval` scan is not enough: live Logic-to-Prism loopback is
@@ -81,3 +81,12 @@ a release blocker.
 
 See Apple's [out-of-process Audio Unit debugging documentation](https://developer.apple.com/documentation/audiotoolbox/debugging-out-of-process-audio-units-on-apple-silicon?language=objc)
 and [Audio Unit sandboxing guide](https://developer.apple.com/library/archive/technotes/tn2312/_index.html).
+
+### CLAP validation
+
+CLAP uses the same pass-through processor, state, and Bridge protocol as VST3/AU.
+Its stable ID is `com.astra.prism.PrismBridge`. Verify discovery, mono/stereo audio,
+custom-name recall, duplicate-instance selection, transport/loop/seek updates,
+and reconnecting after the Prism app restarts. Host track names are provided when
+the DAW supports CLAP track-info; custom names and the instance tag remain available.
+See [plugin build and validation instructions](../plugin/README.md).

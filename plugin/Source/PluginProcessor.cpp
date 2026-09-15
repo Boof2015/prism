@@ -162,7 +162,10 @@ bool PrismSpectrumProcessor::syncReferenceResult()
 
 void PrismSpectrumProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    const juce::String json = getSettingsJson();
+    // CLAP's state loader requires a nonempty stream, including before the
+    // editor has supplied any settings. Keep the existing JSON state format.
+    const auto settings = getSettingsJson();
+    const juce::String json = settings.isEmpty() ? "{}" : settings;
     destData.setSize(0);
     destData.append(json.toRawUTF8(), json.getNumBytesAsUTF8());
 }

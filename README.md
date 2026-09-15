@@ -14,7 +14,7 @@
 
 Prism is a free, open-source audio analyzer and meter rack for Windows, macOS, and Linux.
 
-Monitor system audio or an input with a configurable set of real-time scopes and meters, arrange them however you like, and save the setup as a profile. The same analyzers are also available as VST3/AU plugins, and Prism includes a native terminal interface for lightweight monitoring.
+Monitor system audio or an input with a configurable set of real-time scopes and meters, arrange them however you like, and save the setup as a profile. The same analyzers are also available as VST3/AU/CLAP plugins, and Prism includes a native terminal interface for lightweight monitoring.
 
 ![Prism scopes](assets/prism-demo-readme-optimized.gif)
 
@@ -72,7 +72,7 @@ Spectrum settings have **General** and **Reference** tabs. Matching requires at 
 * Foreground ridges hide covered sections of older lines
 * Available through the desktop add-scope menu and TUI layout editor (shortcut **8**)
 * Desktop popouts and saved profiles are supported; existing layouts stay unchanged
-* Dedicated Prism Waterfall VST3/AU plugin shares the desktop renderer and native history, with settings saved in DAW projects
+* Dedicated Prism Waterfall VST3/AU/CLAP plugin shares the desktop renderer and native history, with settings saved in DAW projects
 
 ### Spectrogram
 
@@ -166,7 +166,7 @@ Spectrum settings have **General** and **Reference** tabs. Matching requires at 
 
 * All eight Prism analyzers are built from the same native DSP source used by the desktop application
 * Prism Bridge streams one DAW track or bus into the standalone app without changing the track audio
-* VST3 on Windows, macOS, and Linux
+* VST3 and CLAP on Windows, macOS, and Linux
 * AU on macOS
 * Mono and stereo host layouts are supported
 * Analyzer plugins are pure pass-through: Prism does not modify the host's audio buffer
@@ -224,7 +224,7 @@ Every Prism scope is also available as a DAW plugin.
 
 Drop a **Spectrum**, **Oscilloscope**, **Vectorscope**, **Spectrogram**, **VU Meter**, **Loudness Meter**, or **Waveform** onto a track and analyze it using the same interface and analysis engine as the desktop app.
 
-* **VST3** on Windows, macOS, and Linux
+* **VST3 and CLAP** on Windows, macOS, and Linux
 * **AU** on macOS
 * Settings are stored with your project
 * Plugins follow your Prism themes and profiles
@@ -237,13 +237,17 @@ audio selector. Multiple Bridge instances can be available at once; only the one
 you select streams audio. Waveform and Spectrogram can optionally show host-derived
 Bars + Beats or Seconds rulers, including loop, seek, and packet-gap seams.
 
-Bridge is available as VST3 on Windows, macOS, and Linux and as AU on macOS. The AU
+Bridge is available as VST3 and CLAP on Windows, macOS, and Linux and as AU on macOS. The AU
 is intentionally not marked sandbox-safe because it requires localhost access.
 Protocol details and host-validation notes are in [docs/daw-bridge.md](docs/daw-bridge.md).
 
-Tested in Ableton Live, FL Studio, and Reaper.
+Existing VST3/AU versions have been tested in Ableton Live, FL Studio, and Reaper.
+CLAP requires a DAW that supports CLAP; see [plugin build and validation notes](plugin/README.md).
 
-The plugins install alongside Prism, so there is no separate download.
+The plugins ship alongside Prism. The Windows installer offers separate VST3 and
+CLAP checkboxes, both enabled by default. The macOS package installs VST3, AU, and
+CLAP; Linux deb/rpm packages install VST3 and CLAP. Archives support manual plugin
+installation; the Linux AppImage remains app-only. See [installation instructions](plugin/README.md).
 
 ## Terminal UI
 

@@ -1,11 +1,11 @@
 # Prism — DAW plugins
 
-JUCE 8 plugins (VST3 / AU / Standalone) that render Prism's scopes inside a DAW —
+JUCE 8 plugins (VST3 / AU / CLAP / Standalone) that render Prism's scopes inside a DAW —
 one plugin per scope: **spectrum, oscilloscope, vectorscope, spectrogram, VU meter,
 loudness meter, waveform, waterfall** — plus the native **Prism Bridge** pass-through plugin.
 The analyzers **reuse Prism's existing C++ DSP** (`native/src/*.cpp`)
 and the **existing React canvas UI** (`src/plugin-ui`, importing the unchanged
-visualizers from `src/renderer/visualizers/`). VST3 is built for macOS, Windows,
+visualizers from `src/renderer/visualizers/`). VST3 and CLAP are built for macOS, Windows,
 and Linux; AU is macOS-only.
 
 ## How it fits together
@@ -52,14 +52,15 @@ cmake -B plugin/build -S plugin -DCMAKE_BUILD_TYPE=Release # embeds the bundle (
 cmake --build plugin/build --config Release
 ```
 
-`COPY_PLUGIN_AFTER_BUILD` installs all eight analyzers plus Prism Bridge into your user plugin folders:
+`PRISM_COPY_PLUGIN_AFTER_BUILD` installs all eight analyzers plus Prism Bridge into your user plugin folders:
 - AU:   `~/Library/Audio/Plug-Ins/Components/Prism *.component`
 - VST3: `~/Library/Audio/Plug-Ins/VST3/Prism *.vst3`
+- CLAP: `~/Library/Audio/Plug-Ins/CLAP/Prism *.clap`
 
-Load any `Prism *` AU / VST3 on a track in Ableton / FL / Logic / Reaper (or run the
+Load a `Prism *` plugin in a DAW that supports its format (or run the
 matching **Standalone** from `plugin/build/Prism*_artefacts/Release/Standalone/`),
 play audio, and the scope animates.
-(Prism Bridge has AU/VST3 targets only and no Standalone target.)
+(Prism Bridge has AU/VST3/CLAP targets and no Standalone target.)
 (To use a local JUCE checkout instead of fetching: add `-DJUCE_PATH=/path/to/JUCE`.)
 
 ### UI development: dev-server mode (hot reload)
@@ -88,12 +89,18 @@ cmake -B plugin\build -S plugin -G "Visual Studio 17 2022" -A x64
 cmake --build plugin\build --config Release
 ```
 
-`COPY_PLUGIN_AFTER_BUILD` targets the system VST3 folder
-(`C:\Program Files\Common Files\VST3\Prism *.vst3`), which **needs admin
-privileges**. Either run the `cmake --build` step from an elevated shell, or copy
-the built bundles from `plugin\build\Prism*_artefacts\Release\VST3\` into your
-user-local VST3 folder (`%LOCALAPPDATA%\Programs\Common\VST3\`) by hand — most
-DAWs scan both.
+`PRISM_COPY_PLUGIN_AFTER_BUILD` installs VST3 bundles into
+`C:\Program Files\Common Files\VST3` and CLAP files into
+`C:\Program Files\Common Files\CLAP`. These locations need admin privileges.
+To build without installing, configure with `-DPRISM_COPY_PLUGIN_AFTER_BUILD=OFF`.
+Then copy the products from `plugin\build\Prism*_artefacts\Release\VST3\`
+and `...\CLAP\` to the system directories, or the user directories
+`%LOCALAPPDATA%\Programs\Common\VST3\` and `...\CLAP\`.
+
+The Windows installer offers independent VST3 and CLAP checkboxes, both checked
+by default. Silent installations install both. For scripted installation, use
+`/VST3=0|1` and `/CLAP=0|1` before any final `/D=...` install-directory argument.
+Uninstall removes only the nine named Prism products from each system directory.
 
 Dev-server mode works the same as macOS: `-DPRISM_DEV_SERVER=ON` + `npm run plugin-ui:dev`.
 
@@ -113,7 +120,7 @@ sudo apt-get install build-essential cmake ninja-build pkg-config \
 ```sh
 npm install
 npm run plugin-ui:build
-cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DPRISM_PLUGIN_FORMATS=VST3
+cmake -B plugin/build -S plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DPRISM_PLUGIN_FORMATS="VST3;CLAP"
 cmake --build plugin/build --target PrismInstallerPlugins --parallel
 ```
 
@@ -124,11 +131,75 @@ nine `Prism *.vst3` directories to one of the standard Linux VST3 scan paths:
 - System-wide: `/usr/lib/vst3`
 - System-wide local: `/usr/local/lib/vst3`
 
-The Linux `.deb` and `.rpm` release packages install Prism's VST3 bundles to
-`/usr/lib/vst3` and remove only those nine bundles on package removal. The Linux
-`tar.gz` release includes `resources/plugins/install-vst3.sh`, which installs to
-`$HOME/.vst3` by default or `/usr/lib/vst3` with `--system`. The AppImage is
-portable app-only and does not install DAW plugins.
+CLAP products are single `.clap` files under
+`plugin/build/Prism*_artefacts/Release/CLAP/`. Copy the nine `Prism *.clap`
+files to `$HOME/.clap` or `/usr/lib/clap`.
+
+The Linux `.deb` and `.rpm` release packages install VST3 bundles to `/usr/lib/vst3`
+and CLAP files to `/usr/lib/clap`. Package upgrades retain the plugins; uninstall
+removes only the nine named Prism products per format. The `tar.gz` release includes
+`resources/plugins/install-vst3.sh` and `resources/plugins/install-clap.sh`:
+
+```sh
+sh resources/plugins/install-vst3.sh
+sh resources/plugins/install-clap.sh
+# Use --system for global installation, or --dest PATH for a custom location.
+```
+
+The CLAP helper defaults to `$HOME/.clap`; `--system` selects `/usr/lib/clap`.
+`--source PATH` overrides the bundled source directory. Environment overrides are
+`PRISM_CLAP_SOURCE_DIR` and `PRISM_CLAP_DEST_DIR`; explicit command-line options win.
+The AppImage is portable app-only and does not install DAW plugins.
+
+## CLAP build configuration and validation
+
+Fresh builds include CLAP. Existing CMake caches keep their selected formats;
+reconfigure with `-DPRISM_PLUGIN_FORMATS="AU;VST3;CLAP"` on macOS or
+`-DPRISM_PLUGIN_FORMATS="VST3;CLAP"` on Windows/Linux. Use
+`-DPRISM_PLUGIN_FORMATS=CLAP` for CLAP only, or omit CLAP from the format list to
+avoid fetching or linking its dependencies. Build `PrismInstallerPlugins` for all
+selected installable formats, or an individual target such as `PrismSpectrum_CLAP`.
+
+CLAP uses [clap-juce-extensions](https://github.com/free-audio/clap-juce-extensions)
+at `9fbefae3d9c3d130aafb558c1ec15427a4bd24be`, including its pinned CLAP and
+clap-helpers submodules. CMake fetches it automatically. An existing recursive
+checkout can be supplied with `-DCLAP_JUCE_EXTENSIONS_PATH=/path/to/checkout`.
+JUCE remains at 8.0.4. See the root third-party notices for dependency licenses.
+
+CLAP IDs are stable `com.astra.prism.<target>` identifiers, for example
+`com.astra.prism.PrismSpectrum` and `com.astra.prism.PrismBridge`. Settings use the
+same JSON as VST3/AU, including references; a fresh analyzer saves `{}` before
+its editor opens. DAWs treat each format as a separate plugin instance, so existing
+VST3/AU instances are not automatically converted.
+
+After building, `npm run stage:plugins` checks and stages all nine products in the
+release formats (VST3/CLAP plus AU on macOS). For macOS ZIP installations, copy the
+bundles from `Prism.app/Contents/Resources/plugins/{CLAP,VST3,AU}` into the matching
+user plugin folders listed above. The macOS PKG installs them into the corresponding
+system folders under `/Library/Audio/Plug-Ins`; CLAP bundles are ad-hoc signed during
+building. For a manually extracted Windows portable build, copy the `.clap` files from
+`resources/plugins/CLAP` into a standard CLAP folder.
+
+CI builds [clap-validator](https://github.com/free-audio/clap-validator) at
+`b2f1d9b79b1d264a5747f46707d72b1aa40a02ef`. With that binary on PATH, run
+`npm run test:clap`; alternatively set `CLAP_VALIDATOR_PATH` to its executable.
+Per-plugin results are saved under `plugin/build/clap-validation/` and uploaded by CI.
+The validator's `param-conversions` test divides by zero when there are no parameters;
+only that test is excluded for Prism's nine parameterless products. The wrapper also
+reports successful loading of random state bytes because JUCE's state-load callback
+cannot return failure; the validator reports this as a warning. All processing,
+state round-trip, and lifecycle checks remain enabled.
+
+`node scripts/check-plugin-formats.mjs` checks CLAP-only and VST3-only configurations
+after the full build is configured. `npm run test:plugin-packaging` tests staging,
+Unix installation, repeated installation, upgrades, and removal using temporary
+paths. CI also tests Windows silent defaults and every format-selection combination.
+
+Before releasing, exercise CLAP in a compatible DAW: rescan all nine products;
+verify mono/stereo pass-through, editor animation and resizing, repeated reopen,
+project save/reload, Spectrum references, Waterfall history, and Bridge connection,
+naming, transport, and reconnection. Host-provided track names depend on the host's
+CLAP track-info support; Bridge retains its custom-name and instance-tag fallback.
 
 ## Notes
 

@@ -6,6 +6,10 @@
 #include <atomic>
 #include <vector>
 
+#if defined(HAS_CLAP_JUCE_EXTENSIONS) && HAS_CLAP_JUCE_EXTENSIONS
+ #include <clap-juce-extensions/clap-juce-extensions.h>
+#endif
+
 /**
  * Prism Spectrum — analyzer plugin.
  *
@@ -18,6 +22,9 @@
  * session save/restore.
  */
 class PrismSpectrumProcessor : public juce::AudioProcessor, private juce::Timer
+#if defined(HAS_CLAP_JUCE_EXTENSIONS) && HAS_CLAP_JUCE_EXTENSIONS
+                            , public clap_juce_extensions::clap_properties
+#endif
 {
 public:
     PrismSpectrumProcessor();
