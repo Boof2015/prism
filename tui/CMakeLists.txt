@@ -60,6 +60,8 @@ target_include_directories(prism_tui_analysis PUBLIC
     ${PRISM_NATIVE_DIR})
 target_link_libraries(prism_tui_analysis PUBLIC Threads::Threads)
 if(WIN32)
+    # r8brain includes Windows.h; keep its min/max macros out of the DSP sources.
+    target_compile_definitions(prism_tui_analysis PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_link_libraries(prism_tui_analysis PUBLIC shell32 ole32)
 endif()
 
