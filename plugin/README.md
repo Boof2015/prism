@@ -192,6 +192,29 @@ Dev-server mode works the same as macOS: `-DPRISM_DEV_SERVER=ON` + `npm run plug
 
 ## Build & run (Linux)
 
+Release and build-smoke CI use Ubuntu 24.04 as the Linux binary baseline. For
+plugins to share across distributions or load in a Flatpak DAW, build on that
+baseline rather than a newer distribution. A Fedora 44 build can require
+`GLIBC_2.43` even when the DAW's Flatpak runtime only provides glibc 2.42;
+that fails during scanning, before Prism's processor or editor starts.
+`readelf --version-info "Prism Oscilloscope.clap"` shows required symbol versions.
+The [Windows Linux test launcher](../docs/linux-testing.md) can build in Ubuntu
+WSL and preserve the build logs.
+
+Scope editors need WebKitGTK 4.1 (or JUCE's 4.0 fallback) in the environment
+running the DAW. A Flatpak runtime must provide it inside the sandbox; installing
+WebKitGTK only on the host does not satisfy that requirement. Successful plugin
+scanning alone does not verify editor support. Prism Bridge uses a native editor
+and does not require WebKitGTK.
+
+The Linux browser runs in a helper process with `LD_LIBRARY_PATH` and
+`LD_PRELOAD` cleared before a clean exec, so a DAW's bundled GLib cannot prevent
+the system WebKitGTK from loading. The DAW's own environment stays unchanged.
+`cmake/PrismLinuxWebView.cmake` patches a build-local copy of JUCE 8.0.4 to defer
+its WebKit probe to that helper. The configure step fails if JUCE's patch anchors
+change; review the patch when updating JUCE. The isolation regression runs as
+`PrismLinuxWebViewHelperTests` in CTest and Linux CI.
+
 Prereqs: CMake >= 3.22, Ninja, GCC/Clang, Node.js, and JUCE's Linux GUI/WebView
 dependencies. On Ubuntu 24.04+:
 

@@ -97,7 +97,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-2022]
+        # Keep the Linux plugin ABI baseline stable for older DAW runtimes.
+        os: [ubuntu-24.04, macos-latest, windows-2022]
 
     steps:
       - uses: actions/checkout@v6
@@ -266,6 +267,12 @@ jobs:
       - name: Build JUCE plugins (Linux)
         if: runner.os == 'Linux'
         run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
+      - name: Test Linux browser helper isolation
+        if: runner.os == 'Linux'
+        run: |
+          cmake --build plugin/build --target PrismLinuxWebViewHelperProbe --parallel 4
+          ctest --test-dir plugin/build --output-on-failure -R '^PrismLinuxWebViewHelperTests$'
 
       - name: Build JUCE plugins (Windows)
         if: runner.os == 'Windows'

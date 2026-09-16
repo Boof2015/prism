@@ -29,6 +29,11 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include(cmake/PrismLinuxWebView.cmake)
+    prism_isolate_linux_webview()
+endif()
+
 # Reused, unmodified Prism DSP (no N-API dependency).
 set(PRISM_NATIVE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../native/src)
 
@@ -198,6 +203,10 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         # directly after fork(), which is unsafe in multi-threaded hosts and has
         # crashed during pluginval/DAW editor creation.
         juce_link_with_embedded_linux_subprocess(${TARGET})
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            set_property(TARGET juce_linux_subprocess_helper PROPERTY SOURCES
+                "${CMAKE_CURRENT_SOURCE_DIR}/Source/LinuxWebViewHelper.cpp")
+        endif()
     endif()
 
     prism_add_clap(${TARGET} analyzer)
@@ -211,6 +220,22 @@ add_prism_scope(PrismVectorscope  "Prism Vectorscope"  Pvct "PRISM_SCOPE_VECTORS
 add_prism_scope(PrismSpectrogram  "Prism Spectrogram"  Pspg "PRISM_SCOPE_SPECTROGRAM=1")
 add_prism_scope(PrismWaveform     "Prism Waveform"     Pwav "PRISM_SCOPE_WAVEFORM=1")
 add_prism_scope(PrismWaterfall    "Prism Waterfall"    Pwfl "PRISM_SCOPE_WATERFALL=1")
+
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(PrismLinuxWebViewHelperProbe SHARED Tests/LinuxWebViewHelperProbe.cpp)
+    target_link_libraries(PrismLinuxWebViewHelperProbe PRIVATE ${CMAKE_DL_LIBS})
+    set(host_override_dir "${CMAKE_CURRENT_BINARY_DIR}/host-library-override")
+    set(host_override_library "${host_override_dir}/libprism_host_override.so")
+    add_custom_command(TARGET PrismLinuxWebViewHelperProbe POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${host_override_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:PrismLinuxWebViewHelperProbe> "${host_override_library}"
+        VERBATIM)
+    add_test(NAME PrismLinuxWebViewHelperTests COMMAND juce_linux_subprocess_helper
+        $<TARGET_FILE:PrismLinuxWebViewHelperProbe> prismWebViewHelperProbe
+        "argument with spaces" second "${host_override_library}")
+    set_tests_properties(PrismLinuxWebViewHelperTests PROPERTIES
+        ENVIRONMENT "LD_LIBRARY_PATH=${host_override_dir};LD_PRELOAD=${host_override_library}")
+endif()
 
 # Prism Bridge is intentionally a small native-only pass-through plug-in. It has
 # no standalone target and never creates a webview or performs networking on the

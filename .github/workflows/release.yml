@@ -24,7 +24,8 @@ jobs:
         include:
           - os: macos-latest
             dist_cmd: dist:mac
-          - os: ubuntu-latest
+          # Keep the Linux plugin ABI baseline stable for older DAW runtimes.
+          - os: ubuntu-24.04
             dist_cmd: dist:linux:packages
           # Pinned to windows-2022 because windows-latest now ships VS 2026
           # (internal version 18), which the @electron/node-gyp version in our
@@ -211,6 +212,12 @@ jobs:
       - name: Build JUCE plugins (Linux)
         if: runner.os == 'Linux'
         run: cmake --build plugin/build --target PrismInstallerPlugins --parallel 4
+
+      - name: Test Linux browser helper isolation
+        if: runner.os == 'Linux'
+        run: |
+          cmake --build plugin/build --target PrismLinuxWebViewHelperProbe --parallel 4
+          ctest --test-dir plugin/build --output-on-failure -R '^PrismLinuxWebViewHelperTests$'
 
       - name: Build JUCE plugins (Windows)
         if: runner.os == 'Windows'
