@@ -33,9 +33,10 @@ import type { LinkedAnalysisMessage } from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   LegacyThemeMigrationResult,
+  ResolvedInterfaceTheme,
   ThemeLibrarySnapshot,
 } from '../types/theme'
-import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { DialogConfig, DialogLayout, DialogOptions, DialogResult } from '../types/dialog'
 import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
@@ -169,7 +170,9 @@ declare global {
       onScopePopoutAudio: (callback: (kind: ScopeKind, batch: ScopePopoutAudioBatch) => void) => () => void
       onScopePopoutSession: (callback: (kind: ScopeKind, session: ScopePopoutSessionState) => void) => () => void
       showDialog: (options: DialogOptions) => Promise<DialogResult>
-      onDialogConfig: (callback: (options: DialogOptions) => void) => () => void
+      getDialogConfig: () => Promise<DialogConfig>
+      onDialogThemeChanged: (callback: (theme: ResolvedInterfaceTheme) => void) => () => void
+      reportDialogLayout: (layout: DialogLayout) => void
       sendDialogResult: (result: DialogResult) => void
     }
   }

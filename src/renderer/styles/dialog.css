@@ -1,0 +1,156 @@
+html[data-window-mode='dialog'],
+html[data-window-mode='dialog'] body,
+html[data-window-mode='dialog'] #root {
+  background: transparent;
+}
+
+.dialog-root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.dialog-window {
+  width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-surface);
+  border: 1px solid var(--panel-outline);
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), inset 0 1px 0 var(--glass-highlight);
+  overflow: hidden;
+}
+
+.dialog-content {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) transparent;
+}
+
+.dialog-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 20px 6px;
+  overflow-wrap: anywhere;
+}
+
+.dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+}
+
+.dialog-message,
+.dialog-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.dialog-detail {
+  font-size: 11px;
+}
+
+.dialog-input {
+  flex: none;
+  margin-top: 4px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  caret-color: var(--accent);
+  outline: none;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+
+.dialog-input::placeholder {
+  color: var(--text-tertiary);
+  opacity: 1;
+}
+
+.dialog-input::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.dialog-input:focus {
+  border-color: var(--input-border-focus);
+  background: var(--input-bg-focus);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
+}
+
+.dialog-buttons {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 20px;
+}
+
+.dialog-btn {
+  height: 30px;
+  min-width: 64px;
+  padding: 0 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--control-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+
+.dialog-btn:hover:not(:disabled) {
+  background: var(--control-bg-hover);
+}
+
+.dialog-btn--primary {
+  background: var(--control-bg-active);
+  border-color: var(--control-border-active);
+  color: var(--control-text);
+}
+
+.dialog-btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--control-bg-active) 88%, var(--accent) 12%);
+  border-color: var(--accent);
+}
+
+.dialog-btn--danger {
+  background: color-mix(in srgb, var(--danger) 8%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--control-border));
+  color: var(--danger);
+}
+
+.dialog-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 16%, var(--control-bg-hover));
+}
+
+.dialog-btn:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.16);
+}
+
+.dialog-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-input,
+  .dialog-btn {
+    transition: none;
+  }
+}

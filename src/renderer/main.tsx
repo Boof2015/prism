@@ -30,6 +30,7 @@ if (windowMode !== 'dialog' && windowRole !== 'now-playing-config') {
 
 let root: React.ReactElement
 if (windowMode === 'dialog') {
+  document.documentElement.dataset.windowMode = 'dialog'
   root = <DialogApp />
 } else if (windowRole === 'now-playing-config') {
   root = <NowPlayingConfigWindow />

@@ -30,9 +30,10 @@ import type { LinkedAnalysisMessage } from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   LegacyThemeMigrationResult,
+  ResolvedInterfaceTheme,
   ThemeLibrarySnapshot,
 } from '../types/theme'
-import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { DialogConfig, DialogLayout, DialogOptions, DialogResult } from '../types/dialog'
 import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
@@ -346,11 +347,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('scope-popout:session', handler)
   },
   showDialog: (options: DialogOptions) => ipcRenderer.invoke('dialog:show', options) as Promise<DialogResult>,
-  onDialogConfig: (callback: (options: DialogOptions) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, options: DialogOptions): void => callback(options)
-    ipcRenderer.on('dialog:config', handler)
-    return () => ipcRenderer.removeListener('dialog:config', handler)
+  getDialogConfig: () => ipcRenderer.invoke('dialog:get-config') as Promise<DialogConfig>,
+  onDialogThemeChanged: (callback: (theme: ResolvedInterfaceTheme) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, theme: ResolvedInterfaceTheme): void => callback(theme)
+    ipcRenderer.on('dialog:theme-changed', handler)
+    return () => ipcRenderer.removeListener('dialog:theme-changed', handler)
   },
+  reportDialogLayout: (layout: DialogLayout) => ipcRenderer.send('dialog:layout-ready', layout),
   sendDialogResult: (result: DialogResult) => ipcRenderer.send('dialog:result', result),
 })
 

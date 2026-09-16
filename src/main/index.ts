@@ -28,10 +28,10 @@ import type {
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
-import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { DialogConfig, DialogLayout, DialogOptions, DialogResult } from '../types/dialog'
 import { normalizeProfile } from '../shared/profileState'
 import { getScopePopoutMinWidth } from '../shared/scopeSizing'
-import { resolveNativeThemeSource } from '../shared/themeState'
+import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../shared/themeState'
 import {
   resolveMacWindowBlurMaterial,
   resolveWindowCapabilities,
@@ -118,7 +118,8 @@ let latestTrayMenuStateKey: string | null = null
 let trayRendererReady = false
 let latestTrayRendererState: TrayRendererState = { ...DEFAULT_TRAY_RENDERER_STATE }
 const pendingTrayRendererCommands = new TrayRendererCommandQueue()
-const customDialogWindows = new Set<BrowserWindow>()
+const customDialogWindows = new Map<BrowserWindow, { options: DialogOptions; ready: boolean }>()
+let activeDialogTheme = resolveTheme(createDefaultTheme()).interface
 
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
@@ -545,7 +546,8 @@ function showPrismWindows(): void {
     nowPlayingConfigWindow.show()
   }
 
-  const visibleDialogs = Array.from(customDialogWindows).filter((window) => !window.isDestroyed())
+  const visibleDialogs = Array.from(customDialogWindows.keys())
+    .filter((window) => !window.isDestroyed() && customDialogWindows.get(window)?.ready)
   for (const window of visibleDialogs) {
     window.show()
   }
@@ -1079,6 +1081,12 @@ function applyNativeThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
     : null
   nativeTheme.themeSource = resolveNativeThemeSource(activeTheme)
   refreshMacBlurVibrancy()
+  activeDialogTheme = resolveTheme(activeTheme ?? createDefaultTheme()).interface
+  for (const window of customDialogWindows.keys()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send('dialog:theme-changed', activeDialogTheme)
+    }
+  }
 }
 
 async function syncNativeThemeAppearance(): Promise<void> {
@@ -1728,10 +1736,9 @@ function loadRendererTarget(window: BrowserWindow, query: Record<string, string>
 
 async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
   return new Promise((resolve) => {
-    const height = options.type === 'prompt' ? 200 : 160
     const win = new BrowserWindow({
       width: 380,
-      height,
+      height: 200,
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
@@ -1748,10 +1755,9 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
         nodeIntegration: false,
       },
     })
-    customDialogWindows.add(win)
+    customDialogWindows.set(win, { options, ready: false })
 
     win.center()
-    loadRendererTarget(win, { mode: 'dialog' })
 
     const onResult = (_event: Electron.IpcMainEvent, result: DialogResult) => {
       if (_event.sender !== win.webContents) return
@@ -1761,16 +1767,13 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
 
     ipcMain.on('dialog:result', onResult)
 
-    win.webContents.once('did-finish-load', () => {
-      win.webContents.send('dialog:config', options)
-      if (!appHiddenToTray) win.show()
-    })
-
     win.once('closed', () => {
       customDialogWindows.delete(win)
       ipcMain.removeListener('dialog:result', onResult)
       resolve({ buttonIndex: options.cancelId ?? options.buttons.length - 1 })
     })
+
+    loadRendererTarget(win, { mode: 'dialog' })
   })
 }
 
@@ -2617,6 +2620,35 @@ function setupIPC(): void {
 
   ipcMain.handle('dialog:show', async (_event, options: DialogOptions) => {
     return showCustomDialog(options)
+  })
+
+  ipcMain.handle('dialog:get-config', (event): DialogConfig => {
+    const win = getWindowFromSender(event.sender)
+    const state = win && customDialogWindows.get(win)
+    if (!state) throw new Error('Dialog configuration is only available to dialog windows.')
+    return { options: state.options, theme: activeDialogTheme }
+  })
+
+  ipcMain.on('dialog:layout-ready', (event, layout: DialogLayout) => {
+    const win = getWindowFromSender(event.sender)
+    const state = win && customDialogWindows.get(win)
+    if (!win || !state || !Number.isFinite(layout?.height) || layout.height <= 0) return
+
+    const bounds = win.getBounds()
+    const { workArea } = screen.getDisplayMatching(bounds)
+    const maxHeight = Math.max(1, workArea.height - 32)
+    const height = Math.min(maxHeight, Math.max(120, Math.ceil(layout.height)))
+    const y = Math.round(Math.max(workArea.y + 16, Math.min(
+      bounds.y + (bounds.height - height) / 2,
+      workArea.y + workArea.height - height - 16,
+    )))
+    if (bounds.height !== height || bounds.y !== y) {
+      win.setBounds({ ...bounds, height, y })
+    }
+    if (!state.ready) {
+      state.ready = true
+      if (!appHiddenToTray) win.show()
+    }
   })
 
   ipcMain.handle('profiles:reveal-folder', async () => {
