@@ -37,6 +37,92 @@ Reference validation: build `PrismReferenceTests` and run
 `PrismReferenceTests --ui [audio-file]` opens a native editor with a quiet test
 tone for file-drop, picker, loading, and narrow-window checks.
 
+## Build with npm (all platforms)
+
+After installing the platform prerequisites below and running `npm install`, use
+these commands from the repository root:
+
+```sh
+npm run build:plugins       # Build the web UI, configure CMake, compile in Release
+npm run test:plugins        # Also enable and run all native plugin tests
+npm run configure:plugins   # Build the web UI and configure, without compiling
+npm run install:plugins     # Install already-built plugin formats; no compilation
+npm run prepare:plugins     # Build and stage all formats required by installers
+```
+
+The commands reuse `plugin/build`, including its existing generator and selected
+formats. Fresh builds use CMake's default generator and include VST3, CLAP, and
+Standalone on Windows/Linux, plus AU on macOS. Bridge has no Standalone target.
+Pinned JUCE and CLAP sources are downloaded by CMake when needed. Build products
+are under `plugin/build/Prism*_artefacts/Release/`.
+
+Compilation always disables CMake's copy-after-build step, including when an
+older cache enabled it. `--install` runs the separate installation helper only
+after a successful build (and tests, when requested). If installation fails or
+is cancelled, the compiled files remain available and can be installed later
+with `npm run install:plugins` without rebuilding. The direct CMake commands
+below retain CMake's default copy-after-build behavior.
+
+```sh
+npm run build:plugins -- --install
+npm run build:plugins -- --jobs 2
+npm run build:plugins -- "-DPRISM_PLUGIN_FORMATS=VST3;CLAP"
+npm run build:plugins -- "-DCMAKE_BUILD_TYPE=Debug"
+npm run build:plugins -- "-DJUCE_PATH=/path/to/JUCE"
+npm run install:plugins -- --dry-run
+npm run install:plugins -- --formats VST3
+npm run install:plugins -- --config Debug
+```
+
+Installation checks the complete set of selected products before copying or
+requesting elevation. By default, it reads the formats selected in the CMake
+cache and skips Standalone apps. `--formats VST3,CLAP` selects an explicit subset.
+
+- **Windows:** installs to `Common Files/VST3` and `Common Files/CLAP`, requesting
+  UAC only for a PowerShell copy helper. Run npm from a normal terminal. For a
+  user-only copy, use `npm run install:plugins -- --user`; this writes under
+  `%LOCALAPPDATA%/Programs/Common/` (your DAW may need those scan paths added).
+- **macOS:** installs to `~/Library/Audio/Plug-Ins/{VST3,CLAP,Components}`.
+- **Linux:** installs to `~/.vst3` and `~/.clap`.
+
+On macOS/Linux, `--system` uses `/Library/Audio/Plug-Ins/` or `/usr/lib/{vst3,clap}`
+and requests `sudo` for the copy helper only. Close DAWs using Prism before
+updating installed plugins.
+
+`npm run dist` now prepares plugins before packaging: it builds the embedded UI,
+adds missing VST3/CLAP formats (plus AU on macOS) to the existing CMake selection,
+builds the Release installer targets, then validates and stages every product
+in `plugin/dist-installer`. Missing plugins stop packaging. Other cached formats,
+such as Standalone, are preserved. Use the matching host OS for native packaging.
+The Linux AppImage stays app-only; `.deb`, `.rpm`, and `.tar.gz` include plugins.
+
+Release CI sets `PRISM_PLUGINS_PREBUILT=1` after its separate native build and
+validation steps. In this mode preparation still checks and stages every release
+artifact, but does not rebuild outside the CI compiler environment. Local builds
+should leave this variable unset.
+
+Parallelism defaults to `CMAKE_BUILD_PARALLEL_LEVEL`, or 4 when unset. CMake
+definitions (`-DNAME=VALUE`) are forwarded as individual arguments, including
+paths with spaces and semicolon-separated formats. Generator/toolchain options
+`-G`, `-A`, and `-T` are also accepted; an existing build directory must retain
+its original generator. Run `npm run build:plugins -- --help` for all options.
+
+On Windows, the helper detects an SDK extracted to
+`plugin/sdk/Microsoft.Web.WebView2/`. An explicit
+`-DJUCE_WEBVIEW2_PACKAGE_LOCATION=...` takes precedence over the environment
+variable of the same name, an existing CMake cache entry, and that local SDK.
+Otherwise, JUCE searches its standard user NuGet package location. The value
+must name the **parent directory** containing `Microsoft.Web.WebView2`.
+With the NuGet CLI installed, you can prepare the local SDK using the same
+version as CI:
+
+```sh
+nuget install Microsoft.Web.WebView2 -Version 1.0.1901.177 -OutputDirectory plugin/sdk -ExcludeVersion
+```
+
+The SDK download is separate from the WebView2 Runtime. SDK files and build
+outputs are ignored by Git. The npm helper does not install system prerequisites.
+
 ## Build & run (macOS)
 
 Prereqs: CMake ≥ 3.22, Xcode command-line tools, Node.

@@ -41,7 +41,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
           file(join(source, 'Contents/MacOS', product))
           file(join(source, 'Contents/Info.plist'))
         } else if (format === 'CLAP') file(source)
-        else file(join(source, `Contents/${platform === 'linux' ? 'x86_64-linux' : 'x86_64-win'}/plugin`))
+        else file(join(source, `Contents/${platform === 'linux' ? 'x86_64-linux/plugin.so' : 'x86_64-win/plugin.vst3'}`))
       }
     }
     stagePlugins({ buildDir, destination, platform })

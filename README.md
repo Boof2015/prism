@@ -33,7 +33,7 @@ Prism includes eight real-time scopes and meters:
 
 Every scope can be configured independently. Resize and rearrange them into a rack, rotate supported scopes, pop them into separate windows, or pin them on top of other applications.
 
-On Windows, enable **Reserve screen space** in the rack's Top/Bottom reposition menu or its tray equivalent to dock the main rack across one monitor. Maximized applications use the remaining workspace. Resize the edge facing the workspace, drag the grab handle to return to a floating rack, or disable the option to restore its previous position and size. Settings open in a separate panel beside the dock. Docking is remembered on this computer independently of profiles; minimizing or hiding Prism releases the reserved space.
+On Windows, enable Reserve screen space in the rack's Top/Bottom reposition menu or its tray equivalent to dock the main rack across one monitor. Maximized applications use the remaining workspace. Resize the edge facing the workspace, drag the grab handle to return to a floating rack, or disable the option to restore its previous position and size. Settings open in a separate panel beside the dock. Docking is remembered on this computer independently of profiles; minimizing or hiding Prism releases the reserved space.
 
 ![Prism customize](assets/prism-showcase-layout-readme.gif)
 
@@ -54,11 +54,11 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * Independent spectral and heatmap tilt around a 1 kHz reference
 * Peak analysis can report dBFS, frequency, musical note, octave, and cents offset
 * Interactive measurement overlay exposes frequency, level, and pitch directly from the graph
-* One whole-track reference: drop a mono/stereo WAV, AIFF, FLAC, or MP3 onto the spectrum, or use **Spectrum settings → Reference → Load track**
-* Dashed Overlay and a centered ±24 dB Difference view, with ±24 dB reference trim and one-shot **Match level** using the latest three seconds of live Mid audio
+* One whole-track reference: drop a mono/stereo WAV, AIFF, FLAC, or MP3 onto the spectrum, or use Spectrum settings → Reference → Load track
+* Dashed Overlay and a centered ±24 dB Difference view, with ±24 dB reference trim and one-shot Match level using the latest three seconds of live Mid audio
 * Cancellable background analysis with an evolving preview; analyzed curves are saved with profiles and Spectrum plugin state, so recall does not need the original file
 
-Spectrum settings have **General** and **Reference** tabs. Matching requires at least one second of current, non-silent audio. During import, the spectrum temporarily shows Overlay; the previous reference remains available if loading fails or is canceled. Reference analysis uses a shared 48 kHz path with all five FFT sizes cached, while respecting the original file's bandwidth. This affects analysis only.
+Spectrum settings have General and Reference tabs. Matching requires at least one second of current, non-silent audio. During import, the spectrum temporarily shows Overlay; the previous reference remains available if loading fails or is canceled. Reference analysis uses a shared 48 kHz path with all five FFT sizes cached, while respecting the original file's bandwidth. This affects analysis only.
 
 ### Waterfall
 
@@ -158,7 +158,7 @@ Spectrum settings have **General** and **Reference** tabs. Matching requires at 
 * Keeps the previous 5, 10, 30, or 60 seconds of audio available without starting a recording beforehand
 * Buffer retains 32-bit floating-point samples and exports standard RIFF/WAV files
 * Mono and stereo capture are supported
-* Choose **16-bit PCM** (default) or **32-bit float** WAV export in Rolling Capture settings; the choice is remembered across launches
+* Choose 16-bit PCM (default) or 32-bit float WAV export in Rolling Capture settings; the choice is remembered across launches
 * The export path supports source sample rates up to 384 kHz
 * Captured audio can be dragged directly out of Prism as a file
 
@@ -210,11 +210,11 @@ Prism can also live in the system tray, start automatically with your computer, 
 
 ## Rolling Capture
 
-Prism can continuously keep the last **5, 10, 30, or 60 seconds** of audio in memory.
+Prism can continuously keep the last 5, 10, 30, or 60 seconds of audio in memory.
 
 When you hear something you want to keep, drag the buffered audio out of Prism as a WAV file. There is no need to start recording beforehand.
 
-Choose **16-bit PCM** for smaller files or **32-bit float** to preserve captured floating-point precision and samples above full scale for DAW editing. Changing the format applies to the next export without clearing buffered audio. Exports retain the source sample rate and do not normalize or dither audio.
+Choose 16-bit PCM for smaller files or 32-bit float to preserve captured floating-point precision and samples above full scale for DAW editing. Changing the format applies to the next export without clearing buffered audio. Exports retain the source sample rate and do not normalize or dither audio.
 
 The float buffer uses approximately 23 MB for 60 seconds of stereo at 48 kHz. Rolling Capture allocates no recorder buffer while off.
 
@@ -222,17 +222,17 @@ The float buffer uses approximately 23 MB for 60 seconds of stereo at 48 kHz. Ro
 
 Every Prism scope is also available as a DAW plugin.
 
-Drop a **Spectrum**, **Oscilloscope**, **Vectorscope**, **Spectrogram**, **VU Meter**, **Loudness Meter**, or **Waveform** onto a track and analyze it using the same interface and analysis engine as the desktop app.
+Drop a Spectrum, Oscilloscope, Vectorscope, Spectrogram, VU Meter, Loudness Meter, or Waveform onto a track and analyze it using the same interface and analysis engine as the desktop app.
 
-* **VST3 and CLAP** on Windows, macOS, and Linux
-* **AU** on macOS
+* VST3 and CLAP on Windows, macOS, and Linux
+* AU on macOS
 * Settings are stored with your project
 * Plugins follow your Prism themes and profiles
 * Audio passes through untouched
 
-Prism also installs **Prism Bridge**, a lightweight pass-through plugin for sending
+Prism also installs Prism Bridge, a lightweight pass-through plugin for sending
 one DAW track or bus to the standalone application. Keep Prism open, insert Bridge
-on the source you want to inspect, then choose it under **DAW Bridges** in Prism's
+on the source you want to inspect, then choose it under DAW Bridges in Prism's
 audio selector. Multiple Bridge instances can be available at once; only the one
 you select streams audio. Waveform and Spectrogram can optionally show host-derived
 Bars + Beats or Seconds rulers, including loop, seek, and packet-gap seams.
@@ -323,6 +323,9 @@ npm run build            # Build application assets
 npm run configure:tui    # Configure the standalone CMake project
 npm run build:tui        # Build prism-tui
 npm run test:tui         # Build and run native TUI tests
+npm run build:plugins    # Build bundled UI and native DAW plugins
+npm run test:plugins     # Build plugins and run native plugin tests
+npm run install:plugins  # Install built plugins (Windows prompts for UAC)
 npm run test:lufsmeter-native # Run generated BS.1770/EBU true-peak vectors
 npm run dist             # Package for current platform
 npm run dist:mac         # macOS
@@ -338,19 +341,7 @@ npm run test:lufsmeter-ebu -- /path/to/extracted-ebu-loudness-test-set
 
 The TUI build downloads the pinned FTXUI source through CMake. Linux also requires the PulseAudio development package.
 
-The DAW plugins build with CMake from the [`plugin/`](plugin/) directory. See [`plugin/README.md`](plugin/README.md) for per-platform build and installation details.
-
-## TIDAL Now Playing
-
-Prism reads playback from a local TIDAL client without account setup in Prism or additional helper software. Open the Now Playing configuration to set provider priority or retry detection.
-
-| Platform | Track information and progress | Playback controls | Artwork |
-| --- | --- | --- | --- |
-| macOS | TIDAL desktop, while it owns system Now Playing | Use the TIDAL app | Only when supplied by macOS |
-| Windows | TIDAL desktop media session | Play, pause, next, previous | When supplied by TIDAL |
-| Linux | Dedicated TIDAL clients exposing MPRIS, including TIDAL Hi-Fi | Play, pause, next, previous | When supplied by the client |
-
-Linux requires `gdbus`, a desktop session bus, and MPRIS enabled in the client; generic browser tabs are excluded. On macOS, Prism uses a small built-in script to read Apple's private MediaRemote interface. OS updates can affect compatibility; the provider reports errors and can be retried. Missing artwork, album names, or duration do not prevent track display. This integration does not stream music or browse the TIDAL catalog.
+`npm run build:plugins` compiles the DAW plugins locally. `npm run install:plugins` copies the built files, requesting Windows UAC only for the protected copy; macOS/Linux default to user plugin folders. `npm run dist` builds and stages the complete plugin set before packaging on the current OS (the Linux AppImage remains app-only). See [`plugin/README.md`](plugin/README.md) for prerequisites and options.
 
 ## Astra Integration
 

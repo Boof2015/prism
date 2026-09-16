@@ -21,6 +21,8 @@ const testScripts = [
   'test:build-metadata',
   'test:updates',
   'test:plugin-packaging',
+  'test:plugin-build',
+  'test:plugin-install',
   'test:waterfall-native',
   'test:spectrum-native',
   'test:reference-tracks',
@@ -29,10 +31,15 @@ const testScripts = [
   'test:lufsmeter-native',
 ]
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npmCli = process.env.npm_execpath
+if (!npmCli) {
+  console.error('[test] Could not locate the npm CLI. Run this command through npm test.')
+  process.exit(1)
+}
 
 for (const testScript of testScripts) {
-  const result = spawnSync(npmCommand, ['run', testScript], {
+  // Use npm's JS entry point so Windows does not have to spawn a .cmd shim.
+  const result = spawnSync(process.execPath, [npmCli, 'run', testScript], {
     cwd: process.cwd(),
     stdio: 'inherit',
   })

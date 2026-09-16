@@ -298,6 +298,7 @@ jobs:
         if: runner.os != 'Linux'
         run: npm run ${{ matrix.dist_cmd }}
         env:
+          PRISM_PLUGINS_PREBUILT: '1'
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Smoke-test Windows installer plugins and PATH integration
@@ -312,6 +313,7 @@ jobs:
           rm -rf dist/linux-unpacked
           npm run ${{ matrix.dist_cmd }}
         env:
+          PRISM_PLUGINS_PREBUILT: '1'
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Upload artifacts

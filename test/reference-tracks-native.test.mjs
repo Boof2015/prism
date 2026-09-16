@@ -71,7 +71,8 @@ test('stereo Mid follows existing analyzer semantics; silence and damaged files 
 })
 
 test('native teardown releases an active resampler before shared caches', () => {
-  const result = spawnSync(process.execPath, ['-e', `const {spectrum}=require(${JSON.stringify(new URL('../native/build/Release/visualizer_dsp.node', import.meta.url).pathname)}); spectrum.setSampleRate(44100); spectrum.setReferenceEnabled(true); spectrum.pushSamples(new Float32Array(8000).fill(0.1));`], { encoding: 'utf8' })
+  const addonPath = require.resolve('../native/build/Release/visualizer_dsp.node')
+  const result = spawnSync(process.execPath, ['-e', `const {spectrum}=require(${JSON.stringify(addonPath)}); spectrum.setSampleRate(44100); spectrum.setReferenceEnabled(true); spectrum.pushSamples(new Float32Array(8000).fill(0.1));`], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
 })
 test('imports and cancellation leave live analyzer state untouched', async () => {
