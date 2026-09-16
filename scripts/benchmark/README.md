@@ -22,6 +22,14 @@ No physical measurement equipment or virtual audio driver is needed.
 The runner builds production renderer/main/preload bundles and rebuilds the native
 addon for the installed Electron version. It verifies native exports in that
 Electron runtime and refuses to benchmark a missing native capture or DSP module.
+After compilation, the full runner waits at least two minutes, including one
+continuous minute at nominal macOS thermal state (ten-minute timeout). This uses
+a separate Electron process without a rendering window. Quick diagnostics skip
+this wait. The measured app records thermal state and power source at 1 Hz and
+on OS notifications into preallocated main-process memory, plus advertised CPU
+speed-limit changes. A missing speed-limit notification means unknown, not 100%.
+The same observer is active for baselines and probes. Nothing is subtracted from
+latency based on thermals; warm runs remain part of the report.
 The benchmark preload uses the checkout's native addon path; it does not set
 `NODE_ENV=development`. macOS may request audio-capture permission for Electron.
 
@@ -90,6 +98,10 @@ Each output directory contains:
 - `native-build.json`: native addon hash and Electron version.
 - `machine.json`, `stimulus.json`, and `stimulus.wav`: machine/display/runtime and
   deterministic external test signal.
+- `cooldown.json`, `thermal.json`, and per-run `environment`: cooldown outcome,
+  thermal/power observations, and reported CPU speed limits. `machine.json` also
+  records macOS power settings. Nominal thermal state does not prove an absence
+  of all frequency changes; these records do not establish causal slowdown.
 - `chromium-trace.json` and `trace-measurement.json`: a separate presentation
   investigation, excluded from latency claims.
 

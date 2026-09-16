@@ -90,6 +90,7 @@ await writeFile(join(output, 'native-build.json'), JSON.stringify({ path: native
   electronVersion: require('electron/package.json').version, rebuiltFromSource: true,
 }, null, 2))
 console.log(`Benchmark artifacts: ${output}\n${quick ? 'Diagnostic quick run; not suitable for published claims.' : 'Full suite: approximately 29 minutes. Keep Prism visible; a quiet test tone will play.'}`)
+await run(electron, [join(root, 'scripts/benchmark/cooldown.cjs')], { env })
 try {
   await run(electron, [root], { env })
 } finally {

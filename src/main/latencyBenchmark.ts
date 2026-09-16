@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import os from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
+import { recordBenchmarkEnvironment } from './benchmarkEnvironment'
 
 /** Runs only with the explicit benchmark environment, in an isolated userData directory. */
 export async function runLatencyBenchmark(window: BrowserWindow): Promise<void> {
@@ -20,6 +21,7 @@ export async function runLatencyBenchmark(window: BrowserWindow): Promise<void> 
   let player: ChildProcess | null = null
   let tracing = false
   const sleepBlocker = powerSaveBlocker.start('prevent-display-sleep')
+  const environment = recordBenchmarkEnvironment()
   const stopPlayer = () => { player?.kill('SIGTERM'); player = null }
   const assertWindow = () => {
     if (window.isDestroyed() || window.isMinimized() || !window.isVisible()) throw new Error('Benchmark window was closed, minimized, or hidden')
@@ -39,6 +41,7 @@ export async function runLatencyBenchmark(window: BrowserWindow): Promise<void> 
       cpu: os.cpus()[0]?.model, memoryBytes: os.totalmem(), versions: process.versions,
       display, bounds: window.getBounds(), durationSeconds: duration, warmupSeconds: warmup, repeats,
       audioPlayer: '/usr/bin/afplay', signalFile: 'stimulus.wav',
+      powerSettings: execFileSync('/usr/bin/pmset', ['-g', 'custom'], { encoding: 'utf8' }),
     }, null, 2))
     const cases = [
       { name: 'spectrum', scopes: ['spectrum'] },
@@ -61,14 +64,16 @@ export async function runLatencyBenchmark(window: BrowserWindow): Promise<void> 
           await delay(warmup * 1000)
           assertWindow()
           if (playerError || player.exitCode !== null) throw new Error(`Stimulus player failed: ${playerError}`)
+          const environmentStart = environment.mark()
           const startMetadata = await invoke('start', mode)
           console.log(`[latency] ${id}: measuring ${duration}s`)
           await delay(duration * 1000)
           assertWindow()
           const result = await invoke('stop')
+          const runEnvironment = environment.finishRun(environmentStart)
           if (playerError || player.exitCode !== null) throw new Error(`Stimulus ended during measurement: ${playerError}`)
           stopPlayer()
-          await writeFile(join(output, `${id}.json`), JSON.stringify({ id, config: config.name, target, repeat, startMetadata, ...result }))
+          await writeFile(join(output, `${id}.json`), JSON.stringify({ id, config: config.name, target, repeat, startMetadata, environment: runEnvironment, ...result }))
           console.log(`[latency] ${id}: saved ${result.records.length} chunk/scope records, ${result.frames.length} frames`)
         }
       }
@@ -81,18 +86,21 @@ export async function runLatencyBenchmark(window: BrowserWindow): Promise<void> 
     await writeFile(join(output, 'trace-categories.json'), JSON.stringify(categories, null, 2))
     await contentTracing.startRecording({ included_categories: ['blink.user_timing', 'devtools.timeline', 'cc', 'viz', 'gpu', 'toplevel', 'benchmark'] })
     tracing = true
+    const traceEnvironmentStart = environment.mark()
     await invoke('start', 'trace')
     await delay(Math.min(duration, 10) * 1000)
     const traceResult = await invoke('stop')
     await contentTracing.stopRecording(join(output, 'chromium-trace.json'))
     tracing = false
-    await writeFile(join(output, 'trace-measurement.json'), JSON.stringify(traceResult))
+    await writeFile(join(output, 'trace-measurement.json'), JSON.stringify({ ...traceResult, environment: environment.finishRun(traceEnvironmentStart) }))
     stopPlayer()
+    await writeFile(join(output, 'thermal.json'), JSON.stringify(environment.stop()))
     await writeFile(join(output, 'complete.json'), JSON.stringify({ completedAt: new Date().toISOString(), runs: run }))
     console.log(`[latency] Complete: ${output}`)
     app.exit(0)
   } catch (error) {
     stopPlayer()
+    await writeFile(join(output, 'thermal.json'), JSON.stringify(environment.stop()))
     if (tracing) await contentTracing.stopRecording(join(output, 'interrupted-trace.json')).catch(() => {})
     await writeFile(join(output, 'failure.json'), JSON.stringify({ error: String(error), at: new Date().toISOString() }, null, 2))
     console.error('[latency]', error)

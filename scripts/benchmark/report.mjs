@@ -20,7 +20,7 @@ export async function generateReport(directory) {
   for (const name of names) {
     const raw = await read(name)
     results.push({ id: raw.id, config: raw.config, target: raw.target, mode: raw.mode, repeat: raw.repeat,
-      metadata: raw.metadata, ...analyzeMeasurement(raw) })
+      metadata: raw.metadata, environment: raw.environment, ...analyzeMeasurement(raw) })
   }
   await writeFile(join(output, 'summary.json'), JSON.stringify(results, null, 2))
   const lines = ['# Prism capture-to-render submission benchmark', '',
@@ -59,7 +59,15 @@ export async function generateReport(directory) {
     const range = values => `${fmt(Math.min(...values))}–${fmt(Math.max(...values))}`
     lines.push(`| ${b.config} / ${b.target} | ${bs.scope} | ${fmt(bs.frameWorkMs.p95)} | ${range(probes.map(s => s.frameWorkMs.p95))} | ${fmt(bs.observedFps)} | ${range(probes.map(s => s.observedFps))} |`)
   }
-  lines.push('', '## Supported wording', '')
+  lines.push('', '## Thermal and power observations', '',
+    'The full runner waits at least two minutes after compilation, including one continuous minute at nominal thermal state. Thermal state and AC/battery power are then sampled at 1 Hz in the main process and on OS notifications, using preallocated memory. CPU speed limits are only known after an OS notification; unavailable values do not mean 100%. Both baseline and probe runs include this observer. See cooldown.json, thermal.json, per-run environment records, and machine.json power settings.', '',
+    '| Run | Observed thermal states | Battery observed | Lowest reported CPU speed limit % |',
+    '|---|---|---|---:|')
+  for (const r of results) {
+    const e = r.environment
+    lines.push(`| ${r.id} | ${e?.thermalStates.join(', ') ?? 'unavailable'} | ${e ? e.batteryObserved ? 'yes' : 'no' : 'unavailable'} | ${fmt(e?.minimumReportedCpuSpeedLimitPercent)} |`)
+  }
+  lines.push('', 'These observations can identify reported thermal pressure, but cannot quantify how many milliseconds it caused. Nominal state does not rule out all frequency changes. Run order/configuration and background load confound a causal cool-versus-hot comparison; no thermal correction is subtracted.', '', '## Supported wording', '')
   let claims = 0
   if (!manifest.quick && completed) {
     for (const config of ['spectrum', 'oscilloscope', 'default-rack']) for (const target of ['display-sync', 60]) {
