@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, type JSX, type KeyboardEvent } from 'react'
 import type { DialogOptions, DialogResult } from '../../types/dialog'
 import { applyResolvedThemeToDocument } from '../../shared/themeState'
+import { observeDialogLayout } from '../utils/dialogLayout'
 import '../styles/dialog.css'
 
 export default function DialogApp(): JSX.Element {
@@ -51,14 +52,11 @@ export default function DialogApp(): JSX.Element {
   }, [config])
 
   useEffect(() => {
-    if (!config) return
-    let disposed = false
+    if (!config || !copyRef.current || !buttonsRef.current) return
     let lastHeight = 0
-    let observer: ResizeObserver | undefined
-    let frame = 0
 
     const reportLayout = (): void => {
-      if (disposed || !copyRef.current || !buttonsRef.current) return
+      if (!copyRef.current || !buttonsRef.current) return
       // Measure the unconstrained copy, so a capped window can still scroll its body.
       // Include the card border (2px) and transparent window margins (16px).
       const height = Math.ceil(
@@ -71,21 +69,7 @@ export default function DialogApp(): JSX.Element {
       }
     }
 
-    void document.fonts.ready.then(() => {
-      if (disposed) return
-      frame = requestAnimationFrame(() => {
-        reportLayout()
-        observer = new ResizeObserver(reportLayout)
-        if (copyRef.current) observer.observe(copyRef.current)
-        if (buttonsRef.current) observer.observe(buttonsRef.current)
-      })
-    })
-
-    return () => {
-      disposed = true
-      cancelAnimationFrame(frame)
-      observer?.disconnect()
-    }
+    return observeDialogLayout([copyRef.current, buttonsRef.current], reportLayout)
   }, [config])
 
   const submit = useCallback((buttonIndex: number) => {

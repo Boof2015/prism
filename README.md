@@ -301,13 +301,17 @@ On Windows, the NSIS installer adds `prism-tui` to the machine `PATH`. Open a ne
 
 ## Building from Source
 
-**Prerequisites:** Node.js 18+, npm, CMake 3.22+, and a C++ compiler toolchain.
+**Prerequisites:** Node.js 20.19+ or 22.12+ (Node 22.x is used in CI), npm, CMake 3.22+, and a C++ compiler toolchain.
 
 | Platform | Toolchain                                                                                               |
 | -------- | ------------------------------------------------------------------------------------------------------- |
 | macOS    | Xcode Command Line Tools                                                                                |
 | Windows  | Visual Studio Build Tools                                                                               |
 | Linux    | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev` |
+
+To build and test Linux from Windows using WSL2 or a Fedora VM over SSH, see
+[Linux testing](docs/linux-testing.md). After setup, run `npm run test:linux`;
+add `-- --target fedora --suite full` for Fedora plugin and package checks.
 
 ```bash
 git clone https://github.com/Boof2015/prism.git

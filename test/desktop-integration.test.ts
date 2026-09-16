@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inflateSync } from 'node:zlib'
 import test from 'node:test'
+import { showReadyScopePopout } from '../src/main/scopePopoutReady'
 import {
   loadDesktopIntegrationPreferences,
   normalizeDesktopIntegrationPreferences,
@@ -30,6 +31,34 @@ import {
   getTrayAssetFilename,
   resolveTrayAssetPath,
 } from '../src/main/services/trayAssets'
+
+test('renderer-ready opens a hidden popout without compositor readiness and does not refocus it on repeat', () => {
+  let visible = false
+  let shows = 0
+  const window = {
+    isDestroyed: () => false,
+    isVisible: () => visible,
+    show: () => { visible = true; shows++ },
+  }
+  assert.equal(showReadyScopePopout(window, false), true)
+  assert.equal(visible, true)
+  assert.equal(showReadyScopePopout(window, false), false)
+  assert.equal(shows, 1)
+})
+
+test('popout readiness respects tray hiding and windows closed before readiness', () => {
+  let destroyed = false
+  let shows = 0
+  const window = {
+    isDestroyed: () => destroyed,
+    isVisible: () => false,
+    show: () => { shows++ },
+  }
+  assert.equal(showReadyScopePopout(window, true), false)
+  destroyed = true
+  assert.equal(showReadyScopePopout(window, false), false)
+  assert.equal(shows, 0)
+})
 
 function inspectPng(buffer: Buffer): {
   width: number

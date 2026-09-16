@@ -238,6 +238,7 @@ target_sources(PrismBridge PRIVATE
 
 target_include_directories(PrismBridge PRIVATE Source)
 target_compile_definitions(PrismBridge PRIVATE
+    JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0)
 target_link_libraries(PrismBridge PRIVATE
@@ -289,6 +290,7 @@ if(BUILD_TESTING)
     target_compile_definitions(PrismBridgeTests PRIVATE
         PRISM_BRIDGE_TESTING=1
         JucePlugin_Name="Prism Bridge"
+        JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0)
     target_link_libraries(PrismBridgeTests PRIVATE
         juce::juce_audio_utils

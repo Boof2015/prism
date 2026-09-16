@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 
 const testScripts = [
+  'test:linux-launcher',
   'test:audio-router',
   'test:audio-clips',
   'test:audio-store',

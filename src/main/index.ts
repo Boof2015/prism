@@ -60,6 +60,7 @@ import { checkForUpdates, resolveSafeReleaseUrl } from './services/updates'
 import { FileBackedThemeLibrary } from './themeLibrary'
 import { normalizeWindowBackgroundState } from '../shared/windowState'
 import { FileBackedWindowStateStore } from './windowStateStore'
+import { showReadyScopePopout } from './scopePopoutReady'
 import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
 import type { NativeWindowsMediaAPI } from '../types/nativeWindowsMedia'
 import type { NativeWindowChromeAPI } from '../types/nativeWindowChrome'
@@ -2044,13 +2045,6 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   setSettingsHeightForWindow(popoutWindow, 0)
   scopePopoutWindows.set(kind, popoutWindow)
 
-  popoutWindow.once('ready-to-show', () => {
-    if (!popoutWindow.isDestroyed() && !appHiddenToTray) {
-      popoutWindow.show()
-      raiseMainWindowAboveNormalPopouts()
-    }
-  })
-
   popoutWindow.on('close', (event) => {
     if (scopePopoutCloseAllowed.has(kind) || !mainWindow || mainWindow.isDestroyed()) {
       return
@@ -2884,8 +2878,11 @@ function setupIPC(): void {
 
   ipcMain.on('scope-popout:ready', (event, kind: ScopeKind) => {
     const targetWindow = getWindowFromSender(event.sender)
-    if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
+    if (!isScopeKind(kind) || !targetWindow || targetWindow !== scopePopoutWindows.get(kind)) return
     mainWindow?.webContents.send('scope-popout:ready', kind)
+    if (showReadyScopePopout(targetWindow, appHiddenToTray)) {
+      raiseMainWindowAboveNormalPopouts()
+    }
   })
 
   ipcMain.on('scope-popout:request-pop-in', (event, kind: ScopeKind) => {

@@ -1,4 +1,5 @@
 import { Waterfall } from '../src/renderer/visualizers/Waterfall'
+import { observeDialogLayout } from '../src/renderer/utils/dialogLayout'
 import { ChannelActivity, sourcePeakToOpacity } from '../src/renderer/audio/ChannelActivity'
 import { softenWaterfallSpectra, waterfallRidgeHeight, waterfallPlotLayout } from '../src/renderer/visualizers/waterfallPlot'
 import type { WaterfallFrame } from '../src/types/waterfall'
@@ -8040,4 +8041,51 @@ test('plugin native frame clock paints without browser animation callbacks and s
   unsubscribe()
   scheduler.dispatchFrame()
   assert.equal(paints, 2)
+})
+
+test('hidden dialog reports layout after fonts load even when animation frames never fire', async (t) => {
+  let resolveFonts!: () => void
+  const fonts = new Promise<void>((resolve) => { resolveFonts = resolve })
+  let resized!: () => void
+  let disconnected = false
+  const observed: Element[] = []
+  const elements = [{}, {}] as Element[]
+  const originalRaf = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame')
+  Object.defineProperty(globalThis, 'requestAnimationFrame', { configurable: true, value: () => 0 })
+  const originalObserver = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver')
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: class {
+    constructor(callback: () => void) { resized = callback }
+    observe(element: Element): void { observed.push(element) }
+    disconnect(): void { disconnected = true }
+  } })
+  t.after(() => {
+    if (originalRaf) Object.defineProperty(globalThis, 'requestAnimationFrame', originalRaf)
+    else Reflect.deleteProperty(globalThis, 'requestAnimationFrame')
+    if (originalObserver) Object.defineProperty(globalThis, 'ResizeObserver', originalObserver)
+    else Reflect.deleteProperty(globalThis, 'ResizeObserver')
+  })
+  let reports = 0
+  const stop = observeDialogLayout(elements, () => { reports++ }, fonts)
+  assert.equal(reports, 0)
+  resolveFonts()
+  await fonts
+  assert.equal(reports, 1, 'initial measurement must not need a visible compositor frame')
+  assert.deepEqual(observed, elements)
+  resized()
+  assert.equal(reports, 2)
+  stop()
+  assert.equal(disconnected, true)
+  resized()
+  assert.equal(reports, 2)
+})
+
+test('dialog unmounted before its fonts load never starts layout observation', async () => {
+  let resolveFonts!: () => void
+  const fonts = new Promise<void>((resolve) => { resolveFonts = resolve })
+  let reports = 0
+  const stop = observeDialogLayout([], () => { reports++ }, fonts)
+  stop()
+  resolveFonts()
+  await fonts
+  assert.equal(reports, 0)
 })

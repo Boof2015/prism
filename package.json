@@ -12,6 +12,8 @@
     "build:icons": "node scripts/build/generate-prism-icons.mjs",
     "build:clip-drag-icons": "node scripts/build/generate-audio-clip-drag-icons.mjs",
     "test": "node scripts/run-tests.mjs",
+    "test:linux": "node scripts/linux-test.mjs",
+    "test:linux-launcher": "node --test test/linux-test.test.mjs",
     "test:audio-router": "node scripts/run-audio-router-tests.mjs",
     "test:audio-clips": "node scripts/run-audio-clip-tests.mjs",
     "test:audio-store": "node scripts/run-audio-store-tests.mjs",
