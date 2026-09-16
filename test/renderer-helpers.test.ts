@@ -144,7 +144,7 @@ import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
 import { REFERENCE_FFT_SIZES, encodeReferencePower, type SpectrumReferenceSettings, type SpectrumReferenceAsset } from '../src/types/spectrumReference'
 import { vectorscopeSettingsToOptions } from '../src/plugin-ui/vectorscopeOptions'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
-import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
+import { Vectorscope, type VectorscopeMode } from '../src/renderer/visualizers/Vectorscope'
 import { Waveform } from '../src/renderer/visualizers/Waveform'
 import {
   VUMeter,
@@ -4176,6 +4176,89 @@ test('native and JavaScript vectorscope paths project identical channel samples'
     assertAlmostEqual(nativeRecorder.fillRects[0]?.y ?? 0, fallbackRecorder.fillRects[0]?.y ?? 0, 1e-6, 'path parity y')
   } finally {
     vectorscope.dispose()
+    dom.restore()
+  }
+})
+
+test('Vectorscope preserves every dot across history shifts, changed snapshots, and live options', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const multiband of [false, true]) {
+      const canvas = createFakeCanvas()
+      let history: number[][] = []
+      let pending: Array<{ left: Float32Array; right: Float32Array }> = []
+      let resetSession = () => {}
+      let displayPoints = 17
+      let mode: VectorscopeMode = 'polar-unipolar'
+      let zoomDb = 6
+      const nativeAnalyzer = createFakeVectorscopeNativeAnalyzer()
+      nativeAnalyzer.fillPoints = (x, y) => {
+        const points = history.slice(-displayPoints)
+        points.forEach((point, index) => { x[index] = point[1]; y[index] = point[0] })
+        return points.length
+      }
+      nativeAnalyzer.getMultibandPoints = () => {
+        const points = history.slice(-displayPoints)
+        return { count: points.length, data: new Float32Array(points.flat()) }
+      }
+      const scope = new Vectorscope(canvas, {
+        nativeAnalyzer, multiband, displayPoints, mode, zoomDb, showGrid: false,
+        dataSource: {
+          getPendingVectorscopeSamples: () => pending,
+          getSampleRate: () => 48000,
+          isPlaying: () => true,
+          subscribeToSessionChanges: (callback) => { resetSession = callback; return () => {} },
+        },
+      })
+      const state = scope as unknown as { drawFrame: () => void; offscreenCtx: CanvasRenderingContext2D }
+      const dots: Array<{ x: number; y: number; color: string | CanvasGradient | CanvasPattern; alpha: number }> = []
+      const ctx = state.offscreenCtx
+      ctx.fillRect = (x, y) => {
+        if (ctx.globalCompositeOperation === 'source-over') dots.push({ x, y, color: ctx.fillStyle, alpha: ctx.globalAlpha })
+      }
+      try {
+        let sequence = 0
+        for (let frame = 0; frame < 20; frame++) {
+          const newCount = frame === 0 ? 17 : frame % 4 === 0 ? 0 : frame % 3 === 0 ? 24 : 3
+          pending = newCount ? [{ left: new Float32Array(newCount), right: new Float32Array(newCount) }] : []
+          for (let i = 0; i < newCount; i++) {
+            sequence++
+            history.push(Array.from(new Float32Array(Array.from({ length: 6 }, (_, channel) => Math.sin(sequence * (channel + 1)) * 0.7))))
+          }
+          history = history.slice(-displayPoints)
+          if (frame === 4) history.reverse() // Different snapshot without any new samples.
+          if (frame === 8) { zoomDb = -3; scope.setOptions({ zoomDb }) }
+          if (frame === 9) { mode = 'linear-bipolar'; scope.setOptions({ mode }) }
+          if (frame === 10) { displayPoints = 9; scope.setOptions({ displayPoints }); history = history.slice(-displayPoints) }
+          if (frame === 12) resetSession()
+          if (frame === 13) { canvas.width = 480; scope.resize() }
+          if (frame === 14) { mode = 'polar-bipolar'; scope.setOptions({ mode }) }
+          if (frame === 16) { zoomDb = 0; scope.setOptions({ zoomDb }) }
+          dots.length = 0
+          state.drawFrame()
+          const expected: typeof dots = []
+          const layout = getVectorscopeLayout(canvas.width, canvas.height, mode)
+          const perSegment = Math.ceil(history.length / 8)
+          for (let segment = 0; segment < 8 && segment * perSegment < history.length; segment++) {
+            for (let band = 0; band < (multiband ? 3 : 1); band++) {
+              for (let i = segment * perSegment; i < Math.min((segment + 1) * perSegment, history.length); i++) {
+                const point = transformPoint(history[i][band * 2], history[i][band * 2 + 1], mode, zoomDb)
+                expected.push({
+                  x: layout.centerX + point.dx * layout.radius - 0.75,
+                  y: layout.centerY - point.dy * layout.radius - 0.75,
+                  color: multiband ? ['#ff4444', '#44dd44', '#4488ff'][band] : '#00ffff',
+                  alpha: 0.15 + 0.85 * (segment / 7),
+                })
+              }
+            }
+          }
+          assert.deepEqual(dots, expected, `frame ${frame}, multiband ${multiband}`)
+        }
+      } finally {
+        scope.dispose()
+      }
+    }
+  } finally {
     dom.restore()
   }
 })
