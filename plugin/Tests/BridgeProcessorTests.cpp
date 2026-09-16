@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <memory>
 
 namespace
 {
@@ -41,7 +42,9 @@ int main(int argc, char** argv)
 {
     if (argc > 1 && juce::String(argv[1]) == "--ui") return runBridgeEditorTests(true);
     if (argc > 1 && juce::String(argv[1]) == "--ui-test") return runBridgeEditorTests(false);
-    PrismBridgeProcessor processor;
+    // Two processor packet queues exceed the default Windows stack size.
+    const auto processorOwner = std::make_unique<PrismBridgeProcessor>();
+    auto& processor = *processorOwner;
     processor.prepareToPlay(48000.0, 1024);
     processor.setSelectedForTesting(true);
     juce::MidiBuffer midi;
@@ -136,7 +139,8 @@ int main(int argc, char** argv)
     expect(processor.getDisplayName() == "Drum Bus", "a custom name must override later host track renames");
     juce::MemoryBlock state;
     processor.getStateInformation(state);
-    PrismBridgeProcessor restored;
+    const auto restoredOwner = std::make_unique<PrismBridgeProcessor>();
+    auto& restored = *restoredOwner;
     restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
     expect(restored.getCustomName() == "Drum Bus", "custom source names must restore from DAW state");
     expect(restored.getInstanceId() != processor.getInstanceId(), "restoring state must not copy the live instance ID");

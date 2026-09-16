@@ -146,6 +146,8 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         PRISM_LINUX_UI_DIAGNOSTICS=$<BOOL:${PRISM_LINUX_UI_DIAGNOSTICS}>
         ${PRISM_LINUX_UI_MODE_DEFINITIONS})
     if(WIN32)
+        # r8brain includes Windows.h; keep its min/max macros out of the DSP sources.
+        target_compile_definitions(${TARGET} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
         # NEEDS_WEBVIEW2 links the WebView2 SDK but doesn't turn on the JUCE compile
         # paths that gate withResourceProvider. JUCE_USE_WIN_WEBVIEW2=1 enables the
         # WebView2-aware code (incl. the resource provider); _WITH_STATIC_LINKING=1
