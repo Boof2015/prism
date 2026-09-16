@@ -361,11 +361,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 let nativeAddonModule: NativeAddonModule | null = null
 try {
   const isDev = process.env.NODE_ENV === 'development'
-  const modulePath = isDev
+  const isLatencyBenchmark = process.env.PRISM_LATENCY_BENCHMARK === '1'
+  const modulePath = isDev || isLatencyBenchmark
     ? require('path').join(__dirname, '../../native/build/Release/visualizer_dsp.node')
     : require('path').join(process.resourcesPath!, 'native/visualizer_dsp.node')
   nativeAddonModule = require(modulePath) as NativeAddonModule
-} catch {
+} catch (error) {
+  if (process.env.PRISM_LATENCY_BENCHMARK === '1') console.error('Benchmark native addon load failed:', error)
   console.warn('Native DSP module not available — using JS fallback')
 }
 

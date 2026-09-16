@@ -1,3 +1,4 @@
+import { latencyProbe } from '../benchmark/latencyProbe'
 import { audioRouter } from '../audio/AudioRouter'
 import {
   vumeter as nativeVUMeter,
@@ -334,6 +335,7 @@ export class VUMeter {
     this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeVUMeter : nativeAnalyzer
     this.meterBallistics = new VUMeterBallistics(this.dataSource.getSampleRate())
     this.frameLoop = new VisualizerFrameLoop({
+      benchmarkScope: 'vumeter',
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
       onFrame: this.drawFrame,
@@ -1385,6 +1387,7 @@ export class VUMeter {
     } else {
       this.drawBarMode(width, height)
     }
+    latencyProbe?.drawn()
   }
 
   dispose(): void {

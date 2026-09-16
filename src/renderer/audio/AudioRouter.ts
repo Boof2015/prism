@@ -5,6 +5,7 @@
  */
 
 import { AUDIO_SCOPE_KINDS, type AudioScopeKind } from '../../types/scope'
+import { latencyProbe } from '../benchmark/latencyProbe'
 import type { CaptureBackendKind } from '../../types/capture'
 import type { DawTransportSnapshot } from '../../types/dawBridge'
 
@@ -259,6 +260,7 @@ export class AudioRouter {
   private demandListeners = new Set<(demand: NormalizedVisualizerConsumerDemand) => void>()
 
   private emitSessionState(): void {
+    latencyProbe?.sessionChanged(this._sessionId)
     const state = this.getSessionState()
     for (const listener of this.sessionListeners) {
       listener(state)
@@ -618,6 +620,7 @@ export class AudioRouter {
     const tracker = this.scopeLatency[scope]
     const now = performance.now()
     for (const record of records) {
+      latencyProbe?.consume(scope, record.sequence)
       const captureToScopeMs = Math.max(0, now - record.capturedAt)
       tracker.lastCaptureToScopeMs = captureToScopeMs
       tracker.latencyWindow.push(captureToScopeMs)

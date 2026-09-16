@@ -1,3 +1,4 @@
+import { latencyProbe } from '../benchmark/latencyProbe'
 import { audioRouter } from '../audio/AudioRouter'
 import { vectorscope as nativeVectorscope, type VectorscopeNativeAnalyzer } from '../audio/native'
 import {
@@ -110,6 +111,7 @@ export class Vectorscope {
     this.dataSource = dataSource ?? defaultVectorscopeDataSource
     this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeVectorscope : nativeAnalyzer
     this.frameLoop = new VisualizerFrameLoop({
+      benchmarkScope: 'vectorscope',
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
       onFrame: this.drawFrame,
@@ -276,6 +278,7 @@ export class Vectorscope {
 
     this.renderStaticLayer()
     ctx.drawImage(offscreenCanvas, 0, 0)
+    latencyProbe?.drawn()
   }
 
   private isNativeAvailable(): boolean {

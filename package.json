@@ -4,6 +4,9 @@
   "description": "Open-source audio metering and visualization tool",
   "main": "./out/main/index.js",
   "scripts": {
+    "bench:latency": "node scripts/benchmark/run.mjs",
+    "bench:latency:report": "node scripts/benchmark/report.mjs",
+    "test:latency": "node scripts/benchmark/test.mjs",
     "dev": "node ./scripts/build/writeAppBuildMetadata.cjs && electron-vite dev",
     "dev:mac": "node ./scripts/build/writeAppBuildMetadata.cjs && env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "build": "electron-vite build && node ./scripts/build/writeAppBuildMetadata.cjs",

@@ -1,12 +1,15 @@
 import { FrameScheduler } from './frameScheduler'
+import { latencyProbe, type BenchScope } from '../benchmark/latencyProbe'
 
 interface VisualizerFrameLoopOptions {
+  benchmarkScope?: BenchScope
   frameScheduler?: FrameScheduler
   shouldRun: () => boolean
   onFrame: () => void
 }
 
 export class VisualizerFrameLoop {
+  private readonly benchmarkScope?: BenchScope
   private readonly frameScheduler: FrameScheduler
   private readonly shouldRun: () => boolean
   private readonly onFrame: () => void
@@ -14,7 +17,8 @@ export class VisualizerFrameLoop {
   private isStarted = false
   private isInvalidated = false
 
-  constructor({ frameScheduler, shouldRun, onFrame }: VisualizerFrameLoopOptions) {
+  constructor({ frameScheduler, shouldRun, onFrame, benchmarkScope }: VisualizerFrameLoopOptions) {
+    this.benchmarkScope = benchmarkScope
     this.frameScheduler = frameScheduler ?? new FrameScheduler()
     this.shouldRun = shouldRun
     this.onFrame = onFrame
@@ -67,7 +71,12 @@ export class VisualizerFrameLoop {
   private tick = (): void => {
     if (!this.isStarted) return
     this.isInvalidated = false
-    this.onFrame()
+    if (latencyProbe?.active && this.benchmarkScope) {
+      latencyProbe.beginFrame(this.benchmarkScope)
+      try { this.onFrame() } finally { latencyProbe.endFrame() }
+    } else {
+      this.onFrame()
+    }
     this.sync()
   }
 }

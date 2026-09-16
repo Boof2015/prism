@@ -1,3 +1,4 @@
+import { latencyProbe } from '../benchmark/latencyProbe'
 import { audioRouter } from '../audio/AudioRouter'
 import {
   oscilloscope as defaultNativeOscilloscope,
@@ -109,6 +110,7 @@ export class Oscilloscope {
     this.dataSource = dataSource ?? defaultOscilloscopeDataSource
     this.nativeAnalyzer = nativeAnalyzer === undefined ? defaultNativeOscilloscope : (nativeAnalyzer ?? defaultNativeOscilloscope)
     this.frameLoop = new VisualizerFrameLoop({
+      benchmarkScope: 'oscilloscope',
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
       onFrame: this.drawFrame,
@@ -335,6 +337,7 @@ export class Oscilloscope {
       ctx.lineTo(x, y)
     }
     ctx.stroke()
+    latencyProbe?.drawn()
   }
 
   private renderStaticLayer(): void {

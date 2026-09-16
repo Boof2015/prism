@@ -24,6 +24,10 @@ const windowMode = params.get('mode')
 const windowRole = params.get('window')
 const scopeKind = params.get('scope')
 
+if (typeof __PRISM_LATENCY_BENCHMARK__ !== 'undefined' && __PRISM_LATENCY_BENCHMARK__ && windowRole === 'main') {
+  void import('./benchmark/controller').then(({ installLatencyBenchmark }) => installLatencyBenchmark())
+}
+
 if (windowMode !== 'dialog' && windowRole !== 'now-playing-config') {
   bootstrapWindowBackgroundFromQuery()
 }

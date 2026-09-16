@@ -6,6 +6,7 @@
  */
 
 import { audioRouter } from './AudioRouter'
+import { latencyProbe } from '../benchmark/latencyProbe'
 import { nativeVisualizerTransport } from './NativeVisualizerTransport'
 import { RollingAudioBuffer } from './RollingAudioBuffer'
 import { ChannelActivity, type ChannelActivitySnapshot } from './ChannelActivity'
@@ -596,7 +597,9 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
             result,
             this.shouldTrimBacklogForLiveCapture(),
           )
+          latencyProbe?.nativeDrain(result.overwriteCount, result.queueDepth, result.chunks.length - deliveredChunks.length)
           for (const chunk of deliveredChunks) {
+            latencyProbe?.receipt(chunk.sequence, chunk.capturedAtMilliseconds, chunk.left.length, chunk.sourceChannelPeaks?.[0] ?? 0)
             const routedChunk: CaptureChunk = {
               left: chunk.left,
               right: chunk.right,

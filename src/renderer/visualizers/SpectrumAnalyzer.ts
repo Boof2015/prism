@@ -1,3 +1,4 @@
+import { latencyProbe } from '../benchmark/latencyProbe'
 import { REFERENCE_SAMPLE_RATE, type SpectrumReferenceAsset, type SpectrumReferenceSettings, type SpectrumReferenceLevel } from '../../types/spectrumReference'
 import { referenceBins, referenceDbAt, differenceReferenceBins, ReferenceCurveTransition } from './referenceCurve'
 import { audioRouter } from '../audio/AudioRouter'
@@ -346,6 +347,7 @@ export class SpectrumAnalyzer {
     this.nativeAnalyzer = nativeAnalyzer === undefined ? defaultNativeSpectrum : nativeAnalyzer
     this.heatLut = buildHeatLUT(this.options.heatColors)
     this.frameLoop = new VisualizerFrameLoop({
+      benchmarkScope: 'spectrum',
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying() || this.options.referenceImporting || performance.now() < this.referenceSettleUntil,
       onFrame: this.drawFrame,
@@ -1337,6 +1339,7 @@ export class SpectrumAnalyzer {
     }
 
     this.emitPeakInfo(primaryRender.peakInfo)
+    latencyProbe?.drawn()
   }
 
   private renderStaticLayer(minFrequency: number, maxFrequency: number): void {

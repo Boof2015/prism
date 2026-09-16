@@ -91,6 +91,12 @@ import { resolveTrayAssetPath } from './services/trayAssets'
 import { DawBridgeService } from './services/dawBridgeService'
 import type { DawBridgeAudioBatch, DawBridgeSnapshot } from '../types/dawBridge'
 
+const latencyBenchmarkDirectory = process.env.PRISM_LATENCY_BENCHMARK === '1'
+  ? process.env.PRISM_LATENCY_BENCHMARK_DIR : undefined
+if (latencyBenchmarkDirectory) {
+  app.setPath('userData', join(resolve(latencyBenchmarkDirectory), 'user-data'))
+}
+let latencyBenchmarkStarted = false
 let mainWindow: BrowserWindow | null = null
 let windowDocking: WindowDockingService | null = null
 const dockingGeometryGuard = new DockingGeometryGuard()
@@ -2845,6 +2851,11 @@ function setupIPC(): void {
     if (!isMainRendererWindow(targetWindow)) return
 
     mainRendererReady = true
+    if (latencyBenchmarkDirectory && !latencyBenchmarkStarted && mainWindow) {
+      latencyBenchmarkStarted = true
+      const benchmarkWindow = mainWindow
+      void import('./latencyBenchmark').then(({ runLatencyBenchmark }) => runLatencyBenchmark(benchmarkWindow))
+    }
     windowDocking?.ready()
     void processPendingProfileOpenPaths()
   })

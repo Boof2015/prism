@@ -1,0 +1,1 @@
+declare const __PRISM_LATENCY_BENCHMARK__: boolean

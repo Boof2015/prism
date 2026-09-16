@@ -36,3 +36,6 @@ yarn-error.log*
 
 # notes
 untitled-1
+
+# Local latency benchmark artifacts (raw records, traces, isolated settings)
+benchmark-results/
