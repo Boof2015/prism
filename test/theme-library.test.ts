@@ -321,7 +321,7 @@ test('createTemplateThemeFile presents a simplified recommended theme layout', (
   assert.match(template, /^\[Controls\]$/m)
   assert.match(template, /^\[Scopes\]$/m)
   assert.match(template, /^\[Spectrum\]$/m)
-  assert.match(template, /^# phase_risk = 255, 191, 0$/m)
+  assert.match(template, /^# phase_risk = 56, 189, 248$/m)
   assert.match(template, /^# flat_controls = false$/m)
   assert.match(template, /^# toolbar_bg = 4, 8, 12, 199$/m)
   assert.equal(parsed.app.accent, 'rgb(56, 189, 248)')

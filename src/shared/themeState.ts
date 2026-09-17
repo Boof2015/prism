@@ -537,6 +537,7 @@ export function createDefaultTheme(): PrismTheme {
     },
     vectorscope: {
       trace: DEFAULT_ACCENT,
+      phaseRisk: DEFAULT_ACCENT,
       bandLow: DEFAULT_BAND_LOW,
       bandMid: DEFAULT_BAND_MID,
       bandHigh: DEFAULT_BAND_HIGH,
@@ -632,6 +633,7 @@ fill = 240, 30, 180, 100
 guides = 0, 0, 0, 40
 
 [Vectorscope]
+phase_risk = 0, 50, 220
 band_low = 0, 50, 180
 band_mid = 11, 180, 140
 band_high = 200, 50, 180
@@ -732,6 +734,7 @@ guides = 0, 0, 255
 [Vectorscope]
 background = 0, 0, 255
 trace = 255, 255, 255
+phase_risk = 0, 0, 255
 band_low = 255, 255, 255, 120
 band_mid = 255, 255, 255, 120
 band_high = 255, 255, 255, 120
@@ -850,6 +853,7 @@ guides = 0, 255, 0
 [Vectorscope]
 background = 0, 255, 0
 trace = 255, 255, 255
+phase_risk = 0, 255, 0
 band_low = 255, 255, 255, 120
 band_mid = 255, 255, 255, 120
 band_high = 255, 255, 255, 120
@@ -966,6 +970,7 @@ guides = 56, 58, 61
 [Vectorscope]
 background = 15, 15, 15
 trace = 230, 0, 69
+phase_risk = 230, 0, 69
 band_low = 230, 0, 69
 band_mid = 102, 90, 255
 band_high = 0, 255, 255
@@ -1084,6 +1089,7 @@ guides = 48, 58, 70
 [Vectorscope]
 background = 6, 10, 14
 trace = 196, 216, 247
+phase_risk = 142, 157, 181
 band_low = 255, 40, 30
 band_mid = 0, 255, 80
 band_high = 58, 92, 255
@@ -1169,6 +1175,7 @@ heat_base = 0, 0, 0
 fill = 191, 40, 201, 150
 
 [Vectorscope]
+phase_risk = 177, 105, 219
 band_low = 177, 105, 219
 band_mid = 108, 31, 196
 band_high = 69, 20, 184
