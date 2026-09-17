@@ -376,3 +376,13 @@ If you find Prism useful and want to support a broke college student, consider s
 Prism is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html). See [LICENSE](LICENSE) for the full text.
 
 Third-party license notices are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=boof2015%2Fprism&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=boof2015/prism&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=boof2015/prism&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=boof2015/prism&type=date&legend=top-left" />
+ </picture>
+</a>
