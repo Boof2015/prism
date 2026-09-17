@@ -327,6 +327,12 @@ npm install
 
 The `postinstall` script compiles the native C++ module for your platform.
 
+Use `npm run rebuild:native` to rebuild it for the installed Electron version
+before running the desktop app. `npm run build:native` builds for your current
+Node.js version, for example when running native tests directly with Node.
+These commands select the project's `node-gyp` dependency explicitly to avoid
+conflicts with the older copy bundled by Electron's build tools on Windows.
+
 ```bash
 npm run dev              # Development
 npm run build            # Build application assets
