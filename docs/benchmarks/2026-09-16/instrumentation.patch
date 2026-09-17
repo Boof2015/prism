@@ -1,0 +1,1610 @@
+diff --git a/.gitignore b/.gitignore
+index 02869b1..40f1ec5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -37,3 +37,6 @@ yarn-error.log*
+ 
+ # notes
+ untitled-1
++
++# Local latency benchmark artifacts (raw records, traces, isolated settings)
++benchmark-results/
+diff --git a/package.json b/package.json
+index 827d674..20ce6c5 100644
+--- a/package.json
++++ b/package.json
+@@ -4,6 +4,9 @@
+   "description": "Open-source audio metering and visualization tool",
+   "main": "./out/main/index.js",
+   "scripts": {
++    "bench:latency": "node scripts/benchmark/run.mjs",
++    "bench:latency:report": "node scripts/benchmark/report.mjs",
++    "test:latency": "node scripts/benchmark/test.mjs",
+     "dev": "node ./scripts/build/writeAppBuildMetadata.cjs && electron-vite dev",
+     "dev:mac": "node ./scripts/build/writeAppBuildMetadata.cjs && env -u ELECTRON_RUN_AS_NODE electron-vite dev",
+     "build": "electron-vite build && node ./scripts/build/writeAppBuildMetadata.cjs",
+diff --git a/scripts/benchmark/README.md b/scripts/benchmark/README.md
+new file mode 100644
+index 0000000..81f74ac
+--- /dev/null
++++ b/scripts/benchmark/README.md
+@@ -0,0 +1,155 @@
++# Local capture-to-render submission benchmark
++
++This branch observes Prism's native macOS system-audio capture and its existing
++Spectrum, Oscilloscope, Vectorscope, and VU render paths. It does not change capture
++buffers, polling delays, frame scheduling, DSP settings, or analysis algorithms.
++
++This revision measures upstream `0.3.1` at
++`2a2d01d32da824d03e60440acd505f3d890a4e6f` (vectorscope optimization).
++The original `latency-benchmark` branch and its results measure `166e0f0`.
++The protocol, analysis settings, timing probes, cooldown, and thermal observer are
++unchanged, so the new run can be compared with that baseline on the same setup.
++Each report records its own exact base commit and instrumentation patch; the
++previous result directory is never overwritten. The current upstream revision
++has no frame-scheduler changes relative to the original baseline.
++
++## Run
++
++```sh
++npm run test:latency
++npm run typecheck
++npm run bench:latency -- --quick
++npm run bench:latency
++```
++
++The full run takes approximately 29 minutes. Keep the benchmark window visible
++and avoid changing display settings or audio devices during measurement. A quiet,
++changing stereo tone plays through the current default output using `afplay`.
++Other system audio is captured too; stop unrelated playback for a controlled run.
++No physical measurement equipment or virtual audio driver is needed.
++
++The runner builds production renderer/main/preload bundles and rebuilds the native
++addon for the installed Electron version. It verifies native exports in that
++Electron runtime and refuses to benchmark a missing native capture or DSP module.
++After compilation, the full runner waits at least two minutes, including one
++continuous minute at nominal macOS thermal state (ten-minute timeout). This uses
++a separate Electron process without a rendering window. Quick diagnostics skip
++this wait. The measured app records thermal state and power source at 1 Hz and
++on OS notifications into preallocated main-process memory, plus advertised CPU
++speed-limit changes. A missing speed-limit notification means unknown, not 100%.
++The same observer is active for baselines and probes. Nothing is subtracted from
++latency based on thermals; warm runs remain part of the report.
++The benchmark preload uses the checkout's native addon path; it does not set
++`NODE_ENV=development`. macOS may request audio-capture permission for Electron.
++
++Use `--output benchmark-results/my-run` to choose a new artifact directory. Existing
++run directories are never overwritten. Each run uses its own Electron user-data
++directory, leaving regular Prism preferences untouched. Nothing is pushed, merged,
++or installed. `out/` and the native build output are regenerated as usual.
++
++`--quick` exercises all configurations with 2-second warmups and 3-second samples.
++Quick results are always marked diagnostic and cannot produce publication wording.
++
++The full matrix uses Spectrum alone, Oscilloscope alone, and the default four-scope
++rack. Each configuration runs at display-sync and the 60 FPS target. Each cell has
++one 60-second frame-only baseline and three 60-second probe runs, each preceded by
++10 seconds of warmup. The fixed window is 1200×360 logical pixels. Default scope
++settings are applied without reducing FFT size, smoothing, persistence, or pitch
++locking to obtain a faster result.
++
++## What is measured
++
++Each native chunk retains its existing monotonic capture timestamp and sequence.
++The observer records renderer receipt, scope consumption, and the end of the
++successful draw invocation that consumed it. All chunks in a batch are counted,
++once per scope; multiple chunks can share one render frame. Repainting old state
++without consuming new chunks adds no latency samples.
++
++The endpoint is completion of canvas drawing commands on the renderer thread.
++This is **not** GPU completion, compositor presentation, pixel illumination, or
++the first visible response to a specific sound. The start is inside the native
++capture callback, **not** the original sample's hardware time. Audio buffering
++before that timestamp is excluded. A scope can render selected history or
++smoothed values after consuming newer data; FFT windows, pitch locking, and meter
++ballistics require a separate signal-response experiment.
++
++64 native-clock reads, bracketed by `performance.now()`, are taken before and after
++each run. The narrowest bracket at each endpoint is selected and the union bounds
++the clock offset. Raw clock samples, drift, uncertainty, and each stage's timing
++are retained. The method assumes no unobserved clock excursion between endpoints.
++Renderer timer granularity is measured outside each run. Calibration intervals are
++widened by that quantum (at least 0.1 ms), with another quantum allowed at the draw
++endpoint. Impossible ordering is rejected; receipt durations below resolution are
++reported as unresolved instead of clamped to zero.
++
++Native queue overwrites, sequence gaps, trimmed chunks, router overwrites, missing
++receipt metadata, observer-buffer exhaustion, skipped draws, and session changes
++are reported. Chunks queued before observation began and chunks still queued at
++stop are reported as boundaries, not successful latency samples. Invalid runs
++cannot produce claim wording.
++
++Observation uses preallocated typed arrays. Capture and draw hot paths do not
++write files, log events, or allocate record objects. Export and percentile sorting
++happen after stopping observation. The frame-only baseline retains the same small
++frame recorder but disables chunk probes. Its difference from probe runs is an
++observed workload difference, not an exact correction; nothing is subtracted.
++
++## Artifacts and reporting
++
++Each output directory contains:
++
++- `REPORT.md` and `summary.json`: results, losses, clock bounds, overhead comparison,
++  stage distributions, and supported wording.
++- Per-run JSON: every chunk, chunk/scope/frame association, frame interval, clock
++  calibration sample, router counters, scope settings, and canvas dimensions.
++- `source-manifest.json` and `benchmark.patch`: exact base commit, source hashes,
++  instrumentation patch, and version. New untracked source files are included.
++- `native-build.json`: native addon hash and Electron version.
++- `machine.json`, `stimulus.json`, and `stimulus.wav`: machine/display/runtime and
++  deterministic external test signal.
++- `cooldown.json`, `thermal.json`, and per-run `environment`: cooldown outcome,
++  thermal/power observations, and reported CPU speed limits. `machine.json` also
++  records macOS power settings. Nominal thermal state does not prove an absence
++  of all frequency changes; these records do not establish causal slowdown.
++- `chromium-trace.json` and `trace-measurement.json`: a separate presentation
++  investigation, excluded from latency claims.
++
++Regenerate a report with:
++
++```sh
++npm run bench:latency:report -- benchmark-results/my-run
++```
++
++Rows are compact arrays with explicit `chunkColumns`, `recordColumns`, and
++`frameColumns` in the same JSON. Scope indices refer to `scopes`. Record outcomes
++are 1 (successful draw), 0 (skipped draw), or -1 (missing receipt metadata). JSON
++uses null for unavailable numeric timestamps; the analyzer rejects those records.
++
++A claim names the hardware, capture path, configuration, version/base commit, and
++measurement endpoint. Median/p95 wording uses the largest per-run statistic across
++all three repeats rather than selecting the best run. An under-8-ms p95 statement
++requires every valid repeat's uncertainty-adjusted p95 to be below 8 ms. Observed
++maxima are not universal bounds. An instrumented-build result must not be presented
++as an uninstrumented physical-display measurement.
++
++The separate trace contains `prism.frame.<id>.<scope>.start/end` marks. Do not infer
++presentation from the nearest unrelated compositor event or add a nominal refresh
++interval. If chunk→frame→presentation cannot be established unambiguously,
++presentation remains unavailable. The report attempts a strict association through
++the enclosing RAF task and AnimationFrame interval, exact presentation ID and
++begin-frame source/sequence, and a fully presented compositor frame. Links and
++rejections are exported in `presentation-investigation.json`. Any resulting
++estimate is kept separate from the main measurements and publication wording.
++Chromium also documents estimated presentation
++feedback on some platforms, including macOS:
++https://chromium.googlesource.com/chromium/src.git/+/main/docs/life_of_a_frame.md
++
++## Build isolation
++
++`scripts/benchmark/electron.config.mjs` adds only the benchmark compile-time flag
++to the effective defaults used by the existing build command. The repository's
++`electron-vite.config.ts` is not auto-discovered by Electron Vite, which expects
++`electron.vite.config.*`; the benchmark does not change normal config discovery.
++Normal builds never install the benchmark renderer controller or allocate probe
++buffers. The branch-only main-process runner requires the explicit benchmark
++environment and output directory.
+diff --git a/scripts/benchmark/check-native.cjs b/scripts/benchmark/check-native.cjs
+new file mode 100644
+index 0000000..e18c7f9
+--- /dev/null
++++ b/scripts/benchmark/check-native.cjs
+@@ -0,0 +1,8 @@
++const assert = require('node:assert/strict')
++const addon = require(process.argv[2])
++for (const key of ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter', 'macosCapture']) {
++  assert.ok(addon[key], `Missing native export: ${key}`)
++}
++assert.equal(addon.macosCapture.getSupport().available, true, 'Native system capture unavailable')
++assert.equal(typeof addon.macosCapture.nowMilliseconds(), 'number')
++console.log('[latency] Native addon preflight passed in Electron', process.versions.electron, 'ABI', process.versions.modules)
+diff --git a/scripts/benchmark/cooldown.cjs b/scripts/benchmark/cooldown.cjs
+new file mode 100644
+index 0000000..e07a1f6
+--- /dev/null
++++ b/scripts/benchmark/cooldown.cjs
+@@ -0,0 +1,32 @@
++const { app, powerMonitor, powerSaveBlocker } = require('electron')
++const { writeFile } = require('node:fs/promises')
++const { mkdirSync } = require('node:fs')
++const { join } = require('node:path')
++const { setTimeout: delay } = require('node:timers/promises')
++
++const userData = join(process.env.PRISM_LATENCY_BENCHMARK_DIR, 'cooldown-user-data')
++mkdirSync(userData, { recursive: true })
++app.setPath('userData', userData)
++app.whenReady().then(async () => {
++  app.dock?.hide()
++  const blocker = powerSaveBlocker.start('prevent-display-sleep')
++  const quick = process.env.PRISM_BENCH_DURATION === '3'
++  const minimumSeconds = quick ? 0 : 120
++  const requiredNominalSeconds = quick ? 0 : 60
++  const start = performance.now(), samples = []
++  let nominalSince = null, success = false
++  console.log(`[latency] Post-build cooldown: at least ${minimumSeconds}s, including ${requiredNominalSeconds}s continuously nominal; maximum 10 minutes.`)
++  while (true) {
++    const now = performance.now(), elapsedSeconds = (now - start) / 1000
++    const thermalState = powerMonitor.getCurrentThermalState()
++    samples.push({ elapsedSeconds, thermalState, onBattery: powerMonitor.isOnBatteryPower() })
++    nominalSince = thermalState === 'nominal' ? nominalSince ?? now : null
++    if (quick || (elapsedSeconds >= minimumSeconds && nominalSince !== null && now - nominalSince >= requiredNominalSeconds * 1000)) { success = true; break }
++    if (elapsedSeconds >= 600) break
++    await delay(1000)
++  }
++  await writeFile(join(process.env.PRISM_LATENCY_BENCHMARK_DIR, 'cooldown.json'), JSON.stringify({ success, minimumSeconds, requiredNominalSeconds, samples }, null, 2))
++  powerSaveBlocker.stop(blocker)
++  console.log(success ? '[latency] Cooldown complete.' : '[latency] Nominal thermal state was not sustained; measurement was not started.')
++  app.exit(success ? 0 : 1)
++}).catch(error => { console.error(error); app.exit(1) })
+diff --git a/scripts/benchmark/electron.config.mjs b/scripts/benchmark/electron.config.mjs
+new file mode 100644
+index 0000000..f737207
+--- /dev/null
++++ b/scripts/benchmark/electron.config.mjs
+@@ -0,0 +1,8 @@
++// The existing `npm run build` uses electron-vite's defaults: its auto-discovery
++// expects electron.vite.config.*, whereas this repo has electron-vite.config.ts.
++// Preserve those effective defaults; add only the benchmark compile-time flag.
++export default {
++  main: {},
++  preload: {},
++  renderer: { define: { __PRISM_LATENCY_BENCHMARK__: 'true' } },
++}
+diff --git a/scripts/benchmark/presentation.mjs b/scripts/benchmark/presentation.mjs
+new file mode 100644
+index 0000000..311b927
+--- /dev/null
++++ b/scripts/benchmark/presentation.mjs
+@@ -0,0 +1,64 @@
++/** Conservative association using frame IDs and enclosing RAF tasks, never nearest timestamps. */
++export function linkPresentation(events, raw, clock) {
++  const key = e => `${e.pid}:${e.tid}:${e.id2?.local ?? e.id2?.global ?? e.id}`
++  const intervals = [], stacks = new Map(), presentations = new Map(), reporters = new Map(), marks = new Map()
++  const append = (map, id, value) => map.set(id, [...(map.get(id) ?? []), value])
++  const rafTasks = events.filter(e => e.name === 'FireAnimationFrame' && e.ph === 'X' && e.dur > 0)
++  for (const e of [...events].sort((a, b) => a.ts - b.ts)) {
++    if (e.name === 'AnimationFrame') {
++      if (e.ph === 'b') append(stacks, key(e), e)
++      if (e.ph === 'e') {
++        const start = stacks.get(key(e))?.pop()
++        if (start?.args?.id) intervals.push({ start, end: e })
++      }
++    }
++    if (e.name === 'AnimationFrame::Presentation') append(presentations, `${e.pid}:${e.args?.id}`, e)
++    if (e.name === 'PipelineReporter' && e.ph === 'b') {
++      const info = e.args?.frame_reporter
++      if (info) append(reporters, `${e.pid}:${info.frame_source}:${info.frame_sequence}`, e)
++    }
++    const match = /^prism\.frame\.(\d+)\.([a-z]+)\.(start|end)$/.exec(e.name ?? '')
++    if (match) append(marks, `${match[1]}:${match[2]}:${match[3]}`, e)
++  }
++  const frameLinks = [], rejected = []
++  for (const frame of raw.frames) {
++    const id = frame[0], scope = raw.scopes[frame[1]]
++    if (!frame[4]) continue
++    const starts = marks.get(`${id}:${scope}:start`) ?? [], ends = marks.get(`${id}:${scope}:end`) ?? []
++    const fail = reason => rejected.push({ frame: id, scope, reason })
++    if (starts.length !== 1 || ends.length !== 1) { fail('missing or duplicate scope markers'); continue }
++    const start = starts[0], end = ends[0]
++    const startCall = start.args?.data?.callTime, endCall = end.args?.data?.callTime
++    const endPerformance = end.args?.data?.startTime
++    if (![startCall, endCall, endPerformance].every(Number.isFinite) || start.pid !== end.pid || start.tid !== end.tid) { fail('invalid marker clock/thread'); continue }
++    const parents = intervals.filter(x => x.start.pid === start.pid && x.start.tid === start.tid && x.start.ts <= startCall && x.end.ts >= endCall)
++    const tasks = rafTasks.filter(x => x.pid === start.pid && x.tid === start.tid && x.ts <= startCall && x.ts + x.dur >= endCall)
++    if (parents.length !== 1 || tasks.length !== 1) { fail('ambiguous enclosing animation frame or RAF task'); continue }
++    const parent = parents[0].start, beginId = parent.args?.animation_frame_timing_info?.begin_frame_id
++    const present = presentations.get(`${parent.pid}:${parent.args.id}`) ?? []
++    const pipeline = reporters.get(`${parent.pid}:${beginId?.source_id}:${beginId?.sequence_number}`) ?? []
++    if (present.length !== 1 || pipeline.length !== 1 || pipeline[0].args.frame_reporter.state !== 'STATE_PRESENTED_ALL') { fail('missing/ambiguous presentation or incomplete compositor frame'); continue }
++    const p = present[0], presentId = p.args?.begin_frame_id
++    if (!beginId || beginId.source_id !== presentId?.source_id || beginId.sequence_number !== presentId?.sequence_number
++      || p.ts < endCall || endPerformance + clock.timerQuantumMs < frame[3]) { fail('frame identity or time ordering mismatch'); continue }
++    const rendererPresentationMs = endPerformance + (p.ts - endCall) / 1000
++    frameLinks.push({ frame: id, scope, rendererPid: parent.pid, animationId: parent.args.id,
++      beginFrameSource: beginId.source_id, beginFrameSequence: beginId.sequence_number,
++      presentationTraceUs: p.ts, markerCallTraceUs: endCall, markerPerformanceMs: endPerformance,
++      rendererPresentationMs, drawToPresentationEstimateMs: rendererPresentationMs - frame[3] })
++  }
++  const byFrame = new Map(frameLinks.map(link => [link.frame, link]))
++  const samples = []
++  for (const r of raw.records) {
++    const link = byFrame.get(r[3])
++    if (!link || r[8] !== 1 || !Number.isFinite(r[4])) continue
++    const latencyMs = link.rendererPresentationMs - (r[4] + clock.offset)
++    if (latencyMs >= 0) samples.push({ session: r[0], sequence: r[1], frame: r[3], scope: link.scope, latencyMs })
++  }
++  return { available: samples.length > 0, source: 'Chromium AnimationFrame::Presentation; macOS presentation feedback is an estimate',
++    caveat: 'Separate tracing workload. Software clock bounds do not bound OS presentation-estimation error or physical pixel response.',
++    matchedFrames: frameLinks.length, rejectedFrames: rejected.length, matchedChunkScopeRecords: samples.length,
++    successfulChunkScopeRecords: raw.records.filter(r => r[8] === 1).length,
++    softwareTimingUncertaintyMs: clock.uncertaintyMs + clock.timerQuantumMs,
++    frameLinks, rejected, samples }
++}
+diff --git a/scripts/benchmark/report.mjs b/scripts/benchmark/report.mjs
+new file mode 100644
+index 0000000..8fd4cf5
+--- /dev/null
++++ b/scripts/benchmark/report.mjs
+@@ -0,0 +1,120 @@
++import { build } from 'esbuild'
++import { readdir, readFile, writeFile } from 'node:fs/promises'
++import { resolve, join } from 'node:path'
++import { pathToFileURL } from 'node:url'
++import { linkPresentation } from './presentation.mjs'
++
++const fmt = value => value == null ? '—' : Number(value).toFixed(3)
++export async function generateReport(directory) {
++  const output = resolve(directory)
++  const bundled = join(output, 'analysis.mjs')
++  await build({ entryPoints: [resolve(import.meta.dirname, '../../src/renderer/benchmark/analyze.ts')], outfile: bundled,
++    bundle: true, platform: 'node', format: 'esm', define: { __PRISM_LATENCY_BENCHMARK__: 'false' } })
++  const { analyzeMeasurement, statistics } = await import(`${pathToFileURL(bundled).href}?t=${Date.now()}`)
++  const read = async name => JSON.parse(await readFile(join(output, name), 'utf8'))
++  const manifest = await read('source-manifest.json')
++  const machine = await read('machine.json').catch(() => null)
++  const completed = await read('complete.json').catch(() => null)
++  const names = (await readdir(output)).filter(name => /^\d+-.*\.json$/.test(name)).sort()
++  const results = []
++  for (const name of names) {
++    const raw = await read(name)
++    results.push({ id: raw.id, config: raw.config, target: raw.target, mode: raw.mode, repeat: raw.repeat,
++      metadata: raw.metadata, environment: raw.environment, ...analyzeMeasurement(raw) })
++  }
++  await writeFile(join(output, 'summary.json'), JSON.stringify(results, null, 2))
++  const lines = ['# Prism capture-to-render submission benchmark', '',
++    `Base: \`${manifest.baseCommit}\` (${manifest.version}); branch: \`${manifest.branch}\`.`,
++    `Instrumentation patch SHA-256: \`${manifest.patchSha256}\`.`, '',
++    'Endpoint: the existing native timestamp inside the CoreAudio capture callback → return from a successful scope draw invocation that consumed that chunk. Every consumed chunk is counted once per scope. This measures processing and draw-command submission, not physical presentation or the time for a signal change to become visible.', '',
++    'Excluded: audio buffering before the native timestamp, GPU execution/compositing, display scanout/pixel response, and the perceptual response of FFT windows, pitch locking, persistence, and meter ballistics. A scope may display selected history after consuming newer audio.', '',
++    `Status: ${completed ? 'suite completed' : 'incomplete suite'}${manifest.quick ? '; diagnostic quick run — no publication claim' : ''}.`,
++    ...(machine ? [`Machine: ${machine.cpu}, ${machine.model}, macOS ${machine.systemVersion}, ${machine.arch}.`,
++      `Window: ${machine.bounds.width}×${machine.bounds.height}; display scale: ${machine.display.scaleFactor}; reported display frequency: ${machine.display.displayFrequency ?? 'unavailable'} Hz.`,
++      `Electron ${machine.versions.electron}; Chromium ${machine.versions.chrome}. ${machine.warmupSeconds}s warmup; ${machine.durationSeconds}s measurement; ${machine.repeats} probe repeats.`] : []), '',
++    'Complete scope settings, capture device/rate, canvas dimensions, and start/end metadata are in each raw JSON. See machine.json, stimulus.json, source-manifest.json, and benchmark.patch for reproduction.', '',
++    '## Per-run results', '',
++    '| Run | Scope | Median ms | p95 ms | p99 ms | Max ms | N | Timing ±ms | Observed FPS | Valid |',
++    '|---|---|---:|---:|---:|---:|---:|---:|---:|---|']
++  for (const r of results.filter(r => r.mode === 'probe')) for (const s of r.scopes) {
++    lines.push(`| ${r.id} | ${s.scope} | ${fmt(s.latencyMs.median)} | ${fmt(s.latencyMs.p95)} | ${fmt(s.latencyMs.p99)} | ${fmt(s.latencyMs.max)} | ${s.latencyMs.count} | ${fmt(r.latencyUncertaintyMs)} | ${fmt(s.observedFps)} | ${r.valid ? 'yes' : 'no'} |`)
++  }
++  lines.push('', '## Stage timings', '',
++    '| Run | Scope | Capture → receipt p95 ms | Receipt → consumption p95 ms | Consumption → draw end p95 ms | Unresolved receipt durations |',
++    '|---|---|---:|---:|---:|---:|')
++  for (const r of results.filter(r => r.mode === 'probe')) for (const s of r.scopes) {
++    lines.push(`| ${r.id} | ${s.scope} | ${fmt(s.captureToReceiptMs.p95)} | ${fmt(s.receiptToConsumptionMs.p95)} | ${fmt(s.consumptionToDrawEndMs.p95)} | ${s.unresolvedDelivery} |`)
++  }
++  lines.push('', 'Stage percentiles are separate distributions and must not be added together. Receipt intervals that overlap clock uncertainty are unresolved and excluded only from the receipt-duration distribution; their capture-to-draw measurements remain subject to the full uncertainty bounds.')
++  lines.push('', '## Losses and exclusions', '')
++  for (const r of results) lines.push(`- ${r.id}: ${r.problems.join('; ') || 'no validity failures'}. ${r.mode === 'baseline' ? 'Chunk probes disabled; chunk-loss counters unavailable.' : `Counters: ${JSON.stringify(r.counters)}. Pending at stop: ${r.scopes.map(s => `${s.scope}=${s.unconsumedAtStop}`).join(', ')}.`}`)
++  lines.push('', 'Boundary chunks were queued before observation began and are reported separately; chunks still queued at stop are right-censored. Neither is treated as a successful low-latency sample. Skipped draws, unexplained losses, duplicate consumption, and invalid clock ordering invalidate that run for a claim.', '',
++    '## Probe overhead comparison', '',
++    'Baseline disables capture/chunk probes but retains the same minimal frame-duration recorder. Differences below are observed workload differences, not a precise causal overhead correction; run order and system load can also affect them. No overhead is subtracted from latency.', '',
++    '| Configuration / target | Scope | Baseline draw p95 ms | Probe draw p95 range ms | Baseline FPS | Probe FPS range |',
++    '|---|---|---:|---|---:|---|')
++  for (const b of results.filter(r => r.mode === 'baseline')) for (const bs of b.scopes) {
++    const probes = results.filter(r => r.mode === 'probe' && r.config === b.config && r.target === b.target).map(r => r.scopes.find(s => s.scope === bs.scope)).filter(Boolean)
++    if (!probes.length) continue
++    const range = values => `${fmt(Math.min(...values))}–${fmt(Math.max(...values))}`
++    lines.push(`| ${b.config} / ${b.target} | ${bs.scope} | ${fmt(bs.frameWorkMs.p95)} | ${range(probes.map(s => s.frameWorkMs.p95))} | ${fmt(bs.observedFps)} | ${range(probes.map(s => s.observedFps))} |`)
++  }
++  lines.push('', '## Thermal and power observations', '',
++    'The full runner waits at least two minutes after compilation, including one continuous minute at nominal thermal state. Thermal state and AC/battery power are then sampled at 1 Hz in the main process and on OS notifications, using preallocated memory. CPU speed limits are only known after an OS notification; unavailable values do not mean 100%. Both baseline and probe runs include this observer. See cooldown.json, thermal.json, per-run environment records, and machine.json power settings.', '',
++    '| Run | Observed thermal states | Battery observed | Lowest reported CPU speed limit % |',
++    '|---|---|---|---:|')
++  for (const r of results) {
++    const e = r.environment
++    lines.push(`| ${r.id} | ${e?.thermalStates.join(', ') ?? 'unavailable'} | ${e ? e.batteryObserved ? 'yes' : 'no' : 'unavailable'} | ${fmt(e?.minimumReportedCpuSpeedLimitPercent)} |`)
++  }
++  lines.push('', 'These observations can identify reported thermal pressure, but cannot quantify how many milliseconds it caused. Nominal state does not rule out all frequency changes. Run order/configuration and background load confound a causal cool-versus-hot comparison; no thermal correction is subtracted.', '', '## Supported wording', '')
++  let claims = 0
++  if (!manifest.quick && completed) {
++    for (const config of ['spectrum', 'oscilloscope', 'default-rack']) for (const target of ['display-sync', 60]) {
++      const runs = results.filter(r => r.config === config && r.target === target && r.mode === 'probe')
++      if (runs.length !== 3 || runs.some(r => !r.valid || r.durationMs < 59900)) continue
++      for (const scope of runs[0].scopes.map(s => s.scope)) {
++        const samples = runs.map(r => r.scopes.find(s => s.scope === scope))
++        const p95 = Math.max(...samples.map(s => s.latencyMs.p95))
++        const p95Upper = Math.max(...samples.map(s => s.upperLatencyMs.p95))
++        const median = Math.max(...samples.map(s => s.latencyMs.median))
++        const uncertainty = Math.max(...runs.map(r => r.latencyUncertaintyMs))
++        lines.push(`- On ${machine.cpu} / macOS ${machine.systemVersion}, an instrumented build of Prism ${manifest.version} based on ${manifest.baseCommit.slice(0, 7)} measured at most ${fmt(median)} ms median and ${fmt(p95)} ms p95 across three 60-second runs for **${scope}**, using **${config}, ${target} target**, native system capture at ${runs[0].metadata.capture.sampleRate} Hz. Timing uncertainty was at most ±${fmt(uncertainty)} ms. ${p95Upper < 8 ? 'All three observed p95 upper bounds were below 8 ms.' : 'These results do not support an under-8-ms p95 claim.'}`)
++        claims++
++      }
++    }
++  }
++  if (!claims) lines.push('No publication-ready latency claim is supported by this dataset. See validity failures and suite status above.')
++  lines.push('', 'These statements apply only to the tested configuration and instrumentation patch. Observed maxima are not guaranteed bounds. No claim of capture-to-physical-display latency is made.', '',
++    '## Presentation investigation', '',
++    'Presentation latency: **unavailable unless separately established from an unambiguous chunk/frame/presentation association**. The separate chromium-trace.json and trace-measurement.json contain scope frame markers and Chromium events; their mere proximity is not a valid association. Presentation feedback may itself be estimated on macOS. No nominal refresh interval is added to manufacture an end-to-end result.', '',
++    '## Clock method', '',
++    '64 synchronous native-clock calls are bracketed by performance.now() before and after each run. The narrowest round-trip bracket at each endpoint is selected, then their union bounds the offset used for the run. This assumes no unobserved clock excursion between endpoints. Calibration bounds include the measured renderer timer quantum (at least 0.1 ms), and draw-end uncertainty includes an additional quantum. The midpoint supplies reported estimates; conservative p95 checks use the older possible capture time and later possible draw time. Receipt durations below timer resolution are counted as unresolved, never clamped or presented as zero latency. Complete calibration samples and endpoint drift are exported.', '')
++  try {
++    const traceRaw = await read('trace-measurement.json')
++    const trace = await read('chromium-trace.json')
++    const traceAnalysis = analyzeMeasurement(traceRaw)
++    const presentation = linkPresentation(trace.traceEvents, traceRaw, traceAnalysis.clock)
++    await writeFile(join(output, 'presentation-investigation.json'), JSON.stringify({ ...presentation, traceValidity: traceAnalysis.problems }, null, 2))
++    lines.push('## Separate trace findings', '',
++      `Matched ${presentation.matchedFrames} scope frames and ${presentation.matchedChunkScopeRecords}/${presentation.successfulChunkScopeRecords} successful chunk/scope records; ${presentation.rejectedFrames} frame associations were rejected.`,
++      'Associations require unique scope markers inside one RAF task and one AnimationFrame interval, exact animation/presentation IDs, matching begin-frame source/sequence IDs, and a STATE_PRESENTED_ALL compositor reporter.', '')
++    if (presentation.available && traceAnalysis.valid) {
++      lines.push('| Scope | Estimated capture → presentation median ms | Estimated p95 ms | Matched records |', '|---|---:|---:|---:|')
++      for (const scope of traceRaw.metadata.visibleScopes) {
++        const stats = statistics(presentation.samples.filter(s => s.scope === scope).map(s => s.latencyMs))
++        lines.push(`| ${scope} | ${fmt(stats.median)} | ${fmt(stats.p95)} | ${stats.count} |`)
++      }
++      lines.push('', `Software timestamp uncertainty is approximately ±${fmt(presentation.softwareTimingUncertaintyMs)} ms, **plus unquantified macOS presentation-estimation error**. These are diagnostic estimates from the separate tracing workload, not physical display measurements or publication claims.`)
++    } else lines.push(`Presentation estimate unavailable: ${traceAnalysis.problems.join('; ') || 'no unambiguous associations'}.`)
++  } catch (error) {
++    lines.push('## Separate trace findings', '', `Presentation estimate unavailable: ${String(error)}.`)
++  }
++  await writeFile(join(output, 'REPORT.md'), lines.join('\n'))
++  console.log(`Report: ${join(output, 'REPORT.md')}`)
++  return results
++}
++if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
++  if (!process.argv[2]) throw new Error('Usage: npm run bench:latency:report -- benchmark-results/<run>')
++  await generateReport(process.argv[2])
++}
+diff --git a/scripts/benchmark/run.mjs b/scripts/benchmark/run.mjs
+new file mode 100644
+index 0000000..8e6a893
+--- /dev/null
++++ b/scripts/benchmark/run.mjs
+@@ -0,0 +1,98 @@
++import { spawn, execFileSync } from 'node:child_process'
++import { mkdir, readFile, writeFile, open } from 'node:fs/promises'
++import { resolve, join } from 'node:path'
++import { createHash } from 'node:crypto'
++import { createRequire } from 'node:module'
++import { generateReport } from './report.mjs'
++
++const root = resolve(import.meta.dirname, '../..')
++const args = process.argv.slice(2)
++const quick = args.includes('--quick')
++const outputIndex = args.indexOf('--output')
++if (outputIndex >= 0 && !args[outputIndex + 1]) throw new Error('--output requires a directory')
++const output = resolve(outputIndex >= 0 ? args[outputIndex + 1] : join(root, 'benchmark-results', new Date().toISOString().replaceAll(':', '-')))
++if (process.platform !== 'darwin') throw new Error('This first benchmark supports native macOS system capture only')
++const run = (command, argv, options = {}) => new Promise((resolveRun, reject) => {
++  const child = spawn(command, argv, { cwd: root, stdio: 'inherit', ...options })
++  child.on('error', reject)
++  child.on('exit', (code, signal) => code === 0 ? resolveRun() : reject(new Error(`${command} exited ${code ?? signal}`)))
++})
++await mkdir(output, { recursive: true })
++// Refuse accidental overwrite of a previous experiment.
++await writeFile(join(output, 'run.lock'), `${process.pid}\n`, { flag: 'wx' })
++await mkdir(join(output, 'user-data'), { recursive: true })
++const git = (...argv) => execFileSync('git', argv, { cwd: root, encoding: 'utf8' })
++const baseCommit = '2a2d01d32da824d03e60440acd505f3d890a4e6f'
++const measurementCommit = git('rev-parse', 'HEAD').trim()
++let patch = git('diff', '--binary', baseCommit)
++const untracked = git('ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean)
++for (const file of untracked) {
++  try { patch += git('diff', '--no-index', '--binary', '--', '/dev/null', file) }
++  catch (error) { if (error.status !== 1) throw error; patch += error.stdout }
++}
++await writeFile(join(output, 'benchmark.patch'), patch)
++const files = [...new Set([...git('ls-files', '-z').split('\0').filter(Boolean), ...untracked])]
++const hashes = {}
++for (const file of files) {
++  try { hashes[file] = createHash('sha256').update(await readFile(join(root, file))).digest('hex') }
++  catch (error) { if (error.code !== 'ENOENT') throw error; hashes[file] = null }
++}
++const env = { ...process.env, PRISM_LATENCY_BENCHMARK: '1', PRISM_LATENCY_BENCHMARK_DIR: output,
++  PRISM_BENCH_DURATION: quick ? '3' : '60', PRISM_BENCH_WARMUP: quick ? '2' : '10', PRISM_BENCH_REPEATS: quick ? '1' : '3' }
++delete env.ELECTRON_RUN_AS_NODE
++delete env.ELECTRON_RENDERER_URL
++await writeFile(join(output, 'source-manifest.json'), JSON.stringify({
++  baseCommit, measurementCommit, branch: git('branch', '--show-current').trim(), version: JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version,
++  patchSha256: createHash('sha256').update(patch).digest('hex'), files: hashes,
++  quick, createdAt: new Date().toISOString(), command: process.argv, nodeVersion: process.version,
++}, null, 2))
++
++// A file-backed external player keeps synthesis work off Prism's rendering thread.
++const sampleRate = 48000, seconds = Number(env.PRISM_BENCH_DURATION) + Number(env.PRISM_BENCH_WARMUP) + 15
++const totalFrames = Math.ceil(sampleRate * seconds), dataSize = totalFrames * 4
++const header = Buffer.alloc(44)
++header.write('RIFF'); header.writeUInt32LE(36 + dataSize, 4); header.write('WAVEfmt ', 8)
++header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(2, 22)
++header.writeUInt32LE(sampleRate, 24); header.writeUInt32LE(sampleRate * 4, 28)
++header.writeUInt16LE(4, 32); header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(dataSize, 40)
++const wav = await open(join(output, 'stimulus.wav'), 'w')
++await wav.write(header)
++const block = Buffer.alloc(sampleRate * 4)
++let phaseL = 0, phaseR = 0
++for (let first = 0; first < totalFrames; first += sampleRate) {
++  const frames = Math.min(sampleRate, totalFrames - first)
++  for (let i = 0; i < frames; i++) {
++    const t = (first + i) / sampleRate
++    const step = Math.floor(t / 0.73) % 4
++    phaseL += 2 * Math.PI * [220, 440, 880, 330][step] / sampleRate
++    phaseR += 2 * Math.PI * [330, 550, 660, 440][step] / sampleRate
++    const amplitude = 0.025 * (0.7 + 0.3 * Math.sin(2 * Math.PI * 1.37 * t))
++    block.writeInt16LE(Math.round(32767 * amplitude * Math.sin(phaseL)), i * 4)
++    block.writeInt16LE(Math.round(32767 * amplitude * Math.sin(phaseR)), i * 4 + 2)
++  }
++  await wav.write(block.subarray(0, frames * 4))
++}
++await wav.close()
++await writeFile(join(output, 'stimulus.json'), JSON.stringify({ sampleRate, channels: 2, format: 'PCM16', seconds,
++  peakAmplitude: 0.025, amplitudeModulationHz: 1.37, frequencyStepSeconds: 0.73,
++  leftHz: [220, 440, 880, 330], rightHz: [330, 550, 660, 440],
++  sha256: createHash('sha256').update(await readFile(join(output, 'stimulus.wav'))).digest('hex'),
++}, null, 2))
++await run(process.execPath, [join(root, 'node_modules/electron-vite/bin/electron-vite.js'), 'build', '--config', 'scripts/benchmark/electron.config.mjs'], { env })
++await run(process.execPath, ['scripts/build/writeAppBuildMetadata.cjs'], { env })
++const require = createRequire(import.meta.url)
++const electron = require('electron')
++await run('npm', ['run', 'rebuild:native'], { env })
++const nativePath = join(root, 'native/build/Release/visualizer_dsp.node')
++await run(electron, [join(root, 'scripts/benchmark/check-native.cjs'), nativePath], { env: { ...env, ELECTRON_RUN_AS_NODE: '1' } })
++await writeFile(join(output, 'native-build.json'), JSON.stringify({ path: nativePath,
++  sha256: createHash('sha256').update(await readFile(nativePath)).digest('hex'),
++  electronVersion: require('electron/package.json').version, rebuiltFromSource: true,
++}, null, 2))
++console.log(`Benchmark artifacts: ${output}\n${quick ? 'Diagnostic quick run; not suitable for published claims.' : 'Full suite: approximately 29 minutes. Keep Prism visible; a quiet test tone will play.'}`)
++await run(electron, [join(root, 'scripts/benchmark/cooldown.cjs')], { env })
++try {
++  await run(electron, [root], { env })
++} finally {
++  await generateReport(output)
++}
+diff --git a/scripts/benchmark/test.mjs b/scripts/benchmark/test.mjs
+new file mode 100644
+index 0000000..e94bad0
+--- /dev/null
++++ b/scripts/benchmark/test.mjs
+@@ -0,0 +1,24 @@
++import { build } from 'esbuild'
++import { mkdtemp, rm } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join, resolve } from 'node:path'
++import { spawn } from 'node:child_process'
++const directory = await mkdtemp(join(tmpdir(), 'prism-latency-tests-'))
++try {
++  for (const [name, enabled] of [['latency-benchmark', false], ['latency-benchmark-integration', true]]) {
++  const file = join(directory, name + '.mjs')
++  await build({ entryPoints: [resolve(import.meta.dirname, `../../test/${name}.test.ts`)], outfile: file,
++    bundle: true, platform: 'node', format: 'esm', define: { __PRISM_LATENCY_BENCHMARK__: String(enabled) } })
++  process.exitCode = await new Promise((resolveRun, reject) => {
++    const child = spawn(process.execPath, ['--test', file], { stdio: 'inherit' })
++    child.on('error', reject); child.on('exit', code => resolveRun(code ?? 1))
++  })
++  if (process.exitCode) break
++  }
++  if (!process.exitCode) {
++    process.exitCode = await new Promise((resolveRun, reject) => {
++      const child = spawn(process.execPath, ['--test', resolve(import.meta.dirname, '../../test/presentation-benchmark.test.mjs')], { stdio: 'inherit' })
++      child.on('error', reject); child.on('exit', code => resolveRun(code ?? 1))
++    })
++  }
++} finally { await rm(directory, { recursive: true, force: true }) }
+diff --git a/src/main/benchmarkEnvironment.ts b/src/main/benchmarkEnvironment.ts
+new file mode 100644
+index 0000000..be55c80
+--- /dev/null
++++ b/src/main/benchmarkEnvironment.ts
+@@ -0,0 +1,52 @@
++import { powerMonitor } from 'electron'
++
++/** Main-process-only observer. No per-frame polling, logging, or file writes. */
++export function recordBenchmarkEnvironment() {
++  const states = ['unknown', 'nominal', 'fair', 'serious', 'critical']
++  const columns = ['mainMonotonicMs', 'unixMs', 'thermalState', 'onBattery', 'cpuSpeedLimitPercent', 'reason']
++  const reasons = ['sample', 'thermal-change', 'speed-limit-change', 'power-change', 'boundary']
++  const width = columns.length
++  const data = new Float64Array(8192 * width)
++  let count = 0, overflow = 0, speedLimit = Number.NaN
++  const sample = (reason = 0) => {
++    if (count >= data.length / width) { overflow++; return }
++    const offset = count++ * width
++    data[offset] = performance.now()
++    data[offset + 1] = Date.now()
++    data[offset + 2] = states.indexOf(powerMonitor.getCurrentThermalState())
++    data[offset + 3] = Number(powerMonitor.isOnBatteryPower())
++    data[offset + 4] = speedLimit
++    data[offset + 5] = reason
++  }
++  const thermal = () => sample(1)
++  const speed = ({ limit }: { limit: number }) => { speedLimit = limit; sample(2) }
++  const power = () => sample(3)
++  powerMonitor.on('thermal-state-change', thermal)
++  powerMonitor.on('speed-limit-change', speed)
++  powerMonitor.on('on-ac', power)
++  powerMonitor.on('on-battery', power)
++  const timer = setInterval(sample, 1000)
++  sample()
++  const exportSince = (first = 0) => {
++    const samples = Array.from({ length: count - first }, (_, i) => Array.from(data.subarray((first + i) * width, (first + i + 1) * width)))
++    const limits = samples.map(row => row[4]).filter(Number.isFinite)
++    return { columns, states, reasons, samples, overflow,
++      thermalStates: [...new Set(samples.map(row => states[row[2]] ?? 'unknown'))],
++      batteryObserved: samples.some(row => row[3] === 1),
++      minimumReportedCpuSpeedLimitPercent: limits.length ? Math.min(...limits) : null,
++      note: '1 Hz snapshots plus OS notifications; CPU speed limit is unknown until a notification arrives. Nominal thermal state does not prove an absence of all clock-frequency changes. No temperature or causal latency correction is inferred.' }
++  }
++  return {
++    mark: () => { const first = count; sample(4); return first },
++    finishRun: (first: number) => { sample(4); return exportSince(first) },
++    stop: () => {
++      clearInterval(timer)
++      powerMonitor.removeListener('thermal-state-change', thermal)
++      powerMonitor.removeListener('speed-limit-change', speed)
++      powerMonitor.removeListener('on-ac', power)
++      powerMonitor.removeListener('on-battery', power)
++      sample(4)
++      return exportSince()
++    },
++  }
++}
+diff --git a/src/main/index.ts b/src/main/index.ts
+index 105db5b..311f0b9 100644
+--- a/src/main/index.ts
++++ b/src/main/index.ts
+@@ -92,6 +92,12 @@ import { resolveTrayAssetPath } from './services/trayAssets'
+ import { DawBridgeService } from './services/dawBridgeService'
+ import type { DawBridgeAudioBatch, DawBridgeSnapshot } from '../types/dawBridge'
+ 
++const latencyBenchmarkDirectory = process.env.PRISM_LATENCY_BENCHMARK === '1'
++  ? process.env.PRISM_LATENCY_BENCHMARK_DIR : undefined
++if (latencyBenchmarkDirectory) {
++  app.setPath('userData', join(resolve(latencyBenchmarkDirectory), 'user-data'))
++}
++let latencyBenchmarkStarted = false
+ let mainWindow: BrowserWindow | null = null
+ let windowDocking: WindowDockingService | null = null
+ const dockingGeometryGuard = new DockingGeometryGuard()
+@@ -2839,6 +2845,11 @@ function setupIPC(): void {
+     if (!isMainRendererWindow(targetWindow)) return
+ 
+     mainRendererReady = true
++    if (latencyBenchmarkDirectory && !latencyBenchmarkStarted && mainWindow) {
++      latencyBenchmarkStarted = true
++      const benchmarkWindow = mainWindow
++      void import('./latencyBenchmark').then(({ runLatencyBenchmark }) => runLatencyBenchmark(benchmarkWindow))
++    }
+     windowDocking?.ready()
+     void processPendingProfileOpenPaths()
+   })
+diff --git a/src/main/latencyBenchmark.ts b/src/main/latencyBenchmark.ts
+new file mode 100644
+index 0000000..87f2946
+--- /dev/null
++++ b/src/main/latencyBenchmark.ts
+@@ -0,0 +1,111 @@
++import { app, contentTracing, powerSaveBlocker, screen, type BrowserWindow } from 'electron'
++import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
++import { writeFile } from 'node:fs/promises'
++import { join, resolve } from 'node:path'
++import os from 'node:os'
++import { setTimeout as delay } from 'node:timers/promises'
++import { recordBenchmarkEnvironment } from './benchmarkEnvironment'
++
++/** Runs only with the explicit benchmark environment, in an isolated userData directory. */
++export async function runLatencyBenchmark(window: BrowserWindow): Promise<void> {
++  const directory = process.env.PRISM_LATENCY_BENCHMARK_DIR
++  if (!directory || process.platform !== 'darwin') throw new Error('Benchmark requires macOS and an output directory')
++  const output = resolve(directory)
++  const duration = Number(process.env.PRISM_BENCH_DURATION ?? 60)
++  const warmup = Number(process.env.PRISM_BENCH_WARMUP ?? 10)
++  const repeats = Number(process.env.PRISM_BENCH_REPEATS ?? 3)
++  if (![duration, warmup, repeats].every(n => Number.isFinite(n) && n > 0) || repeats > 10 || duration > 120) throw new Error('Invalid benchmark durations')
++  const invoke = async (method: string, ...args: unknown[]) => window.webContents.executeJavaScript(
++    `window.prismLatencyBenchmark.${method}(...${JSON.stringify(args)})`,
++  )
++  let player: ChildProcess | null = null
++  let tracing = false
++  const sleepBlocker = powerSaveBlocker.start('prevent-display-sleep')
++  const environment = recordBenchmarkEnvironment()
++  const stopPlayer = () => { player?.kill('SIGTERM'); player = null }
++  const assertWindow = () => {
++    if (window.isDestroyed() || window.isMinimized() || !window.isVisible()) throw new Error('Benchmark window was closed, minimized, or hidden')
++  }
++  try {
++    for (let i = 0; i < 100; i++) {
++      if (await window.webContents.executeJavaScript('Boolean(window.prismLatencyBenchmark)')) break
++      if (i === 99) throw new Error('Benchmark renderer interface unavailable; rebuild with PRISM_LATENCY_BENCHMARK=1')
++      await delay(100)
++    }
++    window.setBounds({ width: 1200, height: 360 })
++    window.center(); window.show(); window.focus()
++    const display = screen.getDisplayMatching(window.getBounds())
++    await writeFile(join(output, 'machine.json'), JSON.stringify({
++      platform: process.platform, arch: process.arch, os: os.release(), systemVersion: process.getSystemVersion(),
++      model: execFileSync('/usr/sbin/sysctl', ['-n', 'hw.model'], { encoding: 'utf8' }).trim(),
++      cpu: os.cpus()[0]?.model, memoryBytes: os.totalmem(), versions: process.versions,
++      display, bounds: window.getBounds(), durationSeconds: duration, warmupSeconds: warmup, repeats,
++      audioPlayer: '/usr/bin/afplay', signalFile: 'stimulus.wav',
++      powerSettings: execFileSync('/usr/bin/pmset', ['-g', 'custom'], { encoding: 'utf8' }),
++    }, null, 2))
++    const cases = [
++      { name: 'spectrum', scopes: ['spectrum'] },
++      { name: 'oscilloscope', scopes: ['oscilloscope'] },
++      { name: 'default-rack', scopes: ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter'] },
++    ]
++    const modes = ['baseline', ...Array.from({ length: repeats }, () => 'probe')]
++    let run = 0
++    for (const target of ['display-sync', 60] as const) {
++      for (const config of cases) {
++        await invoke('configure', config.scopes, target)
++        for (let repeat = 0; repeat < modes.length; repeat++) {
++          const mode = modes[repeat]
++          const id = `${String(++run).padStart(2, '0')}-${config.name}-${target}-${mode}-${repeat}`
++          console.log(`[latency] ${id}: warming up ${warmup}s`)
++          let playerError = ''
++          player = spawn('/usr/bin/afplay', [join(output, 'stimulus.wav')], { stdio: ['ignore', 'ignore', 'pipe'] })
++          player.on('error', error => { playerError = error.message })
++          player.stderr?.on('data', data => { playerError += data.toString() })
++          await delay(warmup * 1000)
++          assertWindow()
++          if (playerError || player.exitCode !== null) throw new Error(`Stimulus player failed: ${playerError}`)
++          const environmentStart = environment.mark()
++          const startMetadata = await invoke('start', mode)
++          console.log(`[latency] ${id}: measuring ${duration}s`)
++          await delay(duration * 1000)
++          assertWindow()
++          const result = await invoke('stop')
++          const runEnvironment = environment.finishRun(environmentStart)
++          if (playerError || player.exitCode !== null) throw new Error(`Stimulus ended during measurement: ${playerError}`)
++          stopPlayer()
++          await writeFile(join(output, `${id}.json`), JSON.stringify({ id, config: config.name, target, repeat, startMetadata, environment: runEnvironment, ...result }))
++          console.log(`[latency] ${id}: saved ${result.records.length} chunk/scope records, ${result.frames.length} frames`)
++        }
++      }
++    }
++    // Diagnostic trace is a separate workload and is never pooled into latency claims.
++    await invoke('configure', cases[2].scopes, 'display-sync')
++    player = spawn('/usr/bin/afplay', [join(output, 'stimulus.wav')], { stdio: 'ignore' })
++    await delay(warmup * 1000)
++    const categories = await contentTracing.getCategories()
++    await writeFile(join(output, 'trace-categories.json'), JSON.stringify(categories, null, 2))
++    await contentTracing.startRecording({ included_categories: ['blink.user_timing', 'devtools.timeline', 'cc', 'viz', 'gpu', 'toplevel', 'benchmark'] })
++    tracing = true
++    const traceEnvironmentStart = environment.mark()
++    await invoke('start', 'trace')
++    await delay(Math.min(duration, 10) * 1000)
++    const traceResult = await invoke('stop')
++    await contentTracing.stopRecording(join(output, 'chromium-trace.json'))
++    tracing = false
++    await writeFile(join(output, 'trace-measurement.json'), JSON.stringify({ ...traceResult, environment: environment.finishRun(traceEnvironmentStart) }))
++    stopPlayer()
++    await writeFile(join(output, 'thermal.json'), JSON.stringify(environment.stop()))
++    await writeFile(join(output, 'complete.json'), JSON.stringify({ completedAt: new Date().toISOString(), runs: run }))
++    console.log(`[latency] Complete: ${output}`)
++    app.exit(0)
++  } catch (error) {
++    stopPlayer()
++    await writeFile(join(output, 'thermal.json'), JSON.stringify(environment.stop()))
++    if (tracing) await contentTracing.stopRecording(join(output, 'interrupted-trace.json')).catch(() => {})
++    await writeFile(join(output, 'failure.json'), JSON.stringify({ error: String(error), at: new Date().toISOString() }, null, 2))
++    console.error('[latency]', error)
++    app.exit(1)
++  } finally {
++    if (powerSaveBlocker.isStarted(sleepBlocker)) powerSaveBlocker.stop(sleepBlocker)
++  }
++}
+diff --git a/src/preload/index.ts b/src/preload/index.ts
+index 4d2ee44..72e44f8 100644
+--- a/src/preload/index.ts
++++ b/src/preload/index.ts
+@@ -361,11 +361,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
+ let nativeAddonModule: NativeAddonModule | null = null
+ try {
+   const isDev = process.env.NODE_ENV === 'development'
+-  const modulePath = isDev
++  const isLatencyBenchmark = process.env.PRISM_LATENCY_BENCHMARK === '1'
++  const modulePath = isDev || isLatencyBenchmark
+     ? require('path').join(__dirname, '../../native/build/Release/visualizer_dsp.node')
+     : require('path').join(process.resourcesPath!, 'native/visualizer_dsp.node')
+   nativeAddonModule = require(modulePath) as NativeAddonModule
+-} catch {
++} catch (error) {
++  if (process.env.PRISM_LATENCY_BENCHMARK === '1') console.error('Benchmark native addon load failed:', error)
+   console.warn('Native DSP module not available — using JS fallback')
+ }
+ 
+diff --git a/src/renderer/audio/AudioCapture.ts b/src/renderer/audio/AudioCapture.ts
+index fc414a2..8f3ece8 100644
+--- a/src/renderer/audio/AudioCapture.ts
++++ b/src/renderer/audio/AudioCapture.ts
+@@ -6,6 +6,7 @@
+  */
+ 
+ import { audioRouter } from './AudioRouter'
++import { latencyProbe } from '../benchmark/latencyProbe'
+ import { nativeVisualizerTransport } from './NativeVisualizerTransport'
+ import { RollingAudioBuffer } from './RollingAudioBuffer'
+ import { ChannelActivity, type ChannelActivitySnapshot } from './ChannelActivity'
+@@ -596,7 +597,9 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
+             result,
+             this.shouldTrimBacklogForLiveCapture(),
+           )
++          latencyProbe?.nativeDrain(result.overwriteCount, result.queueDepth, result.chunks.length - deliveredChunks.length)
+           for (const chunk of deliveredChunks) {
++            latencyProbe?.receipt(chunk.sequence, chunk.capturedAtMilliseconds, chunk.left.length, chunk.sourceChannelPeaks?.[0] ?? 0)
+             const routedChunk: CaptureChunk = {
+               left: chunk.left,
+               right: chunk.right,
+diff --git a/src/renderer/audio/AudioRouter.ts b/src/renderer/audio/AudioRouter.ts
+index 9850e4e..0187a2f 100644
+--- a/src/renderer/audio/AudioRouter.ts
++++ b/src/renderer/audio/AudioRouter.ts
+@@ -5,6 +5,7 @@
+  */
+ 
+ import { AUDIO_SCOPE_KINDS, type AudioScopeKind } from '../../types/scope'
++import { latencyProbe } from '../benchmark/latencyProbe'
+ import type { CaptureBackendKind } from '../../types/capture'
+ import type { DawTransportSnapshot } from '../../types/dawBridge'
+ 
+@@ -259,6 +260,7 @@ export class AudioRouter {
+   private demandListeners = new Set<(demand: NormalizedVisualizerConsumerDemand) => void>()
+ 
+   private emitSessionState(): void {
++    latencyProbe?.sessionChanged(this._sessionId)
+     const state = this.getSessionState()
+     for (const listener of this.sessionListeners) {
+       listener(state)
+@@ -618,6 +620,7 @@ export class AudioRouter {
+     const tracker = this.scopeLatency[scope]
+     const now = performance.now()
+     for (const record of records) {
++      latencyProbe?.consume(scope, record.sequence)
+       const captureToScopeMs = Math.max(0, now - record.capturedAt)
+       tracker.lastCaptureToScopeMs = captureToScopeMs
+       tracker.latencyWindow.push(captureToScopeMs)
+diff --git a/src/renderer/benchmark/analyze.ts b/src/renderer/benchmark/analyze.ts
+new file mode 100644
+index 0000000..0469ecd
+--- /dev/null
++++ b/src/renderer/benchmark/analyze.ts
+@@ -0,0 +1,71 @@
++import { clockBounds, percentile, type ClockSample, type LatencyProbe } from './latencyProbe'
++import type { AudioRouterDiagnostics } from '../audio/AudioRouter'
++
++export type RawMeasurement = ReturnType<LatencyProbe['export']> & {
++  clockStart: ClockSample[]; clockEnd: ClockSample[]
++  timerQuantumMs?: number
++  routerStart: AudioRouterDiagnostics; routerEnd: AudioRouterDiagnostics
++  hiddenEvents: number
++  startMetadata?: unknown
++  metadata: { hidden: boolean; visibleScopes: string[]; capture: { activeBackendKind: string | null; isCapturing: boolean } }
++}
++export function statistics(values: number[]) {
++  return { count: values.length, median: percentile(values, 0.5), p95: percentile(values, 0.95), p99: percentile(values, 0.99), max: percentile(values, 1) }
++}
++
++export function analyzeMeasurement(raw: RawMeasurement) {
++  const timerQuantumMs = raw.timerQuantumMs ?? 0
++  const clock = { ...clockBounds(raw.clockStart, raw.clockEnd, timerQuantumMs), timerQuantumMs }
++  const latencyUncertaintyMs = clock.uncertaintyMs + timerQuantumMs
++  const problems: string[] = []
++  if (raw.startMetadata && JSON.stringify(raw.startMetadata) !== JSON.stringify(raw.metadata)) problems.push('Capture, display geometry, or scope settings changed during measurement')
++  if (raw.hiddenEvents || raw.metadata.hidden) problems.push('Window visibility changed or window was hidden')
++  if (!raw.metadata.capture.isCapturing || raw.metadata.capture.activeBackendKind !== 'native-macos') problems.push('Native macOS system capture was not active')
++  for (const key of ['nativeOverwrites', 'sequenceGaps', 'sessionChanges', 'bufferOverflow', 'missingReceipts', 'trimmedChunks', 'consumedOutsideFrame'] as const) {
++    if (raw.counters[key]) problems.push(`${key}: ${raw.counters[key]}`)
++  }
++  if (raw.routerEnd.totalOverwriteCount !== raw.routerStart.totalOverwriteCount) problems.push('Router overwrites occurred')
++  if (raw.mode !== 'baseline' && !raw.chunks.some(c => c[5] > 0.00001)) problems.push('No non-silent captured signal verified')
++  if (raw.mode !== 'baseline' && !raw.chunks.length) problems.push('No captured chunks')
++  const scopes = raw.scopes.filter(s => raw.metadata.visibleScopes.includes(s)).map(scope => {
++    const id = raw.scopes.indexOf(scope)
++    const rows = raw.records.filter(r => r[2] === id)
++    const frames = raw.frames.filter(f => f[1] === id)
++    const frameIntervals = frames.slice(1).map((f, i) => f[2] - frames[i][2])
++    const drawWork = frames.map(f => f[3] - f[2])
++    const total: number[] = [], upper: number[] = [], delivery: number[] = [], queue: number[] = [], render: number[] = []
++    const seen = new Set<string>()
++    let invalid = 0, skipped = 0, duplicate = 0, unresolvedDelivery = 0
++    for (const r of rows) {
++      const key = `${r[0]}:${r[1]}`
++      if (seen.has(key)) { duplicate++; continue }
++      seen.add(key)
++      if (r[8] === 0) { skipped++; continue }
++      if (r[8] !== 1 || !r.slice(4, 8).every(Number.isFinite)) { invalid++; continue }
++      const capture = r[4] + clock.offset
++      // Reject impossible ordering. Overlapping receipt/capture uncertainty intervals
++      // leave delivery duration unresolved, but need not invalidate a later draw endpoint.
++      if (r[5] + timerQuantumMs < r[4] + clock.low || r[6] < r[5] || r[7] < r[6]
++          || r[7] - capture < 0) { invalid++; continue }
++      total.push(r[7] - capture)
++      upper.push(r[7] + timerQuantumMs - (r[4] + clock.low))
++      if (r[5] - timerQuantumMs >= r[4] + clock.high) delivery.push(r[5] - capture)
++      else unresolvedDelivery++
++      queue.push(r[6] - r[5]); render.push(r[7] - r[6])
++    }
++    if (raw.mode !== 'baseline' && (!total.length || invalid || skipped || duplicate)) problems.push(`${scope}: ${invalid} invalid, ${skipped} skipped, ${duplicate} duplicate, ${total.length} valid`)
++    // End-of-window arrivals still in the normal scope queue are right-censored, not successful draws.
++    const unconsumedAtStop = Math.max(0, raw.chunks.length - seen.size)
++    const pendingAtStop = raw.routerEnd.scopes[scope].queuedChunks
++    if (raw.mode !== 'baseline' && unconsumedAtStop > pendingAtStop) problems.push(`${scope}: unexplained unconsumed chunks`)
++    return { scope, latencyMs: statistics(total), upperLatencyMs: statistics(upper), captureToReceiptMs: statistics(delivery),
++      receiptToConsumptionMs: statistics(queue), consumptionToDrawEndMs: statistics(render),
++      frameWorkMs: statistics(drawWork), frameIntervalMs: statistics(frameIntervals),
++      observedFps: frames.length > 1 ? (frames.length - 1) * 1000 / (frames[frames.length - 1][2] - frames[0][2]) : 0,
++      frameCount: frames.length, skippedDrawFrames: frames.filter(f => !f[4]).length,
++      invalid, skippedChunks: skipped, duplicate, unresolvedDelivery, unconsumedAtStop, pendingAtStop }
++  })
++  if (!scopes.length || scopes.some(s => s.frameCount < 2)) problems.push('Insufficient scope frames')
++  return { durationMs: raw.stoppedAt - raw.startedAt, clock, latencyUncertaintyMs, problems, valid: problems.length === 0,
++    counters: raw.counters, chunkSizes: [...new Set(raw.chunks.map(c => c[4]))], scopes }
++}
+diff --git a/src/renderer/benchmark/controller.ts b/src/renderer/benchmark/controller.ts
+new file mode 100644
+index 0000000..754c7e4
+--- /dev/null
++++ b/src/renderer/benchmark/controller.ts
+@@ -0,0 +1,85 @@
++import { audioCapture } from '../audio/AudioCapture'
++import { audioRouter } from '../audio/AudioRouter'
++import { isNativeAvailable } from '../audio/native'
++import { useAudioStore } from '../stores/audioStore'
++import { useSettingsStore } from '../stores/settingsStore'
++import { usePerformanceStore } from '../stores/performanceStore'
++import { createDefaultProfile } from '../../shared/profileState'
++import { SCOPE_KINDS } from '../../types/scope'
++import { BENCHMARK_BUILD, calibrateClock, measureTimerQuantum, latencyProbe, type BenchScope, type ClockSample, type ProbeMode } from './latencyProbe'
++
++export function installLatencyBenchmark(): void {
++  if (!BENCHMARK_BUILD || !latencyProbe) return
++  const probe = latencyProbe
++  let clockStart: ClockSample[] = []
++  let timerQuantumStart = 0
++  let routerStart = audioRouter.getDiagnosticsSnapshot()
++  let hiddenEvents = 0
++  document.addEventListener('visibilitychange', () => { if (probe.active) hiddenEvents++ })
++  const metadata = () => ({
++    capture: audioCapture.getStatus(), session: audioRouter.getSessionState(),
++    frameTarget: usePerformanceStore.getState().frameTarget,
++    scopeSettings: useSettingsStore.getState().scopeSettings,
++    visibleScopes: useSettingsStore.getState().visibleScopes(),
++    pixelRatio: devicePixelRatio, innerWidth, innerHeight, hidden: document.hidden,
++    canvases: [...document.querySelectorAll('canvas')].map(canvas => ({
++      width: canvas.width, height: canvas.height, cssWidth: canvas.clientWidth, cssHeight: canvas.clientHeight,
++    })),
++  })
++  const readNative = () => {
++    const api = window.nativeCaptureAPI?.macosCapture
++    if (!api) throw new Error('Native macOS capture API unavailable')
++    return api.nowMilliseconds()
++  }
++  window.prismLatencyBenchmark = {
++    async configure(scopes: BenchScope[], frameTarget: 60 | 'display-sync') {
++      if (probe.active) throw new Error('Cannot configure during a measurement')
++      if (!isNativeAvailable() || !window.nativeCaptureAPI?.macosCapture?.getSupport().available
++          || scopes.some(scope => !window.visualizerAPI?.[scope])) {
++        throw new Error('Benchmark requires the native capture and every selected native DSP module; fallback measurements are forbidden')
++      }
++      const profile = createDefaultProfile()
++      useSettingsStore.setState({ ...profile, hiddenScopes: new Set(SCOPE_KINDS.filter(s => !scopes.includes(s as BenchScope))) })
++      usePerformanceStore.getState().setFrameTarget(frameTarget)
++      useAudioStore.getState().setRollingCaptureSeconds(null)
++      useAudioStore.getState().setInputGain(0)
++      if (!audioCapture.getStatus().isCapturing) {
++        useAudioStore.getState().setCaptureMode('system')
++        await useAudioStore.getState().startCapture()
++      }
++      const status = audioCapture.getStatus()
++      if (!status.isCapturing || status.activeBackendKind !== 'native-macos') {
++        throw new Error(`Benchmark requires native macOS system capture: ${JSON.stringify(status)}`)
++      }
++      return metadata()
++    },
++    start(mode: ProbeMode) {
++      if (document.hidden) throw new Error('Benchmark window must be visible')
++      timerQuantumStart = measureTimerQuantum()
++      clockStart = calibrateClock(readNative)
++      routerStart = audioRouter.getDiagnosticsSnapshot()
++      hiddenEvents = 0
++      probe.start(mode, audioRouter.getSessionState().sessionId)
++      return metadata()
++    },
++    stop() {
++      probe.stop()
++      const clockEnd = calibrateClock(readNative)
++      const timerQuantumMs = Math.max(timerQuantumStart, measureTimerQuantum())
++      const routerEnd = audioRouter.getDiagnosticsSnapshot()
++      return { ...probe.export(), clockStart, clockEnd, timerQuantumMs, routerStart, routerEnd, hiddenEvents, metadata: metadata() }
++    },
++    metadata,
++  }
++}
++
++declare global {
++  interface Window {
++    prismLatencyBenchmark?: {
++      configure: (scopes: BenchScope[], frameTarget: 60 | 'display-sync') => Promise<unknown>
++      start: (mode: ProbeMode) => unknown
++      stop: () => unknown
++      metadata: () => unknown
++    }
++  }
++}
+diff --git a/src/renderer/benchmark/latencyProbe.ts b/src/renderer/benchmark/latencyProbe.ts
+new file mode 100644
+index 0000000..47f3dfe
+--- /dev/null
++++ b/src/renderer/benchmark/latencyProbe.ts
+@@ -0,0 +1,184 @@
++/** Benchmark-only observation. This module never changes capture or DSP state. */
++export const BENCHMARK_BUILD = typeof __PRISM_LATENCY_BENCHMARK__ !== 'undefined' && __PRISM_LATENCY_BENCHMARK__
++export const BENCH_SCOPES = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter'] as const
++export type BenchScope = typeof BENCH_SCOPES[number]
++export type ProbeMode = 'baseline' | 'probe' | 'trace'
++export const CHUNK_COLUMNS = ['session', 'sequence', 'nativeAt', 'receivedAt', 'sampleFrames', 'peak'] as const
++export const RECORD_COLUMNS = ['session', 'sequence', 'scope', 'frame', 'nativeAt', 'receivedAt', 'consumedAt', 'drawEnd', 'outcome', 'sampleFrames'] as const
++export const FRAME_COLUMNS = ['frame', 'scope', 'start', 'end', 'drew'] as const
++// outcome: 1 = successful draw invocation, 0 = skipped; -1 = missing receipt metadata.
++const C = CHUNK_COLUMNS.length, R = RECORD_COLUMNS.length, F = FRAME_COLUMNS.length
++
++export interface ClockSample { before: number; native: number; after: number }
++export function measureTimerQuantum(now = () => performance.now(), minimumMs = 0.1): number {
++  const deltas: number[] = []
++  let previous = now()
++  for (let i = 0; i < 1000000 && deltas.length < 32; i++) {
++    const current = now()
++    if (current > previous) { deltas.push(current - previous); previous = current }
++  }
++  if (!deltas.length) throw new Error('Renderer clock did not advance')
++  return Math.max(minimumMs, Math.min(...deltas) * 1.05)
++}
++export function calibrateClock(readNative: () => number, now = () => performance.now(), count = 64): ClockSample[] {
++  return Array.from({ length: count }, () => {
++    const before = now(), native = readNative(), after = now()
++    return { before, native, after }
++  })
++}
++
++/** Lowest round-trip bracket, widened to cover both endpoint calibrations. */
++export function clockBounds(start: ClockSample[], end: ClockSample[], timerQuantumMs = 0) {
++  const best = (samples: ClockSample[]) => samples.filter(s =>
++    Number.isFinite(s.native) && Number.isFinite(s.before) && Number.isFinite(s.after) && s.after >= s.before,
++  ).sort((a, b) => (a.after - a.before) - (b.after - b.before))[0]
++  const a = best(start), b = best(end)
++  if (!a || !b) throw new Error('Missing valid clock calibration')
++  const low = Math.min(a.before - a.native, b.before - b.native) - timerQuantumMs
++  const high = Math.max(a.after - a.native, b.after - b.native) + timerQuantumMs
++  return { low, high, offset: (low + high) / 2, uncertaintyMs: (high - low) / 2,
++    endpointDriftMs: Math.abs((a.before + a.after) / 2 - a.native - ((b.before + b.after) / 2 - b.native)) }
++}
++
++export function percentile(values: number[], fraction: number): number | null {
++  if (!values.length) return null
++  const sorted = [...values].sort((a, b) => a - b)
++  return sorted[Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1))]
++}
++
++export class LatencyProbe {
++  active = false
++  mode: ProbeMode = 'probe'
++  private chunks: Float64Array
++  private records: Float64Array
++  private frames: Float64Array
++  private receiptSlots: Int32Array
++  private boundaryChunks = 0
++  private latestNativeOverwrites = 0
++  private chunkCount = 0
++  private recordCount = 0
++  private frameCount = 0
++  private frameRecordStart = 0
++  private currentFrame = -1
++  private currentScope = -1
++  private didDraw = false
++  private session = 0
++  private lastSequence = 0
++  private nativeOverwrites = 0
++  private sequenceGaps = 0
++  private sessionChanges = 0
++  private overflow = 0
++  private missingReceipts = 0
++  private trimmedChunks = 0
++  private outsideFrame = 0
++  private nativeQueueMax = 0
++  private lastNativeOverwrites: number | null = null
++  private startedAt = 0
++  private stoppedAt = 0
++  constructor(private capacity = 262144, private now = () => performance.now()) {
++    this.chunks = new Float64Array(capacity * C)
++    this.records = new Float64Array(capacity * R)
++    this.frames = new Float64Array(65536 * F)
++    this.receiptSlots = new Int32Array(8192).fill(-1)
++  }
++  start(mode: ProbeMode, session: number): void {
++    if (this.active) throw new Error('Benchmark already running')
++    this.mode = mode
++    this.session = session
++    this.chunkCount = this.recordCount = this.frameCount = this.lastSequence = 0
++    this.nativeOverwrites = this.sequenceGaps = this.sessionChanges = this.overflow = 0
++    this.missingReceipts = this.trimmedChunks = this.outsideFrame = this.nativeQueueMax = 0
++    this.currentFrame = -1
++    this.lastNativeOverwrites = this.latestNativeOverwrites
++    this.boundaryChunks = 0
++    this.receiptSlots.fill(-1)
++    this.startedAt = this.now()
++    this.active = true
++  }
++  sessionChanged(session: number): void {
++    if (!this.active || session === this.session) return
++    this.sessionChanges++
++    this.session = session
++    this.lastSequence = 0
++    this.lastNativeOverwrites = null
++    this.receiptSlots.fill(-1)
++  }
++  nativeDrain(overwrites: number, queueDepth: number, trimmed: number): void {
++    this.latestNativeOverwrites = overwrites
++    if (!this.active || this.mode === 'baseline') return
++    if (this.lastNativeOverwrites !== null) this.nativeOverwrites += Math.max(0, overwrites - this.lastNativeOverwrites)
++    this.lastNativeOverwrites = overwrites
++    this.nativeQueueMax = Math.max(this.nativeQueueMax, queueDepth)
++    this.trimmedChunks += trimmed
++  }
++  receipt(sequence: number, nativeAt: number, sampleFrames: number, peak: number): void {
++    if (!this.active || this.mode === 'baseline') return
++    const receivedAt = this.now()
++    if (this.lastSequence && sequence !== this.lastSequence + 1) this.sequenceGaps += Math.max(1, sequence - this.lastSequence - 1)
++    this.lastSequence = sequence
++    if (this.chunkCount >= this.capacity) { this.overflow++; return }
++    const row = this.chunkCount++, i = row * C
++    this.chunks[i] = this.session; this.chunks[i + 1] = sequence
++    this.chunks[i + 2] = nativeAt; this.chunks[i + 3] = receivedAt
++    this.chunks[i + 4] = sampleFrames; this.chunks[i + 5] = peak
++    this.receiptSlots[sequence % this.receiptSlots.length] = row
++  }
++  beginFrame(scope: BenchScope): void {
++    if (!this.active) return
++    if (this.currentFrame !== -1) throw new Error('Nested benchmark frames')
++    if (this.frameCount >= this.frames.length / F) { this.overflow++; return }
++    this.currentScope = BENCH_SCOPES.indexOf(scope)
++    this.currentFrame = this.frameCount++
++    this.frameRecordStart = this.recordCount
++    this.didDraw = false
++    const i = this.currentFrame * F
++    this.frames[i] = this.currentFrame; this.frames[i + 1] = this.currentScope
++    this.frames[i + 2] = this.now()
++    if (this.mode === 'trace') performance.mark(`prism.frame.${this.currentFrame}.${scope}.start`)
++  }
++  consume(scope: string, sequence: number): void {
++    if (!this.active || this.mode === 'baseline' || !BENCH_SCOPES.includes(scope as BenchScope)) return
++    if (this.currentFrame < 0 || BENCH_SCOPES[this.currentScope] !== scope) { this.outsideFrame++; return }
++    if (this.chunkCount === 0 || (this.chunks[0] === this.session && sequence < this.chunks[1])) { this.boundaryChunks++; return }
++    if (this.recordCount >= this.capacity) { this.overflow++; return }
++    const i = this.recordCount++ * R
++    const slot = this.receiptSlots[sequence % this.receiptSlots.length], c = slot * C
++    const found = slot >= 0 && this.chunks[c] === this.session && this.chunks[c + 1] === sequence
++    if (!found) this.missingReceipts++
++    this.records[i] = this.session; this.records[i + 1] = sequence
++    this.records[i + 2] = this.currentScope; this.records[i + 3] = this.currentFrame
++    this.records[i + 4] = found ? this.chunks[c + 2] : NaN
++    this.records[i + 5] = found ? this.chunks[c + 3] : NaN
++    this.records[i + 6] = this.now(); this.records[i + 7] = NaN
++    this.records[i + 8] = found ? 0 : -1
++    this.records[i + 9] = found ? this.chunks[c + 4] : 0
++  }
++  drawn(): void { if (this.active) this.didDraw = true }
++  endFrame(): void {
++    if (!this.active || this.currentFrame < 0) return
++    // Capture endpoint before observer bookkeeping and trace emission.
++    const end = this.now(), i = this.currentFrame * F
++    this.frames[i + 3] = end; this.frames[i + 4] = Number(this.didDraw)
++    for (let row = this.frameRecordStart; row < this.recordCount; row++) {
++      const r = row * R
++      this.records[r + 7] = end
++      if (this.records[r + 8] !== -1) this.records[r + 8] = Number(this.didDraw)
++    }
++    if (this.mode === 'trace') performance.mark(`prism.frame.${this.currentFrame}.${BENCH_SCOPES[this.currentScope]}.end`)
++    this.currentFrame = -1
++  }
++  stop(): void { this.stoppedAt = this.now(); this.active = false }
++  export() {
++    if (this.active) throw new Error('Stop before export')
++    const rows = (data: Float64Array, count: number, width: number) => Array.from({ length: count }, (_, i) => Array.from(data.subarray(i * width, (i + 1) * width)))
++    return { mode: this.mode, startedAt: this.startedAt, stoppedAt: this.stoppedAt,
++      scopes: BENCH_SCOPES, chunkColumns: CHUNK_COLUMNS, recordColumns: RECORD_COLUMNS, frameColumns: FRAME_COLUMNS,
++      chunks: rows(this.chunks, this.chunkCount, C), records: rows(this.records, this.recordCount, R), frames: rows(this.frames, this.frameCount, F),
++      counters: { boundaryChunks: this.boundaryChunks, nativeOverwrites: this.nativeOverwrites, sequenceGaps: this.sequenceGaps, sessionChanges: this.sessionChanges,
++        bufferOverflow: this.overflow, missingReceipts: this.missingReceipts, trimmedChunks: this.trimmedChunks,
++        consumedOutsideFrame: this.outsideFrame, nativeQueueMax: this.nativeQueueMax } }
++  }
++}
++
++// Allocate only in the explicit benchmark build, never in a normal build.
++export const latencyProbe = BENCHMARK_BUILD ? new LatencyProbe() : null
+diff --git a/src/renderer/main.tsx b/src/renderer/main.tsx
+index 74d8f82..25a7bf6 100644
+--- a/src/renderer/main.tsx
++++ b/src/renderer/main.tsx
+@@ -24,6 +24,10 @@ const windowMode = params.get('mode')
+ const windowRole = params.get('window')
+ const scopeKind = params.get('scope')
+ 
++if (typeof __PRISM_LATENCY_BENCHMARK__ !== 'undefined' && __PRISM_LATENCY_BENCHMARK__ && windowRole === 'main') {
++  void import('./benchmark/controller').then(({ installLatencyBenchmark }) => installLatencyBenchmark())
++}
++
+ if (windowMode !== 'dialog' && windowRole !== 'now-playing-config') {
+   bootstrapWindowBackgroundFromQuery()
+ }
+diff --git a/src/renderer/visualizers/Oscilloscope.ts b/src/renderer/visualizers/Oscilloscope.ts
+index eb0bea1..afcd685 100644
+--- a/src/renderer/visualizers/Oscilloscope.ts
++++ b/src/renderer/visualizers/Oscilloscope.ts
+@@ -1,3 +1,4 @@
++import { latencyProbe } from '../benchmark/latencyProbe'
+ import { audioRouter } from '../audio/AudioRouter'
+ import {
+   oscilloscope as defaultNativeOscilloscope,
+@@ -109,6 +110,7 @@ export class Oscilloscope {
+     this.dataSource = dataSource ?? defaultOscilloscopeDataSource
+     this.nativeAnalyzer = nativeAnalyzer === undefined ? defaultNativeOscilloscope : (nativeAnalyzer ?? defaultNativeOscilloscope)
+     this.frameLoop = new VisualizerFrameLoop({
++      benchmarkScope: 'oscilloscope',
+       frameScheduler,
+       shouldRun: () => this.dataSource.isPlaying(),
+       onFrame: this.drawFrame,
+@@ -335,6 +337,7 @@ export class Oscilloscope {
+       ctx.lineTo(x, y)
+     }
+     ctx.stroke()
++    latencyProbe?.drawn()
+   }
+ 
+   private renderStaticLayer(): void {
+diff --git a/src/renderer/visualizers/SpectrumAnalyzer.ts b/src/renderer/visualizers/SpectrumAnalyzer.ts
+index 5ca6e88..9f64ec2 100644
+--- a/src/renderer/visualizers/SpectrumAnalyzer.ts
++++ b/src/renderer/visualizers/SpectrumAnalyzer.ts
+@@ -1,3 +1,4 @@
++import { latencyProbe } from '../benchmark/latencyProbe'
+ import { REFERENCE_SAMPLE_RATE, type SpectrumReferenceAsset, type SpectrumReferenceSettings, type SpectrumReferenceLevel } from '../../types/spectrumReference'
+ import { referenceBins, referenceDbAt, differenceReferenceBins, ReferenceCurveTransition } from './referenceCurve'
+ import { audioRouter } from '../audio/AudioRouter'
+@@ -346,6 +347,7 @@ export class SpectrumAnalyzer {
+     this.nativeAnalyzer = nativeAnalyzer === undefined ? defaultNativeSpectrum : nativeAnalyzer
+     this.heatLut = buildHeatLUT(this.options.heatColors)
+     this.frameLoop = new VisualizerFrameLoop({
++      benchmarkScope: 'spectrum',
+       frameScheduler,
+       shouldRun: () => this.dataSource.isPlaying() || this.options.referenceImporting || performance.now() < this.referenceSettleUntil,
+       onFrame: this.drawFrame,
+@@ -1337,6 +1339,7 @@ export class SpectrumAnalyzer {
+     }
+ 
+     this.emitPeakInfo(primaryRender.peakInfo)
++    latencyProbe?.drawn()
+   }
+ 
+   private renderStaticLayer(minFrequency: number, maxFrequency: number): void {
+diff --git a/src/renderer/visualizers/VUMeter.ts b/src/renderer/visualizers/VUMeter.ts
+index 70ab830..0bb23a6 100644
+--- a/src/renderer/visualizers/VUMeter.ts
++++ b/src/renderer/visualizers/VUMeter.ts
+@@ -1,3 +1,4 @@
++import { latencyProbe } from '../benchmark/latencyProbe'
+ import { audioRouter } from '../audio/AudioRouter'
+ import {
+   vumeter as nativeVUMeter,
+@@ -334,6 +335,7 @@ export class VUMeter {
+     this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeVUMeter : nativeAnalyzer
+     this.meterBallistics = new VUMeterBallistics(this.dataSource.getSampleRate())
+     this.frameLoop = new VisualizerFrameLoop({
++      benchmarkScope: 'vumeter',
+       frameScheduler,
+       shouldRun: () => this.dataSource.isPlaying(),
+       onFrame: this.drawFrame,
+@@ -1385,6 +1387,7 @@ export class VUMeter {
+     } else {
+       this.drawBarMode(width, height)
+     }
++    latencyProbe?.drawn()
+   }
+ 
+   dispose(): void {
+diff --git a/src/renderer/visualizers/Vectorscope.ts b/src/renderer/visualizers/Vectorscope.ts
+index 67b27de..f0583f6 100644
+--- a/src/renderer/visualizers/Vectorscope.ts
++++ b/src/renderer/visualizers/Vectorscope.ts
+@@ -1,3 +1,4 @@
++import { latencyProbe } from '../benchmark/latencyProbe'
+ import { audioRouter } from '../audio/AudioRouter'
+ import { vectorscope as nativeVectorscope, type VectorscopeNativeAnalyzer } from '../audio/native'
+ import {
+@@ -119,6 +120,7 @@ export class Vectorscope {
+     this.dataSource = dataSource ?? defaultVectorscopeDataSource
+     this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeVectorscope : nativeAnalyzer
+     this.frameLoop = new VisualizerFrameLoop({
++      benchmarkScope: 'vectorscope',
+       frameScheduler,
+       shouldRun: () => this.dataSource.isPlaying(),
+       onFrame: this.drawFrame,
+@@ -288,6 +290,7 @@ export class Vectorscope {
+ 
+     this.renderStaticLayer()
+     ctx.drawImage(offscreenCanvas, 0, 0)
++    latencyProbe?.drawn()
+   }
+ 
+   private isNativeAvailable(): boolean {
+diff --git a/src/renderer/visualizers/visualizerFrameLoop.ts b/src/renderer/visualizers/visualizerFrameLoop.ts
+index aa7f1a1..5433f9f 100644
+--- a/src/renderer/visualizers/visualizerFrameLoop.ts
++++ b/src/renderer/visualizers/visualizerFrameLoop.ts
+@@ -1,12 +1,15 @@
+ import { FrameScheduler } from './frameScheduler'
++import { latencyProbe, type BenchScope } from '../benchmark/latencyProbe'
+ 
+ interface VisualizerFrameLoopOptions {
++  benchmarkScope?: BenchScope
+   frameScheduler?: FrameScheduler
+   shouldRun: () => boolean
+   onFrame: () => void
+ }
+ 
+ export class VisualizerFrameLoop {
++  private readonly benchmarkScope?: BenchScope
+   private readonly frameScheduler: FrameScheduler
+   private readonly shouldRun: () => boolean
+   private readonly onFrame: () => void
+@@ -14,7 +17,8 @@ export class VisualizerFrameLoop {
+   private isStarted = false
+   private isInvalidated = false
+ 
+-  constructor({ frameScheduler, shouldRun, onFrame }: VisualizerFrameLoopOptions) {
++  constructor({ frameScheduler, shouldRun, onFrame, benchmarkScope }: VisualizerFrameLoopOptions) {
++    this.benchmarkScope = benchmarkScope
+     this.frameScheduler = frameScheduler ?? new FrameScheduler()
+     this.shouldRun = shouldRun
+     this.onFrame = onFrame
+@@ -67,7 +71,12 @@ export class VisualizerFrameLoop {
+   private tick = (): void => {
+     if (!this.isStarted) return
+     this.isInvalidated = false
+-    this.onFrame()
++    if (latencyProbe?.active && this.benchmarkScope) {
++      latencyProbe.beginFrame(this.benchmarkScope)
++      try { this.onFrame() } finally { latencyProbe.endFrame() }
++    } else {
++      this.onFrame()
++    }
+     this.sync()
+   }
+ }
+diff --git a/src/types/latencyBenchmark.d.ts b/src/types/latencyBenchmark.d.ts
+new file mode 100644
+index 0000000..4743f7d
+--- /dev/null
++++ b/src/types/latencyBenchmark.d.ts
+@@ -0,0 +1 @@
++declare const __PRISM_LATENCY_BENCHMARK__: boolean
+diff --git a/test/latency-benchmark-integration.test.ts b/test/latency-benchmark-integration.test.ts
+new file mode 100644
+index 0000000..60a86b1
+--- /dev/null
++++ b/test/latency-benchmark-integration.test.ts
+@@ -0,0 +1,34 @@
++import test from 'node:test'
++import assert from 'node:assert/strict'
++import { AudioRouter } from '../src/renderer/audio/AudioRouter'
++import { VisualizerFrameLoop } from '../src/renderer/visualizers/visualizerFrameLoop'
++import type { FrameScheduler } from '../src/renderer/visualizers/frameScheduler'
++import { latencyProbe } from '../src/renderer/benchmark/latencyProbe'
++
++test('real router drains bind to the active visualizer frame without modifying samples', () => {
++  const probe = latencyProbe!
++  const router = new AudioRouter()
++  const session = router.beginSession(48000, 2, 'native-macos')
++  router.setVisualizerConsumerDemand('bench-test', { spectrum: true })
++  const callbacks = new Set<() => void>()
++  const scheduler = { subscribe(callback: () => void) { callbacks.add(callback); return () => callbacks.delete(callback) } } as FrameScheduler
++  const left = Float32Array.of(0.5, 0.25), right = Float32Array.of(-0.5, -0.25)
++  let observed: ReturnType<AudioRouter['flushPendingSpectrumStereoSamples']> = []
++  const loop = new VisualizerFrameLoop({ frameScheduler: scheduler, benchmarkScope: 'spectrum', shouldRun: () => true,
++    onFrame: () => { observed = router.flushPendingSpectrumStereoSamples(); probe.drawn() } })
++  probe.start('probe', session)
++  probe.receipt(4, 100, 2, 0.5)
++  router.ingestChunk(left, right, { sessionId: session, sequence: 4, capturedAt: 100 })
++  loop.start()
++  for (const cb of callbacks) cb()
++  assert.equal(observed[0].left, left)
++  assert.equal(observed[0].right, right)
++  for (const cb of callbacks) cb()
++  loop.dispose(); probe.stop()
++  const raw = probe.export()
++  assert.equal(raw.records.length, 1)
++  assert.equal(raw.records[0][1], 4)
++  assert.equal(raw.records[0][8], 1)
++  assert.equal(raw.frames.length, 2)
++  assert.equal(callbacks.size, 0)
++})
+diff --git a/test/latency-benchmark.test.ts b/test/latency-benchmark.test.ts
+new file mode 100644
+index 0000000..5d75f48
+--- /dev/null
++++ b/test/latency-benchmark.test.ts
+@@ -0,0 +1,139 @@
++import test from 'node:test'
++import assert from 'node:assert/strict'
++import { LatencyProbe, clockBounds, calibrateClock, percentile } from '../src/renderer/benchmark/latencyProbe'
++import { analyzeMeasurement, type RawMeasurement } from '../src/renderer/benchmark/analyze'
++
++const calibration = [{ before: 0, native: 1000, after: 0.2 }]
++function fixture(capacity = 100) {
++  let time = 0
++  const probe = new LatencyProbe(capacity, () => time)
++  probe.start('probe', 7)
++  return { probe, at: (t: number) => { time = t } }
++}
++function raw(probe: LatencyProbe): RawMeasurement {
++  const router = { totalOverwriteCount: 0, scopes: { spectrum: { queuedChunks: 0 } } } as RawMeasurement['routerStart']
++  return { ...probe.export(), clockStart: calibration, clockEnd: calibration, hiddenEvents: 0,
++    routerStart: router, routerEnd: router, metadata: { hidden: false, visibleScopes: ['spectrum'],
++      capture: { activeBackendKind: 'native-macos', isCapturing: true } } }
++}
++test('clock calibration brackets calls and retains drift as uncertainty', () => {
++  let clock = 0
++  const samples = calibrateClock(() => 1000, () => clock++, 2)
++  assert.deepEqual(samples, [{ before: 0, native: 1000, after: 1 }, { before: 2, native: 1000, after: 3 }])
++  const bounds = clockBounds([{ before: 1, native: 1000, after: 9 }, ...calibration], [{ before: 100, native: 1099, after: 100.2 }])
++  assert.equal(bounds.low, -1000)
++  assert.ok(Math.abs(bounds.high + 998.8) < 1e-9)
++  assert.ok(Math.abs(bounds.uncertaintyMs - 0.6) < 1e-9)
++  assert.throws(() => clockBounds([], calibration))
++})
++test('multiple chunks retain their own capture ages and exact frame association', () => {
++  const { probe, at } = fixture()
++  at(3); probe.receipt(1, 1001, 128, 0.02)
++  at(4); probe.receipt(2, 1002, 256, 0.03)
++  at(8); probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.consume('spectrum', 2)
++  probe.drawn(); at(10); probe.endFrame()
++  at(20); probe.beginFrame('spectrum'); probe.drawn(); at(21); probe.endFrame()
++  probe.stop()
++  const data = raw(probe), summary = analyzeMeasurement(data)
++  assert.equal(data.records.length, 2, 'redrawing without new audio must not add samples')
++  assert.equal(data.records[0][3], data.records[1][3])
++  assert.equal(data.records[0][9], 128)
++  assert.equal(summary.scopes[0].latencyMs.count, 2)
++  assert.ok(Math.abs(summary.scopes[0].latencyMs.p95! - 8.9) < 1e-8)
++  assert.equal(summary.scopes[0].upperLatencyMs.p95, 9)
++  assert.equal(summary.valid, true)
++})
++test('skipped frames are not reported as successful low latency', () => {
++  const { probe, at } = fixture()
++  at(3); probe.receipt(1, 1001, 128, 0.02)
++  at(4); probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.endFrame(); probe.stop()
++  const result = analyzeMeasurement(raw(probe))
++  assert.equal(result.scopes[0].skippedChunks, 1)
++  assert.equal(result.scopes[0].latencyMs.count, 0)
++  assert.equal(result.valid, false)
++})
++test('negative clock ordering is invalid, never clamped into a fast result', () => {
++  const { probe, at } = fixture()
++  at(3); probe.receipt(1, 1100, 128, 0.02)
++  at(4); probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.drawn(); probe.endFrame(); probe.stop()
++  const result = analyzeMeasurement(raw(probe))
++  assert.equal(result.scopes[0].invalid, 1)
++  assert.equal(result.scopes[0].latencyMs.count, 0)
++})
++test('same sequence from a new session cannot use old receipt metadata', () => {
++  const { probe, at } = fixture()
++  at(3); probe.receipt(1, 1001, 128, 0.02)
++  probe.sessionChanged(8)
++  at(4); probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.drawn(); probe.endFrame(); probe.stop()
++  assert.equal(probe.export().counters.sessionChanges, 1)
++  assert.equal(probe.export().records[0][8], -1)
++  assert.equal(analyzeMeasurement(raw(probe)).valid, false)
++})
++test('native drops, trimming, sequence gaps and metadata loss are explicit', () => {
++  const { probe, at } = fixture()
++  probe.nativeDrain(2, 3, 1)
++  at(3); probe.receipt(1, 1001, 128, 0.02); probe.receipt(4, 1002, 128, 0.02)
++  probe.beginFrame('spectrum'); probe.consume('spectrum', 3); probe.endFrame(); probe.stop()
++  const counters = probe.export().counters
++  assert.equal(counters.nativeOverwrites, 2)
++  assert.equal(counters.sequenceGaps, 2)
++  assert.equal(counters.trimmedChunks, 1)
++  assert.equal(counters.missingReceipts, 1)
++})
++test('pre-existing boundary chunks are excluded explicitly, pending tail remains censored', () => {
++  const { probe, at } = fixture()
++  at(3); probe.receipt(10, 1001, 128, 0.02)
++  probe.beginFrame('spectrum'); probe.consume('spectrum', 9); probe.consume('spectrum', 10); probe.drawn(); probe.endFrame()
++  at(5); probe.receipt(11, 1004, 128, 0.02)
++  at(6); probe.beginFrame('spectrum'); probe.drawn(); probe.endFrame(); probe.stop()
++  const data = raw(probe)
++  data.routerEnd = { ...data.routerEnd, scopes: { ...data.routerEnd.scopes, spectrum: { ...data.routerEnd.scopes.spectrum, queuedChunks: 1 } } }
++  const result = analyzeMeasurement(data)
++  assert.equal(result.counters.boundaryChunks, 1)
++  assert.equal(result.scopes[0].latencyMs.count, 1)
++  assert.equal(result.scopes[0].unconsumedAtStop, 1)
++  assert.equal(result.valid, true)
++})
++test('baseline observes frames but records no chunk probes; overflow never silently overwrites', () => {
++  const { probe, at } = fixture(1)
++  at(3); probe.receipt(1, 1001, 128, 0.02); probe.receipt(2, 1002, 128, 0.02)
++  probe.stop()
++  assert.equal(probe.export().chunks.length, 1)
++  assert.equal(probe.export().counters.bufferOverflow, 1)
++  probe.start('baseline', 7); probe.receipt(1, 1001, 128, 0.02)
++  probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.drawn(); probe.endFrame(); probe.stop()
++  assert.equal(probe.export().records.length, 0)
++  assert.equal(probe.export().frames.length, 1)
++})
++test('quantiles use nearest rank and preserve worst-case tails', () => {
++  assert.equal(percentile([], 0.95), null)
++  assert.equal(percentile([2, 100, 1, 3], 0.5), 2)
++  assert.equal(percentile([2, 100, 1, 3], 0.95), 100)
++})
++
++test('timer-quantized delivery is unresolved while later draw latency remains measurable', () => {
++  const { probe, at } = fixture()
++  at(1); probe.receipt(1, 1001.05, 128, 0.02)
++  at(4); probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.drawn(); at(5); probe.endFrame()
++  at(10); probe.beginFrame('spectrum'); probe.drawn(); probe.endFrame(); probe.stop()
++  const data = raw(probe); data.timerQuantumMs = 0.1
++  const result = analyzeMeasurement(data)
++  assert.equal(result.valid, true)
++  assert.equal(result.scopes[0].unresolvedDelivery, 1)
++  assert.equal(result.scopes[0].captureToReceiptMs.count, 0)
++  assert.equal(result.scopes[0].latencyMs.count, 1)
++  assert.ok(Math.abs(result.latencyUncertaintyMs - 0.3) < 1e-8)
++  assert.ok(result.scopes[0].upperLatencyMs.p95! > result.scopes[0].latencyMs.p95!)
++})
++
++test('duplicate consumption and changed configuration cannot support a claim', () => {
++  const { probe, at } = fixture()
++  at(3); probe.receipt(1, 1001, 128, 0.02)
++  at(4); probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.drawn(); probe.endFrame()
++  at(8); probe.beginFrame('spectrum'); probe.consume('spectrum', 1); probe.drawn(); probe.endFrame(); probe.stop()
++  const data = raw(probe); data.startMetadata = { changed: true }
++  const result = analyzeMeasurement(data)
++  assert.equal(result.scopes[0].duplicate, 1)
++  assert.equal(result.valid, false)
++  assert.ok(result.problems.some(p => p.includes('settings changed')))
++})
+diff --git a/test/presentation-benchmark.test.mjs b/test/presentation-benchmark.test.mjs
+new file mode 100644
+index 0000000..13313cc
+--- /dev/null
++++ b/test/presentation-benchmark.test.mjs
+@@ -0,0 +1,39 @@
++import test from 'node:test'
++import assert from 'node:assert/strict'
++import { linkPresentation } from '../scripts/benchmark/presentation.mjs'
++const fixture = () => {
++  const identity = { sequence_number: 2, source_id: 1 }
++  const event = (name, ph, ts, args = {}, extra = {}) => ({ name, ph, ts, args, pid: 10, tid: 20, id2: { local: '0x3' }, ...extra })
++  const events = [
++    event('AnimationFrame', 'b', 100000, { id: 'exact-id', animation_frame_timing_info: { begin_frame_id: identity } }),
++    event('AnimationFrame', 'e', 104000),
++    event('FireAnimationFrame', 'X', 101000, {}, { dur: 2000 }),
++    event('prism.frame.0.spectrum.start', 'I', 101100, { data: { callTime: 101100, startTime: 1.1 } }),
++    event('prism.frame.0.spectrum.end', 'I', 102100, { data: { callTime: 102100, startTime: 2.1 } }),
++    event('AnimationFrame::Presentation', 'n', 110000, { id: 'exact-id', begin_frame_id: identity }),
++    event('PipelineReporter', 'b', 99000, { frame_reporter: { frame_source: 1, frame_sequence: 2, state: 'STATE_PRESENTED_ALL' } }, { tid: 30 }),
++  ]
++  const raw = { scopes: ['spectrum'], frames: [[0, 0, 1, 2, 1]], records: [[1, 4, 0, 0, 1001, 1, 1.5, 2, 1, 128]] }
++  const clock = { offset: -1000, uncertaintyMs: 0.1, timerQuantumMs: 0.1 }
++  return { events, raw, clock }
++}
++test('presentation estimate requires complete identity chain and calibrated clock bridge', () => {
++  const { events, raw, clock } = fixture(), result = linkPresentation(events, raw, clock)
++  assert.equal(result.available, true)
++  assert.equal(result.samples[0].latencyMs, 9)
++  assert.equal(result.frameLinks[0].drawToPresentationEstimateMs, 8)
++})
++test('duplicate or wrong-frame presentation is rejected, regardless of proximity', () => {
++  const { events, raw, clock } = fixture()
++  assert.equal(linkPresentation([...events, events[5]], raw, clock).available, false)
++  events[5].args.begin_frame_id = { source_id: 1, sequence_number: 3 }
++  assert.equal(linkPresentation(events, raw, clock).available, false)
++})
++test('a partial compositor frame or marker outside its RAF task cannot establish presentation', () => {
++  const { events, raw, clock } = fixture()
++  events[6].args.frame_reporter.state = 'STATE_PRESENTED_PARTIAL'
++  assert.equal(linkPresentation(events, raw, clock).available, false)
++  events[6].args.frame_reporter.state = 'STATE_PRESENTED_ALL'
++  events[2].dur = 10
++  assert.equal(linkPresentation(events, raw, clock).available, false)
++})

@@ -37,3 +37,6 @@ yarn-error.log*
 
 # notes
 untitled-1
+
+# Local latency benchmark recordings, traces, and isolated settings
+benchmark-results/

@@ -204,6 +204,8 @@ Prism can capture system output directly through CoreAudio on macOS, WASAPI on W
 
 No virtual audio cable is required for normal system capture.
 
+The default rack measured [around 7 ms median capture-to-render latency](docs/latency.md) on an M5 Pro at 120 FPS.
+
 The main rack and scope popouts can use solid, blurred, or clear backgrounds, making Prism usable as a normal desktop application or as a set of unobtrusive overlays.
 
 Prism can also live in the system tray, start automatically with your computer, and launch either normally or out of the way when you want it running all the time.
