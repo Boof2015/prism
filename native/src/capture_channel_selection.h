@@ -8,6 +8,7 @@ namespace Prism::Capture {
 enum class SampleEncoding {
     Float,
     SignedInteger,
+    UnsignedInteger,
     Unsupported,
 };
 
@@ -15,7 +16,15 @@ struct PCMFormat {
     SampleEncoding encoding = SampleEncoding::Unsupported;
     uint32_t bitsPerChannel = 0;
     bool bigEndian = false;
+    // Zero uses bitsPerChannel (the byte-aligned storage/container width).
+    uint32_t validBitsPerChannel = 0;
+    bool highAligned = false;
+    // Preserve the original macOS signed-PCM scale by default. PulseAudio uses
+    // the negative full-scale magnitude (e.g. 32768 for signed 16-bit PCM).
+    bool normalizeByPowerOfTwo = false;
 };
+
+bool isSupportedPCMFormat(const PCMFormat& format);
 
 struct PCMBufferView {
     const uint8_t* data = nullptr;

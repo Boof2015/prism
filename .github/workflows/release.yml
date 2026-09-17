@@ -124,6 +124,9 @@ jobs:
       - name: Test native spectrum and capture exports
         run: npm run test:spectrum-native
 
+      - name: Test native channel routing and PCM formats
+        run: npm run test:capture-channel-selection-native
+
       - name: Test native spectrogram accuracy
         run: npm run test:spectrogram-native
 

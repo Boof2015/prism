@@ -357,6 +357,7 @@ function installAudioCaptureHarness(options: {
     startDeviceRequests: Array<{ deviceId: string | null; forceDeviceRestart: boolean }>
     startSystemAudio: number
     startSystemAudioDeviceIds: Array<string | undefined>
+    channelRoutes: Array<{ left: number; right: number } | undefined>
   }
 } {
   const originalMethods = {
@@ -373,6 +374,7 @@ function installAudioCaptureHarness(options: {
   }
 
   const calls = {
+    channelRoutes: [] as Array<{ left: number; right: number } | undefined>,
     listDevices: 0,
     listSources: 0,
     startSystemAudio: 0,
@@ -398,7 +400,8 @@ function installAudioCaptureHarness(options: {
     calls.listDevices += 1
     return resolveHarnessSources(options.devices, [])
   }
-  audioCapture.startSystemAudio = async (deviceId?: string) => {
+  audioCapture.startSystemAudio = async (deviceId, startOptions) => {
+    calls.channelRoutes.push(startOptions?.channelRouting)
     calls.startSystemAudio += 1
     calls.startSystemAudioDeviceIds.push(deviceId)
     if (options.startSystemAudio) {
@@ -417,6 +420,7 @@ function installAudioCaptureHarness(options: {
     }
   }
   audioCapture.startDevice = async (deviceId?: string, startOptions?: StartDeviceOptions) => {
+    calls.channelRoutes.push(startOptions?.channelRouting)
     calls.startDevice += 1
     calls.startDeviceRequests.push({
       deviceId: deviceId ?? null,
@@ -1238,6 +1242,71 @@ test('audio device watcher coalesces refreshes and cleans up timers and listener
   } finally {
     fakeEnvironment.restore()
     harness.restore()
+    resetStores()
+  }
+})
+
+for (const mode of ['system', 'device'] as const) {
+  test(`${mode} capture reopens when the selected native device changes channel layout`, async () => {
+    resetStores()
+    const support = createBackendSupport(true, null)
+    let source: CaptureSourceDescriptor = {
+      id: 'native-device', label: 'Interface', kind: mode, isDefault: true,
+      sampleRate: 48000, channelCount: 6, channelRoutingAvailable: true,
+      channels: Array.from({ length: 6 }, (_, index) => ({ index, label: `Channel ${index + 1}` })),
+    }
+    const harness = installAudioCaptureHarness({
+      support,
+      systemSources: () => [source],
+      devices: () => [source],
+    })
+    const key = getCaptureRoutingStorageKey(mode, source.id)
+    try {
+      useAudioStore.setState({
+        backendSupport: support, systemSources: [source], devices: [source], captureMode: mode,
+        selectedSystemSourceId: source.id, selectedDeviceId: source.id,
+        captureStatus: 'capturing', isCapturing: true, activeSourceId: source.id,
+        channelRoutingBySource: { [key]: { left: 5, right: 4 } },
+      })
+      source = { ...source, channelCount: 2, channels: source.channels!.slice(0, 2) }
+      const refresh = mode === 'system' ? useAudioStore.getState().refreshSystemSources : useAudioStore.getState().refreshDevices
+      await refresh({ rebindActiveCapture: true })
+      assert.equal(harness.calls.startDevice + harness.calls.startSystemAudio, 1)
+      assert.deepEqual(harness.calls.channelRoutes, [{ left: 0, right: 1 }])
+      if (mode === 'device') assert.equal(harness.calls.startDeviceRequests[0].forceDeviceRestart, true)
+      assert.deepEqual(useAudioStore.getState().channelRoutingBySource[key], { left: 5, right: 4 },
+        'retain saved routes so returning to the full layout restores the selection')
+      await refresh({ rebindActiveCapture: true })
+      assert.equal(harness.calls.startDevice + harness.calls.startSystemAudio, 1, 'unchanged devices do not restart')
+      source = { ...source, sampleRate: 96000 }
+      await refresh({ rebindActiveCapture: true })
+      assert.equal(harness.calls.startDevice + harness.calls.startSystemAudio, 2)
+    } finally {
+      harness.restore()
+      resetStores()
+    }
+  })
+}
+
+test('legacy browser input preferences recover to the native default and retain unrelated routes', async () => {
+  resetStores()
+  const storage = installFakeLocalStorage()
+  const native = { ...mediaDevice('native-input', 'Interface', true), channelRoutingAvailable: true }
+  const harness = installAudioCaptureHarness({ support: createBackendSupport(true, null), devices: [native] })
+  try {
+    useAudioStore.setState({
+      captureMode: 'device', selectedDeviceId: 'old-browser-device-hash', devices: [],
+      channelRoutingBySource: { 'system:output': { left: 3, right: 4 } },
+    })
+    await useAudioStore.getState().refreshDevices({ rebindActiveCapture: false })
+    assert.equal(useAudioStore.getState().selectedDeviceId, null)
+    assert.match(useAudioStore.getState().captureNotice ?? '', /switched to Default Input/)
+    const saved = JSON.parse(storage.getItem('prism:audio')!)
+    assert.equal(saved.selectedDeviceId, null)
+    assert.deepEqual(saved.channelRoutingBySource, { 'system:output': { left: 3, right: 4 } })
+  } finally {
+    harness.restore()
+    storage.restore()
     resetStores()
   }
 })

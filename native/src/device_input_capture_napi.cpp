@@ -74,6 +74,11 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
     if (info.Length() >= 1 && info[0].IsString()) {
         requestedDeviceId = info[0].As<Napi::String>().Utf8Value();
     }
+    // Stop before setting startup routing: the previous device's channel count
+    // must not clamp a route intended for the new device.
+    activeInputCapture()->stop();
+    activeInputCapture()->setChannelRouting(0, 1);
+
     if (info.Length() >= 2 && info[1].IsObject()) {
         const Napi::Object routing = info[1].As<Napi::Object>();
         if (routing.Has("left") && routing.Has("right")

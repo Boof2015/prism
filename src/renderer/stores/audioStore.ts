@@ -188,6 +188,20 @@ function getDefaultInputSignature(devices: CaptureSourceDescriptor[]): string | 
   ].join('\0')
 }
 
+function hasActiveSourceFormatChanged(
+  previous: CaptureSourceDescriptor[],
+  next: CaptureSourceDescriptor[],
+  activeSourceId: string | null,
+): boolean {
+  const before = previous.find((source) => source.id === activeSourceId)
+  const after = next.find((source) => source.id === activeSourceId)
+  return Boolean(before && after && (
+    before.sampleRate !== after.sampleRate
+    || before.channelCount !== after.channelCount
+    || JSON.stringify(before.channels ?? []) !== JSON.stringify(after.channels ?? [])
+  ))
+}
+
 function normalizeChannelRoutingMap(raw: unknown): Record<string, CaptureChannelRouting> {
   if (typeof raw !== 'object' || raw === null) return {}
   const result: Record<string, CaptureChannelRouting> = {}
@@ -559,13 +573,16 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       && defaultSystemSourceId
       && currentState.activeSourceId !== defaultSystemSourceId,
     )
+    const activeFormatChanged = hasActiveSourceFormatChanged(
+      previousSources, systemSources, currentState.activeSourceId,
+    )
 
     if (
       options.rebindActiveCapture === true
       && currentState.captureMode === 'system'
       && currentState.captureStatus === 'capturing'
       && currentState.isCapturing
-      && (explicitSourceBecameUnavailable || defaultOutputChanged)
+      && (explicitSourceBecameUnavailable || defaultOutputChanged || activeFormatChanged)
     ) {
       await get().startCapture({ skipSourceRefresh: true })
     }
@@ -620,6 +637,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
 
     const defaultInputChanged = getDefaultInputSignature(previousDevices)
       !== getDefaultInputSignature(devices)
+    const activeFormatChanged = hasActiveSourceFormatChanged(
+      previousDevices, devices, currentState.activeSourceId,
+    )
     const selectedDefaultInput = nextSelectedDeviceId === null
     const explicitDeviceBecameUnavailable = Boolean(
       previousSelectedDeviceId
@@ -634,10 +654,11 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       && (
         explicitDeviceBecameUnavailable
         || (selectedDefaultInput && defaultInputChanged)
+        || activeFormatChanged
       )
     ) {
       await get().startCapture({
-        forceDeviceRestart: selectedDefaultInput,
+        forceDeviceRestart: selectedDefaultInput || activeFormatChanged,
         skipSourceRefresh: true,
       })
     }

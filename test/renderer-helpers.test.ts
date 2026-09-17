@@ -7505,10 +7505,14 @@ test('channel activity isolates sessions and sources and resets on channel-count
   assert.equal(activity.getSnapshot(70), null, 'late chunks cannot restore stopped activity')
 })
 
-test('AudioCapture keeps activity before gain, preserves it across routing, and clears it on restart and stop', async () => {
+for (const [exportName, kind] of [
+  ['macosCapture', 'native-macos'], ['windowsCapture', 'native-windows'], ['linuxCapture', 'native-linux'],
+] as const) {
+test(`${kind} keeps pre-gain activity across routing and clears it on restart and stop`, async () => {
   const timers = installFakeTimeouts()
   const { audioCapture } = await import('../src/renderer/audio/AudioCapture')
   const { audioRouter } = await import('../src/renderer/audio/AudioRouter')
+  const originalNativeAPI = window.nativeCaptureAPI
   const originalSupport = audioCapture.getStatus().backendSupport
   const originalSource = audioCapture.getSelectedSystemSourceId()
   const originalMode = audioCapture.getCaptureMode()
@@ -7516,7 +7520,7 @@ test('AudioCapture keeps activity before gain, preserves it across routing, and 
   const pending: import('../src/types/nativeCapture').NativeCapturedChunk[] = []
   const routes: Array<{ left: number; right: number }> = []
   window.nativeCaptureAPI = {
-    macosCapture: {
+    [exportName]: {
       getSupport: () => ({ available: true, reason: null }),
       listOutputDevices: () => [],
       start: (deviceId = 'first') => ({ sampleRate: 48000, channelCount: 2, sourceChannelCount: 3, deviceId, deviceLabel: deviceId }),
@@ -7527,7 +7531,7 @@ test('AudioCapture keeps activity before gain, preserves it across routing, and 
     },
   } as typeof window.nativeCaptureAPI
   const support = {
-    nativeBackend: { kind: 'native-macos' as const, available: true, reason: null, channelRoutingAvailable: true },
+    nativeBackend: { kind, available: true, reason: null, channelRoutingAvailable: true },
     deviceInput: { kind: 'device-input' as const, available: false, reason: null },
     dawBridge: { kind: 'daw-bridge' as const, available: false, reason: null },
   }
@@ -7572,6 +7576,80 @@ test('AudioCapture keeps activity before gain, preserves it across routing, and 
     audioRouter.clearVisualizerConsumerDemand('channel-activity-test')
     window.electronAPI.getCaptureBackendSupport = async () => originalSupport ?? support
     await audioCapture.refreshBackendSupport()
+    window.nativeCaptureAPI = originalNativeAPI
+    timers.restore()
+  }
+})
+
+}
+
+test('native input capture exposes channels, forwards routing and peaks, and normalizes a changed layout', async () => {
+  const { NativeDeviceInputCaptureBackend } = await import('../src/renderer/audio/AudioCapture')
+  const timers = installFakeTimeouts()
+  const originalAPI = window.nativeCaptureAPI
+  const originalRequest = window.electronAPI.requestMicrophoneAccess
+  const pending: import('../src/types/nativeCapture').NativeCapturedChunk[] = []
+  const starts: Array<{ deviceId: string | undefined; routing: unknown }> = []
+  const routes: Array<{ left: number; right: number }> = []
+  let sourceChannels = 6
+  let allowed = true
+  let failure: Error | null = null
+  window.electronAPI.requestMicrophoneAccess = async () => allowed
+  window.nativeCaptureAPI = {
+    deviceInputCapture: {
+      getSupport: () => ({ available: true, reason: null }),
+      listInputDevices: () => [{ id: 'interface', label: 'Interface', kind: 'device', isDefault: true,
+        sampleRate: 48000, channelCount: sourceChannels, channelRoutingAvailable: true,
+        channels: Array.from({ length: sourceChannels }, (_, index) => ({ index, label: `Input ${index + 1}` })) }],
+      start: (deviceId, routing) => {
+        if (failure) throw failure
+        starts.push({ deviceId, routing })
+        return { sampleRate: 48000, channelCount: sourceChannels > 1 ? 2 : 1,
+          sourceChannelCount: sourceChannels, deviceId: 'interface', deviceLabel: 'Interface' }
+      },
+      setChannelRouting: (left, right) => { const route = { left, right }; routes.push(route); return route },
+      stop: () => {}, drain: () => ({ chunks: pending.splice(0), overwriteCount: 0, queueDepth: 0 }),
+      nowMilliseconds: () => 1000,
+    },
+  } as typeof window.nativeCaptureAPI
+  const backend = new NativeDeviceInputCaptureBackend({
+    kind: 'device-input', available: true, reason: null, channelRoutingAvailable: true,
+  })
+  try {
+    const [source] = await backend.listSources()
+    assert.equal(source.channels!.length, 6)
+    assert.equal(source.channelRoutingAvailable, true)
+    await backend.start({ deviceId: 'interface', channelRouting: { left: 5, right: 3 } })
+    assert.deepEqual(starts, [{ deviceId: 'interface', routing: { left: 5, right: 3 } }])
+    assert.equal(backend.getStatus().sourceChannelCount, 6)
+    assert.equal(backend.getStatus().channelCount, 2)
+    assert.deepEqual(routes.at(-1), { left: 5, right: 3 })
+    const received: Float32Array[] = []
+    backend.subscribe(chunk => { received.push(chunk.sourceChannelPeaks!) })
+    const peaks = new Float32Array([0, 0.25, 0, 0.5, 0.75, 1])
+    pending.push({ left: new Float32Array([1]), right: new Float32Array([0.5]), channelCount: 2,
+      sourceChannelPeaks: peaks, sequence: 1, capturedAtMilliseconds: 1000 })
+    timers.runNext()
+    assert.deepEqual(received, [peaks])
+    backend.setChannelRouting({ left: 4, right: 4 })
+    assert.equal(starts.length, 1, 'routing does not restart capture')
+    assert.deepEqual(routes.at(-1), { left: 4, right: 4 })
+    await backend.stop()
+    sourceChannels = 1
+    await backend.start({ deviceId: 'interface', channelRouting: { left: 5, right: 3 } })
+    assert.equal(backend.getStatus().sourceChannelCount, 1)
+    assert.equal(backend.getStatus().channelCount, 1)
+    assert.deepEqual(routes.at(-1), { left: 0, right: 0 })
+    await backend.stop()
+    failure = new Error('Device disconnected')
+    await assert.rejects(backend.start(), /Device disconnected/)
+    assert.equal(timers.pendingCount(), 0)
+    allowed = false
+    await assert.rejects(backend.start(), /Microphone access/)
+  } finally {
+    await backend.stop()
+    window.nativeCaptureAPI = originalAPI
+    window.electronAPI.requestMicrophoneAccess = originalRequest
     timers.restore()
   }
 })

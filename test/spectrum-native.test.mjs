@@ -94,13 +94,17 @@ test('native capture exports preserve the renderer-facing API shape', () => {
   ]) {
     assert.equal(typeof deviceInputCapture[method], 'function', `deviceInputCapture.${method} should be a function`)
   }
-  assert.equal(deviceInputCapture.getSupport().available, process.platform === 'darwin')
+  const inputSupport = deviceInputCapture.getSupport()
+  assert.equal(typeof inputSupport.available, 'boolean')
+  assert.ok(inputSupport.reason === null || typeof inputSupport.reason === 'string')
+  if (!inputSupport.available) assert.ok(inputSupport.reason, 'runtime failures include a reason')
 
   const activeExport = process.platform === 'darwin'
     ? 'macosCapture'
     : process.platform === 'win32'
       ? 'windowsCapture'
       : 'linuxCapture'
+  assert.equal(typeof nativeAddon[activeExport].setChannelRouting, 'function')
   const support = nativeAddon[activeExport].getSupport()
   assert.equal(typeof support.available, 'boolean')
   assert.ok(support.reason === null || typeof support.reason === 'string')

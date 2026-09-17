@@ -28,7 +28,7 @@ export interface NativeCaptureStartResult {
   sampleRate: number
   /** Effective mono/stereo count emitted to the renderer. */
   channelCount: number
-  /** Physical channel count exposed by the selected source. */
+  /** Full channel count exposed by the selected source through its OS audio backend. */
   sourceChannelCount: number
   deviceId: string
   deviceLabel: string
@@ -40,7 +40,7 @@ export interface NativeCapturedChunk {
   channelCount: number
   capturedAtMilliseconds: number
   sequence: number
-  /** Absolute peaks for all physical source channels, before routing or gain. */
+  /** Absolute peaks for all OS-exposed source channels, before routing or gain. */
   sourceChannelPeaks?: Float32Array
 }
 

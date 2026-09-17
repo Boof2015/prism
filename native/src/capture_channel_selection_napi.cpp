@@ -7,7 +7,7 @@
 
 namespace {
 
-Napi::Value SelectFloat32(const Napi::CallbackInfo& info) {
+Napi::Value Select(const Napi::CallbackInfo& info, bool rawPCM) {
     Napi::Env env = info.Env();
     if (info.Length() < 5 || !info[0].IsArray() || !info[1].IsNumber()
         || !info[2].IsNumber() || !info[3].IsNumber() || !info[4].IsNumber()) {
@@ -18,8 +18,29 @@ Napi::Value SelectFloat32(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
+    Prism::Capture::PCMFormat format{Prism::Capture::SampleEncoding::Float, 32, false};
+    if (rawPCM) {
+        if (info.Length() < 6 || !info[5].IsObject()) {
+            Napi::TypeError::New(env, "Expected a PCM format descriptor.").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+        const auto descriptor = info[5].As<Napi::Object>();
+        const auto encoding = descriptor.Get("encoding").ToString().Utf8Value();
+        format.encoding = encoding == "float" ? Prism::Capture::SampleEncoding::Float
+            : encoding == "signed" ? Prism::Capture::SampleEncoding::SignedInteger
+            : encoding == "unsigned" ? Prism::Capture::SampleEncoding::UnsignedInteger
+            : Prism::Capture::SampleEncoding::Unsupported;
+        format.bitsPerChannel = descriptor.Get("bitsPerChannel").ToNumber().Uint32Value();
+        if (descriptor.Has("validBitsPerChannel")) {
+            format.validBitsPerChannel = descriptor.Get("validBitsPerChannel").ToNumber().Uint32Value();
+        }
+        format.bigEndian = descriptor.Get("bigEndian").ToBoolean().Value();
+        format.highAligned = descriptor.Get("highAligned").ToBoolean().Value();
+        format.normalizeByPowerOfTwo = descriptor.Get("normalizeByPowerOfTwo").ToBoolean().Value();
+    }
+
     const Napi::Array sourceBuffers = info[0].As<Napi::Array>();
-    std::vector<Napi::Float32Array> retainedArrays;
+    std::vector<Napi::TypedArray> retainedArrays;
     std::vector<Prism::Capture::PCMBufferView> buffers;
     retainedArrays.reserve(sourceBuffers.Length());
     buffers.reserve(sourceBuffers.Length());
@@ -38,21 +59,21 @@ Napi::Value SelectFloat32(const Napi::CallbackInfo& info) {
         const Napi::Value dataValue = entry.Get("data");
         const Napi::Value channelCountValue = entry.Get("channelCount");
         if (!dataValue.IsTypedArray() || !channelCountValue.IsNumber()) {
-            Napi::TypeError::New(env, "Each buffer requires Float32Array data and channelCount.")
+            Napi::TypeError::New(env, "Each buffer requires typed-array data and channelCount.")
                 .ThrowAsJavaScriptException();
             return env.Undefined();
         }
         const Napi::TypedArray typedArray = dataValue.As<Napi::TypedArray>();
-        if (typedArray.TypedArrayType() != napi_float32_array) {
-            Napi::TypeError::New(env, "Buffer data must be a Float32Array.")
+        if (typedArray.TypedArrayType() != (rawPCM ? napi_uint8_array : napi_float32_array)) {
+            Napi::TypeError::New(env, rawPCM ? "Buffer data must be a Uint8Array." : "Buffer data must be a Float32Array.")
                 .ThrowAsJavaScriptException();
             return env.Undefined();
         }
-        retainedArrays.push_back(dataValue.As<Napi::Float32Array>());
+        retainedArrays.push_back(typedArray);
         const auto& retained = retainedArrays.back();
         buffers.push_back({
-            reinterpret_cast<const uint8_t*>(retained.Data()),
-            retained.ElementLength() * sizeof(float),
+            static_cast<const uint8_t*>(retained.ArrayBuffer().Data()) + retained.ByteOffset(),
+            retained.ByteLength(),
             channelCountValue.As<Napi::Number>().Uint32Value(),
         });
     }
@@ -63,7 +84,7 @@ Napi::Value SelectFloat32(const Napi::CallbackInfo& info) {
     const bool valid = Prism::Capture::selectStereoChannels(
         buffers.data(),
         buffers.size(),
-        {Prism::Capture::SampleEncoding::Float, 32, false},
+        format,
         frameCount,
         info[2].As<Napi::Number>().Uint32Value(),
         info[3].As<Napi::Number>().Uint32Value(),
@@ -75,7 +96,7 @@ Napi::Value SelectFloat32(const Napi::CallbackInfo& info) {
     const uint32_t sourceChannelCount = info[2].As<Napi::Number>().Uint32Value();
     auto peaks = Napi::Float32Array::New(env, sourceChannelCount);
     Prism::Capture::measureSourceChannelPeaks(
-        buffers.data(), buffers.size(), {Prism::Capture::SampleEncoding::Float, 32, false},
+        buffers.data(), buffers.size(), format,
         frameCount, sourceChannelCount, peaks.Data());
     result.Set("sourceChannelPeaks", peaks);
     result.Set("valid", Napi::Boolean::New(env, valid));
@@ -84,10 +105,14 @@ Napi::Value SelectFloat32(const Napi::CallbackInfo& info) {
     return result;
 }
 
+Napi::Value SelectFloat32(const Napi::CallbackInfo& info) { return Select(info, false); }
+Napi::Value SelectPCM(const Napi::CallbackInfo& info) { return Select(info, true); }
+
 }  // namespace
 
 void RegisterCaptureChannelSelection(Napi::Env env, Napi::Object exports) {
     Napi::Object helper = Napi::Object::New(env);
     helper.Set("selectFloat32", Napi::Function::New(env, SelectFloat32));
+    helper.Set("selectPCM", Napi::Function::New(env, SelectPCM));
     exports.Set("captureChannelSelection", helper);
 }

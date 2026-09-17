@@ -36,16 +36,25 @@ float decodeSample(const uint8_t* data, const PCMFormat& format) {
         std::memcpy(&value, &bits, sizeof(value));
         return static_cast<float>(value);
     }
-    if (format.encoding != SampleEncoding::SignedInteger || format.bitsPerChannel > 32) {
+    if (format.encoding != SampleEncoding::SignedInteger
+        && format.encoding != SampleEncoding::UnsignedInteger) {
         return 0.0f;
     }
 
-    const uint64_t raw = readUnsignedSample(data, byteCount, format.bigEndian);
-    const uint64_t signBit = uint64_t{1} << (format.bitsPerChannel - 1);
-    const int64_t signedValue = (raw & signBit) != 0
-        ? static_cast<int64_t>(raw) - static_cast<int64_t>(uint64_t{1} << format.bitsPerChannel)
-        : static_cast<int64_t>(raw);
-    const double maximum = static_cast<double>(signBit - 1);
+    const uint32_t validBits = format.validBitsPerChannel == 0
+        ? format.bitsPerChannel : format.validBitsPerChannel;
+    uint64_t raw = readUnsignedSample(data, byteCount, format.bigEndian);
+    if (format.highAligned) raw >>= format.bitsPerChannel - validBits;
+    raw &= (uint64_t{1} << validBits) - 1;
+    const uint64_t signBit = uint64_t{1} << (validBits - 1);
+    const int64_t signedValue = format.encoding == SampleEncoding::UnsignedInteger
+        ? static_cast<int64_t>(raw) - static_cast<int64_t>(signBit)
+        : (raw & signBit) != 0
+            ? static_cast<int64_t>(raw) - static_cast<int64_t>(uint64_t{1} << validBits)
+            : static_cast<int64_t>(raw);
+    const double maximum = static_cast<double>(
+        format.normalizeByPowerOfTwo || format.encoding == SampleEncoding::UnsignedInteger
+            ? signBit : signBit - 1);
     return maximum > 0.0 ? static_cast<float>(static_cast<double>(signedValue) / maximum) : 0.0f;
 }
 
@@ -75,6 +84,20 @@ float readChannelFrame(const PCMBufferView* buffers,
 
 }  // namespace
 
+bool isSupportedPCMFormat(const PCMFormat& format) {
+    const uint32_t validBits = format.validBitsPerChannel == 0
+        ? format.bitsPerChannel : format.validBitsPerChannel;
+    if (format.encoding == SampleEncoding::Float) {
+        return (format.bitsPerChannel == 32 || format.bitsPerChannel == 64)
+            && validBits == format.bitsPerChannel;
+    }
+    return (format.encoding == SampleEncoding::SignedInteger
+            || format.encoding == SampleEncoding::UnsignedInteger)
+        && format.bitsPerChannel >= 8 && format.bitsPerChannel <= 32
+        && format.bitsPerChannel % 8 == 0
+        && validBits > 0 && validBits <= format.bitsPerChannel;
+}
+
 void measureSourceChannelPeaks(const PCMBufferView* buffers,
                                size_t bufferCount,
                                const PCMFormat& format,
@@ -83,12 +106,7 @@ void measureSourceChannelPeaks(const PCMBufferView* buffers,
                                float* peaksOutput) {
     if (peaksOutput == nullptr) return;
     std::fill_n(peaksOutput, sourceChannelCount, 0.0f);
-    const bool supported = (format.encoding == SampleEncoding::Float
-            && (format.bitsPerChannel == 32 || format.bitsPerChannel == 64))
-        || (format.encoding == SampleEncoding::SignedInteger
-            && format.bitsPerChannel >= 8 && format.bitsPerChannel <= 32
-            && format.bitsPerChannel % 8 == 0);
-    if (buffers == nullptr || !supported) return;
+    if (buffers == nullptr || !isSupportedPCMFormat(format)) return;
 
     const size_t bytesPerSample = format.bitsPerChannel / 8;
     uint32_t channelBase = 0;
@@ -132,9 +150,7 @@ bool selectStereoChannels(const PCMBufferView* buffers,
     if (leftOutput == nullptr || rightOutput == nullptr) return false;
     const bool valid = buffers != nullptr
         && bufferCount > 0
-        && format.bitsPerChannel >= 8
-        && format.bitsPerChannel % 8 == 0
-        && format.encoding != SampleEncoding::Unsupported
+        && isSupportedPCMFormat(format)
         && sourceChannelCount > 0
         && leftChannel < sourceChannelCount
         && rightChannel < sourceChannelCount;

@@ -16,6 +16,10 @@ Prism is a free, open-source audio analyzer and meter rack for Windows, macOS, a
 
 Monitor system audio or an input with a configurable set of real-time scopes and meters, arrange them however you like, and save the setup as a profile. The same analyzers are also available as VST3/AU/CLAP plugins, and Prism includes a native terminal interface for lightweight monitoring.
 
+### Multichannel input routing
+
+The desktop app's Channel Routing matrix works with system audio and device inputs on macOS, Windows, and Linux. Select any source channel independently for Prism's Left and Right channels, including the same channel for both. Activity fills show the incoming signal on every available channel, before routing and input trim; routes are saved per source.
+
 ![Prism scopes](assets/prism-demo-readme-optimized.gif)
 
 ## Scopes

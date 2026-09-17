@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
-import { getCaptureBackendSupport, resolveNativeCaptureSupport } from '../src/preload/captureSupport'
+import { getCaptureBackendSupport } from '../src/preload/captureSupport'
 import type {
   NativeCaptureSupport,
   NativeDeviceInputCaptureAPI,
@@ -64,6 +64,7 @@ test('getCaptureBackendSupport resolves Linux native support from the addon surf
       kind: 'native-linux',
       available: false,
       reason: 'PulseAudio connection failed.',
+      channelRoutingAvailable: false,
     },
     deviceInput: {
       kind: 'device-input',
@@ -79,27 +80,37 @@ test('getCaptureBackendSupport resolves Linux native support from the addon surf
   })
 })
 
-test('getCaptureBackendSupport exposes macOS routing capability explicitly', () => {
-  const macosCapture = createNativeSystemCaptureAPI({ available: true, reason: null })
-  macosCapture.setChannelRouting = (left, right) => ({ left, right })
-  const support = getCaptureBackendSupport('darwin', {
-    macosCapture,
-    windowsCapture: createNativeSystemCaptureAPI({ available: false, reason: 'Windows only' }),
-    linuxCapture: createNativeSystemCaptureAPI({ available: false, reason: 'Linux only' }),
-    deviceInputCapture: createNativeDeviceInputCaptureAPI({ available: true, reason: null }),
+for (const [platform, exportName] of [
+  ['darwin', 'macosCapture'], ['win32', 'windowsCapture'], ['linux', 'linuxCapture'],
+] as const) {
+  test(`${platform} exposes routing capabilities for system audio and native inputs`, () => {
+    const system = createNativeSystemCaptureAPI({ available: true, reason: null })
+    system.setChannelRouting = (left, right) => ({ left, right })
+    const api = {
+      macosCapture: system, windowsCapture: system, linuxCapture: system,
+      deviceInputCapture: createNativeDeviceInputCaptureAPI({ available: true, reason: null }),
+    }
+    const support = getCaptureBackendSupport(platform, api)
+    assert.equal(support.nativeBackend.channelRoutingAvailable, true)
+    assert.equal(support.deviceInput.channelRoutingAvailable, true)
+
+    delete api[exportName].setChannelRouting
+    assert.equal(getCaptureBackendSupport(platform, api).nativeBackend.channelRoutingAvailable, false,
+      'older native modules do not claim routing support')
+    api.deviceInputCapture = createNativeDeviceInputCaptureAPI({ available: false, reason: 'Unavailable' })
+    assert.deepEqual(getCaptureBackendSupport(platform, api).deviceInput, {
+      kind: 'device-input', available: true, reason: null, channelRoutingAvailable: false,
+    }, 'browser input capture remains available without a native backend')
   })
 
-  assert.equal(support.nativeBackend.channelRoutingAvailable, true)
-  assert.equal(support.deviceInput.channelRoutingAvailable, true)
-})
-
-test('resolveNativeCaptureSupport returns a module-unavailable reason when the addon is missing', () => {
-  assert.deepEqual(resolveNativeCaptureSupport('linux', null), {
-    kind: 'native-linux',
-    available: false,
-    reason: 'Native capture module is not available in this build.',
+  test(`${platform} reports a missing addon without enabling routing`, () => {
+    const support = getCaptureBackendSupport(platform, null)
+    assert.equal(support.nativeBackend.available, false)
+    assert.equal(support.nativeBackend.reason, 'Native capture module is not available in this build.')
+    assert.notEqual(support.nativeBackend.channelRoutingAvailable, true)
+    assert.equal(support.deviceInput.channelRoutingAvailable, false)
   })
-})
+}
 
 test('preload no longer exposes desktop source capture APIs', async () => {
   const preloadSource = await readFile(join(process.cwd(), 'src', 'preload', 'index.ts'), 'utf8')

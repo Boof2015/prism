@@ -126,3 +126,77 @@ test('source activity ignores nonfinite samples but retains finite overrange pea
   ], 4, 3, 2, 2)
   assert.deepEqual(values(result.sourceChannelPeaks), [0.5, 0, 2])
 })
+
+function encodePCM(values, format) {
+  const bytes = format.bitsPerChannel / 8
+  const buffer = new Uint8Array(values.length * bytes)
+  const view = new DataView(buffer.buffer)
+  for (let index = 0; index < values.length; index++) {
+    if (format.encoding === 'float') {
+      view[bytes === 4 ? 'setFloat32' : 'setFloat64'](index * bytes, values[index], !format.bigEndian)
+      continue
+    }
+    const bits = format.validBitsPerChannel ?? format.bitsPerChannel
+    const magnitude = 2 ** (bits - 1)
+    const scale = format.normalizeByPowerOfTwo || format.encoding === 'unsigned' ? magnitude : magnitude - 1
+    let sample = BigInt(Math.round(values[index] * scale))
+    if (format.encoding === 'unsigned') sample += BigInt(magnitude)
+    sample = BigInt.asUintN(bits, sample)
+    if (format.highAligned) sample <<= BigInt(format.bitsPerChannel - bits)
+    for (let byte = 0; byte < bytes; byte++) {
+      buffer[index * bytes + (format.bigEndian ? bytes - byte - 1 : byte)] = Number((sample >> BigInt(8 * byte)) & 255n)
+    }
+  }
+  return buffer
+}
+
+const pcmFormats = [
+  { encoding: 'unsigned', bitsPerChannel: 8 },
+  ...[8, 16, 24, 32].map(bitsPerChannel => ({ encoding: 'signed', bitsPerChannel })),
+  { encoding: 'signed', bitsPerChannel: 32, validBitsPerChannel: 24, highAligned: true },
+  { encoding: 'signed', bitsPerChannel: 32, validBitsPerChannel: 20, highAligned: true },
+  { encoding: 'signed', bitsPerChannel: 32, validBitsPerChannel: 24, normalizeByPowerOfTwo: true },
+  ...[16, 24, 32].map(bitsPerChannel => ({ encoding: 'signed', bitsPerChannel, normalizeByPowerOfTwo: true })),
+  { encoding: 'float', bitsPerChannel: 32 },
+  { encoding: 'float', bitsPerChannel: 64 },
+]
+
+for (const baseFormat of pcmFormats) {
+  for (const bigEndian of [false, true]) {
+    const format = { ...baseFormat, bigEndian }
+    test(`routes and measures multichannel PCM: ${JSON.stringify(format)}`, () => {
+      const pcm = encodePCM([0.125, -0.25, 0.5, -0.75, -0.5, 0.125, -0.25, 0.25], format)
+      // A subarray verifies that the native helper respects typed-array offsets.
+      const padded = new Uint8Array(pcm.length + 8)
+      padded.set(pcm, 4)
+      const buffers = [{ data: padded.subarray(4, 4 + pcm.length), channelCount: 4 }]
+      const result = captureChannelSelection.selectPCM(buffers, 2, 4, 3, 1, format)
+      assert.equal(result.valid, true)
+      const close = (actual, expected) => actual.forEach((sample, index) => {
+        assert.ok(Math.abs(sample - expected[index]) < 0.005, `${sample} != ${expected[index]}`)
+      })
+      close(result.left, [-0.75, 0.25])
+      close(result.right, [-0.25, 0.125])
+      close(result.sourceChannelPeaks, [0.5, 0.25, 0.5, 0.75])
+      const duplicate = captureChannelSelection.selectPCM(buffers, 2, 4, 2, 2, format)
+      assert.deepEqual(values(duplicate.left), values(duplicate.right))
+      assert.deepEqual(values(duplicate.sourceChannelPeaks), values(result.sourceChannelPeaks))
+    })
+  }
+}
+
+test('invalid PCM formats render silence instead of decoding unsupported memory layouts', () => {
+  for (const format of [
+    { encoding: 'float', bitsPerChannel: 24 },
+    { encoding: 'signed', bitsPerChannel: 64 },
+    { encoding: 'signed', bitsPerChannel: 32, validBitsPerChannel: 40 },
+    { encoding: 'compressed', bitsPerChannel: 16 },
+  ]) {
+    const result = captureChannelSelection.selectPCM(
+      [{ data: new Uint8Array(32).fill(255), channelCount: 2 }], 2, 2, 0, 1, format)
+    assert.equal(result.valid, false)
+    assert.deepEqual(values(result.left), [0, 0])
+    assert.deepEqual(values(result.right), [0, 0])
+    assert.deepEqual(values(result.sourceChannelPeaks), [0, 0])
+  }
+})

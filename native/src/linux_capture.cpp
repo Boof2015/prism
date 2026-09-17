@@ -1,4 +1,6 @@
 #include "system_audio_capture.h"
+#include "device_input_capture_adapter.h"
+#include "capture_channel_selection.h"
 
 #if defined(__linux__)
 
@@ -19,142 +21,70 @@ constexpr size_t kMaxQueuedChunks = 256;
 constexpr size_t kDefaultDrainChunkLimit = 64;
 constexpr pa_usec_t kTargetRecordFragmentMicroseconds = 10000;
 
-struct OutputDeviceInfo {
+struct DeviceInfo {
     std::string id;
     std::string label;
-    std::string monitorSourceName;
+    std::string recordSourceName;
     pa_sample_spec sampleSpec{};
     pa_channel_map channelMap{};
     bool hasChannelMap = false;
     bool isDefault = false;
 };
 
-struct CapturedChunk {
-    std::vector<float> left;
-    std::vector<float> right;
-    uint32_t channelCount = 2;
-    double capturedAtMilliseconds = 0.0;
-    uint64_t sequence = 0;
-};
+using CapturedChunk = Prism::Capture::AudioChunk;
 
 double monotonicMilliseconds() {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     return std::chrono::duration<double, std::milli>(now).count();
 }
 
-uint32_t readUint24LE(const uint8_t* data) {
-    return static_cast<uint32_t>(data[0]) |
-           (static_cast<uint32_t>(data[1]) << 8) |
-           (static_cast<uint32_t>(data[2]) << 16);
-}
-
-uint32_t readUint24BE(const uint8_t* data) {
-    return static_cast<uint32_t>(data[2]) |
-           (static_cast<uint32_t>(data[1]) << 8) |
-           (static_cast<uint32_t>(data[0]) << 16);
-}
-
-uint32_t readUint32LE(const uint8_t* data) {
-    return static_cast<uint32_t>(data[0]) |
-           (static_cast<uint32_t>(data[1]) << 8) |
-           (static_cast<uint32_t>(data[2]) << 16) |
-           (static_cast<uint32_t>(data[3]) << 24);
-}
-
-uint32_t readUint32BE(const uint8_t* data) {
-    return static_cast<uint32_t>(data[3]) |
-           (static_cast<uint32_t>(data[2]) << 8) |
-           (static_cast<uint32_t>(data[1]) << 16) |
-           (static_cast<uint32_t>(data[0]) << 24);
-}
-
-int32_t signExtend24(uint32_t value) {
-    if ((value & 0x00800000U) != 0) {
-        value |= 0xFF000000U;
-    }
-    return static_cast<int32_t>(value);
-}
-
-bool isSupportedSampleFormat(pa_sample_format_t format) {
+Prism::Capture::PCMFormat getPCMFormat(pa_sample_format_t format) {
+    using namespace Prism::Capture;
+    PCMFormat pcm;
+    pcm.normalizeByPowerOfTwo = true;
     switch (format) {
-        case PA_SAMPLE_U8:
-        case PA_SAMPLE_S16LE:
-        case PA_SAMPLE_S16BE:
-        case PA_SAMPLE_S24LE:
-        case PA_SAMPLE_S24BE:
-        case PA_SAMPLE_S24_32LE:
-        case PA_SAMPLE_S24_32BE:
-        case PA_SAMPLE_S32LE:
-        case PA_SAMPLE_S32BE:
-        case PA_SAMPLE_FLOAT32LE:
-        case PA_SAMPLE_FLOAT32BE:
-            return true;
-        default:
-            return false;
+        case PA_SAMPLE_U8: pcm.encoding = SampleEncoding::UnsignedInteger; pcm.bitsPerChannel = 8; break;
+        case PA_SAMPLE_S16LE: case PA_SAMPLE_S16BE:
+            pcm.encoding = SampleEncoding::SignedInteger; pcm.bitsPerChannel = 16; break;
+        case PA_SAMPLE_S24LE: case PA_SAMPLE_S24BE:
+            pcm.encoding = SampleEncoding::SignedInteger; pcm.bitsPerChannel = 24; break;
+        case PA_SAMPLE_S24_32LE: case PA_SAMPLE_S24_32BE:
+            pcm.encoding = SampleEncoding::SignedInteger; pcm.bitsPerChannel = 32;
+            pcm.validBitsPerChannel = 24; break;
+        case PA_SAMPLE_S32LE: case PA_SAMPLE_S32BE:
+            pcm.encoding = SampleEncoding::SignedInteger; pcm.bitsPerChannel = 32; break;
+        case PA_SAMPLE_FLOAT32LE: case PA_SAMPLE_FLOAT32BE:
+            pcm.encoding = SampleEncoding::Float; pcm.bitsPerChannel = 32; break;
+        default: break;
     }
+    pcm.bigEndian = pa_sample_format_is_be(format) > 0;
+    return pcm;
 }
 
-float readNormalizedSample(const uint8_t* data, pa_sample_format_t format) {
-    if (data == nullptr) {
-        return 0.0f;
+std::vector<Prism::Capture::ChannelDescriptor> channelDescriptors(const DeviceInfo& device) {
+    std::vector<Prism::Capture::ChannelDescriptor> result;
+    for (uint32_t index = 0; index < device.sampleSpec.channels; ++index) {
+        const char* label = device.hasChannelMap && index < device.channelMap.channels
+            ? pa_channel_position_to_pretty_string(device.channelMap.map[index]) : nullptr;
+        result.push_back({index, label != nullptr ? label : "Channel " + std::to_string(index + 1)});
     }
-
-    switch (format) {
-        case PA_SAMPLE_U8:
-            return (static_cast<int>(data[0]) - 128) / 128.0f;
-        case PA_SAMPLE_S16LE:
-            return static_cast<int16_t>(
-                       static_cast<uint16_t>(data[0]) |
-                       (static_cast<uint16_t>(data[1]) << 8)) /
-                   32768.0f;
-        case PA_SAMPLE_S16BE:
-            return static_cast<int16_t>(
-                       static_cast<uint16_t>(data[1]) |
-                       (static_cast<uint16_t>(data[0]) << 8)) /
-                   32768.0f;
-        case PA_SAMPLE_S24LE:
-            return signExtend24(readUint24LE(data)) / 8388608.0f;
-        case PA_SAMPLE_S24BE:
-            return signExtend24(readUint24BE(data)) / 8388608.0f;
-        case PA_SAMPLE_S24_32LE: {
-            uint32_t raw = readUint32LE(data) & 0x00FFFFFFU;
-            return signExtend24(raw) / 8388608.0f;
-        }
-        case PA_SAMPLE_S24_32BE: {
-            uint32_t raw = readUint32BE(data) & 0x00FFFFFFU;
-            return signExtend24(raw) / 8388608.0f;
-        }
-        case PA_SAMPLE_S32LE:
-            return static_cast<int32_t>(readUint32LE(data)) / 2147483648.0f;
-        case PA_SAMPLE_S32BE:
-            return static_cast<int32_t>(readUint32BE(data)) / 2147483648.0f;
-        case PA_SAMPLE_FLOAT32LE: {
-            const uint32_t raw = readUint32LE(data);
-            float value = 0.0f;
-            std::memcpy(&value, &raw, sizeof(value));
-            return value;
-        }
-        case PA_SAMPLE_FLOAT32BE: {
-            const uint32_t raw = readUint32BE(data);
-            float value = 0.0f;
-            std::memcpy(&value, &raw, sizeof(value));
-            return value;
-        }
-        default:
-            return 0.0f;
-    }
+    return result;
 }
 
-struct SinkEnumerationState {
+struct DeviceEnumerationState {
     pa_threaded_mainloop* mainloop = nullptr;
     std::string defaultSinkName;
-    std::vector<OutputDeviceInfo> devices;
+    std::string defaultSourceName;
+    std::vector<DeviceInfo> devices;
 };
 
 void HandleServerInfo(pa_context*, const pa_server_info* info, void* userdata) {
-    auto* state = static_cast<SinkEnumerationState*>(userdata);
+    auto* state = static_cast<DeviceEnumerationState*>(userdata);
     if (state != nullptr && info != nullptr && info->default_sink_name != nullptr) {
         state->defaultSinkName = info->default_sink_name;
+    }
+    if (state != nullptr && info != nullptr && info->default_source_name != nullptr) {
+        state->defaultSourceName = info->default_source_name;
     }
     if (state != nullptr && state->mainloop != nullptr) {
         pa_threaded_mainloop_signal(state->mainloop, 0);
@@ -162,7 +92,7 @@ void HandleServerInfo(pa_context*, const pa_server_info* info, void* userdata) {
 }
 
 void HandleSinkInfo(pa_context*, const pa_sink_info* info, int eol, void* userdata) {
-    auto* state = static_cast<SinkEnumerationState*>(userdata);
+    auto* state = static_cast<DeviceEnumerationState*>(userdata);
     if (state == nullptr || state->mainloop == nullptr) {
         return;
     }
@@ -173,16 +103,33 @@ void HandleSinkInfo(pa_context*, const pa_sink_info* info, int eol, void* userda
     }
 
     if (info != nullptr && info->name != nullptr && info->monitor_source_name != nullptr) {
-        OutputDeviceInfo device;
+        DeviceInfo device;
         device.id = info->name;
         device.label = info->description != nullptr ? info->description : info->name;
-        device.monitorSourceName = info->monitor_source_name;
+        device.recordSourceName = info->monitor_source_name;
         device.sampleSpec = info->sample_spec;
         device.channelMap = info->channel_map;
         device.hasChannelMap = info->channel_map.channels > 0;
         state->devices.push_back(device);
     }
 
+    pa_threaded_mainloop_signal(state->mainloop, 0);
+}
+
+void HandleSourceInfo(pa_context*, const pa_source_info* info, int eol, void* userdata) {
+    auto* state = static_cast<DeviceEnumerationState*>(userdata);
+    if (state == nullptr || state->mainloop == nullptr) return;
+    if (eol == 0 && info != nullptr && info->name != nullptr
+        && info->monitor_of_sink == PA_INVALID_INDEX) {
+        DeviceInfo device;
+        device.id = info->name;
+        device.label = info->description != nullptr ? info->description : info->name;
+        device.recordSourceName = info->name;
+        device.sampleSpec = info->sample_spec;
+        device.channelMap = info->channel_map;
+        device.hasChannelMap = info->channel_map.channels > 0;
+        state->devices.push_back(std::move(device));
+    }
     pa_threaded_mainloop_signal(state->mainloop, 0);
 }
 
@@ -273,11 +220,11 @@ public:
         started_ = false;
     }
 
-    bool enumerateOutputDevices(std::vector<OutputDeviceInfo>* outDevices,
+    bool enumerateDevices(bool input, std::vector<DeviceInfo>* outDevices,
                                 std::string* outErrorMessage) {
         if (outDevices == nullptr) {
             if (outErrorMessage != nullptr) {
-                *outErrorMessage = "Could not store PulseAudio output devices.";
+                *outErrorMessage = "Could not store PulseAudio devices.";
             }
             return false;
         }
@@ -291,7 +238,7 @@ public:
 
         pa_threaded_mainloop_lock(mainloop_);
 
-        SinkEnumerationState state;
+        DeviceEnumerationState state;
         state.mainloop = mainloop_;
 
         pa_operation* serverOperation =
@@ -302,7 +249,8 @@ public:
         }
 
         pa_operation* sinkOperation =
-            pa_context_get_sink_info_list(context_, &HandleSinkInfo, &state);
+            input ? pa_context_get_source_info_list(context_, &HandleSourceInfo, &state)
+                  : pa_context_get_sink_info_list(context_, &HandleSinkInfo, &state);
         if (!waitForOperationLocked(sinkOperation, outErrorMessage)) {
             pa_threaded_mainloop_unlock(mainloop_);
             return false;
@@ -311,14 +259,7 @@ public:
         pa_threaded_mainloop_unlock(mainloop_);
 
         for (auto& device : state.devices) {
-            device.isDefault = device.id == state.defaultSinkName;
-        }
-
-        if (state.devices.empty()) {
-            if (outErrorMessage != nullptr) {
-                *outErrorMessage = "No Linux output devices are available.";
-            }
-            return false;
+            device.isDefault = device.id == (input ? state.defaultSourceName : state.defaultSinkName);
         }
 
         *outDevices = std::move(state.devices);
@@ -408,6 +349,8 @@ private:
 
 class LinuxNativeCaptureEngine final : public Prism::Capture::SystemAudioCapture {
 public:
+    explicit LinuxNativeCaptureEngine(bool input = false) : input_(input) {}
+
     ~LinuxNativeCaptureEngine() override {
         stop();
     }
@@ -415,10 +358,10 @@ public:
     Prism::Capture::Support getSupport() const override {
         PulseContextConnection connection;
         std::string errorMessage;
-        std::vector<OutputDeviceInfo> devices;
+        std::vector<DeviceInfo> devices;
         const bool available =
             connection.connect("Prism Linux Capture Probe", &errorMessage) &&
-            connection.enumerateOutputDevices(&devices, &errorMessage);
+            connection.enumerateDevices(input_, &devices, &errorMessage);
         return {
             available,
             available ? std::string() : (errorMessage.empty()
@@ -430,9 +373,9 @@ public:
     std::vector<Prism::Capture::OutputDevice> listOutputDevices() override {
         PulseContextConnection connection;
         std::string errorMessage;
-        std::vector<OutputDeviceInfo> devices;
+        std::vector<DeviceInfo> devices;
         if (!connection.connect("Prism Linux Capture Devices", &errorMessage) ||
-            !connection.enumerateOutputDevices(&devices, &errorMessage)) {
+            !connection.enumerateDevices(input_, &devices, &errorMessage)) {
             return {};
         }
 
@@ -445,6 +388,7 @@ public:
                 static_cast<double>(device.sampleSpec.rate),
                 static_cast<uint32_t>(device.sampleSpec.channels),
                 device.isDefault,
+                channelDescriptors(device),
             });
         }
         return result;
@@ -455,18 +399,26 @@ public:
                std::string* errorMessage) override {
         if (!startInternal(requestedDeviceId, errorMessage)) {
             if (errorMessage != nullptr && errorMessage->empty()) {
-                *errorMessage = "Native Linux monitor capture failed to start.";
+                *errorMessage = "Native Linux audio capture failed to start.";
             }
             return false;
         }
         if (result != nullptr) {
             std::lock_guard<std::mutex> lock(stateMutex_);
             result->sampleRate = sampleRate_;
-            result->channelCount = channelCount_;
+            result->channelCount = channelCount_ > 1 ? 2u : 1u;
+            result->sourceChannelCount = channelCount_;
             result->deviceId = activeDeviceId_;
             result->deviceLabel = activeDeviceLabel_;
         }
         return true;
+    }
+
+    Prism::Capture::ChannelRouting setChannelRouting(uint32_t left, uint32_t right) override {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        routing_ = active_ ? Prism::Capture::normalizeChannelRouting({left, right}, channelCount_)
+                          : Prism::Capture::ChannelRouting{left, right};
+        return routing_;
     }
 
     void stop() override {
@@ -494,13 +446,7 @@ public:
         while (!drained.empty()) {
             auto chunk = std::move(drained.front());
             drained.pop_front();
-            result.chunks.push_back({
-                std::move(chunk.left),
-                std::move(chunk.right),
-                chunk.channelCount,
-                chunk.capturedAtMilliseconds,
-                chunk.sequence,
-            });
+            result.chunks.push_back(std::move(chunk));
         }
         return result;
     }
@@ -558,13 +504,22 @@ private:
             return false;
         }
 
-        std::vector<OutputDeviceInfo> devices;
-        if (!connection_.enumerateOutputDevices(&devices, outErrorMessage)) {
+        std::vector<DeviceInfo> devices;
+        if (!connection_.enumerateDevices(input_, &devices, outErrorMessage)) {
             connection_.disconnect();
             return false;
         }
 
-        const OutputDeviceInfo* selected = nullptr;
+        if (devices.empty()) {
+            if (outErrorMessage != nullptr) {
+                *outErrorMessage = input_ ? "No Linux input devices are available."
+                                         : "No Linux output devices are available.";
+            }
+            connection_.disconnect();
+            return false;
+        }
+
+        const DeviceInfo* selected = nullptr;
         if (!requestedDeviceId.empty()) {
             for (const auto& device : devices) {
                 if (device.id == requestedDeviceId) {
@@ -575,7 +530,8 @@ private:
             if (selected == nullptr) {
                 if (outErrorMessage != nullptr) {
                     *outErrorMessage =
-                        "The selected Linux output device is no longer available.";
+                        input_ ? "The selected Linux input device is no longer available."
+                               : "The selected Linux output device is no longer available.";
                 }
                 connection_.disconnect();
                 return false;
@@ -592,10 +548,10 @@ private:
             }
         }
 
-        if (!isSupportedSampleFormat(selected->sampleSpec.format)) {
+        if (!Prism::Capture::isSupportedPCMFormat(getPCMFormat(selected->sampleSpec.format))) {
             if (outErrorMessage != nullptr) {
                 *outErrorMessage =
-                    "Unsupported PulseAudio sample format for Linux monitor capture.";
+                    "Unsupported PulseAudio sample format for Linux audio capture.";
             }
             connection_.disconnect();
             return false;
@@ -605,7 +561,7 @@ private:
 
         stream_ = pa_stream_new(
             connection_.context(),
-            "Prism Output Monitor",
+            input_ ? "Prism Device Input" : "Prism Output Monitor",
             &selected->sampleSpec,
             selected->hasChannelMap ? &selected->channelMap : nullptr);
         if (stream_ == nullptr) {
@@ -629,10 +585,10 @@ private:
             PA_STREAM_INTERPOLATE_TIMING |
             PA_STREAM_DONT_MOVE);
         const int connectResult = pa_stream_connect_record(
-            stream_, selected->monitorSourceName.c_str(), &requestedBufferAttr, flags);
+            stream_, selected->recordSourceName.c_str(), &requestedBufferAttr, flags);
         if (connectResult < 0) {
             const std::string errorMessage = buildContextErrorMessage(
-                connection_.context(), "Could not start Linux monitor capture.");
+                connection_.context(), "Could not start Linux audio capture.");
             pa_stream_set_read_callback(stream_, nullptr, nullptr);
             pa_stream_set_state_callback(stream_, nullptr, nullptr);
             pa_stream_unref(stream_);
@@ -678,6 +634,7 @@ private:
             activeDeviceLabel_ = selected->label;
             sampleRate_ = static_cast<double>(sampleSpec_.rate);
             channelCount_ = std::max<uint32_t>(1, sampleSpec_.channels);
+            routing_ = Prism::Capture::normalizeChannelRouting(routing_, channelCount_);
             sequence_ = 0;
         }
 
@@ -696,7 +653,7 @@ private:
                     if (outErrorMessage != nullptr) {
                         *outErrorMessage = buildContextErrorMessage(
                             connection_.context(),
-                            "PulseAudio monitor stream failed to initialize.");
+                            "PulseAudio recording stream failed to initialize.");
                     }
                     return false;
                 default:
@@ -706,7 +663,7 @@ private:
         }
 
         if (outErrorMessage != nullptr) {
-            *outErrorMessage = "PulseAudio monitor stream is unavailable.";
+            *outErrorMessage = "PulseAudio recording stream is unavailable.";
         }
         return false;
     }
@@ -765,6 +722,7 @@ private:
             pa_sample_spec sampleSpec{};
             uint32_t channelCount = 2;
             uint64_t sequence = 0;
+            Prism::Capture::ChannelRouting routing;
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 if (!active_) {
@@ -773,6 +731,7 @@ private:
                 }
                 sampleSpec = sampleSpec_;
                 channelCount = channelCount_;
+                routing = routing_;
                 sequence = ++sequence_;
             }
 
@@ -782,7 +741,6 @@ private:
                 break;
             }
 
-            const size_t bytesPerSample = pa_sample_size_of_format(sampleSpec.format);
             const size_t frames = length / bytesPerFrame;
             if (frames == 0) {
                 pa_stream_drop(stream_);
@@ -790,27 +748,20 @@ private:
             }
 
             CapturedChunk chunk;
-            chunk.channelCount = channelCount;
+            chunk.channelCount = channelCount > 1 ? 2u : 1u;
             chunk.capturedAtMilliseconds = monotonicMilliseconds();
             chunk.sequence = sequence;
             chunk.left.resize(frames);
             chunk.right.resize(frames);
 
-            if (data != nullptr) {
-                const auto* rawData = static_cast<const uint8_t*>(data);
-                for (size_t frameIndex = 0; frameIndex < frames; ++frameIndex) {
-                    const uint8_t* frameData = rawData + (frameIndex * bytesPerFrame);
-                    const float left = readNormalizedSample(frameData, sampleSpec.format);
-                    const float right = channelCount > 1
-                        ? readNormalizedSample(frameData + bytesPerSample, sampleSpec.format)
-                        : left;
-                    chunk.left[frameIndex] = left;
-                    chunk.right[frameIndex] = right;
-                }
-            } else {
-                std::fill(chunk.left.begin(), chunk.left.end(), 0.0f);
-                std::fill(chunk.right.begin(), chunk.right.end(), 0.0f);
-            }
+            chunk.sourceChannelPeaks.resize(channelCount);
+            const Prism::Capture::PCMBufferView buffer{
+                static_cast<const uint8_t*>(data), length, channelCount};
+            const auto format = getPCMFormat(sampleSpec.format);
+            Prism::Capture::selectStereoChannels(&buffer, 1, format, frames, channelCount,
+                routing.left, routing.right, chunk.left.data(), chunk.right.data());
+            Prism::Capture::measureSourceChannelPeaks(&buffer, 1, format, frames, channelCount,
+                chunk.sourceChannelPeaks.data());
 
             pa_stream_drop(stream_);
             pushChunk(std::move(chunk));
@@ -830,6 +781,8 @@ private:
         chunkQueue_.push_back(std::move(chunk));
     }
 
+    const bool input_;
+    Prism::Capture::ChannelRouting routing_;
     PulseContextConnection connection_;
     pa_stream* stream_ = nullptr;
     mutable std::mutex stateMutex_;
@@ -852,6 +805,11 @@ namespace Prism::Capture {
 
 std::unique_ptr<SystemAudioCapture> createSystemAudioCapture() {
     return std::make_unique<LinuxNativeCaptureEngine>();
+}
+
+std::unique_ptr<DeviceInputCapture> createDeviceInputCapture() {
+    return std::make_unique<DeviceInputCaptureAdapter>(
+        std::make_unique<LinuxNativeCaptureEngine>(true));
 }
 
 }  // namespace Prism::Capture

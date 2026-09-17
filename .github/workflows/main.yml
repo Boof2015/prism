@@ -55,7 +55,9 @@ jobs:
             ninja-build \
             pkg-config \
             python3 \
-            libpulse-dev
+            libpulse-dev \
+            pulseaudio \
+            pulseaudio-utils
 
       - name: Install dependencies
         env:
@@ -79,6 +81,9 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Test isolated Linux multichannel capture
+        run: npm run test:linux-capture
 
       - name: Build and test Prism TUI
         run: npm run test:tui
@@ -189,6 +194,9 @@ jobs:
 
       - name: Test native spectrum and capture exports
         run: npm run test:spectrum-native
+
+      - name: Test native channel routing and PCM formats
+        run: npm run test:capture-channel-selection-native
 
       - name: Test native spectrogram accuracy
         run: npm run test:spectrogram-native

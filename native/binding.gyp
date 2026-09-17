@@ -54,8 +54,7 @@
         }],
         ["OS=='win'", {
           "sources": [
-            "src/windows_capture.cpp",
-            "src/device_input_capture_stub.cpp"
+            "src/windows_capture.cpp"
           ],
           "defines": [
             "WIN32_LEAN_AND_MEAN",
@@ -66,6 +65,7 @@
             "avrt.lib",
             "runtimeobject.lib",
             "uuid.lib",
+            "ksuser.lib",
             "dwmapi.lib",
             "shell32.lib",
             "comctl32.lib"
@@ -80,8 +80,7 @@
         ["OS=='linux'", {
           "sources": [
             "src/windows_capture_stub.cpp",
-            "src/linux_capture.cpp",
-            "src/device_input_capture_stub.cpp"
+            "src/linux_capture.cpp"
           ],
           "cflags_cc": ["-std=c++17", "-O3", "-ffast-math", "-fPIC"],
           "libraries": [

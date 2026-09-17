@@ -688,7 +688,7 @@ class NativeLinuxCaptureBackend extends NativePolledCaptureBackend {
   }
 }
 
-class NativeDeviceInputCaptureBackend extends NativePolledCaptureBackend {
+export class NativeDeviceInputCaptureBackend extends NativePolledCaptureBackend {
   readonly kind = 'device-input' as const
 
   async start(request?: CaptureBackendStartRequest): Promise<void> {

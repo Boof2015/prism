@@ -18,6 +18,7 @@
     "test:audio-clips": "node scripts/run-audio-clip-tests.mjs",
     "test:audio-store": "node scripts/run-audio-store-tests.mjs",
     "test:astra": "node scripts/run-astra-integration-tests.mjs",
+    "test:linux-capture": "node --test test/linux-capture-integration.test.mjs",
     "test:capture-support": "node scripts/run-capture-support-tests.mjs",
     "test:capture-channel-selection-native": "node --test test/capture-channel-selection-native.test.mjs",
     "test:daw-bridge": "node scripts/run-daw-bridge-tests.mjs",

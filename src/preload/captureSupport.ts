@@ -40,6 +40,7 @@ export function resolveNativeCaptureSupport(
       kind: 'native-windows',
       available: support.available,
       reason: support.reason,
+      channelRoutingAvailable: typeof windowsCapture.setChannelRouting === 'function',
     }
   }
 
@@ -53,6 +54,7 @@ export function resolveNativeCaptureSupport(
     kind: 'native-linux',
     available: support.available,
     reason: support.reason,
+    channelRoutingAvailable: typeof linuxCapture.setChannelRouting === 'function',
   }
 }
 

@@ -117,11 +117,7 @@ Napi::Value ListOutputDevices(const Napi::CallbackInfo& info) {
         entry.Set("sampleRate", Napi::Number::New(env, device.sampleRate));
         entry.Set("channelCount", Napi::Number::New(env, device.channelCount));
         entry.Set("channels", channelsToNapi(env, device.channels, device.channelCount));
-#if defined(__APPLE__)
         entry.Set("channelRoutingAvailable", Napi::Boolean::New(env, true));
-#else
-        entry.Set("channelRoutingAvailable", Napi::Boolean::New(env, false));
-#endif
         result.Set(static_cast<uint32_t>(index), entry);
     }
     return result;
@@ -133,6 +129,11 @@ Napi::Value Start(const Napi::CallbackInfo& info) {
     if (info.Length() >= 1 && info[0].IsString()) {
         requestedDeviceId = info[0].As<Napi::String>().Utf8Value();
     }
+
+    // Stop before setting startup routing: the previous device's channel count
+    // must not clamp a route intended for the new device.
+    activeCapture()->stop();
+    activeCapture()->setChannelRouting(0, 1);
 
     if (info.Length() >= 2 && info[1].IsObject()) {
         const Napi::Object routing = info[1].As<Napi::Object>();
@@ -203,9 +204,7 @@ void RegisterCaptureObject(Napi::Env env, Napi::Object exports, const char* expo
     capture.Set("stop", Napi::Function::New(env, Stop));
     capture.Set("drain", Napi::Function::New(env, Drain));
     capture.Set("nowMilliseconds", Napi::Function::New(env, NowMilliseconds));
-#if defined(__APPLE__)
     capture.Set("setChannelRouting", Napi::Function::New(env, SetChannelRouting));
-#endif
     exports.Set(exportName, capture);
 }
 
