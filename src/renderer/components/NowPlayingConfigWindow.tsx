@@ -1,3 +1,5 @@
+import { LocalNowPlayingProviderDetails } from './LocalNowPlayingProviderDetails'
+import { getLocalIntegrationLabel, getLocalUnavailableMetaText } from '../utils/localNowPlaying'
 import {
   useCallback,
   useEffect,
@@ -95,82 +97,6 @@ function getErrorMessage(error: unknown, fallback: string): string {
     : fallback
 }
 
-function isMacOSPlatform(platform: string): boolean {
-  return platform === 'darwin'
-}
-
-function isLinuxPlatform(platform: string): boolean {
-  return platform === 'linux'
-}
-
-function isWindowsPlatform(platform: string): boolean {
-  return platform === 'win32'
-}
-
-function getSpotifyIntegrationLabel(platform: string): string {
-  if (isMacOSPlatform(platform)) {
-    return 'Local macOS app'
-  }
-
-  if (isLinuxPlatform(platform)) {
-    return 'Local Linux MPRIS'
-  }
-
-  if (isWindowsPlatform(platform)) {
-    return 'Local Windows media session'
-  }
-
-  return 'Local Spotify integration'
-}
-
-function getSpotifyUnavailableMetaText(platform: string): string {
-  if (isMacOSPlatform(platform)) {
-    return 'Local macOS app unavailable'
-  }
-
-  if (isLinuxPlatform(platform)) {
-    return 'Local Linux MPRIS unavailable'
-  }
-
-  if (isWindowsPlatform(platform)) {
-    return 'Local Windows media session unavailable'
-  }
-
-  return 'Local Spotify integration unavailable'
-}
-
-function getSpotifyAvailabilityDetail(platform: string): string {
-  if (isMacOSPlatform(platform)) {
-    return 'Install Spotify.app in /Applications to enable this provider.'
-  }
-
-  if (isLinuxPlatform(platform)) {
-    return 'This provider needs a Linux desktop session with Spotify MPRIS access.'
-  }
-
-  if (isWindowsPlatform(platform)) {
-    return 'This provider needs Windows system media controls to expose a Spotify session.'
-  }
-
-  return 'This provider is currently available on macOS, Linux, and Windows.'
-}
-
-function getSpotifyProviderCopy(platform: string): string {
-  if (isMacOSPlatform(platform)) {
-    return 'No Spotify developer account or API setup is required. Prism reads the local Spotify macOS app directly.'
-  }
-
-  if (isLinuxPlatform(platform)) {
-    return 'No Spotify developer account or API setup is required. Prism reads Spotify through the local Linux MPRIS session.'
-  }
-
-  if (isWindowsPlatform(platform)) {
-    return 'No Spotify developer account or API setup is required. Prism reads Spotify through the local Windows media session.'
-  }
-
-  return 'No Spotify developer account or API setup is required. On supported systems, Prism reads the local Spotify app directly.'
-}
-
 function getProviderStatusLabel(
   definition: NowPlayingProviderDefinition,
   provider: NowPlayingProviderState,
@@ -211,8 +137,8 @@ function getProviderMetaText(
   }
 
   if (!provider.available) {
-    return provider.providerId === 'spotify'
-      ? getSpotifyUnavailableMetaText(platform)
+    return definition.authMode === 'local'
+      ? getLocalUnavailableMetaText(platform, provider.providerId)
       : 'Unavailable on this device'
   }
 
@@ -221,10 +147,10 @@ function getProviderMetaText(
   }
 
   if (definition.authMode === 'local') {
-    const integrationLabel = getSpotifyIntegrationLabel(platform)
+    const integrationLabel = getLocalIntegrationLabel(platform, provider.providerId)
     switch (provider.connectionState) {
       case 'disabled':
-        return `${integrationLabel} · Waiting for Spotify`
+        return `${integrationLabel} · Waiting for ${definition.label}`
       case 'connecting':
         return `${integrationLabel} · Checking playback`
       case 'connected':
@@ -234,7 +160,7 @@ function getProviderMetaText(
       case 'error':
         return `${integrationLabel} · Needs attention`
       case 'unavailable':
-        return getSpotifyUnavailableMetaText(platform)
+        return getLocalUnavailableMetaText(platform, provider.providerId)
     }
   }
 
@@ -475,7 +401,7 @@ export default function NowPlayingConfigWindow(): JSX.Element {
           <div className="now-playing-config__stack">
             <div className="now-playing-config__intro">
               {nowPlayingState.onboardingRequired
-                ? 'Start with Astra or the local Spotify integration. TIDAL stays visible here for future priority.'
+                ? 'Connect Astra or use local Spotify or TIDAL playback. Drag providers to set their priority.'
                 : 'The highest configured provider that starts playing takes over immediately.'}
             </div>
 
@@ -651,42 +577,13 @@ export default function NowPlayingConfigWindow(): JSX.Element {
                           </div>
                         </div>
                       ) : (
-                        <div className="now-playing-config__provider-body">
-                          <div className="now-playing-config__provider-body-copy">
-                            {definition.description}
-                          </div>
-                          <div className="settings-info-text">
-                            {getSpotifyProviderCopy(platform)}
-                          </div>
-                          <div className="settings-inline-actions now-playing-config__provider-actions">
-                            <button
-                              type="button"
-                              className="settings-chip"
-                              disabled={!provider.available}
-                              onClick={() => {
-                                void retryProvider('spotify').catch((error) => {
-                                  showBanner({
-                                    tone: 'error',
-                                    message: getErrorMessage(error, 'Could not reconnect to Spotify.'),
-                                    actions: [],
-                                  })
-                                })
-                              }}
-                            >
-                              Retry
-                            </button>
-                          </div>
-                          {!provider.available ? (
-                            <div className="settings-info-text">
-                              {getSpotifyAvailabilityDetail(platform)}
-                          </div>
-                          ) : null}
-                          {provider.lastError || provider.lastControlError ? (
-                            <div className="settings-error-text now-playing-config__provider-error">
-                              {provider.lastError ?? provider.lastControlError}
-                            </div>
-                          ) : null}
-                        </div>
+                        <LocalNowPlayingProviderDetails
+                          providerId={providerId}
+                          provider={provider}
+                          platform={platform}
+                          retryProvider={retryProvider}
+                          onError={(message) => showBanner({ tone: 'error', message, actions: [] })}
+                        />
                       )
                     ) : null}
                   </section>

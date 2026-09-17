@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setImmediate } from 'node:timers/promises'
 import test from 'node:test'
 import { NowPlayingManager } from '../src/main/services/nowPlayingManager'
+import { bindNowPlayingWindowConsumer } from '../src/main/services/nowPlayingWindowConsumer'
 import type { NowPlayingProviderService } from '../src/main/services/nowPlayingProvider'
 import {
   DEFAULT_ASTRA_BASE_URL,
@@ -47,7 +50,7 @@ function cloneProviderState(state: NowPlayingProviderState): NowPlayingProviderS
   }
 }
 
-class StubProviderService<K extends 'astra' | 'spotify'> implements NowPlayingProviderService<K> {
+class StubProviderService<K extends NowPlayingProviderId> implements NowPlayingProviderService<K> {
   readonly providerId: K
   publicConfig: NowPlayingProviderConfigMap[K]
   providerState: NowPlayingProviderState
@@ -136,11 +139,14 @@ async function createHarness(options?: {
   astraConfig?: AstraIntegrationPublicConfig
   astraState?: Partial<NowPlayingProviderState>
   spotifyState?: Partial<NowPlayingProviderState>
+  tidalState?: Partial<NowPlayingProviderState>
 }): Promise<{
   astra: StubProviderService<'astra'>
   cleanup: () => Promise<void>
   manager: NowPlayingManager
   spotify: StubProviderService<'spotify'>
+  tidal: StubProviderService<'tidal'>
+  localStatePath: string
 }> {
   const rootDir = await mkdtemp(join(tmpdir(), 'prism-now-playing-manager-'))
   const astra = new StubProviderService('astra', {
@@ -164,16 +170,145 @@ async function createHarness(options?: {
     }),
   })
 
+  const tidal = new StubProviderService('tidal', {
+    publicConfig: {},
+    providerState: createProviderState('tidal', options?.tidalState),
+  })
+  const localStatePath = join(rootDir, 'now-playing-state.json')
   return {
+    tidal,
+    localStatePath,
     astra,
     cleanup: () => rm(rootDir, { recursive: true, force: true }),
     manager: new NowPlayingManager({
       localStatePath: join(rootDir, 'now-playing-state.json'),
-      providerServices: [astra, spotify],
+      providerServices: [astra, spotify, tidal],
     }),
     spotify,
   }
 }
+
+class StubConsumerWebContents extends EventEmitter {
+  private destroyed = false
+
+  constructor(readonly id: number) {
+    super()
+  }
+
+  isDestroyed(): boolean {
+    return this.destroyed
+  }
+
+  destroy(): void {
+    this.destroyed = true
+    this.emit('destroyed')
+  }
+}
+
+test('config window activates every provider until destroyed and can be reopened independently', async () => {
+  const harness = await createHarness()
+  const errors: unknown[] = []
+  const config = new StubConsumerWebContents(101)
+  const reopened = new StubConsumerWebContents(102)
+
+  try {
+    await harness.manager.initialize()
+    await harness.manager.setConsumerActive(1, true)
+    bindNowPlayingWindowConsumer(config, harness.manager, error => errors.push(error))
+    await setImmediate()
+
+    // Renderer reloads and presentation changes do not end the native window's lifetime.
+    config.emit('did-finish-load')
+    config.emit('hide')
+    config.emit('show')
+    await setImmediate()
+    for (const provider of [harness.astra, harness.spotify, harness.tidal]) {
+      assert.deepEqual(provider.consumerCalls, [
+        { consumerId: 1, active: true },
+        { consumerId: 101, active: true },
+      ])
+    }
+
+    config.destroy()
+    await setImmediate()
+    bindNowPlayingWindowConsumer(reopened, harness.manager, error => errors.push(error))
+    await setImmediate()
+    reopened.destroy()
+    await setImmediate()
+
+    for (const provider of [harness.astra, harness.spotify, harness.tidal]) {
+      assert.deepEqual(provider.consumerCalls, [
+        { consumerId: 1, active: true },
+        { consumerId: 101, active: true },
+        { consumerId: 101, active: false },
+        { consumerId: 102, active: true },
+        { consumerId: 102, active: false },
+      ])
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await harness.manager.dispose()
+    await harness.cleanup()
+  }
+})
+
+test('closing during activation releases immediately and also removes a late consumer', async () => {
+  const contents = new StubConsumerWebContents(101)
+  const activeConsumers = new Set([1])
+  const errors: unknown[] = []
+  let finishActivation!: () => void
+  const activation = new Promise<void>(resolve => { finishActivation = resolve })
+  const calls: boolean[] = []
+  const manager = {
+    setConsumerActive: async (id: number, active: boolean) => {
+      calls.push(active)
+      assert.equal(contents.listenerCount('destroyed'), active ? 1 : 0)
+      if (active) {
+        await activation
+        activeConsumers.add(id)
+      } else {
+        activeConsumers.delete(id)
+      }
+      return {} as ReturnType<NowPlayingManager['getState']>
+    },
+  }
+
+  bindNowPlayingWindowConsumer(contents, manager, error => errors.push(error))
+  contents.destroy()
+  assert.deepEqual(calls, [true, false])
+  finishActivation()
+  await setImmediate()
+  assert.deepEqual(calls, [true, false, false])
+  assert.deepEqual([...activeConsumers], [1])
+  assert.deepEqual(errors, [])
+})
+
+test('window lifecycle reports rejected activation and cleanup without dropping destruction cleanup', async () => {
+  const contents = new StubConsumerWebContents(101)
+  const errors: unknown[] = []
+  const activationError = new Error('Activation failed')
+  const cleanupError = new Error('Cleanup failed')
+  const calls: boolean[] = []
+  bindNowPlayingWindowConsumer(contents, {
+    setConsumerActive: async (_id, active) => {
+      calls.push(active)
+      throw active ? activationError : cleanupError
+    },
+  }, error => errors.push(error))
+  await setImmediate()
+  contents.destroy()
+  await setImmediate()
+  assert.deepEqual(calls, [true, false])
+  assert.deepEqual(errors, [activationError, cleanupError])
+})
+
+test('binding an already destroyed window never activates providers', () => {
+  const contents = new StubConsumerWebContents(101)
+  contents.destroy()
+  bindNowPlayingWindowConsumer(contents, {
+    setConsumerActive: async () => { assert.fail('Destroyed window must not activate') },
+  }, () => { assert.fail('No lifecycle calls should run') })
+})
 
 test('manager starts in onboarding mode until a supported provider is configured', async () => {
   const harness = await createHarness()
@@ -334,4 +469,44 @@ test('manager forwards save, retry, and controls to the active provider services
   } finally {
     await harness.cleanup()
   }
+})
+
+
+test('TIDAL participates in priority, configuration, lifecycle, retry and controls', async () => {
+  const active = {
+    available: true, isConfigured: true, supportsTransportControls: true,
+    connectionState: 'connected' as const,
+    snapshot: {
+      playbackState: 'playing' as const, currentTime: 3, duration: 120, queueLength: 0,
+      outputDeviceLabel: null, visualizerLineColor: '#fff', updatedAt: 100,
+      currentTrack: { id: 'track', title: 'Track', artist: '', album: '', isFavorite: false, artworkDataUrl: null },
+    },
+  }
+  const harness = await createHarness({ spotifyState: active, tidalState: active })
+  try {
+    await harness.manager.initialize()
+    assert.equal(harness.manager.getState().activeProviderId, 'spotify')
+    await harness.manager.setProviderPriority(['tidal', 'spotify', 'astra'])
+    assert.equal(harness.manager.getState().activeProviderId, 'tidal')
+    assert.equal(harness.manager.getState().onboardingRequired, false)
+    await harness.manager.setConsumerActive(99, true)
+    await harness.manager.retryProvider('tidal')
+    await harness.manager.sendControl('next')
+    assert.equal(harness.tidal.initializeCalls, 1)
+    assert.deepEqual(harness.tidal.consumerCalls, [{ consumerId: 99, active: true }])
+    assert.equal(harness.tidal.retryCalls, 1)
+    assert.equal(harness.spotify.retryCalls, 0)
+    assert.deepEqual(harness.tidal.controlCalls, ['next'])
+    assert.deepEqual(harness.spotify.controlCalls, [])
+    const restored = new NowPlayingManager({ localStatePath: harness.localStatePath, providerServices: [harness.tidal] })
+    await restored.initialize()
+    assert.deepEqual(restored.getState().providerPriority, ['tidal', 'spotify', 'astra'])
+    harness.tidal.providerState.supportsTransportControls = false
+    await assert.rejects(harness.manager.sendControl('pause'), /controls are unavailable/)
+    harness.tidal.providerState.snapshot = null
+    harness.tidal.emit()
+    assert.equal(harness.manager.getState().activeProviderId, 'spotify')
+    await harness.manager.dispose()
+    assert.equal(harness.tidal.disposeCalls, 1)
+  } finally { await harness.cleanup() }
 })

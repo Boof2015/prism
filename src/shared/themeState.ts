@@ -99,6 +99,7 @@ const SPECTRUM_SCHEMA = {
   background: 'background',
   line: 'line',
   side_line: 'sideLine',
+  reference_line: 'referenceLine',
   fill: 'fill',
   heat_low: 'heatLow',
   heat_mid: 'heatMid',
@@ -181,10 +182,13 @@ const NOW_PLAYING_SCHEMA = {
   status_error: 'statusError',
 } as const satisfies SectionSchema<ThemeNowPlayingTokens>
 
+const WATERFALL_SCHEMA = { background: 'background', line: 'line', heat_low: 'heatLow', heat_mid: 'heatMid', heat_high: 'heatHigh', guides: 'guides', labels: 'labels' } as const
+
 const SECTION_KEY_MAP: Record<string, ThemeSectionName> = {
   app: 'app',
   controls: 'controls',
   scopes: 'scopes',
+  waterfall: 'waterfall',
   spectrum: 'spectrum',
   oscilloscope: 'oscilloscope',
   vectorscope: 'vectorscope',
@@ -200,6 +204,7 @@ const SECTION_LABEL_MAP: Record<ThemeSectionName, string> = {
   app: 'App',
   controls: 'Controls',
   scopes: 'Scopes',
+  waterfall: 'Waterfall',
   spectrum: 'Spectrum',
   oscilloscope: 'Oscilloscope',
   vectorscope: 'Vectorscope',
@@ -214,6 +219,7 @@ const SECTION_SCHEMAS = {
   app: APP_SCHEMA,
   controls: CONTROLS_SCHEMA,
   scopes: SCOPES_SCHEMA,
+  waterfall: WATERFALL_SCHEMA,
   spectrum: SPECTRUM_SCHEMA,
   oscilloscope: OSCILLOSCOPE_SCHEMA,
   vectorscope: VECTORSCOPE_SCHEMA,
@@ -434,6 +440,7 @@ function createEmptyTheme(): PrismTheme {
     app: {},
     controls: {},
     scopes: {},
+    waterfall: {},
     spectrum: {},
     oscilloscope: {},
     vectorscope: {},
@@ -530,6 +537,7 @@ export function createDefaultTheme(): PrismTheme {
     },
     vectorscope: {
       trace: DEFAULT_ACCENT,
+      phaseRisk: DEFAULT_ACCENT,
       bandLow: DEFAULT_BAND_LOW,
       bandMid: DEFAULT_BAND_MID,
       bandHigh: DEFAULT_BAND_HIGH,
@@ -625,6 +633,7 @@ fill = 240, 30, 180, 100
 guides = 0, 0, 0, 40
 
 [Vectorscope]
+phase_risk = 0, 50, 220
 band_low = 0, 50, 180
 band_mid = 11, 180, 140
 band_high = 200, 50, 180
@@ -725,6 +734,7 @@ guides = 0, 0, 255
 [Vectorscope]
 background = 0, 0, 255
 trace = 255, 255, 255
+phase_risk = 0, 0, 255
 band_low = 255, 255, 255, 120
 band_mid = 255, 255, 255, 120
 band_high = 255, 255, 255, 120
@@ -843,6 +853,7 @@ guides = 0, 255, 0
 [Vectorscope]
 background = 0, 255, 0
 trace = 255, 255, 255
+phase_risk = 0, 255, 0
 band_low = 255, 255, 255, 120
 band_mid = 255, 255, 255, 120
 band_high = 255, 255, 255, 120
@@ -959,6 +970,7 @@ guides = 56, 58, 61
 [Vectorscope]
 background = 15, 15, 15
 trace = 230, 0, 69
+phase_risk = 230, 0, 69
 band_low = 230, 0, 69
 band_mid = 102, 90, 255
 band_high = 0, 255, 255
@@ -1077,6 +1089,7 @@ guides = 48, 58, 70
 [Vectorscope]
 background = 6, 10, 14
 trace = 196, 216, 247
+phase_risk = 142, 157, 181
 band_low = 255, 40, 30
 band_mid = 0, 255, 80
 band_high = 58, 92, 255
@@ -1162,6 +1175,7 @@ heat_base = 0, 0, 0
 fill = 191, 40, 201, 150
 
 [Vectorscope]
+phase_risk = 177, 105, 219
 band_low = 177, 105, 219
 band_mid = 108, 31, 196
 band_high = 69, 20, 184
@@ -1243,6 +1257,7 @@ export function normalizeTheme(
   normalized.app = normalizeSectionTokens(parsed.app, APP_SCHEMA)
   normalized.controls = normalizeSectionTokens(parsed.controls, CONTROLS_SCHEMA)
   normalized.scopes = normalizeSectionTokens(parsed.scopes, SCOPES_SCHEMA)
+  normalized.waterfall = normalizeSectionTokens(parsed.waterfall, WATERFALL_SCHEMA)
   normalized.spectrum = normalizeSectionTokens(parsed.spectrum, SPECTRUM_SCHEMA)
   normalized.oscilloscope = normalizeSectionTokens(parsed.oscilloscope, OSCILLOSCOPE_SCHEMA)
   normalized.vectorscope = normalizeSectionTokens(parsed.vectorscope, VECTORSCOPE_SCHEMA)
@@ -1522,8 +1537,15 @@ export function createTemplateThemeFile(): string {
   )
   scopesSection.splice(1, 0, '# Entire section optional. Uncomment tokens here only if you want to override Prism defaults.')
 
+  const waterfallSection = commentExampleTokens(serializeSection('Waterfall', {
+    ...base.waterfall, line: resolved.waterfall.line, background: resolved.waterfall.background,
+    guides: resolved.waterfall.guides, labels: resolved.waterfall.labels,
+    heatLow: resolved.waterfall.heatColors[0], heatMid: resolved.waterfall.heatColors[1], heatHigh: resolved.waterfall.heatColors[2],
+  }, WATERFALL_SCHEMA as SectionSchema<Record<string, string | undefined>>))
+
   const spectrumSection = commentExampleTokens(serializeSection('Spectrum', {
     ...base.spectrum,
+    referenceLine: resolved.spectrum.referenceLine,
     background: resolved.spectrum.background,
     guides: resolved.spectrum.guides,
     labels: resolved.spectrum.labels,
@@ -1590,6 +1612,7 @@ export function createTemplateThemeFile(): string {
 # Module sections show the full set of supported tokens for each module.
 # Spectrum and Spectrogram heat token alpha is honored directly.
 # Leave Spectrum heat_base commented unless you want an explicit underlay beneath the heatmap.
+# Spectrum reference_line sets the reference track curve; it defaults to the theme's text color.
 #
 # Comment out any optional token to let Prism inherit or derive it.
 # Leave an entire optional section commented if that area should use Prism's defaults.
@@ -1601,6 +1624,7 @@ ${[
   scopesSection.join('\n'),
   '# Module sections below are optional overrides.',
   '# Uncomment the tokens you want to customize and leave the rest as examples.',
+  waterfallSection.join('\n'),
   spectrumSection.join('\n'),
   oscilloscopeSection.join('\n'),
   vectorscopeSection.join('\n'),
@@ -1800,6 +1824,7 @@ function resolveSpectrumTheme(
   return {
     line,
     sideLine,
+    referenceLine: section.referenceLine ?? app.text,
     guides,
     guidesSecondary: multiplyAlpha(guides, 0.5),
     labels: section.labels ?? guides,
@@ -1964,6 +1989,13 @@ export function resolveTheme(theme: PrismTheme): PrismResolvedTheme {
     website: normalized.website,
     description: normalized.description,
     interface: resolveInterfaceTheme(app, controls, scopes),
+    waterfall: (() => {
+      const fallback = resolveSpectrumTheme(normalized, app, scopes)
+      const w = normalized.waterfall
+      return { line: w.line ?? fallback.line, background: w.background ?? fallback.background,
+        guides: w.guides ?? fallback.guides, labels: w.labels ?? w.guides ?? normalized.spectrum.labels ?? app.textMuted,
+        heatColors: [w.heatLow ?? fallback.heatColors[0], w.heatMid ?? fallback.heatColors[1], w.heatHigh ?? fallback.heatColors[2]] as [string, string, string] }
+    })(),
     spectrum: resolveSpectrumTheme(normalized, app, scopes),
     oscilloscope: resolveOscilloscopeTheme(normalized, app, scopes),
     vectorscope: resolveVectorscopeTheme(normalized, app, scopes),

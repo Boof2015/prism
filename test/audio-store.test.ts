@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { audioCapture } from '../src/renderer/audio/AudioCapture'
+import { RollingAudioBuffer } from '../src/renderer/audio/RollingAudioBuffer'
+import type { AudioClipDragPayload } from '../src/types/audioClip'
 import {
   loadAudioPreferences,
   normalizeAudioPreferences,
@@ -11,6 +13,11 @@ import {
 } from '../src/renderer/stores/audioStore'
 import { useUiStore } from '../src/renderer/stores/uiStore'
 import type { CaptureBackendSupport, CaptureSourceDescriptor } from '../src/types/capture'
+import {
+  createDefaultCaptureChannelRouting,
+  getCaptureRoutingStorageKey,
+  normalizeCaptureChannelRouting,
+} from '../src/types/capture'
 
 type GlobalWithStorage = typeof globalThis & {
   localStorage?: Storage
@@ -18,6 +25,7 @@ type GlobalWithStorage = typeof globalThis & {
 
 type StartDeviceOptions = {
   forceDeviceRestart?: boolean
+  channelRouting?: { left: number; right: number }
 }
 
 type HarnessSourceProvider<T> = T[] | (() => T[] | Promise<T[]>)
@@ -30,7 +38,10 @@ function audioPreferences(overrides: Partial<PersistedAudioState> = {}): Persist
     captureMode: 'system',
     selectedSystemSourceId: DEFAULT_SYSTEM_SOURCE_ID,
     selectedDeviceId: null,
+    selectedDawSourceId: null,
     rollingCaptureSeconds: null,
+    rollingCaptureFormat: 'pcm16',
+    channelRoutingBySource: {},
     ...overrides,
   }
 }
@@ -107,6 +118,11 @@ function createBackendSupport(available: boolean, reason: string | null): Captur
       available: true,
       reason: null,
     },
+    dawBridge: {
+      kind: 'daw-bridge',
+      available: true,
+      reason: null,
+    },
   }
 }
 
@@ -134,24 +150,31 @@ function systemSource(
   }
 }
 
-function mediaDevice(deviceId: string, label: string, groupId = ''): MediaDeviceInfo {
+function mediaDevice(deviceId: string, label: string, isDefault = false): CaptureSourceDescriptor {
   return {
-    deviceId,
-    groupId,
-    kind: 'audioinput',
+    id: deviceId,
+    kind: 'device',
     label,
-    toJSON() {
-      return {}
-    },
-  } as MediaDeviceInfo
+    isDefault,
+    sampleRate: 48000,
+    channelCount: 2,
+    channels: [
+      { index: 0, label: 'Channel 1' },
+      { index: 1, label: 'Channel 2' },
+    ],
+    channelRoutingAvailable: false,
+  }
 }
 
 function getDefaultSystemSourceId(sources: CaptureSourceDescriptor[]): string | null {
   return sources.find((source) => source.id !== DEFAULT_SYSTEM_SOURCE_ID && source.isDefault)?.id ?? null
 }
 
-function getDefaultInputDeviceId(devices: MediaDeviceInfo[]): string | null {
-  return devices.find((device) => device.deviceId !== 'default')?.deviceId ?? devices[0]?.deviceId ?? null
+function getDefaultInputDeviceId(devices: CaptureSourceDescriptor[]): string | null {
+  return devices.find((device) => device.id !== 'default' && device.isDefault)?.id
+    ?? devices.find((device) => device.id !== 'default')?.id
+    ?? devices[0]?.id
+    ?? null
 }
 
 async function resolveHarnessSources<T>(provider: HarnessSourceProvider<T> | undefined, fallback: T[]): Promise<T[]> {
@@ -279,6 +302,7 @@ function installFakeDeviceWatcherEnvironment(): {
 function resetStores(): void {
   audioCapture.setSelectedSystemSourceId(DEFAULT_SYSTEM_SOURCE_ID)
   audioCapture.setSelectedDeviceId(null)
+  audioCapture.setSelectedDawSourceId(null)
   audioCapture.setCaptureMode('system')
   audioCapture.setInputGain(0)
   audioCapture.setRollingCaptureSeconds(null)
@@ -288,6 +312,8 @@ function resetStores(): void {
     devices: [],
     selectedSystemSourceId: '__default_system_output__',
     selectedDeviceId: null,
+    selectedDawSourceId: null,
+    dawSources: [],
     captureMode: 'system',
     activeBackendKind: null,
     backendSupport: null,
@@ -297,10 +323,15 @@ function resetStores(): void {
     captureNotice: null,
     sampleRate: 48000,
     channelCount: 2,
+    sourceChannelCount: 2,
+    channelRoutingAvailable: false,
+    activeChannelRouting: { left: 0, right: 1 },
+    channelRoutingBySource: {},
     activeSourceId: null,
     activeSourceLabel: null,
     inputGainDb: 0,
     rollingCaptureSeconds: null,
+    rollingCaptureFormat: 'pcm16',
     rollingCaptureStatus: audioCapture.getRollingCaptureStatus(),
   })
 
@@ -314,7 +345,7 @@ function resetStores(): void {
 function installAudioCaptureHarness(options: {
   support: CaptureBackendSupport
   systemSources?: HarnessSourceProvider<CaptureSourceDescriptor>
-  devices?: HarnessSourceProvider<MediaDeviceInfo>
+  devices?: HarnessSourceProvider<CaptureSourceDescriptor>
   startSystemAudio?: (deviceId?: string) => Promise<void>
   startDevice?: (deviceId?: string, options?: StartDeviceOptions) => Promise<void>
 }): {
@@ -326,6 +357,7 @@ function installAudioCaptureHarness(options: {
     startDeviceRequests: Array<{ deviceId: string | null; forceDeviceRestart: boolean }>
     startSystemAudio: number
     startSystemAudioDeviceIds: Array<string | undefined>
+    channelRoutes: Array<{ left: number; right: number } | undefined>
   }
 } {
   const originalMethods = {
@@ -342,6 +374,7 @@ function installAudioCaptureHarness(options: {
   }
 
   const calls = {
+    channelRoutes: [] as Array<{ left: number; right: number } | undefined>,
     listDevices: 0,
     listSources: 0,
     startSystemAudio: 0,
@@ -367,7 +400,8 @@ function installAudioCaptureHarness(options: {
     calls.listDevices += 1
     return resolveHarnessSources(options.devices, [])
   }
-  audioCapture.startSystemAudio = async (deviceId?: string) => {
+  audioCapture.startSystemAudio = async (deviceId, startOptions) => {
+    calls.channelRoutes.push(startOptions?.channelRouting)
     calls.startSystemAudio += 1
     calls.startSystemAudioDeviceIds.push(deviceId)
     if (options.startSystemAudio) {
@@ -386,6 +420,7 @@ function installAudioCaptureHarness(options: {
     }
   }
   audioCapture.startDevice = async (deviceId?: string, startOptions?: StartDeviceOptions) => {
+    calls.channelRoutes.push(startOptions?.channelRouting)
     calls.startDevice += 1
     calls.startDeviceRequests.push({
       deviceId: deviceId ?? null,
@@ -396,11 +431,11 @@ function installAudioCaptureHarness(options: {
     } else {
       const devices = await resolveHarnessSources(options.devices, [])
       const resolvedDeviceId = deviceId ?? getDefaultInputDeviceId(devices)
-      const resolvedDevice = devices.find((device) => device.deviceId === resolvedDeviceId) ?? null
+      const resolvedDevice = devices.find((device) => device.id === resolvedDeviceId) ?? null
       captureMode = 'device'
       selectedDeviceId = deviceId ?? null
       activeBackendKind = 'device-input'
-      activeSourceId = resolvedDevice?.deviceId ?? resolvedDeviceId
+      activeSourceId = resolvedDevice?.id ?? resolvedDeviceId
       activeSourceLabel = resolvedDevice?.label ?? null
       isCapturing = true
     }
@@ -411,9 +446,13 @@ function installAudioCaptureHarness(options: {
     backendSupport: options.support,
     sampleRate: 48000,
     channelCount: 2,
+    sourceChannelCount: 2,
+    channelRoutingAvailable: false,
+    channelRouting: { left: 0, right: 1 },
     isCapturing,
     activeSourceId: isCapturing ? activeSourceId : null,
     activeSourceLabel: isCapturing ? activeSourceLabel : null,
+    waiting: false,
   })
   audioCapture.setCaptureMode = (mode) => {
     captureMode = mode
@@ -492,11 +531,172 @@ test('normalizeAudioPreferences preserves valid persisted selector values', () =
   }))
 })
 
+test('normalizeAudioPreferences preserves DAW mode and its stable bridge UUID', () => {
+  assert.deepEqual(normalizeAudioPreferences({
+    captureMode: 'daw',
+    selectedDawSourceId: 'bridge-stable-uuid',
+  }), audioPreferences({
+    captureMode: 'daw',
+    selectedDawSourceId: 'bridge-stable-uuid',
+  }))
+})
+
+test('channel routes default safely and allow one source to feed both sides', () => {
+  assert.deepEqual(createDefaultCaptureChannelRouting(1), { left: 0, right: 0 })
+  assert.deepEqual(createDefaultCaptureChannelRouting(16), { left: 0, right: 1 })
+  assert.deepEqual(normalizeCaptureChannelRouting({ left: 7, right: 7 }, 16), {
+    left: 7,
+    right: 7,
+  })
+  assert.deepEqual(normalizeCaptureChannelRouting({ left: 99, right: -1 }, 2), {
+    left: 0,
+    right: 1,
+  })
+  assert.deepEqual(normalizeCaptureChannelRouting({ left: 1, right: 99 }, 2), {
+    left: 0,
+    right: 1,
+  })
+})
+
+test('normalizeAudioPreferences keeps valid per-device routes and drops malformed entries', () => {
+  assert.deepEqual(normalizeAudioPreferences({
+    channelRoutingBySource: {
+      'system:output-uid': { left: 7, right: 9 },
+      'device:input-uid': { left: 3, right: 3 },
+      broken: { left: -1, right: 2 },
+    },
+  }).channelRoutingBySource, {
+    'system:output-uid': { left: 7, right: 9 },
+    'device:input-uid': { left: 3, right: 3 },
+  })
+})
+
+test('audio store persists routes by direction and physical device UID', () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const originalSetChannelRouting = audioCapture.setChannelRouting
+  const forwarded: Array<{ left: number; right: number }> = []
+  audioCapture.setChannelRouting = (routing) => {
+    forwarded.push(routing)
+    return routing
+  }
+
+  const output = {
+    ...systemSource('output-uid', '16ch Output', true),
+    channelCount: 16,
+    channels: Array.from({ length: 16 }, (_, index) => ({ index, label: `Output ${index + 1}` })),
+    channelRoutingAvailable: true,
+  }
+  const input = {
+    ...mediaDevice('input-uid', '8ch Input', true),
+    channelCount: 8,
+    channels: Array.from({ length: 8 }, (_, index) => ({ index, label: `Input ${index + 1}` })),
+    channelRoutingAvailable: true,
+  }
+
+  try {
+    useAudioStore.setState({
+      systemSources: [defaultSystemSource(), output],
+      devices: [input],
+      captureMode: 'system',
+      selectedSystemSourceId: DEFAULT_SYSTEM_SOURCE_ID,
+      isCapturing: true,
+      activeSourceId: output.id,
+    })
+    useAudioStore.getState().setChannelRouting({ left: 7, right: 9 })
+
+    useAudioStore.setState({
+      captureMode: 'device',
+      selectedDeviceId: null,
+      activeSourceId: input.id,
+    })
+    useAudioStore.getState().setChannelRouting({ left: 3, right: 3 })
+
+    const expectedRoutes = {
+      [getCaptureRoutingStorageKey('system', output.id)]: { left: 7, right: 9 },
+      [getCaptureRoutingStorageKey('device', input.id)]: { left: 3, right: 3 },
+    }
+    assert.deepEqual(useAudioStore.getState().channelRoutingBySource, expectedRoutes)
+    assert.deepEqual(forwarded, [{ left: 7, right: 9 }, { left: 3, right: 3 }])
+    assert.deepEqual(
+      JSON.parse(fakeStorage.getItem('prism:audio') ?? '{}').channelRoutingBySource,
+      expectedRoutes,
+    )
+  } finally {
+    audioCapture.setChannelRouting = originalSetChannelRouting
+    fakeStorage.restore()
+    resetStores()
+  }
+})
+
 test('normalizeRollingCaptureSeconds accepts only supported durations', () => {
   assert.equal(normalizeRollingCaptureSeconds(5), 5)
   assert.equal(normalizeRollingCaptureSeconds(60), 60)
   assert.equal(normalizeRollingCaptureSeconds(15), null)
   assert.equal(normalizeRollingCaptureSeconds('10'), null)
+})
+
+test('audio clip format defaults legacy and invalid preferences to PCM16', () => {
+  for (const rollingCaptureFormat of [undefined, null, '', 'pcm32', 32]) {
+    assert.equal(normalizeAudioPreferences({ rollingCaptureFormat }).rollingCaptureFormat, 'pcm16')
+  }
+  for (const rollingCaptureFormat of ['pcm16', 'float32'] as const) {
+    assert.equal(loadAudioPreferences({
+      getItem: () => JSON.stringify({ rollingCaptureFormat }), setItem: () => {},
+    }).rollingCaptureFormat, rollingCaptureFormat)
+  }
+})
+
+test('format selection survives other audio preference changes and exports the same buffered audio', () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const payloads: AudioClipDragPayload[] = []
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { electronAPI: { audioClips: { startDrag: (payload: AudioClipDragPayload) => payloads.push(payload) } } },
+  })
+  // Feed the real capture snapshot path without starting an audio device.
+  const captureInternals = audioCapture as unknown as { rollingAudioBuffer: RollingAudioBuffer | null }
+  try {
+    useAudioStore.getState().setRollingCaptureSeconds(5)
+    const buffer = new RollingAudioBuffer(5, 48000, 2)
+    buffer.append(new Float32Array([1.25, 1e-8]), new Float32Array([-1.25, -1e-8]), 2)
+    captureInternals.rollingAudioBuffer = buffer
+    const before = audioCapture.takeRollingCaptureSnapshot()
+
+    useAudioStore.getState().setRollingCaptureFormat('float32')
+    const setCount = fakeStorage.getSetCount()
+    useAudioStore.getState().setRollingCaptureFormat('float32')
+    assert.equal(fakeStorage.getSetCount(), setCount)
+    useAudioStore.getState().setInputGain(3)
+    useAudioStore.getState().setCaptureMode('device')
+    useAudioStore.getState().setRollingCaptureSeconds(10)
+    assert.equal(loadAudioPreferences({ getItem: fakeStorage.getItem, setItem: () => {} }).rollingCaptureFormat, 'float32')
+    assert.equal(useAudioStore.getState().startRollingClipDrag(), true)
+    useAudioStore.getState().setRollingCaptureFormat('pcm16')
+    assert.equal(useAudioStore.getState().startRollingClipDrag(), true)
+    assert.deepEqual(audioCapture.takeRollingCaptureSnapshot(), before)
+    assert.equal(captureInternals.rollingAudioBuffer, buffer)
+    assert.deepEqual(payloads.map(({ format, frameCount, channelCount, sampleRate }) => ({ format, frameCount, channelCount, sampleRate })), [
+      { format: 'float32', frameCount: 2, channelCount: 2, sampleRate: 48000 },
+      { format: 'pcm16', frameCount: 2, channelCount: 2, sampleRate: 48000 },
+    ])
+    const floatView = new DataView(payloads[0].pcmBytes.buffer)
+    assert.equal(floatView.getFloat32(0, true), 1.25)
+    assert.equal(floatView.getFloat32(4, true), -1.25)
+    assert.equal(floatView.getFloat32(8, true), Math.fround(1e-8))
+    const intView = new DataView(payloads[1].pcmBytes.buffer)
+    assert.equal(intView.getInt16(0, true), 32767)
+    assert.equal(intView.getInt16(2, true), -32768)
+    assert.equal(intView.getInt16(4, true), 0)
+    assert.equal(loadAudioPreferences({ getItem: fakeStorage.getItem, setItem: () => {} }).rollingCaptureFormat, 'pcm16')
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+    fakeStorage.restore()
+    resetStores()
+  }
 })
 
 test('rolling capture opt-in does not allocate a buffer while capture is idle', () => {
@@ -628,6 +828,40 @@ test('audio store persists input source selections', async () => {
       selectedDeviceId: 'mic-1',
     }))
   } finally {
+    fakeStorage.restore()
+    resetStores()
+  }
+})
+
+test('audio store persists a Bridge stable UUID while selecting its live connection key', async () => {
+  resetStores()
+  const fakeStorage = installFakeLocalStorage()
+  const originalSetSelectedDawSourceId = audioCapture.setSelectedDawSourceId
+  const selections: Array<[string | null, string | null]> = []
+  audioCapture.setSelectedDawSourceId = (stableId, liveId = null) => {
+    selections.push([stableId, liveId])
+  }
+
+  try {
+    useAudioStore.setState({
+      dawSources: [{
+        id: 'bridge-stable-uuid:live-key',
+        persistentId: 'bridge-stable-uuid',
+        label: 'Drums',
+        kind: 'daw',
+      }],
+    })
+    await useAudioStore.getState().selectDawSource('bridge-stable-uuid:live-key')
+
+    assert.equal(useAudioStore.getState().captureMode, 'daw')
+    assert.equal(useAudioStore.getState().selectedDawSourceId, 'bridge-stable-uuid')
+    assert.deepEqual(selections, [['bridge-stable-uuid', 'bridge-stable-uuid:live-key']])
+    assert.equal(fakeStorage.getItem('prism:audio'), storedAudioPreferences({
+      captureMode: 'daw',
+      selectedDawSourceId: 'bridge-stable-uuid',
+    }))
+  } finally {
+    audioCapture.setSelectedDawSourceId = originalSetSelectedDawSourceId
     fakeStorage.restore()
     resetStores()
   }
@@ -880,8 +1114,8 @@ test('audio store persists Default Input when an explicit input disappears', asy
   const fakeStorage = installFakeLocalStorage()
   const support = createBackendSupport(true, null)
   let devices = [
-    mediaDevice('mic-1', 'Mic 1', 'group-1'),
-    mediaDevice('mic-2', 'Mic 2', 'group-2'),
+    mediaDevice('mic-1', 'Mic 1'),
+    mediaDevice('mic-2', 'Mic 2'),
   ]
   const harness = installAudioCaptureHarness({
     support,
@@ -902,7 +1136,7 @@ test('audio store persists Default Input when an explicit input disappears', asy
     })
 
     devices = [
-      mediaDevice('mic-2', 'Mic 2', 'group-2'),
+      mediaDevice('mic-2', 'Mic 2', true),
     ]
 
     await useAudioStore.getState().refreshDevices({ rebindActiveCapture: true })
@@ -931,8 +1165,8 @@ test('audio store forces default input reacquisition when the default input sign
   resetStores()
   const support = createBackendSupport(true, null)
   let devices = [
-    mediaDevice('default', 'Default - Mic 1', 'default-group'),
-    mediaDevice('mic-1', 'Mic 1', 'group-1'),
+    mediaDevice('default', 'Default - Mic 1', true),
+    mediaDevice('mic-1', 'Mic 1'),
   ]
   const harness = installAudioCaptureHarness({
     support,
@@ -953,8 +1187,8 @@ test('audio store forces default input reacquisition when the default input sign
     })
 
     devices = [
-      mediaDevice('default', 'Default - Mic 2', 'default-group'),
-      mediaDevice('mic-2', 'Mic 2', 'group-2'),
+    mediaDevice('default', 'Default - Mic 2', true),
+    mediaDevice('mic-2', 'Mic 2'),
     ]
 
     await useAudioStore.getState().refreshDevices({ rebindActiveCapture: true })
@@ -1008,6 +1242,71 @@ test('audio device watcher coalesces refreshes and cleans up timers and listener
   } finally {
     fakeEnvironment.restore()
     harness.restore()
+    resetStores()
+  }
+})
+
+for (const mode of ['system', 'device'] as const) {
+  test(`${mode} capture reopens when the selected native device changes channel layout`, async () => {
+    resetStores()
+    const support = createBackendSupport(true, null)
+    let source: CaptureSourceDescriptor = {
+      id: 'native-device', label: 'Interface', kind: mode, isDefault: true,
+      sampleRate: 48000, channelCount: 6, channelRoutingAvailable: true,
+      channels: Array.from({ length: 6 }, (_, index) => ({ index, label: `Channel ${index + 1}` })),
+    }
+    const harness = installAudioCaptureHarness({
+      support,
+      systemSources: () => [source],
+      devices: () => [source],
+    })
+    const key = getCaptureRoutingStorageKey(mode, source.id)
+    try {
+      useAudioStore.setState({
+        backendSupport: support, systemSources: [source], devices: [source], captureMode: mode,
+        selectedSystemSourceId: source.id, selectedDeviceId: source.id,
+        captureStatus: 'capturing', isCapturing: true, activeSourceId: source.id,
+        channelRoutingBySource: { [key]: { left: 5, right: 4 } },
+      })
+      source = { ...source, channelCount: 2, channels: source.channels!.slice(0, 2) }
+      const refresh = mode === 'system' ? useAudioStore.getState().refreshSystemSources : useAudioStore.getState().refreshDevices
+      await refresh({ rebindActiveCapture: true })
+      assert.equal(harness.calls.startDevice + harness.calls.startSystemAudio, 1)
+      assert.deepEqual(harness.calls.channelRoutes, [{ left: 0, right: 1 }])
+      if (mode === 'device') assert.equal(harness.calls.startDeviceRequests[0].forceDeviceRestart, true)
+      assert.deepEqual(useAudioStore.getState().channelRoutingBySource[key], { left: 5, right: 4 },
+        'retain saved routes so returning to the full layout restores the selection')
+      await refresh({ rebindActiveCapture: true })
+      assert.equal(harness.calls.startDevice + harness.calls.startSystemAudio, 1, 'unchanged devices do not restart')
+      source = { ...source, sampleRate: 96000 }
+      await refresh({ rebindActiveCapture: true })
+      assert.equal(harness.calls.startDevice + harness.calls.startSystemAudio, 2)
+    } finally {
+      harness.restore()
+      resetStores()
+    }
+  })
+}
+
+test('legacy browser input preferences recover to the native default and retain unrelated routes', async () => {
+  resetStores()
+  const storage = installFakeLocalStorage()
+  const native = { ...mediaDevice('native-input', 'Interface', true), channelRoutingAvailable: true }
+  const harness = installAudioCaptureHarness({ support: createBackendSupport(true, null), devices: [native] })
+  try {
+    useAudioStore.setState({
+      captureMode: 'device', selectedDeviceId: 'old-browser-device-hash', devices: [],
+      channelRoutingBySource: { 'system:output': { left: 3, right: 4 } },
+    })
+    await useAudioStore.getState().refreshDevices({ rebindActiveCapture: false })
+    assert.equal(useAudioStore.getState().selectedDeviceId, null)
+    assert.match(useAudioStore.getState().captureNotice ?? '', /switched to Default Input/)
+    const saved = JSON.parse(storage.getItem('prism:audio')!)
+    assert.equal(saved.selectedDeviceId, null)
+    assert.deepEqual(saved.channelRoutingBySource, { 'system:output': { left: 3, right: 4 } })
+  } finally {
+    harness.restore()
+    storage.restore()
     resetStores()
   }
 })

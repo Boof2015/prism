@@ -1,3 +1,13 @@
+import {
+  extractGdbusStringVariant,
+  extractGdbusObjectPathVariant,
+  extractGdbusInt64Variant,
+  extractGdbusStringArrayVariant,
+  parseLinuxBusNames,
+  buildLinuxListNamesArgs,
+  buildLinuxPropertiesArgs,
+  buildLinuxCommandArgs,
+} from './localMediaMpris'
 import { access } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
@@ -53,10 +63,6 @@ const SLOW_POLL_MS = 5000
 const SPOTIFY_ARTWORK_COLOR = '#1ed760'
 const SPOTIFY_DELIMITER = '\u001f'
 const SPOTIFY_APP_BUNDLE_ID = 'com.spotify.client'
-const MPRIS_PLAYER_INTERFACE = 'org.mpris.MediaPlayer2.Player'
-const MPRIS_PLAYER_OBJECT_PATH = '/org/mpris/MediaPlayer2'
-const SESSION_DBUS_INTERFACE = 'org.freedesktop.DBus'
-const SESSION_DBUS_OBJECT_PATH = '/org/freedesktop/DBus'
 const SPOTIFY_MPRIS_NAME_PATTERN = /^org\.mpris\.MediaPlayer2\.spotify(?:\..+)?$/i
 const execFileAsync = promisify(execFile)
 
@@ -192,54 +198,6 @@ function toOptionalUrl(value: string | undefined): string | null {
 
 function createTrackId(title: string, artist: string, album: string): string {
   return `spotify-local:${title}\n${artist}\n${album}`
-}
-
-function escapeRegexLiteral(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function decodeGVariantString(value: string): string {
-  return value
-    .replace(/\\\\/g, '\\')
-    .replace(/\\'/g, '\'')
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
-    .replace(/\\t/g, '\t')
-}
-
-function extractGdbusStringVariant(output: string, key: string): string {
-  const match = output.match(new RegExp(`'${escapeRegexLiteral(key)}': <(?:@s )?'((?:\\\\.|[^'])*)'>`))
-  return normalizeString(match?.[1] ? decodeGVariantString(match[1]) : '')
-}
-
-function extractGdbusObjectPathVariant(output: string, key: string): string {
-  const match = output.match(new RegExp(`'${escapeRegexLiteral(key)}': <objectpath '((?:\\\\.|[^'])*)'>`))
-  return normalizeString(match?.[1] ? decodeGVariantString(match[1]) : '')
-}
-
-function extractGdbusInt64Variant(output: string, key: string): number {
-  const match = output.match(new RegExp(`'${escapeRegexLiteral(key)}': <(?:@x |@t |int64 |uint64 )?(-?\\d+)>`))
-  if (!match) {
-    return 0
-  }
-
-  const numeric = Number.parseInt(match[1], 10)
-  if (!Number.isFinite(numeric)) {
-    return 0
-  }
-
-  return Math.max(0, numeric)
-}
-
-function extractGdbusStringArrayVariant(output: string, key: string): string[] {
-  const match = output.match(new RegExp(`'${escapeRegexLiteral(key)}': <(?:@as )?\\[([\\s\\S]*?)\\]>`))
-  if (!match?.[1]) {
-    return []
-  }
-
-  return Array.from(match[1].matchAll(/'((?:\\.|[^'])*)'/g), (entry) => {
-    return normalizeString(decodeGVariantString(entry[1] ?? ''))
-  }).filter(Boolean)
 }
 
 function parseLinuxPlaybackState(value: string): LocalSpotifySnapshot['playbackState'] {
@@ -389,12 +347,6 @@ function parseWindowsSpotifyStatusPayload(
   }
 }
 
-function parseLinuxBusNames(output: string): string[] {
-  return Array.from(output.matchAll(/'((?:\\.|[^'])*)'/g), (entry) => {
-    return normalizeString(decodeGVariantString(entry[1] ?? ''))
-  }).filter(Boolean)
-}
-
 function getLinuxSpotifyBusName(output: string): string | null {
   return parseLinuxBusNames(output).find((name) => SPOTIFY_MPRIS_NAME_PATTERN.test(name)) ?? null
 }
@@ -529,59 +481,6 @@ async function defaultAppleScriptRunner(scriptLines: string[]): Promise<string> 
 async function defaultCommandRunner(command: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync(command, args)
   return stdout.trim()
-}
-
-function buildLinuxListNamesArgs(): string[] {
-  return [
-    'call',
-    '--session',
-    '--dest',
-    SESSION_DBUS_INTERFACE,
-    '--object-path',
-    SESSION_DBUS_OBJECT_PATH,
-    '--method',
-    `${SESSION_DBUS_INTERFACE}.ListNames`,
-  ]
-}
-
-function buildLinuxPropertiesArgs(busName: string): string[] {
-  return [
-    'call',
-    '--session',
-    '--dest',
-    busName,
-    '--object-path',
-    MPRIS_PLAYER_OBJECT_PATH,
-    '--method',
-    'org.freedesktop.DBus.Properties.GetAll',
-    MPRIS_PLAYER_INTERFACE,
-  ]
-}
-
-function buildLinuxCommandArgs(busName: string, command: NowPlayingControlCommand): string[] {
-  const methodName = (() => {
-    switch (command) {
-      case 'play':
-        return 'Play'
-      case 'pause':
-        return 'Pause'
-      case 'next':
-        return 'Next'
-      case 'previous':
-        return 'Previous'
-    }
-  })()
-
-  return [
-    'call',
-    '--session',
-    '--dest',
-    busName,
-    '--object-path',
-    MPRIS_PLAYER_OBJECT_PATH,
-    '--method',
-    `${MPRIS_PLAYER_INTERFACE}.${methodName}`,
-  ]
 }
 
 export class SpotifyProvider implements NowPlayingProviderService<'spotify'> {

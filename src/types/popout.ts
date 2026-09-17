@@ -1,6 +1,8 @@
 import type { CaptureBackendKind } from './capture'
 import type { ScopeKind } from './scope'
+import type { DawTransportSnapshot } from './dawBridge'
 import type { ScopeSettings } from './settings'
+import type { AnalysisSettings } from './analysis'
 import type {
   ResolvedAstraTheme,
   ResolvedInterfaceTheme,
@@ -10,6 +12,7 @@ import type {
   ResolvedSpectrumTheme,
   ResolvedVectorscopeTheme,
   ResolvedVUMeterTheme,
+  ResolvedWaterfallTheme,
   ResolvedWaveformTheme,
 } from './theme'
 
@@ -39,12 +42,15 @@ export interface ScopePopoutSessionState {
   sampleRate: number
   channelCount: number
   capturing: boolean
+  suspended: boolean
   backendKind: CaptureBackendKind | null
 }
 
 export interface ScopePopoutStereoChunk {
+  sequence?: number
   left: Float32Array
   right: Float32Array
+  transport?: DawTransportSnapshot
 }
 
 export type ScopePopoutMonoBatch = Float32Array[]
@@ -58,6 +64,7 @@ export type ScopePopoutResolvedScopeTheme =
   | ResolvedSpectrogramTheme
   | ResolvedVUMeterTheme
   | ResolvedLUFSMeterTheme
+  | ResolvedWaterfallTheme
   | ResolvedWaveformTheme
   | ResolvedAstraTheme
 
@@ -67,4 +74,5 @@ export interface ScopePopoutSnapshot<K extends ScopeKind = ScopeKind> {
   interfaceTheme: ResolvedInterfaceTheme
   scopeTheme: ScopePopoutResolvedScopeTheme
   settings: ScopeSettings[K]
+  analysisSettings: AnalysisSettings
 }

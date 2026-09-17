@@ -21,6 +21,7 @@ interface NowPlayingManagerOptions {
 type ProviderServiceMap = Partial<{
   astra: NowPlayingProviderService<'astra'>
   spotify: NowPlayingProviderService<'spotify'>
+  tidal: NowPlayingProviderService<'tidal'>
 }>
 
 interface NowPlayingLocalState {
@@ -96,8 +97,7 @@ function normalizeLocalState(raw: unknown): NowPlayingLocalState {
   }
 }
 
-function createPlaceholderProviderState(providerId: Exclude<NowPlayingProviderId, ManagedNowPlayingProviderId>): NowPlayingProviderState {
-  const definition = NOW_PLAYING_PROVIDER_DEFINITIONS[providerId]
+function createUnavailableProviderState(providerId: NowPlayingProviderId): NowPlayingProviderState {
   return {
     providerId,
     connectionState: 'unavailable',
@@ -105,8 +105,8 @@ function createPlaceholderProviderState(providerId: Exclude<NowPlayingProviderId
     lastControlError: null,
     snapshot: null,
     isConfigured: false,
-    available: definition.available,
-    supportsTransportControls: definition.supportsTransportControls,
+    available: false,
+    supportsTransportControls: false,
   }
 }
 
@@ -124,6 +124,8 @@ export class NowPlayingManager {
         acc.astra = providerService as NowPlayingProviderService<'astra'>
       } else if (providerService.providerId === 'spotify') {
         acc.spotify = providerService as NowPlayingProviderService<'spotify'>
+      } else if (providerService.providerId === 'tidal') {
+        acc.tidal = providerService as NowPlayingProviderService<'tidal'>
       }
       providerService.subscribe(() => {
         if (!this.initialized) {
@@ -220,6 +222,9 @@ export class NowPlayingManager {
       throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[activeProviderId].label} controls are not available yet.`)
     }
 
+    if (!providerService.getProviderState().supportsTransportControls) {
+      throw new Error(`${NOW_PLAYING_PROVIDER_DEFINITIONS[activeProviderId].label} controls are unavailable on this platform.`)
+    }
     await providerService.sendControl(command)
     return this.getState()
   }
@@ -231,7 +236,7 @@ export class NowPlayingManager {
         hasToken: false,
       },
       spotify: this.providerServices.spotify?.getPublicConfig() ?? {},
-      tidal: {},
+      tidal: this.providerServices.tidal?.getPublicConfig() ?? {},
     }
     const providers: NowPlayingProviderStateMap = {
       astra: this.providerServices.astra?.getProviderState() ?? {
@@ -254,7 +259,7 @@ export class NowPlayingManager {
         available: false,
         supportsTransportControls: true,
       },
-      tidal: createPlaceholderProviderState('tidal'),
+      tidal: this.providerServices.tidal?.getProviderState() ?? createUnavailableProviderState('tidal'),
     }
 
     const hasConfiguredProvider = this.providerPriority.some((providerId) => {

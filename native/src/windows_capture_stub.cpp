@@ -12,11 +12,11 @@ Napi::Value MediaGetSupport(const Napi::CallbackInfo& info) {
     return support;
 }
 
-Napi::Value GetSpotifyPlaybackState(const Napi::CallbackInfo& info) {
+Napi::Value GetPlaybackState(const Napi::CallbackInfo& info) {
     return info.Env().Null();
 }
 
-Napi::Value SendSpotifyControl(const Napi::CallbackInfo& info) {
+Napi::Value SendControl(const Napi::CallbackInfo& info) {
     Napi::Error::New(
         info.Env(), "Native Windows media-session integration is unavailable on this platform.")
         .ThrowAsJavaScriptException();
@@ -30,7 +30,9 @@ void RegisterWindowsMedia(Napi::Env env, Napi::Object exports) {
     mediaExports.Set("getSupport", Napi::Function::New(env, MediaGetSupport));
     mediaExports.Set(
         "getSpotifyPlaybackState",
-        Napi::Function::New(env, GetSpotifyPlaybackState));
-    mediaExports.Set("sendSpotifyControl", Napi::Function::New(env, SendSpotifyControl));
+        Napi::Function::New(env, GetPlaybackState));
+    mediaExports.Set("sendSpotifyControl", Napi::Function::New(env, SendControl));
+    mediaExports.Set("getTidalPlaybackState", Napi::Function::New(env, GetPlaybackState));
+    mediaExports.Set("sendTidalControl", Napi::Function::New(env, SendControl));
     exports.Set("windowsMedia", mediaExports);
 }

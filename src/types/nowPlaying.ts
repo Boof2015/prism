@@ -99,10 +99,10 @@ export const NOW_PLAYING_PROVIDER_DEFINITIONS: NowPlayingProviderDefinitionMap =
   tidal: {
     id: 'tidal',
     label: 'TIDAL',
-    description: 'TIDAL integration is planned but not implemented yet.',
-    authMode: 'none',
-    available: false,
-    comingSoon: true,
-    supportsTransportControls: false,
+    description: 'Read local TIDAL playback, with transport controls on Windows and compatible Linux clients.',
+    authMode: 'local',
+    available: true,
+    comingSoon: false,
+    supportsTransportControls: true,
   },
 }

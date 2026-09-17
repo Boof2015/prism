@@ -2,13 +2,19 @@
 #include "windows_capture.h"
 #endif
 #include "system_audio_capture.h"
+#include "device_input_capture_adapter.h"
+#include "capture_channel_selection.h"
 
 #if defined(_WIN32)
 
-#include <Audioclient.h>
+#if defined(__MINGW32__)
+// MinGW's import libraries do not supply the audio/property-key GUID objects.
+#include <initguid.h>
+#endif
+#include <audioclient.h>
 #include <propkeydef.h>
-#include <Functiondiscoverykeys_devpkey.h>
-#include <Mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
+#include <mmdeviceapi.h>
 #include <ksmedia.h>
 #include <mmreg.h>
 #include <propidl.h>
@@ -34,6 +40,7 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -53,31 +60,24 @@ using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionP
 constexpr size_t kMaxQueuedChunks = 256;
 constexpr size_t kDefaultDrainChunkLimit = 64;
 
-struct OutputDeviceInfo {
+struct DeviceInfo {
     std::string id;
     std::string label;
     double sampleRate;
     UINT32 channelCount;
     bool isDefault;
+    std::vector<Prism::Capture::ChannelDescriptor> channels;
 };
 
-struct CapturedChunk {
-    std::vector<float> left;
-    std::vector<float> right;
-    UINT32 channelCount = 2;
-    double capturedAtMilliseconds = 0.0;
-    uint64_t sequence = 0;
-};
+using CapturedChunk = Prism::Capture::AudioChunk;
 
 struct AudioFormatInfo {
     bool valid = false;
-    bool isFloat = false;
+    Prism::Capture::PCMFormat pcm;
+    DWORD channelMask = 0;
     WORD channels = 0;
     DWORD sampleRate = 48000;
-    WORD bitsPerSample = 0;
-    WORD validBitsPerSample = 0;
     WORD bytesPerFrame = 0;
-    WORD bytesPerSample = 0;
 };
 
 double monotonicMilliseconds() {
@@ -226,24 +226,38 @@ private:
     bool usable_;
 };
 
-bool isSpotifySession(const GlobalSystemMediaTransportControlsSession& session) {
+template <typename Operation>
+auto awaitMediaOperation(const Operation& operation) {
+    if (operation.wait_for(std::chrono::seconds(5)) == winrt::Windows::Foundation::AsyncStatus::Started) {
+        operation.Cancel();
+        throw std::runtime_error("Windows media request timed out. Retry after checking the player.");
+    }
+    return operation.GetResults();
+}
+
+bool isProviderSession(const GlobalSystemMediaTransportControlsSession& session, const std::string& provider) {
     if (!session) {
         return false;
     }
 
     const std::string sourceId = toLowerAscii(winrt::to_string(session.SourceAppUserModelId()));
-    return sourceId.find("spotify") != std::string::npos;
+    if (provider == "spotify") return sourceId.find("spotify") != std::string::npos;
+    if (provider != "tidal") return false;
+    return sourceId == "com.squirrel.tidal.tidal" || sourceId == "tidal" ||
+        sourceId == "tidal.exe" || sourceId == "com.tidal.desktop" ||
+        (sourceId.rfind("tidalmusicas.tidal_", 0) == 0 &&
+         sourceId.size() > 6 && sourceId.compare(sourceId.size() - 6, 6, "!tidal") == 0);
 }
 
-std::optional<GlobalSystemMediaTransportControlsSession> findSpotifySession(
-    const GlobalSystemMediaTransportControlsSessionManager& manager) {
+std::optional<GlobalSystemMediaTransportControlsSession> findProviderSession(
+    const GlobalSystemMediaTransportControlsSessionManager& manager, const std::string& provider) {
     const auto currentSession = manager.GetCurrentSession();
-    if (isSpotifySession(currentSession)) {
+    if (isProviderSession(currentSession, provider)) {
         return currentSession;
     }
 
     for (const auto& session : manager.GetSessions()) {
-        if (isSpotifySession(session)) {
+        if (isProviderSession(session, provider)) {
             return session;
         }
     }
@@ -284,30 +298,35 @@ std::string base64Encode(const std::vector<uint8_t>& data) {
 // Thumbnail is fetched on a background thread to avoid blocking the NAPI call
 // thread with cross-process WinRT async I/O.
 std::mutex s_thumbMutex;
-std::string s_thumbTrackKey;
-std::string s_thumbDataUrl;
-bool s_thumbFetching = false;
+struct ThumbnailCache {
+    std::string trackKey;
+    std::string dataUrl;
+    bool fetching = false;
+    std::chrono::steady_clock::time_point retryAfter{};
+};
+// One slot per provider; Spotify and TIDAL must not evict each other's artwork.
+std::map<std::string, ThumbnailCache> s_thumbnailCaches;
 
 void launchThumbnailFetch(
-    const std::string& trackKey,
+    const std::string& provider, const std::string& trackKey,
     winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
     const auto thumbnailRef = props.Thumbnail();
     if (!thumbnailRef) {
         std::lock_guard<std::mutex> lock(s_thumbMutex);
-        s_thumbFetching = false;
+        s_thumbnailCaches[provider].fetching = false;
         return;
     }
-    std::thread([trackKey, thumbnailRef]() {
+    std::thread([provider, trackKey, thumbnailRef]() {
         std::string result;
         try {
             using winrt::Windows::Storage::Streams::DataReader;
-            const HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
-            if (SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE) {
-                const auto stream = thumbnailRef.OpenReadAsync().get();
+            ScopedRoInit init;
+            if (init.usable()) {
+                const auto stream = awaitMediaOperation(thumbnailRef.OpenReadAsync());
                 const uint64_t size = stream.Size();
                 if (size > 0 && size <= 4u * 1024u * 1024u) {
                     const auto reader = DataReader(stream);
-                    const uint32_t loaded = reader.LoadAsync(static_cast<uint32_t>(size)).get();
+                    const uint32_t loaded = awaitMediaOperation(reader.LoadAsync(static_cast<uint32_t>(size)));
                     if (loaded > 0) {
                         std::vector<uint8_t> bytes(loaded);
                         reader.ReadBytes(bytes);
@@ -318,39 +337,40 @@ void launchThumbnailFetch(
                         result = "data:" + mimeType + ";base64," + base64Encode(bytes);
                     }
                 }
-                if (SUCCEEDED(hr)) {
-                    RoUninitialize();
-                }
             }
         } catch (...) {}
         std::lock_guard<std::mutex> lock(s_thumbMutex);
-        if (s_thumbTrackKey == trackKey) {
-            s_thumbDataUrl = std::move(result);
+        auto& cache = s_thumbnailCaches[provider];
+        if (cache.trackKey == trackKey) {
+            cache.dataUrl = std::move(result);
+            cache.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         }
-        s_thumbFetching = false;
+        cache.fetching = false;
     }).detach();
 }
 
 std::string getOrFetchThumbnail(
-    const std::string& trackKey,
+    const std::string& provider, const std::string& trackKey,
     winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties props) {
     bool shouldFetch = false;
     std::string result;
     {
         std::lock_guard<std::mutex> lock(s_thumbMutex);
-        if (s_thumbTrackKey == trackKey) {
-            result = s_thumbDataUrl;
-        } else {
-            s_thumbTrackKey = trackKey;
-            s_thumbDataUrl.clear();
-            if (!s_thumbFetching) {
-                s_thumbFetching = true;
-                shouldFetch = true;
-            }
+        auto& cache = s_thumbnailCaches[provider];
+        if (cache.trackKey != trackKey) {
+            cache.trackKey = trackKey;
+            cache.dataUrl.clear();
+            cache.retryAfter = {};
+        }
+        result = cache.dataUrl;
+        if (result.empty() && !cache.fetching && std::chrono::steady_clock::now() >= cache.retryAfter) {
+            cache.fetching = true;
+            cache.retryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            shouldFetch = true;
         }
     }
     if (shouldFetch) {
-        launchThumbnailFetch(trackKey, std::move(props));
+        launchThumbnailFetch(provider, trackKey, std::move(props));
     }
     return result;
 }
@@ -400,97 +420,59 @@ std::string getDeviceFriendlyName(IMMDevice* device) {
 }
 
 AudioFormatInfo getFormatInfo(const WAVEFORMATEX* format) {
+    using namespace Prism::Capture;
     AudioFormatInfo info;
-    if (format == nullptr || format->nChannels == 0 || format->nBlockAlign == 0) {
-        return info;
-    }
-
-    info.valid = true;
+    if (format == nullptr || format->nChannels == 0 || format->nSamplesPerSec == 0) return info;
     info.channels = format->nChannels;
     info.sampleRate = format->nSamplesPerSec;
-    info.bitsPerSample = format->wBitsPerSample;
-    info.validBitsPerSample = format->wBitsPerSample;
     info.bytesPerFrame = format->nBlockAlign;
-    info.bytesPerSample = static_cast<WORD>(format->nBlockAlign / format->nChannels);
-    info.isFloat = format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
-
-    if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
-        format->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+    info.pcm.bitsPerChannel = format->wBitsPerSample;
+    if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+        info.pcm.encoding = SampleEncoding::Float;
+    } else if (format->wFormatTag == WAVE_FORMAT_PCM) {
+        info.pcm.encoding = format->wBitsPerSample == 8
+            ? SampleEncoding::UnsignedInteger : SampleEncoding::SignedInteger;
+    } else if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE
+        && format->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
         const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(format);
-        info.isFloat = IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
-        if (extensible->Samples.wValidBitsPerSample != 0) {
-            info.validBitsPerSample = extensible->Samples.wValidBitsPerSample;
+        info.channelMask = extensible->dwChannelMask;
+        info.pcm.validBitsPerChannel = extensible->Samples.wValidBitsPerSample;
+        info.pcm.highAligned = true;
+        if (IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)) {
+            info.pcm.encoding = SampleEncoding::Float;
+        } else if (IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
+            info.pcm.encoding = format->wBitsPerSample == 8
+                ? SampleEncoding::UnsignedInteger : SampleEncoding::SignedInteger;
         }
     }
-
+    info.valid = isSupportedPCMFormat(info.pcm)
+        && info.bytesPerFrame == info.channels * (info.pcm.bitsPerChannel / 8);
     return info;
 }
 
-float decodeSignedIntegerSample(const BYTE* data, WORD bytesPerSample, WORD validBitsPerSample) {
-    if (data == nullptr || bytesPerSample == 0) {
-        return 0.0f;
+std::vector<Prism::Capture::ChannelDescriptor> channelDescriptors(const AudioFormatInfo& format) {
+    // WAVEFORMATEXTENSIBLE interleaves speakers in ascending mask-bit order.
+    static constexpr const char* speakerLabels[] = {
+        "Front Left", "Front Right", "Front Center", "LFE", "Back Left", "Back Right",
+        "Front Left of Center", "Front Right of Center", "Back Center", "Side Left", "Side Right",
+        "Top Center", "Top Front Left", "Top Front Center", "Top Front Right",
+        "Top Back Left", "Top Back Center", "Top Back Right",
+    };
+    std::vector<Prism::Capture::ChannelDescriptor> result;
+    for (uint32_t bit = 0; bit < 32 && result.size() < format.channels; ++bit) {
+        if ((format.channelMask & (DWORD{1} << bit)) == 0) continue;
+        const auto index = static_cast<uint32_t>(result.size());
+        result.push_back({index, bit < sizeof(speakerLabels) / sizeof(speakerLabels[0])
+            ? speakerLabels[bit] : "Channel " + std::to_string(index + 1)});
     }
-
-    const WORD totalBits = static_cast<WORD>(bytesPerSample * 8);
-    const WORD validBits = static_cast<WORD>(
-        std::max<WORD>(1, std::min<WORD>(validBitsPerSample == 0 ? totalBits : validBitsPerSample, 32)));
-
-    uint32_t rawBits = 0;
-    for (WORD byteIndex = 0; byteIndex < bytesPerSample && byteIndex < 4; ++byteIndex) {
-        rawBits |= static_cast<uint32_t>(data[byteIndex]) << (byteIndex * 8);
+    while (result.size() < format.channels) {
+        const auto index = static_cast<uint32_t>(result.size());
+        result.push_back({index, "Channel " + std::to_string(index + 1)});
     }
-
-    const uint32_t validMask =
-        validBits >= 32 ? std::numeric_limits<uint32_t>::max() : ((1u << validBits) - 1u);
-    rawBits &= validMask;
-
-    int32_t signedValue = 0;
-    if (validBits == 32) {
-        signedValue = static_cast<int32_t>(rawBits);
-    } else {
-        const uint32_t signBit = 1u << (validBits - 1);
-        if ((rawBits & signBit) != 0) {
-            rawBits |= ~validMask;
-        }
-        signedValue = static_cast<int32_t>(rawBits);
-    }
-
-    const double maxMagnitude = validBits == 32
-        ? static_cast<double>(std::numeric_limits<int32_t>::max())
-        : static_cast<double>((1ULL << (validBits - 1)) - 1ULL);
-    if (maxMagnitude <= 0.0) {
-        return 0.0f;
-    }
-
-    return static_cast<float>(static_cast<double>(signedValue) / maxMagnitude);
+    return result;
 }
 
-float readFrameSample(const BYTE* frameData, UINT32 channelIndex, const AudioFormatInfo& format) {
-    if (frameData == nullptr || !format.valid || format.bytesPerSample == 0 ||
-        channelIndex >= format.channels) {
-        return 0.0f;
-    }
-
-    const BYTE* samplePtr = frameData + static_cast<size_t>(channelIndex) * format.bytesPerSample;
-    if (format.isFloat) {
-        if (format.bitsPerSample == 32 && format.bytesPerSample >= sizeof(float)) {
-            float value = 0.0f;
-            std::memcpy(&value, samplePtr, sizeof(float));
-            return value;
-        }
-
-        if (format.bitsPerSample == 64 && format.bytesPerSample >= sizeof(double)) {
-            double value = 0.0;
-            std::memcpy(&value, samplePtr, sizeof(double));
-            return static_cast<float>(value);
-        }
-    }
-
-    return decodeSignedIntegerSample(
-        samplePtr, format.bytesPerSample, format.validBitsPerSample);
-}
-
-bool getDeviceMixFormat(IMMDevice* device, double* outSampleRate, UINT32* outChannelCount) {
+bool getDeviceMixFormat(IMMDevice* device, AudioFormatInfo* outFormat) {
     if (device == nullptr) {
         return false;
     }
@@ -517,17 +499,12 @@ bool getDeviceMixFormat(IMMDevice* device, double* outSampleRate, UINT32* outCha
         return false;
     }
 
-    if (outSampleRate != nullptr) {
-        *outSampleRate = static_cast<double>(info.sampleRate);
-    }
-    if (outChannelCount != nullptr) {
-        *outChannelCount = info.channels;
-    }
+    *outFormat = info;
 
     return true;
 }
 
-std::vector<OutputDeviceInfo> enumerateOutputDevices() {
+std::vector<DeviceInfo> enumerateDevices(bool input) {
     ScopedCoInit coInit;
     if (!coInit.usable()) {
         return {};
@@ -542,13 +519,13 @@ std::vector<OutputDeviceInfo> enumerateOutputDevices() {
 
     std::string defaultDeviceId;
     ComPtr<IMMDevice> defaultDevice;
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+    hr = enumerator->GetDefaultAudioEndpoint(input ? eCapture : eRender, eConsole, &defaultDevice);
     if (SUCCEEDED(hr) && defaultDevice) {
         defaultDeviceId = getDeviceId(defaultDevice.Get());
     }
 
     ComPtr<IMMDeviceCollection> collection;
-    hr = enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
+    hr = enumerator->EnumAudioEndpoints(input ? eCapture : eRender, DEVICE_STATE_ACTIVE, &collection);
     if (FAILED(hr) || !collection) {
         return {};
     }
@@ -559,7 +536,7 @@ std::vector<OutputDeviceInfo> enumerateOutputDevices() {
         return {};
     }
 
-    std::vector<OutputDeviceInfo> devices;
+    std::vector<DeviceInfo> devices;
     devices.reserve(deviceCount);
 
     for (UINT index = 0; index < deviceCount; ++index) {
@@ -579,16 +556,16 @@ std::vector<OutputDeviceInfo> enumerateOutputDevices() {
             label = deviceId;
         }
 
-        double sampleRate = 48000.0;
-        UINT32 channelCount = 2;
-        getDeviceMixFormat(device.Get(), &sampleRate, &channelCount);
+        AudioFormatInfo format;
+        if (!getDeviceMixFormat(device.Get(), &format)) continue;
 
-        devices.push_back(OutputDeviceInfo{
+        devices.push_back(DeviceInfo{
             deviceId,
             label,
-            sampleRate,
-            channelCount,
+            static_cast<double>(format.sampleRate),
+            static_cast<UINT32>(format.channels),
             deviceId == defaultDeviceId,
+            channelDescriptors(format),
         });
     }
 
@@ -597,6 +574,8 @@ std::vector<OutputDeviceInfo> enumerateOutputDevices() {
 
 class WindowsNativeCaptureEngine final : public Prism::Capture::SystemAudioCapture {
 public:
+    explicit WindowsNativeCaptureEngine(bool input = false) : input_(input) {}
+
     ~WindowsNativeCaptureEngine() override {
         stop();
     }
@@ -606,7 +585,7 @@ public:
     }
 
     std::vector<Prism::Capture::OutputDevice> listOutputDevices() override {
-        const auto devices = enumerateOutputDevices();
+        const auto devices = enumerateDevices(input_);
         std::vector<Prism::Capture::OutputDevice> result;
         result.reserve(devices.size());
         for (const auto& device : devices) {
@@ -616,6 +595,7 @@ public:
                 device.sampleRate,
                 static_cast<uint32_t>(device.channelCount),
                 device.isDefault,
+                device.channels,
             });
         }
         return result;
@@ -630,11 +610,19 @@ public:
         if (result != nullptr) {
             std::lock_guard<std::mutex> lock(stateMutex_);
             result->sampleRate = sampleRate_;
-            result->channelCount = static_cast<uint32_t>(channelCount_);
+            result->channelCount = channelCount_ > 1 ? 2u : 1u;
+            result->sourceChannelCount = channelCount_;
             result->deviceId = activeDeviceId_;
             result->deviceLabel = activeDeviceLabel_;
         }
         return true;
+    }
+
+    Prism::Capture::ChannelRouting setChannelRouting(uint32_t left, uint32_t right) override {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        routing_ = active_ ? Prism::Capture::normalizeChannelRouting({left, right}, channelCount_)
+                          : Prism::Capture::ChannelRouting{left, right};
+        return routing_;
     }
 
     void stop() override {
@@ -660,13 +648,7 @@ public:
         while (!drained.empty()) {
             auto chunk = std::move(drained.front());
             drained.pop_front();
-            result.chunks.push_back({
-                std::move(chunk.left),
-                std::move(chunk.right),
-                static_cast<uint32_t>(chunk.channelCount),
-                chunk.capturedAtMilliseconds,
-                chunk.sequence,
-            });
+            result.chunks.push_back(std::move(chunk));
         }
         return result;
     }
@@ -696,7 +678,7 @@ private:
             stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
             if (stopEvent_ == nullptr) {
                 startPending_ = false;
-                startError_ = "CreateEventW failed for Windows loopback capture.";
+                startError_ = "CreateEventW failed for Windows audio capture.";
                 if (outErrorMessage != nullptr) {
                     *outErrorMessage = startError_;
                 }
@@ -712,7 +694,7 @@ private:
 
         if (!startSucceeded_) {
             const std::string errorMessage = startError_.empty()
-                ? "Native Windows loopback capture failed to start."
+                ? "Native Windows audio capture failed to start."
                 : startError_;
             lock.unlock();
             stopInternal();
@@ -786,7 +768,7 @@ private:
             const std::wstring requestedWide = utf8ToWide(requestedDeviceId);
             hr = enumerator->GetDevice(requestedWide.c_str(), &device);
         } else {
-            hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+            hr = enumerator->GetDefaultAudioEndpoint(input_ ? eCapture : eRender, eConsole, &device);
         }
 
         if (FAILED(hr) || !device) {
@@ -794,10 +776,19 @@ private:
             return;
         }
 
+        ComPtr<IMMEndpoint> endpoint;
+        EDataFlow flow = eAll;
+        hr = device.As(&endpoint);
+        if (FAILED(hr) || FAILED(endpoint->GetDataFlow(&flow))
+            || flow != (input_ ? eCapture : eRender)) {
+            notifyStartFailure("The selected Windows device has the wrong capture direction.");
+            return;
+        }
+
         const std::string deviceId = getDeviceId(device.Get());
         std::string deviceLabel = getDeviceFriendlyName(device.Get());
         if (deviceLabel.empty()) {
-            deviceLabel = deviceId.empty() ? "Windows Output Device" : deviceId;
+            deviceLabel = deviceId.empty() ? (input_ ? "Windows Input Device" : "Windows Output Device") : deviceId;
         }
 
         ComPtr<IAudioClient> audioClient;
@@ -821,7 +812,7 @@ private:
         const AudioFormatInfo format = getFormatInfo(mixFormat);
         if (!format.valid) {
             CoTaskMemFree(mixFormat);
-            notifyStartFailure("Unsupported WASAPI mix format for Windows loopback capture.");
+            notifyStartFailure("Unsupported WASAPI mix format for Windows audio capture.");
             return;
         }
 
@@ -853,7 +844,7 @@ private:
         double lastRealPacketAtMs = startMs;
 
         hr = audioClient->Initialize(
-            AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 0, 0, mixFormat, nullptr);
+            AUDCLNT_SHAREMODE_SHARED, input_ ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK, 0, 0, mixFormat, nullptr);
         if (FAILED(hr)) {
             CoTaskMemFree(mixFormat);
             notifyStartFailure(hresultMessage("IAudioClient::Initialize", hr));
@@ -903,26 +894,24 @@ private:
 
                 if (framesToRead > 0) {
                     CapturedChunk chunk;
-                    chunk.channelCount = std::max<UINT32>(1, format.channels);
+                    chunk.channelCount = format.channels > 1 ? 2u : 1u;
                     chunk.capturedAtMilliseconds = monotonicMilliseconds();
                     chunk.left.resize(framesToRead);
                     chunk.right.resize(framesToRead);
 
-                    if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) == 0 && data != nullptr) {
-                        for (UINT32 frameIndex = 0; frameIndex < framesToRead; ++frameIndex) {
-                            const BYTE* frameData =
-                                data + static_cast<size_t>(frameIndex) * format.bytesPerFrame;
-                            const float left = readFrameSample(frameData, 0, format);
-                            const float right = format.channels > 1
-                                ? readFrameSample(frameData, 1, format)
-                                : left;
-                            chunk.left[frameIndex] = left;
-                            chunk.right[frameIndex] = right;
-                        }
-                    } else {
-                        std::fill(chunk.left.begin(), chunk.left.end(), 0.0f);
-                        std::fill(chunk.right.begin(), chunk.right.end(), 0.0f);
+                    chunk.sourceChannelPeaks.resize(format.channels);
+                    Prism::Capture::ChannelRouting routing;
+                    {
+                        std::lock_guard<std::mutex> lock(stateMutex_);
+                        routing = routing_;
                     }
+                    const Prism::Capture::PCMBufferView buffer{
+                        (flags & AUDCLNT_BUFFERFLAGS_SILENT) == 0 ? data : nullptr,
+                        static_cast<size_t>(framesToRead) * format.bytesPerFrame, format.channels};
+                    Prism::Capture::selectStereoChannels(&buffer, 1, format.pcm, framesToRead,
+                        format.channels, routing.left, routing.right, chunk.left.data(), chunk.right.data());
+                    Prism::Capture::measureSourceChannelPeaks(&buffer, 1, format.pcm, framesToRead,
+                        format.channels, chunk.sourceChannelPeaks.data());
 
                     lastChunkPushedAtMs = chunk.capturedAtMilliseconds;
                     lastRealPacketAtMs = chunk.capturedAtMilliseconds;
@@ -941,7 +930,7 @@ private:
                 break;
             }
 
-            if (!pushedThisIteration) {
+            if (!input_ && !pushedThisIteration) {
                 const double nowMs = monotonicMilliseconds();
                 const double stallMs = nowMs - lastRealPacketAtMs;
                 const double sinceLastChunkMs = nowMs - lastChunkPushedAtMs;
@@ -954,7 +943,8 @@ private:
                                 sinceLastChunkMs *
                                 static_cast<double>(format.sampleRate) / 1000.0)));
                     CapturedChunk silentChunk;
-                    silentChunk.channelCount = std::max<UINT32>(1, format.channels);
+                    silentChunk.channelCount = format.channels > 1 ? 2u : 1u;
+                    silentChunk.sourceChannelPeaks.assign(format.channels, 0.0f);
                     silentChunk.capturedAtMilliseconds = nowMs;
                     silentChunk.left.assign(silenceFrames, 0.0f);
                     silentChunk.right.assign(silenceFrames, 0.0f);
@@ -990,6 +980,7 @@ private:
             activeDeviceLabel_ = deviceLabel;
             sampleRate_ = sampleRate;
             channelCount_ = channelCount;
+            routing_ = Prism::Capture::normalizeChannelRouting(routing_, channelCount_);
             sequence_ = 0;
             startSucceeded_ = true;
             startPending_ = false;
@@ -1030,6 +1021,8 @@ private:
         chunkQueue_.push_back(std::move(chunk));
     }
 
+    const bool input_;
+    Prism::Capture::ChannelRouting routing_;
     std::mutex stateMutex_;
     std::condition_variable startCondition_;
     std::mutex chunkMutex_;
@@ -1061,7 +1054,7 @@ Napi::Value WindowsMediaGetSupport(const Napi::CallbackInfo& info) {
                 hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
         }
 
-        auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        auto manager = awaitMediaOperation(GlobalSystemMediaTransportControlsSessionManager::RequestAsync());
         (void)manager;
         return createWindowsMediaSupport(env, true);
     } catch (const winrt::hresult_error& error) {
@@ -1076,7 +1069,7 @@ Napi::Value WindowsMediaGetSupport(const Napi::CallbackInfo& info) {
     }
 }
 
-Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) {
+Napi::Value WindowsMediaGetPlaybackState(const Napi::CallbackInfo& info, const std::string& provider) {
     Napi::Env env = info.Env();
 
     try {
@@ -1086,15 +1079,15 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
                 hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
         }
 
-        const auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-        const auto session = findSpotifySession(manager);
+        const auto manager = awaitMediaOperation(GlobalSystemMediaTransportControlsSessionManager::RequestAsync());
+        const auto session = findProviderSession(manager, provider);
         if (!session.has_value()) {
             return env.Null();
         }
 
         const auto playbackInfo = session->GetPlaybackInfo();
         const auto timeline = session->GetTimelineProperties();
-        const auto mediaProperties = session->TryGetMediaPropertiesAsync().get();
+        const auto mediaProperties = awaitMediaOperation(session->TryGetMediaPropertiesAsync());
 
         const auto durationMs = std::max<int64_t>(
             0,
@@ -1102,23 +1095,17 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
                 timeline.EndTime() - timeline.StartTime())
                 .count());
 
-        // Position() is stamped at LastUpdatedTime(); extrapolate forward when playing.
-        int64_t positionMs;
-        if (playbackInfo.PlaybackStatus() ==
-            GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing) {
-            const auto elapsed = winrt::clock::now() - timeline.LastUpdatedTime();
-            const auto extrapolated = timeline.Position() + elapsed;
-            positionMs = std::min(
-                durationMs,
-                std::max<int64_t>(
-                    0,
-                    std::chrono::duration_cast<std::chrono::milliseconds>(extrapolated).count()));
-        } else {
-            positionMs = std::max<int64_t>(
-                0,
-                std::chrono::duration_cast<std::chrono::milliseconds>(timeline.Position())
-                    .count());
+        // Position() is stamped at LastUpdatedTime(). Some players omit the timeline;
+        // never extrapolate from the default Windows epoch or clamp unknown duration to zero.
+        int64_t positionMs = std::max<int64_t>(0,
+            std::chrono::duration_cast<std::chrono::milliseconds>(timeline.Position()).count());
+        if (playbackInfo.PlaybackStatus() == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing &&
+            timeline.LastUpdatedTime().time_since_epoch().count() > 0) {
+            positionMs += std::max<int64_t>(0,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    winrt::clock::now() - timeline.LastUpdatedTime()).count());
         }
+        if (durationMs > 0) positionMs = std::min(durationMs, positionMs);
 
         Napi::Object payload = Napi::Object::New(env);
         payload.Set(
@@ -1136,9 +1123,10 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
             Napi::String::New(env, winrt::to_string(session->SourceAppUserModelId())));
 
         const std::string trackKey =
+            provider + "\n" + winrt::to_string(session->SourceAppUserModelId()) + "\n" +
             winrt::to_string(mediaProperties.Title()) + "\n" +
-            winrt::to_string(mediaProperties.Artist());
-        const std::string artworkDataUrl = getOrFetchThumbnail(trackKey, mediaProperties);
+            winrt::to_string(mediaProperties.Artist()) + "\n" + winrt::to_string(mediaProperties.AlbumTitle());
+        const std::string artworkDataUrl = getOrFetchThumbnail(provider, trackKey, mediaProperties);
         payload.Set(
             "artworkDataUrl",
             artworkDataUrl.empty() ? env.Null() : Napi::String::New(env, artworkDataUrl));
@@ -1158,10 +1146,10 @@ Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) 
     }
 }
 
-Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
+Napi::Value WindowsMediaSendControl(const Napi::CallbackInfo& info, const std::string& provider) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsString()) {
-        Napi::TypeError::New(env, "Expected a Spotify control command.").ThrowAsJavaScriptException();
+        Napi::TypeError::New(env, "Expected a media control command.").ThrowAsJavaScriptException();
         return env.Null();
     }
 
@@ -1174,27 +1162,27 @@ Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
                 hresultMessage("RoInitialize(RO_INIT_MULTITHREADED)", init.result()));
         }
 
-        const auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-        const auto session = findSpotifySession(manager);
+        const auto manager = awaitMediaOperation(GlobalSystemMediaTransportControlsSessionManager::RequestAsync());
+        const auto session = findProviderSession(manager, provider);
         if (!session.has_value()) {
-            throw std::runtime_error("Spotify is not running.");
+            throw std::runtime_error(provider + " is not running.");
         }
 
         bool accepted = false;
         if (command == "play") {
-            accepted = session->TryPlayAsync().get();
+            accepted = awaitMediaOperation(session->TryPlayAsync());
         } else if (command == "pause") {
-            accepted = session->TryPauseAsync().get();
+            accepted = awaitMediaOperation(session->TryPauseAsync());
         } else if (command == "next") {
-            accepted = session->TrySkipNextAsync().get();
+            accepted = awaitMediaOperation(session->TrySkipNextAsync());
         } else if (command == "previous") {
-            accepted = session->TrySkipPreviousAsync().get();
+            accepted = awaitMediaOperation(session->TrySkipPreviousAsync());
         } else {
-            throw std::runtime_error("Unsupported Spotify control command.");
+            throw std::runtime_error("Unsupported media control command.");
         }
 
         if (!accepted) {
-            throw std::runtime_error("Spotify did not allow Prism to complete that request.");
+            throw std::runtime_error(provider + " did not allow Prism to complete that request.");
         }
 
         return Napi::Boolean::New(env, true);
@@ -1211,6 +1199,19 @@ Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 }
+Napi::Value WindowsMediaGetSpotifyPlaybackState(const Napi::CallbackInfo& info) {
+    return WindowsMediaGetPlaybackState(info, "spotify");
+}
+Napi::Value WindowsMediaGetTidalPlaybackState(const Napi::CallbackInfo& info) {
+    return WindowsMediaGetPlaybackState(info, "tidal");
+}
+Napi::Value WindowsMediaSendSpotifyControl(const Napi::CallbackInfo& info) {
+    return WindowsMediaSendControl(info, "spotify");
+}
+Napi::Value WindowsMediaSendTidalControl(const Napi::CallbackInfo& info) {
+    return WindowsMediaSendControl(info, "tidal");
+}
+
 #endif
 
 }  // namespace
@@ -1225,6 +1226,8 @@ void RegisterWindowsMedia(Napi::Env env, Napi::Object exports) {
     mediaExports.Set(
         "sendSpotifyControl",
         Napi::Function::New(env, WindowsMediaSendSpotifyControl));
+    mediaExports.Set("getTidalPlaybackState", Napi::Function::New(env, WindowsMediaGetTidalPlaybackState));
+    mediaExports.Set("sendTidalControl", Napi::Function::New(env, WindowsMediaSendTidalControl));
     exports.Set("windowsMedia", mediaExports);
 }
 #endif
@@ -1233,6 +1236,11 @@ namespace Prism::Capture {
 
 std::unique_ptr<SystemAudioCapture> createSystemAudioCapture() {
     return std::make_unique<WindowsNativeCaptureEngine>();
+}
+
+std::unique_ptr<DeviceInputCapture> createDeviceInputCapture() {
+    return std::make_unique<DeviceInputCaptureAdapter>(
+        std::make_unique<WindowsNativeCaptureEngine>(true));
 }
 
 }  // namespace Prism::Capture

@@ -1,8 +1,14 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_extra/juce_gui_extra.h>
+#include "ReferenceTrackManager.h"
 #include <atomic>
 #include <vector>
+
+#if defined(HAS_CLAP_JUCE_EXTENSIONS) && HAS_CLAP_JUCE_EXTENSIONS
+ #include <clap-juce-extensions/clap-juce-extensions.h>
+#endif
 
 /**
  * Prism Spectrum — analyzer plugin.
@@ -15,11 +21,14 @@
  * UI settings (JSON) are owned here so they survive editor open/close and DAW
  * session save/restore.
  */
-class PrismSpectrumProcessor : public juce::AudioProcessor
+class PrismSpectrumProcessor : public juce::AudioProcessor, private juce::Timer
+#if defined(HAS_CLAP_JUCE_EXTENSIONS) && HAS_CLAP_JUCE_EXTENSIONS
+                            , public clap_juce_extensions::clap_properties
+#endif
 {
 public:
     PrismSpectrumProcessor();
-    ~PrismSpectrumProcessor() override = default;
+    ~PrismSpectrumProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -49,16 +58,27 @@ public:
     /** Copy up to `maxSamples` of buffered L/R audio into the destinations; returns count. */
     int drainStereo(float* destLeft, float* destRight, int maxSamples) noexcept;
 
+    bool consumeAudioDiscontinuity() noexcept { return audioDiscontinuity.exchange(false); }
+    void restartAudioHistory() noexcept { audioDiscontinuity.store(true); }
+
     /** Persisted UI settings as a JSON string (set from the editor, read on save). */
     void setSettingsJson(const juce::String& json);
-    juce::String getSettingsJson() const;
+    juce::String getSettingsJson();
+    bool syncReferenceResult();
+    ReferenceTrackManager referenceTracks;
+    void handleReferenceTransfer(juce::var payload, juce::WebBrowserComponent* browser);
+    void retainReferenceTransfer(std::unique_ptr<juce::WebBrowserComponent> browser);
 
 private:
+    void timerCallback() override;
+    struct DetachedTransfer { juce::String id; std::unique_ptr<juce::DocumentWindow> window; };
+    std::vector<DetachedTransfer> detachedTransfers;
     void pushStereoToFifo(const float* left, const float* right, int num) noexcept;
 
     juce::AbstractFifo fifo { 1 << 16 };
     std::vector<float> leftBuffer, rightBuffer; // backing storage for `fifo`
     std::atomic<double> currentSampleRate { 48000.0 };
+    std::atomic<bool> audioDiscontinuity { true };
 
     juce::CriticalSection settingsLock;
     juce::String settingsJson;

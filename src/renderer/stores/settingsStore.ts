@@ -10,6 +10,11 @@ import {
 import { SCOPE_KINDS, type ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import {
+  DEFAULT_ANALYSIS_SETTINGS,
+  normalizeAnalysisSettings,
+  type AnalysisSettings,
+} from '../../types/analysis'
+import {
   createDefaultProfile,
   mergeScopeSettings,
   normalizeHiddenScopes,
@@ -36,6 +41,7 @@ interface PersistedSettingsState {
   hiddenScopes: ScopeKind[]
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
+  analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
 }
@@ -45,6 +51,7 @@ interface WorkingSettingsState {
   hiddenScopes: Set<ScopeKind>
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
+  analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
 }
@@ -62,6 +69,7 @@ interface SettingsState extends WorkingSettingsState {
   moveDockedScope: (kind: ScopeKind, direction: 'left' | 'right') => void
   setScopeWidthWeight: (kind: ScopeKind, weight: number) => void
   updateScopeSettings: <K extends ScopeKind>(kind: K, settings: Partial<ScopeSettings[K]>) => void
+  updateAnalysisSettings: (settings: Partial<AnalysisSettings>) => void
   popOutScope: (kind: ScopeKind, bounds?: WindowBounds) => void
   popInScope: (kind: ScopeKind) => void
   updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => void
@@ -133,6 +141,7 @@ function buildProfileBaselineSignature(profile: Profile | null): string | undefi
     hiddenScopes: normalizeHiddenScopes(normalizedProfile.hiddenScopes),
     widthWeights: normalizeWidthWeights(normalizedProfile.widthWeights),
     scopeSettings: mergeScopeSettings(normalizedProfile.scopeSettings),
+    analysisSettings: normalizeAnalysisSettings(normalizedProfile.analysisSettings),
     scopePopouts,
   })
 }
@@ -151,9 +160,10 @@ function normalizePersistedProfileBaselineSignature(raw: string): string | null 
     return JSON.stringify({
       name: typeof candidate.name === 'string' ? candidate.name : DEFAULT_PROFILE_NAME,
       scopeOrder: normalizeScopeOrder(candidate.scopeOrder),
-      hiddenScopes: normalizeHiddenScopes(candidate.hiddenScopes),
+      hiddenScopes: normalizeHiddenScopes(candidate.hiddenScopes, candidate.scopeOrder ?? []),
       widthWeights: normalizeWidthWeights(candidate.widthWeights),
       scopeSettings: mergeScopeSettings(candidate.scopeSettings),
+      analysisSettings: normalizeAnalysisSettings(candidate.analysisSettings),
       scopePopouts,
     })
   } catch {
@@ -258,6 +268,7 @@ function saveToStorage(
       hiddenScopes: Array.from(state.hiddenScopes),
       widthWeights: state.widthWeights,
       scopeSettings: state.scopeSettings,
+      analysisSettings: state.analysisSettings,
       scopePopouts,
       windowBounds,
     }))
@@ -277,6 +288,7 @@ function hasPersistedWorkingState(state: Partial<PersistedSettingsState>): boole
     || 'hiddenScopes' in state
     || 'widthWeights' in state
     || 'scopeSettings' in state
+    || 'analysisSettings' in state
     || 'scopePopouts' in state
     || 'windowBounds' in state
 }
@@ -341,6 +353,7 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
     hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(normalizedProfile.hiddenScopes)),
     widthWeights: normalizeWidthWeights(normalizedProfile.widthWeights),
     scopeSettings: mergeScopeSettings(normalizedProfile.scopeSettings),
+    analysisSettings: normalizeAnalysisSettings(normalizedProfile.analysisSettings),
     scopePopouts: normalizeScopePopouts(normalizedProfile.scopePopouts),
     windowBounds: normalizedProfile.windowBounds,
   }
@@ -349,9 +362,12 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
 function createWorkingStateFromPersistedState(state: Partial<PersistedSettingsState>): WorkingSettingsState {
   return {
     scopeOrder: normalizeScopeOrder(state.scopeOrder),
-    hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(state.hiddenScopes)),
+    hiddenScopes: new Set<ScopeKind>(normalizeHiddenScopes(state.hiddenScopes, state.scopeOrder ?? [])),
     widthWeights: normalizeWidthWeights(state.widthWeights),
     scopeSettings: mergeScopeSettings(state.scopeSettings),
+    analysisSettings: state.analysisSettings === undefined
+      ? { ...DEFAULT_ANALYSIS_SETTINGS }
+      : normalizeAnalysisSettings(state.analysisSettings),
     scopePopouts: buildPersistedScopePopouts(normalizeScopePopouts(state.scopePopouts)),
     windowBounds: supportsWindowGeometryPersistence()
       ? state.windowBounds
@@ -748,6 +764,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           ...state.scopeSettings,
           [kind]: { ...state.scopeSettings[kind], ...settings },
         },
+      })
+    })
+  },
+
+  updateAnalysisSettings: (settings: Partial<AnalysisSettings>) => {
+    set((state) => {
+      return commitWorkingState(state, {
+        analysisSettings: normalizeAnalysisSettings({
+          ...state.analysisSettings,
+          ...settings,
+        }),
       })
     })
   },

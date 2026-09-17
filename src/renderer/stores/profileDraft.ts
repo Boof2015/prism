@@ -2,6 +2,7 @@ import type { ScopePopoutStateMap, WindowBounds } from '../../types/popout'
 import type { Profile } from '../../types/profile'
 import type { ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
+import type { AnalysisSettings } from '../../types/analysis'
 import {
   cloneScopeSettings,
   normalizeProfile,
@@ -13,6 +14,7 @@ export interface ProfileDraftSource {
   hiddenScopes: Iterable<ScopeKind>
   widthWeights: Record<ScopeKind, number>
   scopeSettings: ScopeSettings
+  analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
 }
@@ -27,6 +29,7 @@ export function buildProfileDraft(
     hiddenScopes: Array.from(source.hiddenScopes),
     widthWeights: { ...source.widthWeights },
     scopeSettings: cloneScopeSettings(source.scopeSettings),
+    analysisSettings: { ...source.analysisSettings },
     scopePopouts: normalizeScopePopouts(source.scopePopouts),
     windowBounds: source.windowBounds,
   }, name)

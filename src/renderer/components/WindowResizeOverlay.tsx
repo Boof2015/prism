@@ -12,7 +12,7 @@ const RESIZE_HANDLE_CLASSNAMES: Record<ResizeDirection, string> = {
   sw: 'window-resize-overlay__handle window-resize-overlay__handle--sw',
 }
 
-export default function WindowResizeOverlay(): JSX.Element | null {
+export default function WindowResizeOverlay({ directions = RESIZE_DIRECTIONS }: { directions?: ResizeDirection[] }): JSX.Element | null {
   const isWindows = window.electronAPI.platform === 'win32'
 
   const stopResize = useCallback(() => {
@@ -50,7 +50,7 @@ export default function WindowResizeOverlay(): JSX.Element | null {
 
   return (
     <div className="window-resize-overlay" aria-hidden="true">
-      {RESIZE_DIRECTIONS.map((direction) => (
+      {directions.map((direction) => (
         <div
           key={direction}
           className={RESIZE_HANDLE_CLASSNAMES[direction]}

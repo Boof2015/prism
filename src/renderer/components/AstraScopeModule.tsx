@@ -1,3 +1,4 @@
+import { getLocalAvailabilityDetail } from '../utils/localNowPlaying'
 import { useEffect, useMemo, useState, type CSSProperties, type JSX } from 'react'
 import type { NowPlayingProviderId } from '../../types/nowPlaying'
 import type { ScopeSettings } from '../../types/settings'
@@ -56,6 +57,16 @@ function getFallbackTitle(
     return 'Nothing playing'
   }
 
+  if (providerId === 'tidal') {
+    switch (connectionState) {
+      case 'disabled': return 'TIDAL is idle'
+      case 'connecting': return 'Checking TIDAL'
+      case 'error': return 'TIDAL connection failed'
+      case 'unavailable': return 'TIDAL unavailable'
+      case 'connected': return 'Nothing playing'
+    }
+  }
+
   if (providerId === 'spotify') {
     switch (connectionState) {
       case 'disabled':
@@ -108,6 +119,14 @@ function getFallbackDetail(
 ): string {
   if (connectionState === null) {
     return ''
+  }
+
+  if (providerId === 'tidal') {
+    if (connectionState === 'connected') return ''
+    if (connectionState === 'error' || connectionState === 'unavailable') return getLocalAvailabilityDetail(platform, 'tidal')
+    return platform === 'darwin'
+      ? 'Start playback in TIDAL so it appears in macOS Now Playing. Track information only.'
+      : 'Start playback in a compatible local TIDAL app.'
   }
 
   if (providerId === 'spotify') {
@@ -216,9 +235,6 @@ export default function AstraScopeModule({
   const providerState = displayProviderId
     ? nowPlayingState.providers[displayProviderId]
     : null
-  const providerDefinition = displayProviderId
-    ? nowPlayingState.definitions[displayProviderId]
-    : null
   const platform = window.electronAPI.platform
 
   useEffect(() => {
@@ -296,6 +312,7 @@ export default function AstraScopeModule({
     )
   }
 
+  const showControls = settings.showControls && Boolean(providerState?.supportsTransportControls)
   const toggleCommand = snapshot?.playbackState === 'playing' ? 'pause' : 'play'
   const toggleLabel = snapshot?.playbackState === 'playing' ? 'Pause' : 'Play'
   const toggleIcon = snapshot?.playbackState === 'playing' ? '\u23F8' : '\u25B6'
@@ -303,7 +320,7 @@ export default function AstraScopeModule({
   const shouldShowTransport = settings.showProgress || settings.showTime
   const shouldShowBody = shouldShowMeta
     || shouldShowTransport
-    || settings.showControls
+    || showControls
     || Boolean(errorMessage)
   const isCoverArtOnly = settings.showCoverArt && !shouldShowBody
   const cardClassName = [
@@ -368,12 +385,12 @@ export default function AstraScopeModule({
               </div>
             )}
 
-            {settings.showControls && (
+            {showControls && (
               <div className="astra-scope__controls">
                 <button
                   type="button"
                   className="astra-scope__control astra-scope__control--transport"
-                  disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
+                  disabled={!currentTrack || isSendingControl || !providerState?.supportsTransportControls}
                   onClick={() => {
                     void sendControl('previous')
                   }}
@@ -387,7 +404,7 @@ export default function AstraScopeModule({
                 <button
                   type="button"
                   className="astra-scope__control astra-scope__control--transport astra-scope__control--transport-primary"
-                  disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
+                  disabled={!currentTrack || isSendingControl || !providerState?.supportsTransportControls}
                   onClick={() => {
                     void sendControl(toggleCommand)
                   }}
@@ -401,7 +418,7 @@ export default function AstraScopeModule({
                 <button
                   type="button"
                   className="astra-scope__control astra-scope__control--transport"
-                  disabled={!currentTrack || isSendingControl || !providerDefinition?.supportsTransportControls}
+                  disabled={!currentTrack || isSendingControl || !providerState?.supportsTransportControls}
                   onClick={() => {
                     void sendControl('next')
                   }}

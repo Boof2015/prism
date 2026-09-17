@@ -6,6 +6,7 @@ export type ScopeKind =
   | 'vumeter'
   | 'lufsmeter'
   | 'waveform'
+  | 'waterfall'
   | 'nowPlaying'
 
 export type AudioScopeKind = Exclude<ScopeKind, 'nowPlaying'>
@@ -24,6 +25,7 @@ export const SCOPE_KINDS: ScopeKind[] = [
   'vumeter',
   'lufsmeter',
   'waveform',
+  'waterfall',
   'nowPlaying',
 ]
 
@@ -35,6 +37,7 @@ export const AUDIO_SCOPE_KINDS: AudioScopeKind[] = [
   'vumeter',
   'lufsmeter',
   'waveform',
+  'waterfall',
 ]
 
 export const TRANSFORMABLE_SCOPE_KINDS: TransformableScopeKind[] = [
@@ -63,6 +66,7 @@ export function normalizeScopeKind(value: unknown): ScopeKind | null {
 }
 
 export const SCOPE_LABELS: Record<ScopeKind, string> = {
+  waterfall: 'Waterfall',
   spectrum: 'Spectrum',
   oscilloscope: 'Oscilloscope',
   vectorscope: 'Vectorscope',

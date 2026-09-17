@@ -1,3 +1,5 @@
+import { SpectrumReferenceProvider } from '../renderer/components/SpectrumReference'
+import { pluginReferenceTransport } from './referenceTransport'
 import { useEffect, useRef, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../types/scope'
 import type { ScopeSettings } from '../types/settings'
@@ -49,7 +51,7 @@ export default function ScopeApp<K extends ScopeKind>({ kind, renderScope }: Sco
     ? undefined
     : ({ '--spectrum-viewport-height': `${lockedViewportHeight}px` } as CSSProperties)
 
-  return (
+  const content = (
     <div className={`spectrum-app ${settingsOpen ? 'has-settings' : ''}`.trim()} style={appStyle}>
       <div ref={viewportRef} className="spectrum-app__viewport">
         {renderScope(settings, resolvedTheme)}
@@ -76,4 +78,7 @@ export default function ScopeApp<K extends ScopeKind>({ kind, renderScope }: Sco
       )}
     </div>
   )
+  return kind === 'spectrum' ? <SpectrumReferenceProvider reference={(settings as ScopeSettings['spectrum']).reference}
+    transport={pluginReferenceTransport} commitResults={false}
+    onChange={reference => handleUpdate({ reference } as unknown as Partial<ScopeSettings[K]>)}>{content}</SpectrumReferenceProvider> : content
 }

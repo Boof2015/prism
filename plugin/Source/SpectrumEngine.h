@@ -27,6 +27,12 @@ public:
         applySmoothing();
     }
 
+    void configureNative(const juce::var& config) override
+    {
+        spectrum.setReferenceEnabled((bool) config.getProperty("referenceEnabled", false));
+    }
+    void resetAudioHistory() override { spectrum.reset(); }
+
     void setMeasurementActive(bool active) override
     {
         if (measurementActive == active)
@@ -48,6 +54,10 @@ public:
     {
         auto* obj = new juce::DynamicObject();
         obj->setProperty("sampleRate", sampleRate);
+        obj->setProperty("hasSpectrumData", spectrum.hasSpectrumData());
+        obj->setProperty("referenceEnabled", spectrum.isReferenceEnabled());
+        obj->setProperty("referenceMeanSquare", spectrum.getReferenceMeanSquare());
+        obj->setProperty("referenceSeconds", spectrum.getReferenceSeconds());
         obj->setProperty("magnitudes", toBase64(spectrum.getMagnitudes()));
         obj->setProperty("side", toBase64(spectrum.getSideMagnitudes()));
         obj->setProperty("channelMax", toBase64(spectrum.getChannelMaxMagnitudes()));

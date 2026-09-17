@@ -183,6 +183,26 @@ test('drops stale-session chunks before they reach scope queues', () => {
   assert.equal(router.getDiagnosticsSnapshot().staleSessionDrops, 1)
 })
 
+test('suspend and resume preserve queued history without creating a new session', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'daw-bridge')
+  router.setVisualizerConsumerDemand('timeline', { waveform: true })
+  router.ingestChunk(createChunk(1), createChunk(1), { sessionId, sequence: 1 })
+
+  router.suspendSession()
+  assert.equal(router.getSessionState().suspended, true)
+  assert.equal(router.getSessionState().sessionId, sessionId)
+  router.ingestChunk(createChunk(2), createChunk(2), { sessionId, sequence: 2 })
+
+  router.resumeSession()
+  assert.equal(router.getSessionState().suspended, false)
+  assert.equal(router.getSessionState().sessionId, sessionId)
+  router.ingestChunk(createChunk(3), createChunk(3), { sessionId, sequence: 3 })
+
+  const chunks = router.flushPendingWaveformStereoSamples()
+  assert.deepEqual(chunks.map((chunk) => chunk.left[0]), [1, 3])
+})
+
 test('publishes aggregated visualizer demand changes for downstream transports', () => {
   const router = new AudioRouter()
   const snapshots: Array<ReturnType<AudioRouter['getActiveVisualizerDemand']>> = []
@@ -197,6 +217,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
   unsubscribe()
 
   assert.deepEqual(snapshots[0], {
+    waterfall: false,
     spectrum: false,
     oscilloscope: false,
     vectorscope: false,
@@ -206,6 +227,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
     waveform: false,
   })
   assert.deepEqual(snapshots[1], {
+    waterfall: false,
     spectrum: true,
     oscilloscope: true,
     vectorscope: false,
@@ -215,6 +237,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
     waveform: false,
   })
   assert.deepEqual(snapshots[2], {
+    waterfall: false,
     spectrum: true,
     oscilloscope: true,
     vectorscope: true,
@@ -224,6 +247,7 @@ test('publishes aggregated visualizer demand changes for downstream transports',
     waveform: false,
   })
   assert.deepEqual(snapshots[3], {
+    waterfall: false,
     spectrum: false,
     oscilloscope: false,
     vectorscope: true,
@@ -238,4 +262,24 @@ test('audio diagnostics stay scoped to audio-only visualizers', () => {
   const router = new AudioRouter()
 
   assert.equal('astra' in router.getDiagnosticsSnapshot().scopes, false)
+})
+
+
+test('Waterfall has independent stereo demand, a bounded queue, and preserves gap sequences', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'native-macos')
+  router.setVisualizerConsumerDemand('waterfall-test', { waterfall: true, spectrum: true, spectrogram: true })
+  for (let sequence = 1; sequence <= 100; sequence++) {
+    router.ingestChunk(createChunk(0.5), createChunk(-0.5), { sessionId, channelCount: 2, sequence })
+  }
+  const chunks = router.flushPendingWaterfallSamples()
+  assert.equal(chunks.length, 96)
+  assert.equal(chunks[0].sequence, 5)
+  assert.deepEqual(Array.from(chunks[0].right), [-0.5, -0.5, -0.5, -0.5])
+  assert.equal(router.flushPendingSpectrumStereoSamples().length, 96)
+  assert.equal(router.flushPendingSpectrogramStereoSamples().length, 96)
+  assert.equal(router.flushPendingWaterfallSamples().length, 0)
+  router.clearVisualizerConsumerDemand('waterfall-test')
+  router.ingestChunk(createChunk(1), createChunk(1), { sessionId, sequence: 101 })
+  assert.equal(router.flushPendingWaterfallSamples().length, 0)
 })

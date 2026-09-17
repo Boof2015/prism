@@ -1,5 +1,6 @@
 import { normalizeScopeKind, type ScopeKind } from '../types/scope'
 import { normalizeWindowBounds } from './profileState'
+import { normalizeWindowDocking } from './windowDocking'
 import {
   WINDOW_LOCAL_STATE_FORMAT,
   WINDOW_LOCAL_STATE_VERSION,
@@ -42,6 +43,7 @@ export function createEmptyWindowLocalState(): PrismWindowLocalStateV1 {
     popoutAlwaysOnTop: {},
     nowPlayingConfigWindowBounds: undefined,
     windowBackground: createDefaultWindowBackgroundState(),
+    docking: normalizeWindowDocking(undefined),
   }
 }
 
@@ -67,5 +69,6 @@ export function normalizeWindowLocalState(raw: unknown): PrismWindowLocalStateV1
     popoutAlwaysOnTop,
     nowPlayingConfigWindowBounds: normalizeWindowBounds(parsed.nowPlayingConfigWindowBounds),
     windowBackground: normalizeWindowBackgroundState(parsed.windowBackground),
+    docking: normalizeWindowDocking(parsed.docking),
   }
 }

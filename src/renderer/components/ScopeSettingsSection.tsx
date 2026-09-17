@@ -1,3 +1,4 @@
+import { SpectrumReferenceControls } from './SpectrumReference'
 import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
 import { SCOPE_LABELS, isTransformableScopeKind } from '../../types/scope'
@@ -82,6 +83,10 @@ function appendTransformSummary(
 
 export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]): string {
   switch (kind) {
+    case 'waterfall': {
+      const s = settings as ScopeSettings['waterfall']
+      return `Spectrum history · ${s.historySeconds}s · ${s.density} · ${s.colorMode === 'heat' ? 'Heat' : 'Theme'}`
+    }
     case 'spectrum': {
       const scopeSettings = settings as ScopeSettings['spectrum']
       const summary = `${scopeSettings.scaleMode.toUpperCase()} · ${frequencyRangeLabel(scopeSettings.frequencyRangeMode)} · ${scopeSettings.heatmap ? 'Heat' : 'Fill'} · FFT ${scopeSettings.fftSize}`
@@ -314,11 +319,14 @@ interface ScopeSettingsSectionProps {
   onUpdate: <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>) => void
 }
 
+let spectrumSettingsTab: 'general' | 'reference' = 'general'
+
 export default function ScopeSettingsSection({
   kind,
   settings,
   onUpdate,
 }: ScopeSettingsSectionProps): JSX.Element {
+  const [tab, setTab] = useState(spectrumSettingsTab)
   return (
     <section className="settings-scope-section">
       <div className="settings-scope-section__header">
@@ -326,7 +334,49 @@ export default function ScopeSettingsSection({
         <div className="settings-scope-section__summary">{scopeSummary(kind, settings)}</div>
       </div>
 
-      <div className="settings-scope-section__controls">
+      {kind === 'spectrum' && <div className="settings-scope-tabs" role="tablist" aria-label="Spectrum settings">
+        {(['general', 'reference'] as const).map(value => <button type="button" role="tab" key={value}
+          className={`settings-chip ${tab === value ? 'is-active' : ''}`}
+          aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} aria-controls={`spectrum-${value}-settings`}
+          onClick={() => { spectrumSettingsTab = value; setTab(value) }}
+          onKeyDown={event => {
+            if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+              event.preventDefault()
+              const next = event.key === 'Home' ? 'general' : event.key === 'End' ? 'reference' : tab === 'general' ? 'reference' : 'general'
+              spectrumSettingsTab = next; setTab(next)
+              const buttons = event.currentTarget.parentElement?.querySelectorAll('button')
+              buttons?.[next === 'general' ? 0 : 1]?.focus()
+            }
+          }}>{value === 'general' ? 'General' : 'Reference'}</button>)}
+      </div>}
+      {kind === 'spectrum' && tab === 'reference' && <div role="tabpanel" id="spectrum-reference-settings"><SpectrumReferenceControls /></div>}
+      <div className="settings-scope-section__controls" id={kind === 'spectrum' ? 'spectrum-general-settings' : undefined}
+        role={kind === 'spectrum' ? 'tabpanel' : undefined} hidden={kind === 'spectrum' && tab !== 'general'}>
+        {kind === 'waterfall' && (() => {
+          const current = settings as ScopeSettings['waterfall']
+          return <>
+            <RangeControl label="History" value={current.historySeconds} valueLabel={`${current.historySeconds}s`} min={1} max={30} step={1} fullWidth={false} onChange={(value) => onUpdate('waterfall', { historySeconds: value })} />
+            <SelectControl label="Ridges" value={current.density} onChange={(value) => onUpdate('waterfall', { density: value as ScopeSettings['waterfall']['density'] })}>
+              <option value="sparse">Sparse</option><option value="balanced">Balanced</option><option value="dense">Dense</option>
+            </SelectControl>
+            <SelectControl label="Color" value={current.colorMode} onChange={(value) => onUpdate('waterfall', { colorMode: value as ScopeSettings['waterfall']['colorMode'] })}>
+              <option value="theme">Theme</option><option value="heat">Heat</option>
+            </SelectControl>
+            <SelectControl label="FFT" value={String(current.fftSize)} onChange={(value) => onUpdate('waterfall', { fftSize: Number(value) })}>
+              {[1024, 2048, 4096, 8192, 16384].map((size) => <option key={size} value={size}>{size}</option>)}
+            </SelectControl>
+            <SelectControl label="Scale" value={current.scaleMode} onChange={(value) => onUpdate('waterfall', { scaleMode: value as ScopeSettings['waterfall']['scaleMode'] })}>
+              <option value="log">Log</option><option value="mel">Mel</option><option value="linear">Linear</option>
+            </SelectControl>
+            <SelectControl label="Range" value={current.frequencyRangeMode} onChange={(value) => onUpdate('waterfall', { frequencyRangeMode: value as ScopeSettings['waterfall']['frequencyRangeMode'] })}>
+              <option value="extended">Extended (10 Hz–up to 24 kHz)</option><option value="audible">Audible (20 Hz–20 kHz)</option>
+            </SelectControl>
+            <ToggleGroup label="Display"><ToggleChip label="Guides" active={current.showGrid} onClick={() => onUpdate('waterfall', { showGrid: !current.showGrid })} /></ToggleGroup>
+            <RangeControl label="Tilt" value={current.tiltDbPerOctave} valueLabel={`${current.tiltDbPerOctave.toFixed(1)} dB/oct`} min={-2} max={8} step={0.1} fullWidth={false} onChange={(value) => onUpdate('waterfall', { tiltDbPerOctave: value })} />
+            <RangeControl label="Smoothing" value={current.smoothing} valueLabel={current.smoothing.toFixed(2)} min={0} max={0.99} step={0.01} fullWidth={false} onChange={(value) => onUpdate('waterfall', { smoothing: value })} />
+          </>
+        })()}
+
         {kind === 'spectrum' && (() => {
           const current = settings as ScopeSettings['spectrum']
           return (
@@ -608,6 +658,16 @@ export default function ScopeSettingsSection({
                 <option value="mono">Solid</option>
               </SelectControl>
 
+              <SelectControl
+                label="Timeline"
+                value={current.timelineUnit}
+                onChange={(value) => onUpdate('spectrogram', { timelineUnit: value as ScopeSettings['spectrogram']['timelineUnit'] })}
+              >
+                <option value="off">Off</option>
+                <option value="bars-beats">Bars + Beats</option>
+                <option value="seconds">Seconds</option>
+              </SelectControl>
+
               <ToggleGroup label="Overlay">
                 <ToggleChip
                   label="Frequency Grid"
@@ -742,6 +802,16 @@ export default function ScopeSettingsSection({
                   onClick={() => onUpdate('waveform', { multiband: !current.multiband })}
                 />
               </ToggleGroup>
+
+              <SelectControl
+                label="Timeline"
+                value={current.timelineUnit}
+                onChange={(value) => onUpdate('waveform', { timelineUnit: value as ScopeSettings['waveform']['timelineUnit'] })}
+              >
+                <option value="off">Off</option>
+                <option value="bars-beats">Bars + Beats</option>
+                <option value="seconds">Seconds</option>
+              </SelectControl>
 
               <RangeControl
                 label="Speed"

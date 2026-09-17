@@ -6,6 +6,8 @@ import BottomBar from './components/BottomBar'
 import ScopePopoutBridge from './components/ScopePopoutBridge'
 import AppBanner from './components/AppBanner'
 import WindowResizeOverlay from './components/WindowResizeOverlay'
+import DockedSettingsPortal from './components/DockedSettingsPortal'
+import { useWindowDockingStore } from './stores/windowDockingStore'
 import TrayControlBridge from './components/TrayControlBridge'
 import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
@@ -17,6 +19,7 @@ import { useWindowBackgroundStore } from './stores/windowBackgroundStore'
 import { useUpdateStore } from './stores/updateStore'
 import { useDesktopIntegrationStore } from './stores/desktopIntegrationStore'
 import { getRendererWindowCapabilities } from './windowCapabilities'
+import { useLinkedAnalysis } from './useLinkedAnalysis'
 
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -40,18 +43,36 @@ export default function App(): JSX.Element {
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopePopouts = useSettingsStore((s) => s.scopePopouts)
+  const linkedAnalysisEnabled = useSettingsStore((s) => s.analysisSettings.linkedAnalysis)
   const settingsOpen = useUiStore((s) => s.settingsOpen)
   const toggleSettings = useUiStore((s) => s.toggleSettings)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const showBanner = useUiStore((s) => s.showBanner)
   const initializeWindowBackground = useWindowBackgroundStore((s) => s.initialize)
   const windowBackgroundMode = useWindowBackgroundStore((s) => s.effective.mode)
-  const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions
+  const docking = useWindowDockingStore()
+  const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions && !docking.enabled
   const initializeDesktopIntegration = useDesktopIntegrationStore((s) => s.initialize)
   const applyDesktopIntegrationSnapshot = useDesktopIntegrationStore((s) => s.applySnapshot)
 
   const isNowPlayingVisible = !hiddenScopes.has('nowPlaying')
     && (scopeOrder.includes('nowPlaying') || scopePopouts.nowPlaying?.poppedOut === true)
+  const linkedAnalysis = useLinkedAnalysis(linkedAnalysisEnabled)
+
+  useEffect(() => {
+    let changed = false
+    let disposed = false
+    const unsubscribe = window.electronAPI.docking.onChanged(snapshot => {
+      changed = true
+      useWindowDockingStore.setState(snapshot)
+      if (snapshot.error) showBanner({ tone: 'error', message: snapshot.error, actions: [] })
+    })
+    void window.electronAPI.docking.get().then(snapshot => {
+      if (!disposed && !changed) useWindowDockingStore.setState(snapshot)
+    })
+    const unsubscribeClosed = window.electronAPI.docking.onSettingsClosed(() => setSettingsOpen(false))
+    return () => { disposed = true; unsubscribe(); unsubscribeClosed() }
+  }, [setSettingsOpen, showBanner])
 
   // Auto-capture on launch
   useEffect(() => {
@@ -184,8 +205,8 @@ export default function App(): JSX.Element {
   const settingsVisible = settingsOpen && settingsHeight > 0
 
   useLayoutEffect(() => {
-    window.electronAPI.setSettingsHeight(settingsHeight)
-  }, [settingsHeight])
+    window.electronAPI.setSettingsHeight(docking.enabled ? 0 : settingsHeight)
+  }, [docking.enabled, settingsHeight])
 
   const showToolbar = useCallback(() => {
     if (hideTimeoutRef.current) {
@@ -277,12 +298,8 @@ export default function App(): JSX.Element {
   }, [useNativeDragRegions])
 
   const handleAltDragEnd = useCallback(() => {
-    if (useNativeDragRegions) {
-      return
-    }
-
     window.electronAPI.stopWindowMove()
-  }, [useNativeDragRegions])
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -300,7 +317,7 @@ export default function App(): JSX.Element {
       onMouseMove={showToolbar}
       onMouseLeave={handleToolbarHoverLeave}
       onMouseDown={useNativeDragRegions ? undefined : handleAltDragStart}
-      onMouseUp={useNativeDragRegions ? undefined : handleAltDragEnd}
+      onMouseUp={handleAltDragEnd}
     >
       <div
         className={`prism-toolbar-layer ${toolbarVisible && !measurementActive ? 'is-visible' : ''}`.trim()}
@@ -309,7 +326,12 @@ export default function App(): JSX.Element {
       </div>
 
       <div className="prism-strip-region">
-        <Strip onMeasurementActiveChange={setMeasurementActive} />
+        <Strip
+          onMeasurementActiveChange={setMeasurementActive}
+          linkedAnalysisEnabled={linkedAnalysisEnabled}
+          linkedAnalysisProbe={linkedAnalysis.probe}
+          onLinkedAnalysisMessage={linkedAnalysis.publish}
+        />
       </div>
 
       <ScopePopoutBridge />
@@ -317,16 +339,23 @@ export default function App(): JSX.Element {
 
       <AppBanner />
 
-      <div
+      {docking.enabled ? (settingsOpen && docking.active ? (
+        <DockedSettingsPortal>
+          <SettingsPanel />
+          <BottomBar onClose={handleCloseSettings} />
+        </DockedSettingsPortal>
+      ) : null) : <div
         className={`prism-settings-region ${settingsVisible ? '' : 'is-hidden'}`.trim()}
         style={{ height: settingsHeight }}
         aria-hidden={!settingsVisible}
       >
         <SettingsPanel onHeightChange={setSettingsPanelHeight} />
         <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
-      </div>
+      </div>}
 
-      {windowBackgroundMode !== 'solid' && <WindowResizeOverlay />}
+      {(docking.enabled || windowBackgroundMode !== 'solid') && (
+        <WindowResizeOverlay directions={docking.enabled ? [docking.edge === 'top' ? 's' : 'n'] : undefined} />
+      )}
     </div>
   )
 }

@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, Tray } from 'electron'
+import { registerReferenceTracks, referenceTrackJobs } from './referenceTracks'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, session, shell, systemPreferences, Tray } from 'electron'
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions, OpenDialogOptions, WebContents } from 'electron'
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
@@ -16,15 +17,21 @@ import type {
 import type { ProfileMenuRequest } from '../types/profileMenu'
 import type { LegacyProfileMigrationPayload, Profile } from '../types/profile'
 import { SCOPE_KINDS, SCOPE_LABELS, type ScopeKind } from '../types/scope'
+import {
+  isLinkedAnalysisCompatibleScopeKind,
+  normalizeLinkedAnalysisMessage,
+  type LinkedAnalysisMessage,
+  type LinkedAnalysisProbe,
+} from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   ThemeLibrarySnapshot,
 } from '../types/theme'
 import { RESIZE_DIRECTIONS, type ResizeDirection } from '../types/windowResize'
-import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { DialogConfig, DialogLayout, DialogOptions, DialogResult } from '../types/dialog'
 import { normalizeProfile } from '../shared/profileState'
 import { getScopePopoutMinWidth } from '../shared/scopeSizing'
-import { resolveNativeThemeSource } from '../shared/themeState'
+import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../shared/themeState'
 import {
   resolveMacWindowBlurMaterial,
   resolveWindowCapabilities,
@@ -40,14 +47,20 @@ import { FileBackedProfileLibrary } from './profileLibrary'
 import { AudioClipLibrary } from './audioClipLibrary'
 import { loadNativeWindowsMediaApi } from './nativeWindowsMedia'
 import { loadNativeWindowChromeApi } from './nativeWindowChrome'
+import { WindowDockingService } from './windowDocking'
+import { DockingGeometryGuard } from './dockingGeometryGuard'
+import { normalizeWindowDocking } from '../shared/windowDocking'
 import { NowPlayingManager } from './services/nowPlayingManager'
+import { bindNowPlayingWindowConsumer } from './services/nowPlayingWindowConsumer'
 import { AstraIntegrationService } from './services/astraIntegration'
+import { TidalProvider } from './services/tidalProvider'
 import { MacSpotifyProvider } from './services/macSpotifyProvider'
 import { SecretVault } from './services/secretVault'
 import { checkForUpdates, resolveSafeReleaseUrl } from './services/updates'
 import { FileBackedThemeLibrary } from './themeLibrary'
 import { normalizeWindowBackgroundState } from '../shared/windowState'
 import { FileBackedWindowStateStore } from './windowStateStore'
+import { showReadyScopePopout } from './scopePopoutReady'
 import type { WindowBackgroundSnapshot, WindowBackgroundState } from '../types/windowState'
 import type { NativeWindowsMediaAPI } from '../types/nativeWindowsMedia'
 import type { NativeWindowChromeAPI } from '../types/nativeWindowChrome'
@@ -76,8 +89,12 @@ import {
 } from './services/trayMenu'
 import { TrayRendererCommandQueue } from './services/trayRendererCommandQueue'
 import { resolveTrayAssetPath } from './services/trayAssets'
+import { DawBridgeService } from './services/dawBridgeService'
+import type { DawBridgeAudioBatch, DawBridgeSnapshot } from '../types/dawBridge'
 
 let mainWindow: BrowserWindow | null = null
+let windowDocking: WindowDockingService | null = null
+const dockingGeometryGuard = new DockingGeometryGuard()
 let moveInterval: ReturnType<typeof setInterval> | null = null
 let moveStartCursor: { x: number; y: number } | null = null
 let moveStartBounds: WindowBounds | null = null
@@ -95,18 +112,22 @@ let suppressMainWindowSyncUntil = 0
 let mainWindowLogicalBounds: WindowBounds | null = null
 let windowRecreationPending = false
 let isAppQuitting = false
+let dockingQuitFlushed = false
 let appHiddenToTray = false
 let appTray: Tray | null = null
 let latestTrayMenuStateKey: string | null = null
 let trayRendererReady = false
 let latestTrayRendererState: TrayRendererState = { ...DEFAULT_TRAY_RENDERER_STATE }
 const pendingTrayRendererCommands = new TrayRendererCommandQueue()
-const customDialogWindows = new Set<BrowserWindow>()
+const customDialogWindows = new Map<BrowserWindow, { options: DialogOptions; ready: boolean }>()
+let activeDialogTheme = resolveTheme(createDefaultTheme()).interface
 
 const scopePopoutWindows = new Map<ScopeKind, BrowserWindow>()
 const scopePopoutCloseAllowed = new Set<ScopeKind>()
 const popoutBoundsTimers = new Map<ScopeKind, ReturnType<typeof setTimeout>>()
 const suppressNextPopoutBoundsEvents = new Set<ScopeKind>()
+const linkedAnalysisSources = new Map<number, LinkedAnalysisProbe>()
+const linkedAnalysisCleanupRegistered = new Set<number>()
 let nowPlayingConfigWindow: BrowserWindow | null = null
 let nowPlayingConfigBoundsTimer: ReturnType<typeof setTimeout> | null = null
 const windowSettingsHeights = new Map<number, number>()
@@ -122,6 +143,7 @@ let nativeWindowsMediaApi: NativeWindowsMediaAPI | null | undefined
 let nativeWindowChromeApi: NativeWindowChromeAPI | null | undefined
 let loginItemService: LoginItemService | null = null
 let audioClipLibrary: AudioClipLibrary | null = null
+let dawBridgeService: DawBridgeService | null = null
 let desktopIntegrationPreferences: DesktopIntegrationPreferences = {
   ...DEFAULT_DESKTOP_INTEGRATION_PREFERENCES,
 }
@@ -525,7 +547,8 @@ function showPrismWindows(): void {
     nowPlayingConfigWindow.show()
   }
 
-  const visibleDialogs = Array.from(customDialogWindows).filter((window) => !window.isDestroyed())
+  const visibleDialogs = Array.from(customDialogWindows.keys())
+    .filter((window) => !window.isDestroyed() && customDialogWindows.get(window)?.ready)
   for (const window of visibleDialogs) {
     window.show()
   }
@@ -602,6 +625,11 @@ function flushPendingTrayRendererCommands(): void {
 
 function repositionWindowToEdge(targetWindow: BrowserWindow, position: 'top' | 'bottom'): void {
   if (!supportsProgrammaticReposition() || targetWindow.isDestroyed()) return
+  if (position !== 'top' && position !== 'bottom') return
+  if (isMainRendererWindow(targetWindow)) {
+    windowDocking?.controller.setEdge(position)
+    if (windowDocking?.controller.ownsGeometry) return
+  }
 
   const display = screen.getDisplayMatching(targetWindow.getBounds())
   const workArea = display.workArea
@@ -678,12 +706,28 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
         deviceId: source.id || null,
       }),
     })),
+    { type: 'separator' },
+    { label: 'DAW Bridges', enabled: false },
+    ...model.rendererState.dawSources.map((source): MenuItemConstructorOptions => ({
+      label: source.label,
+      type: 'radio',
+      checked: model.rendererState.captureMode === 'daw'
+        && source.id === model.rendererState.selectedDawSourceId,
+      enabled: model.rendererReady,
+      click: () => sendTrayRendererCommand({
+        type: 'select-daw-source',
+        sourceId: source.id,
+      }),
+    })),
   ]
   if (model.rendererState.systemSources.length === 0) {
     audioSourceItems.splice(1, 0, { label: 'No outputs available', enabled: false })
   }
   if (model.rendererState.inputSources.length === 0) {
     audioSourceItems.push({ label: 'No inputs available', enabled: false })
+  }
+  if (model.rendererState.dawSources.length === 0) {
+    audioSourceItems.push({ label: 'No DAW bridges connected', enabled: false })
   }
 
   const loginStatus = loginItemStatusLabel(model.desktopIntegration)
@@ -714,6 +758,7 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
       label: 'Always on Top',
       type: 'checkbox',
       checked: model.alwaysOnTop,
+      enabled: !windowDocking?.controller.ownsGeometry,
       click: () => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           setWindowAlwaysOnTop(mainWindow, !mainWindow.isAlwaysOnTop())
@@ -737,6 +782,19 @@ function createNativeTrayMenu(model: ReturnType<typeof buildTrayMenuModel>): Ele
             if (mainWindow && !mainWindow.isDestroyed()) repositionWindowToEdge(mainWindow, 'bottom')
           },
         },
+        ...(windowDocking?.controller.snapshot.supported ? [
+          { type: 'separator' as const },
+          {
+            label: 'Reserve screen space', type: 'checkbox' as const,
+            checked: windowDocking.controller.ownsGeometry,
+            click: () => {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                flushMainWindowBoundsChanged(mainWindow)
+                windowDocking?.controller.setEnabled(!windowDocking.controller.ownsGeometry)
+              }
+            },
+          },
+        ] : []),
       ],
     },
     { type: 'separator' },
@@ -823,7 +881,7 @@ function refreshTrayMenu(): void {
     alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
     supportsReposition: supportsProgrammaticReposition(),
   })
-  const stateKey = createTrayMenuStateKey(model)
+  const stateKey = createTrayMenuStateKey(model) + JSON.stringify(windowDocking?.controller.snapshot)
   appTray!.setToolTip(model.tooltip)
   if (stateKey !== latestTrayMenuStateKey) {
     appTray!.setContextMenu(createNativeTrayMenu(model))
@@ -950,6 +1008,9 @@ function getNowPlayingManager(): NowPlayingManager {
         new MacSpotifyProvider({
           windowsMediaApi: getNativeWindowsMediaApi(),
         }),
+        new TidalProvider({
+          windowsMediaApi: getNativeWindowsMediaApi(),
+        }),
       ],
     })
     nowPlayingManager.subscribe((state) => {
@@ -1021,6 +1082,12 @@ function applyNativeThemeSnapshot(snapshot: ThemeLibrarySnapshot): void {
     : null
   nativeTheme.themeSource = resolveNativeThemeSource(activeTheme)
   refreshMacBlurVibrancy()
+  activeDialogTheme = resolveTheme(activeTheme ?? createDefaultTheme()).interface
+  for (const window of customDialogWindows.keys()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send('dialog:theme-changed', activeDialogTheme)
+    }
+  }
 }
 
 async function syncNativeThemeAppearance(): Promise<void> {
@@ -1035,6 +1102,7 @@ function clearPendingMainWindowBoundsSave(): void {
 }
 
 function sendMainWindowBoundsChanged(window: BrowserWindow): void {
+  if (windowDocking?.controller.ownsGeometry) return
   if (!isMainRendererWindow(window) || !mainRendererReady || !supportsGeometryPersistence()) return
   if (window.isDestroyed() || window.webContents.isDestroyed()) return
 
@@ -1088,6 +1156,36 @@ function getScopeKindForWindow(window: BrowserWindow | null): ScopeKind | null {
   return null
 }
 
+function broadcastLinkedAnalysisMessage(message: LinkedAnalysisMessage): void {
+  const targets = new Set<BrowserWindow>()
+  if (mainWindow) targets.add(mainWindow)
+  for (const popoutWindow of scopePopoutWindows.values()) targets.add(popoutWindow)
+
+  for (const target of targets) {
+    if (!target.isDestroyed() && !target.webContents.isDestroyed()) {
+      target.webContents.send('linked-analysis:update', message)
+    }
+  }
+}
+
+function registerLinkedAnalysisSourceCleanup(sender: WebContents): void {
+  if (linkedAnalysisCleanupRegistered.has(sender.id)) return
+  const senderId = sender.id
+  linkedAnalysisCleanupRegistered.add(senderId)
+  sender.once('destroyed', () => {
+    linkedAnalysisCleanupRegistered.delete(senderId)
+    const activeProbe = linkedAnalysisSources.get(senderId)
+    linkedAnalysisSources.delete(senderId)
+    if (activeProbe) {
+      broadcastLinkedAnalysisMessage({
+        active: false,
+        interactionId: activeProbe.interactionId,
+        sourceKind: activeProbe.sourceKind,
+      })
+    }
+  })
+}
+
 function describeWindow(window: BrowserWindow): string {
   if (isMainRendererWindow(window)) {
     return 'main window'
@@ -1111,6 +1209,7 @@ function normalizeMainWindowBounds(bounds: WindowBounds): WindowBounds {
 }
 
 function getDisplayWorkAreas(): WindowBounds[] {
+  if (windowDocking) return windowDocking.workAreas()
   return screen.getAllDisplays().map((display) => ({
     x: display.workArea.x,
     y: display.workArea.y,
@@ -1163,6 +1262,7 @@ function toLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): Wi
 }
 
 function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): void {
+  if (windowDocking?.controller.ownsGeometry) return
   if (!isMainRendererWindow(window)) {
     return
   }
@@ -1183,6 +1283,7 @@ function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getB
 }
 
 function applyMainWindowLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
+  if (windowDocking?.controller.ownsGeometry) return
   const logicalBounds = clampRestoredWindowBounds(
     normalizeMainWindowBounds(bounds),
     getDisplayWorkAreas(),
@@ -1233,6 +1334,7 @@ function setWindowHeight(window: BrowserWindow, bounds: WindowBounds, height: nu
 }
 
 function applySettingsHeight(window: BrowserWindow, rawNextHeight: number): void {
+  if (isMainRendererWindow(window) && windowDocking?.controller.ownsGeometry) return
   const currentSettingsHeight = getSettingsHeight(window)
   const nextSettingsHeight = Math.max(0, Math.round(rawNextHeight))
   const baseMinHeight = getBaseMinHeight(window)
@@ -1465,7 +1567,7 @@ function recreateWindowsForBackgroundChange(): void {
   mainWindow.once('closed', () => {
     try {
       createMainWindow(restoreBounds)
-      if (wasMaximized) {
+      if (wasMaximized && !windowDocking?.controller.ownsGeometry) {
         mainWindow?.maximize()
       }
     } finally {
@@ -1608,6 +1710,7 @@ async function persistAlwaysOnTopPreference(window: BrowserWindow, next: boolean
 }
 
 function setWindowAlwaysOnTop(window: BrowserWindow, next: boolean): void {
+  if (isMainRendererWindow(window) && windowDocking?.controller.ownsGeometry) return
   if (window.isDestroyed()) {
     return
   }
@@ -1634,10 +1737,9 @@ function loadRendererTarget(window: BrowserWindow, query: Record<string, string>
 
 async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
   return new Promise((resolve) => {
-    const height = options.type === 'prompt' ? 200 : 160
     const win = new BrowserWindow({
       width: 380,
-      height,
+      height: 200,
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
@@ -1654,10 +1756,9 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
         nodeIntegration: false,
       },
     })
-    customDialogWindows.add(win)
+    customDialogWindows.set(win, { options, ready: false })
 
     win.center()
-    loadRendererTarget(win, { mode: 'dialog' })
 
     const onResult = (_event: Electron.IpcMainEvent, result: DialogResult) => {
       if (_event.sender !== win.webContents) return
@@ -1667,16 +1768,13 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
 
     ipcMain.on('dialog:result', onResult)
 
-    win.webContents.once('did-finish-load', () => {
-      win.webContents.send('dialog:config', options)
-      if (!appHiddenToTray) win.show()
-    })
-
     win.once('closed', () => {
       customDialogWindows.delete(win)
       ipcMain.removeListener('dialog:result', onResult)
       resolve({ buttonIndex: options.cancelId ?? options.buttons.length - 1 })
     })
+
+    loadRendererTarget(win, { mode: 'dialog' })
   })
 }
 
@@ -1789,10 +1887,12 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
     refreshTrayMenu()
   })
 
+  windowDocking?.attach(mainWindow)
   loadRendererTarget(mainWindow, { window: 'main', ...getWindowBackgroundQuery(background) })
 }
 
 function sendScopePopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): void {
+  if (!dockingGeometryGuard.shouldPersist(window.id, Boolean(windowDocking?.controller.ownsGeometry))) return
   if (
     !mainWindow
     || mainWindow.isDestroyed()
@@ -1844,6 +1944,7 @@ function flushScopePopoutBoundsChanged(kind: ScopeKind, window: BrowserWindow): 
 }
 
 function flushRepositionedWindowBounds(window: BrowserWindow): void {
+  dockingGeometryGuard.userChange(window.id)
   if (isMainRendererWindow(window)) {
     flushMainWindowBoundsChanged(window)
     return
@@ -1944,13 +2045,6 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   setSettingsHeightForWindow(popoutWindow, 0)
   scopePopoutWindows.set(kind, popoutWindow)
 
-  popoutWindow.once('ready-to-show', () => {
-    if (!popoutWindow.isDestroyed() && !appHiddenToTray) {
-      popoutWindow.show()
-      raiseMainWindowAboveNormalPopouts()
-    }
-  })
-
   popoutWindow.on('close', (event) => {
     if (scopePopoutCloseAllowed.has(kind) || !mainWindow || mainWindow.isDestroyed()) {
       return
@@ -1961,6 +2055,7 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
   })
 
   popoutWindow.on('closed', () => {
+    dockingGeometryGuard.forget(popoutWindow.id)
     if (resizeWindow === popoutWindow) {
       stopWindowResizeController()
     }
@@ -1976,6 +2071,8 @@ function createScopePopoutWindow(kind: ScopeKind, rawBounds?: WindowBounds): Bro
     }
   })
 
+  popoutWindow.on('will-move', () => dockingGeometryGuard.userChange(popoutWindow.id))
+  popoutWindow.on('will-resize', () => dockingGeometryGuard.userChange(popoutWindow.id))
   popoutWindow.on('move', () => emitPopoutBoundsChanged(kind, popoutWindow))
   popoutWindow.on('resize', () => emitPopoutBoundsChanged(kind, popoutWindow))
 
@@ -2113,6 +2210,10 @@ function createNowPlayingConfigWindow(): BrowserWindow {
 
   const configWindow = nowPlayingConfigWindow
 
+  bindNowPlayingWindowConsumer(configWindow.webContents, getNowPlayingManager(), (error) => {
+    console.warn('Could not update now-playing config window activity:', error)
+  })
+
   configWindow.once('ready-to-show', () => {
     if (!configWindow.isDestroyed() && !appHiddenToTray) {
       configWindow.show()
@@ -2163,6 +2264,21 @@ function setupPermissions(): void {
 }
 
 function setupIPC(): void {
+  ipcMain.handle('window:docking-get', () => windowDocking?.controller.snapshot
+    ?? { ...normalizeWindowDocking(undefined), supported: false, active: false, error: null })
+  ipcMain.handle('window:docking-set', (event, enabled: unknown) => {
+    if (!isMainRendererWindow(getWindowFromSender(event.sender)) || typeof enabled !== 'boolean') return null
+    if (mainWindow) flushMainWindowBoundsChanged(mainWindow)
+    windowDocking?.controller.setEnabled(enabled)
+    return windowDocking?.controller.snapshot ?? null
+  })
+  ipcMain.handle('window:docked-settings-show', (event, height: unknown) => {
+    if (!isMainRendererWindow(getWindowFromSender(event.sender)) || typeof height !== 'number') return false
+    return windowDocking?.showSettings(height) ?? false
+  })
+  ipcMain.on('window:docked-settings-close', event => {
+    if (isMainRendererWindow(getWindowFromSender(event.sender))) windowDocking?.closeSettings()
+  })
   ipcMain.on('window:minimize', (event) => {
     getWindowFromSender(event.sender)?.minimize()
   })
@@ -2186,6 +2302,12 @@ function setupIPC(): void {
       const current = screen.getCursorScreenPoint()
       const dx = current.x - moveStartCursor.x
       const dy = current.y - moveStartCursor.y
+      dockingGeometryGuard.userChange(targetWindow.id)
+
+      if (isMainRendererWindow(targetWindow) && windowDocking?.controller.ownsGeometry) {
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return
+        moveStartBounds = windowDocking.controller.undockForDrag(moveStartCursor) ?? targetWindow.getBounds()
+      }
 
       if (isMainRendererWindow(targetWindow)) {
         const nextBounds = clampDraggedMainWindowBounds({
@@ -2212,6 +2334,11 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || targetWindow.isDestroyed()) return
 
+    if (isMainRendererWindow(targetWindow) && windowDocking?.controller.ownsGeometry) {
+      const inwardEdge = windowDocking.controller.snapshot.edge === 'top' ? 's' : 'n'
+      if (rawEdge !== inwardEdge) return
+    }
+
     stopWindowMoveController()
     stopWindowResizeController()
 
@@ -2233,7 +2360,10 @@ function setupIPC(): void {
       }
 
       const currentCursor = screen.getCursorScreenPoint()
-      const [minWidth, minHeight] = resizeWindow.getMinimumSize()
+      dockingGeometryGuard.userChange(resizeWindow.id)
+      // A non-resizable Electron window reports its current size as its minimum.
+      const [minWidth, minHeight] = isMainRendererWindow(resizeWindow) && windowDocking?.controller.ownsGeometry
+        ? [WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight] : resizeWindow.getMinimumSize()
       const nextBounds = calculateResizedWindowBounds({
         edge: resizeEdge,
         startBounds: resizeStartBounds,
@@ -2243,7 +2373,11 @@ function setupIPC(): void {
         minHeight,
       })
 
-      resizeWindow.setBounds(nextBounds)
+      if (isMainRendererWindow(resizeWindow) && windowDocking?.controller.ownsGeometry) {
+        windowDocking.controller.resize(nextBounds.height)
+      } else {
+        resizeWindow.setBounds(nextBounds)
+      }
     }, 16)
   })
 
@@ -2308,6 +2442,32 @@ function setupIPC(): void {
     return getAppBuildInfo()
   })
 
+  ipcMain.handle('audio:request-microphone-access', async () => {
+    if (process.platform !== 'darwin') return true
+    const status = systemPreferences.getMediaAccessStatus('microphone')
+    if (status === 'granted') return true
+    if (status === 'denied' || status === 'restricted') return false
+    return systemPreferences.askForMediaAccess('microphone')
+  })
+
+  ipcMain.handle('daw-bridge:get-snapshot', () => {
+    return dawBridgeService?.getSnapshot() ?? {
+      available: false,
+      reason: 'The DAW bridge listener is not initialized.',
+      selectedSourceId: null,
+      sources: [],
+    } satisfies DawBridgeSnapshot
+  })
+
+  ipcMain.handle('daw-bridge:select-source', (_event, sourceId: unknown) => {
+    return dawBridgeService?.selectSource(typeof sourceId === 'string' ? sourceId : null) ?? {
+      available: false,
+      reason: 'The DAW bridge listener is not initialized.',
+      selectedSourceId: null,
+      sources: [],
+    } satisfies DawBridgeSnapshot
+  })
+
   ipcMain.on('audio-clips:start-drag', (event, rawPayload: unknown) => {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || !isMainRendererWindow(targetWindow)) return
@@ -2325,6 +2485,8 @@ function setupIPC(): void {
       event.sender.send('audio-clips:drag-error', `Could not create the audio clip: ${detail}`)
     }
   })
+
+  registerReferenceTracks()
 
   ipcMain.handle('audio-clips:reveal-folder', async (event) => {
     const targetWindow = getWindowFromSender(event.sender)
@@ -2394,6 +2556,7 @@ function setupIPC(): void {
   })
 
   ipcMain.handle('profiles:load', async (_event, id: string) => {
+    referenceTrackJobs.cancel()
     return getProfileLibrary().loadProfile(id)
   })
 
@@ -2451,6 +2614,35 @@ function setupIPC(): void {
 
   ipcMain.handle('dialog:show', async (_event, options: DialogOptions) => {
     return showCustomDialog(options)
+  })
+
+  ipcMain.handle('dialog:get-config', (event): DialogConfig => {
+    const win = getWindowFromSender(event.sender)
+    const state = win && customDialogWindows.get(win)
+    if (!state) throw new Error('Dialog configuration is only available to dialog windows.')
+    return { options: state.options, theme: activeDialogTheme }
+  })
+
+  ipcMain.on('dialog:layout-ready', (event, layout: DialogLayout) => {
+    const win = getWindowFromSender(event.sender)
+    const state = win && customDialogWindows.get(win)
+    if (!win || !state || !Number.isFinite(layout?.height) || layout.height <= 0) return
+
+    const bounds = win.getBounds()
+    const { workArea } = screen.getDisplayMatching(bounds)
+    const maxHeight = Math.max(1, workArea.height - 32)
+    const height = Math.min(maxHeight, Math.max(120, Math.ceil(layout.height)))
+    const y = Math.round(Math.max(workArea.y + 16, Math.min(
+      bounds.y + (bounds.height - height) / 2,
+      workArea.y + workArea.height - height - 16,
+    )))
+    if (bounds.height !== height || bounds.y !== y) {
+      win.setBounds({ ...bounds, height, y })
+    }
+    if (!state.ready) {
+      state.ready = true
+      if (!appHiddenToTray) win.show()
+    }
   })
 
   ipcMain.handle('profiles:reveal-folder', async () => {
@@ -2570,6 +2762,7 @@ function setupIPC(): void {
 
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow) return null
+    if (isMainRendererWindow(targetWindow) && windowDocking?.controller.ownsGeometry) return null
 
     return toLogicalBounds(targetWindow)
   })
@@ -2646,6 +2839,7 @@ function setupIPC(): void {
     if (!isMainRendererWindow(targetWindow)) return
 
     mainRendererReady = true
+    windowDocking?.ready()
     void processPendingProfileOpenPaths()
   })
 
@@ -2684,8 +2878,11 @@ function setupIPC(): void {
 
   ipcMain.on('scope-popout:ready', (event, kind: ScopeKind) => {
     const targetWindow = getWindowFromSender(event.sender)
-    if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
+    if (!isScopeKind(kind) || !targetWindow || targetWindow !== scopePopoutWindows.get(kind)) return
     mainWindow?.webContents.send('scope-popout:ready', kind)
+    if (showReadyScopePopout(targetWindow, appHiddenToTray)) {
+      raiseMainWindowAboveNormalPopouts()
+    }
   })
 
   ipcMain.on('scope-popout:request-pop-in', (event, kind: ScopeKind) => {
@@ -2698,6 +2895,32 @@ function setupIPC(): void {
     const targetWindow = getWindowFromSender(event.sender)
     if (!targetWindow || isMainRendererWindow(targetWindow) || !isScopeKind(kind)) return
     mainWindow?.webContents.send('scope-popout:settings-update', kind, partial)
+  })
+
+  ipcMain.on('linked-analysis:update', (event, rawMessage: unknown) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    const message = normalizeLinkedAnalysisMessage(rawMessage)
+    if (!targetWindow || !message) return
+
+    const popoutKind = getScopeKindForWindow(targetWindow)
+    if (!isMainRendererWindow(targetWindow)) {
+      if (!popoutKind || !isLinkedAnalysisCompatibleScopeKind(popoutKind) || message.sourceKind !== popoutKind) {
+        return
+      }
+    }
+
+    const senderId = event.sender.id
+    registerLinkedAnalysisSourceCleanup(event.sender)
+    if (message.active) {
+      linkedAnalysisSources.set(senderId, message)
+      broadcastLinkedAnalysisMessage(message)
+      return
+    }
+
+    const activeProbe = linkedAnalysisSources.get(senderId)
+    if (!activeProbe || activeProbe.interactionId !== message.interactionId) return
+    linkedAnalysisSources.delete(senderId)
+    broadcastLinkedAnalysisMessage(message)
   })
 }
 
@@ -2714,7 +2937,35 @@ if (!hasSingleInstanceLock) {
     setupPermissions()
     void getNowPlayingManager().initialize()
     setupIPC()
+    dawBridgeService = new DawBridgeService({
+      onSnapshot: (snapshot: DawBridgeSnapshot) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('daw-bridge:snapshot', snapshot)
+        }
+      },
+      onAudioBatch: (batch: DawBridgeAudioBatch) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('daw-bridge:audio-batch', batch)
+        }
+      },
+    })
+    await dawBridgeService.start()
     await getWindowStateStore().initialize()
+    windowDocking = new WindowDockingService({
+      store: getWindowStateStore(),
+      geometryChanging: () => dockingGeometryGuard.systemChange(),
+      logicalBounds: toLogicalBounds,
+      prepare: window => {
+        setSettingsHeightForWindow(window, 0)
+        window.setMinimumSize(WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight)
+      },
+      restore: (window, bounds) => {
+        setSettingsHeightForWindow(window, 0)
+        window.setMinimumSize(WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight)
+        applyMainWindowLogicalBounds(window, bounds)
+      },
+      changed: () => refreshTrayMenu(),
+    })
     desktopIntegrationPreferences = await loadDesktopIntegrationPreferences(
       getDesktopIntegrationPreferencesPath(),
     )
@@ -2771,8 +3022,17 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   isAppQuitting = true
+  if (windowDocking && !dockingQuitFlushed) {
+    event.preventDefault()
+    void windowDocking.shutdown().finally(() => {
+      dockingQuitFlushed = true
+      app.quit()
+    })
+  }
+  dawBridgeService?.stop()
+  dawBridgeService = null
   destroyAppTray()
   pendingTrayRendererCommands.clear()
 })

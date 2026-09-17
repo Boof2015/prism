@@ -29,7 +29,11 @@ function resolveAppScopeSettings<K extends ScopeKind>(kind: K, profileJson: stri
   try {
     const parsed = JSON.parse(profileJson) as { scopeSettings?: Record<string, unknown> }
     const scoped = parsed?.scopeSettings?.[kind]
-    if (scoped) return mergeScopeSettings(kind, scoped)
+    if (scoped) {
+      const normalized = mergeScopeSettings(kind, scoped)
+      if (kind === 'spectrum') (normalized as ScopeSettings['spectrum']).reference = null
+      return normalized
+    }
   } catch {
     // fall through
   }

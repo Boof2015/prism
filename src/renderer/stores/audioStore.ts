@@ -2,15 +2,24 @@ import { create } from 'zustand'
 import { audioCapture, type CaptureManagerStatus } from '../audio/AudioCapture'
 import {
   isRollingCaptureDuration,
+  isAudioClipFormat,
+  type AudioClipFormat,
   type RollingCaptureDurationSeconds,
   type RollingCaptureStatus,
 } from '../../types/audioClip'
 import type {
   CaptureBackendKind,
   CaptureBackendSupport,
+  CaptureChannelRouting,
   CaptureMode,
   CaptureSourceDescriptor,
+  CaptureStatus,
 } from '../../types/capture'
+import {
+  getCaptureRoutingStorageKey,
+  normalizeCaptureChannelRouting,
+} from '../../types/capture'
+import { encodeAudioClipPayload } from '../../shared/audioClipEncoding'
 import { useUiStore } from './uiStore'
 
 const STORAGE_KEY = 'prism:audio'
@@ -25,7 +34,10 @@ export interface PersistedAudioState {
   captureMode: CaptureMode
   selectedSystemSourceId: string
   selectedDeviceId: string | null
+  selectedDawSourceId: string | null
   rollingCaptureSeconds: RollingCaptureDurationSeconds | null
+  rollingCaptureFormat: AudioClipFormat
+  channelRoutingBySource: Record<string, CaptureChannelRouting>
 }
 
 interface RefreshSourceOptions {
@@ -39,33 +51,44 @@ interface StartCaptureOptions {
 
 interface AudioState {
   systemSources: CaptureSourceDescriptor[]
-  devices: MediaDeviceInfo[]
+  devices: CaptureSourceDescriptor[]
+  dawSources: CaptureSourceDescriptor[]
   selectedSystemSourceId: string | null
   selectedDeviceId: string | null
+  selectedDawSourceId: string | null
   captureMode: CaptureMode
   activeBackendKind: CaptureBackendKind | null
   backendSupport: CaptureBackendSupport | null
   isCapturing: boolean
-  captureStatus: 'idle' | 'connecting' | 'capturing' | 'error'
+  captureStatus: CaptureStatus
   captureError: string | null
   captureNotice: string | null
   sampleRate: number
   channelCount: number
+  sourceChannelCount: number
+  channelRoutingAvailable: boolean
+  activeChannelRouting: CaptureChannelRouting
+  channelRoutingBySource: Record<string, CaptureChannelRouting>
   activeSourceId: string | null
   activeSourceLabel: string | null
   inputGainDb: number
   rollingCaptureSeconds: RollingCaptureDurationSeconds | null
+  rollingCaptureFormat: AudioClipFormat
   rollingCaptureStatus: RollingCaptureStatus
   setInputGain: (db: number) => void
+  setChannelRouting: (routing: CaptureChannelRouting) => void
   setRollingCaptureSeconds: (duration: RollingCaptureDurationSeconds | null) => void
+  setRollingCaptureFormat: (format: AudioClipFormat) => void
   startRollingClipDrag: () => boolean
   revealRollingCaptureFolder: () => Promise<void>
   clearCaptureNotice: () => void
   refreshSystemSources: (options?: RefreshSourceOptions) => Promise<void>
   refreshDevices: (options?: RefreshSourceOptions) => Promise<void>
+  refreshDawSources: () => Promise<void>
   refreshBackendSupport: (options?: RefreshSourceOptions) => Promise<void>
   selectSystemSource: (sourceId: string | null) => Promise<void>
   selectDevice: (deviceId: string | null) => Promise<void>
+  selectDawSource: (sourceId: string) => Promise<void>
   setCaptureMode: (mode: CaptureMode) => void
   startCapture: (options?: StartCaptureOptions) => Promise<void>
   stopCapture: () => void
@@ -83,6 +106,9 @@ function applyCaptureStatus(status: CaptureManagerStatus): Partial<AudioState> {
     backendSupport: status.backendSupport,
     sampleRate: status.sampleRate,
     channelCount: status.channelCount,
+    sourceChannelCount: status.sourceChannelCount,
+    channelRoutingAvailable: status.channelRoutingAvailable,
+    activeChannelRouting: status.channelRouting,
     isCapturing: status.isCapturing,
     activeSourceId: status.activeSourceId,
     activeSourceLabel: status.activeSourceLabel,
@@ -105,8 +131,8 @@ function showSystemCaptureFallbackBanner(message: string): void {
   })
 }
 
-function describeInputDevice(deviceId: string, devices: MediaDeviceInfo[]): string {
-  const matchingDevice = devices.find((device) => device.deviceId === deviceId)
+function describeInputDevice(deviceId: string, devices: CaptureSourceDescriptor[]): string {
+  const matchingDevice = devices.find((device) => device.id === deviceId)
   if (matchingDevice?.label) {
     return matchingDevice.label
   }
@@ -129,25 +155,14 @@ function areCaptureSourcesEqual(
   return left.every((source, index) => {
     const candidate = right[index]
     return source.id === candidate.id
+      && source.persistentId === candidate.persistentId
       && source.label === candidate.label
       && source.kind === candidate.kind
       && source.isDefault === candidate.isDefault
       && source.sampleRate === candidate.sampleRate
       && source.channelCount === candidate.channelCount
-  })
-}
-
-function areMediaDevicesEqual(left: MediaDeviceInfo[], right: MediaDeviceInfo[]): boolean {
-  if (left.length !== right.length) {
-    return false
-  }
-
-  return left.every((device, index) => {
-    const candidate = right[index]
-    return device.deviceId === candidate.deviceId
-      && device.kind === candidate.kind
-      && device.label === candidate.label
-      && device.groupId === candidate.groupId
+      && source.channelRoutingAvailable === candidate.channelRoutingAvailable
+      && JSON.stringify(source.channels ?? []) === JSON.stringify(candidate.channels ?? [])
   })
 }
 
@@ -159,18 +174,87 @@ function getResolvedDefaultSystemSourceId(sources: CaptureSourceDescriptor[]): s
   ))?.id ?? null
 }
 
-function getDefaultInputSignature(devices: MediaDeviceInfo[]): string | null {
-  const defaultDevice = devices.find((device) => device.deviceId === 'default') ?? devices[0] ?? null
+function getDefaultInputSignature(devices: CaptureSourceDescriptor[]): string | null {
+  const defaultDevice = devices.find((device) => device.isDefault) ?? devices[0] ?? null
   if (!defaultDevice) {
     return null
   }
 
   return [
-    defaultDevice.deviceId,
+    defaultDevice.id,
     defaultDevice.label,
-    defaultDevice.groupId,
     defaultDevice.kind,
+    defaultDevice.channelCount ?? '',
   ].join('\0')
+}
+
+function hasActiveSourceFormatChanged(
+  previous: CaptureSourceDescriptor[],
+  next: CaptureSourceDescriptor[],
+  activeSourceId: string | null,
+): boolean {
+  const before = previous.find((source) => source.id === activeSourceId)
+  const after = next.find((source) => source.id === activeSourceId)
+  return Boolean(before && after && (
+    before.sampleRate !== after.sampleRate
+    || before.channelCount !== after.channelCount
+    || JSON.stringify(before.channels ?? []) !== JSON.stringify(after.channels ?? [])
+  ))
+}
+
+function normalizeChannelRoutingMap(raw: unknown): Record<string, CaptureChannelRouting> {
+  if (typeof raw !== 'object' || raw === null) return {}
+  const result: Record<string, CaptureChannelRouting> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key || typeof value !== 'object' || value === null) continue
+    const candidate = value as Partial<CaptureChannelRouting>
+    if (
+      typeof candidate.left !== 'number'
+      || !Number.isInteger(candidate.left)
+      || candidate.left < 0
+      || typeof candidate.right !== 'number'
+      || !Number.isInteger(candidate.right)
+      || candidate.right < 0
+    ) continue
+    result[key] = { left: candidate.left, right: candidate.right }
+  }
+  return result
+}
+
+function resolveRoutingSource(state: Pick<
+  AudioState,
+  'captureMode' | 'systemSources' | 'devices' | 'selectedSystemSourceId' | 'selectedDeviceId'
+>): CaptureSourceDescriptor | null {
+  if (state.captureMode === 'system') {
+    if (state.selectedSystemSourceId && state.selectedSystemSourceId !== DEFAULT_SYSTEM_SOURCE_ID) {
+      return state.systemSources.find((source) => source.id === state.selectedSystemSourceId) ?? null
+    }
+    return state.systemSources.find((source) => (
+      source.id !== DEFAULT_SYSTEM_SOURCE_ID && source.isDefault
+    )) ?? null
+  }
+  if (state.captureMode === 'device') {
+    if (state.selectedDeviceId) {
+      return state.devices.find((source) => source.id === state.selectedDeviceId) ?? null
+    }
+    return state.devices.find((source) => source.isDefault) ?? state.devices[0] ?? null
+  }
+  return null
+}
+
+function resolveRoutingForState(state: Pick<
+  AudioState,
+  | 'captureMode'
+  | 'systemSources'
+  | 'devices'
+  | 'selectedSystemSourceId'
+  | 'selectedDeviceId'
+  | 'channelRoutingBySource'
+>): CaptureChannelRouting | undefined {
+  const source = resolveRoutingSource(state)
+  if (!source?.channelRoutingAvailable || !source.channelCount) return undefined
+  const key = getCaptureRoutingStorageKey(source.kind === 'system' ? 'system' : 'device', source.id)
+  return normalizeCaptureChannelRouting(state.channelRoutingBySource[key], source.channelCount)
 }
 
 function getStorage(): StorageLike | null {
@@ -189,7 +273,7 @@ export function normalizeInputGainDb(raw: unknown): number {
 }
 
 function normalizeCaptureMode(raw: unknown): CaptureMode {
-  return raw === 'device' ? 'device' : 'system'
+  return raw === 'device' || raw === 'daw' ? raw : 'system'
 }
 
 function normalizeSystemSourceId(raw: unknown): string {
@@ -220,7 +304,10 @@ export function normalizeAudioPreferences(raw: unknown): PersistedAudioState {
     captureMode: normalizeCaptureMode(parsed.captureMode),
     selectedSystemSourceId: normalizeSystemSourceId(parsed.selectedSystemSourceId),
     selectedDeviceId: normalizeDeviceId(parsed.selectedDeviceId),
+    selectedDawSourceId: normalizeDeviceId(parsed.selectedDawSourceId),
     rollingCaptureSeconds: normalizeRollingCaptureSeconds(parsed.rollingCaptureSeconds),
+    rollingCaptureFormat: isAudioClipFormat(parsed.rollingCaptureFormat) ? parsed.rollingCaptureFormat : 'pcm16',
+    channelRoutingBySource: normalizeChannelRoutingMap(parsed.channelRoutingBySource),
   }
 }
 
@@ -230,13 +317,19 @@ function buildAudioPreferences(
   selectedSystemSourceId: string | null,
   selectedDeviceId: string | null,
   rollingCaptureSeconds: RollingCaptureDurationSeconds | null,
+  selectedDawSourceId: string | null,
+  channelRoutingBySource: Record<string, CaptureChannelRouting>,
+  rollingCaptureFormat: AudioClipFormat,
 ): PersistedAudioState {
   return normalizeAudioPreferences({
     inputGainDb,
     captureMode,
     selectedSystemSourceId,
     selectedDeviceId,
+    selectedDawSourceId,
     rollingCaptureSeconds,
+    rollingCaptureFormat,
+    channelRoutingBySource,
   })
 }
 
@@ -271,14 +364,17 @@ const storedPreferences = loadAudioPreferences()
 audioCapture.setInputGain(storedPreferences.inputGainDb)
 audioCapture.setSelectedSystemSourceId(storedPreferences.selectedSystemSourceId)
 audioCapture.setSelectedDeviceId(storedPreferences.selectedDeviceId)
+audioCapture.setSelectedDawSourceId(storedPreferences.selectedDawSourceId)
 audioCapture.setCaptureMode(storedPreferences.captureMode)
 audioCapture.setRollingCaptureSeconds(storedPreferences.rollingCaptureSeconds)
 
 export const useAudioStore = create<AudioState>((set, get) => ({
   systemSources: [],
   devices: [],
+  dawSources: [],
   selectedSystemSourceId: audioCapture.getSelectedSystemSourceId(),
   selectedDeviceId: audioCapture.getSelectedDeviceId(),
+  selectedDawSourceId: audioCapture.getSelectedDawSourceId(),
   captureMode: audioCapture.getCaptureMode(),
   activeBackendKind: null,
   backendSupport: null,
@@ -288,10 +384,15 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   captureNotice: null,
   sampleRate: 48000,
   channelCount: 2,
+  sourceChannelCount: 2,
+  channelRoutingAvailable: false,
+  activeChannelRouting: { left: 0, right: 1 },
+  channelRoutingBySource: storedPreferences.channelRoutingBySource,
   activeSourceId: null,
   activeSourceLabel: null,
   inputGainDb: storedPreferences.inputGainDb,
   rollingCaptureSeconds: storedPreferences.rollingCaptureSeconds,
+  rollingCaptureFormat: storedPreferences.rollingCaptureFormat,
   rollingCaptureStatus: audioCapture.getRollingCaptureStatus(),
 
   setInputGain: (db: number) => {
@@ -307,9 +408,47 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.selectedSystemSourceId,
       currentState.selectedDeviceId,
       currentState.rollingCaptureSeconds,
+      currentState.selectedDawSourceId,
+      currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     audioCapture.setInputGain(nextInputGainDb)
     set({ inputGainDb: nextInputGainDb })
+  },
+
+  setChannelRouting: (routing) => {
+    const currentState = get()
+    const source = resolveRoutingSource(currentState)
+    if (!source?.channelRoutingAvailable || !source.channelCount) return
+
+    const normalized = normalizeCaptureChannelRouting(routing, source.channelCount)
+    const sourceKind = source.kind === 'system' ? 'system' : 'device'
+    const key = getCaptureRoutingStorageKey(sourceKind, source.id)
+    const nextRoutingBySource = {
+      ...currentState.channelRoutingBySource,
+      [key]: normalized,
+    }
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      currentState.captureMode,
+      currentState.selectedSystemSourceId,
+      currentState.selectedDeviceId,
+      currentState.rollingCaptureSeconds,
+      currentState.selectedDawSourceId,
+      nextRoutingBySource,
+      currentState.rollingCaptureFormat,
+    ))
+
+    const routingActiveSource = currentState.isCapturing
+      && currentState.captureMode === sourceKind
+      && currentState.activeSourceId === source.id
+    const activeChannelRouting = routingActiveSource
+      ? audioCapture.setChannelRouting(normalized)
+      : currentState.activeChannelRouting
+    set({
+      channelRoutingBySource: nextRoutingBySource,
+      activeChannelRouting,
+    })
   },
 
   setRollingCaptureSeconds: (duration) => {
@@ -323,6 +462,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.selectedSystemSourceId,
       currentState.selectedDeviceId,
       nextDuration,
+      currentState.selectedDawSourceId,
+      currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     audioCapture.setRollingCaptureSeconds(nextDuration)
     set({
@@ -331,21 +473,31 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     })
   },
 
+  setRollingCaptureFormat: (format) => {
+    const nextFormat = isAudioClipFormat(format) ? format : 'pcm16'
+    const currentState = get()
+    if (currentState.rollingCaptureFormat === nextFormat) return
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      currentState.captureMode,
+      currentState.selectedSystemSourceId,
+      currentState.selectedDeviceId,
+      currentState.rollingCaptureSeconds,
+      currentState.selectedDawSourceId,
+      currentState.channelRoutingBySource,
+      nextFormat,
+    ))
+    set({ rollingCaptureFormat: nextFormat })
+  },
+
   startRollingClipDrag: () => {
     if (typeof window === 'undefined' || !window.electronAPI?.audioClips) return false
     const snapshot = audioCapture.takeRollingCaptureSnapshot()
     if (!snapshot) return false
 
-    window.electronAPI.audioClips.startDrag({
-      pcmBytes: new Uint8Array(
-        snapshot.pcmSamples.buffer,
-        snapshot.pcmSamples.byteOffset,
-        snapshot.pcmSamples.byteLength,
-      ),
-      sampleRate: snapshot.sampleRate,
-      channelCount: snapshot.channelCount,
-      frameCount: snapshot.frameCount,
-    })
+    window.electronAPI.audioClips.startDrag(
+      encodeAudioClipPayload(snapshot, get().rollingCaptureFormat),
+    )
     return true
   },
 
@@ -389,6 +541,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         nextSelectedSystemSourceId,
         currentState.selectedDeviceId,
         currentState.rollingCaptureSeconds,
+        currentState.selectedDawSourceId,
+        currentState.channelRoutingBySource,
+        currentState.rollingCaptureFormat,
       ))
     }
 
@@ -418,13 +573,16 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       && defaultSystemSourceId
       && currentState.activeSourceId !== defaultSystemSourceId,
     )
+    const activeFormatChanged = hasActiveSourceFormatChanged(
+      previousSources, systemSources, currentState.activeSourceId,
+    )
 
     if (
       options.rebindActiveCapture === true
       && currentState.captureMode === 'system'
       && currentState.captureStatus === 'capturing'
       && currentState.isCapturing
-      && (explicitSourceBecameUnavailable || defaultOutputChanged)
+      && (explicitSourceBecameUnavailable || defaultOutputChanged || activeFormatChanged)
     ) {
       await get().startCapture({ skipSourceRefresh: true })
     }
@@ -436,7 +594,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     const previousSelectedDeviceId = currentState.selectedDeviceId
     const previousDevices = currentState.devices
     const nextSelectedDeviceId = previousSelectedDeviceId
-      && devices.some((device) => device.deviceId === previousSelectedDeviceId)
+      && devices.some((device) => device.id === previousSelectedDeviceId)
       ? previousSelectedDeviceId
       : null
     const shouldShowFallbackNotice = Boolean(
@@ -444,7 +602,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       && previousSelectedDeviceId !== nextSelectedDeviceId
       && currentState.captureMode === 'device',
     )
-    const deviceListChanged = !areMediaDevicesEqual(previousDevices, devices)
+    const deviceListChanged = !areCaptureSourcesEqual(previousDevices, devices)
     const selectedDeviceChanged = previousSelectedDeviceId !== nextSelectedDeviceId
     const nextCaptureNotice = shouldShowFallbackNotice
       ? `${describeInputDevice(previousSelectedDeviceId!, previousDevices)} is unavailable. Prism switched to Default Input.`
@@ -458,6 +616,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
         currentState.selectedSystemSourceId,
         nextSelectedDeviceId,
         currentState.rollingCaptureSeconds,
+        currentState.selectedDawSourceId,
+        currentState.channelRoutingBySource,
+        currentState.rollingCaptureFormat,
       ))
     }
 
@@ -476,6 +637,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
 
     const defaultInputChanged = getDefaultInputSignature(previousDevices)
       !== getDefaultInputSignature(devices)
+    const activeFormatChanged = hasActiveSourceFormatChanged(
+      previousDevices, devices, currentState.activeSourceId,
+    )
     const selectedDefaultInput = nextSelectedDeviceId === null
     const explicitDeviceBecameUnavailable = Boolean(
       previousSelectedDeviceId
@@ -490,10 +654,11 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       && (
         explicitDeviceBecameUnavailable
         || (selectedDefaultInput && defaultInputChanged)
+        || activeFormatChanged
       )
     ) {
       await get().startCapture({
-        forceDeviceRestart: selectedDefaultInput,
+        forceDeviceRestart: selectedDefaultInput || activeFormatChanged,
         skipSourceRefresh: true,
       })
     }
@@ -503,6 +668,12 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     const backendSupport = await audioCapture.refreshBackendSupport()
     set({ backendSupport })
     await get().refreshSystemSources(options)
+    await get().refreshDawSources()
+  },
+
+  refreshDawSources: async () => {
+    const dawSources = await audioCapture.listSources('daw')
+    set({ dawSources })
   },
 
   selectSystemSource: async (sourceId: string | null) => {
@@ -516,6 +687,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       nextSelectedSystemSourceId,
       currentState.selectedDeviceId,
       currentState.rollingCaptureSeconds,
+      currentState.selectedDawSourceId,
+      currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     set({
       selectedSystemSourceId: nextSelectedSystemSourceId,
@@ -535,10 +709,37 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.selectedSystemSourceId,
       deviceId,
       currentState.rollingCaptureSeconds,
+      currentState.selectedDawSourceId,
+      currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     set({
       selectedDeviceId: deviceId,
       captureMode: 'device',
+      captureError: null,
+      captureNotice: null,
+    })
+  },
+
+  selectDawSource: async (sourceId: string) => {
+    const currentState = get()
+    const source = currentState.dawSources.find((candidate) => candidate.id === sourceId)
+    const persistentSourceId = source?.persistentId ?? sourceId
+    audioCapture.setSelectedDawSourceId(persistentSourceId, sourceId)
+    audioCapture.setCaptureMode('daw')
+    persistAudioPreferences(buildAudioPreferences(
+      currentState.inputGainDb,
+      'daw',
+      currentState.selectedSystemSourceId,
+      currentState.selectedDeviceId,
+      currentState.rollingCaptureSeconds,
+      persistentSourceId,
+      currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
+    ))
+    set({
+      selectedDawSourceId: persistentSourceId,
+      captureMode: 'daw',
       captureError: null,
       captureNotice: null,
     })
@@ -553,6 +754,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       currentState.selectedSystemSourceId,
       currentState.selectedDeviceId,
       currentState.rollingCaptureSeconds,
+      currentState.selectedDawSourceId,
+      currentState.channelRoutingBySource,
+      currentState.rollingCaptureFormat,
     ))
     set({ captureMode: mode })
   },
@@ -565,9 +769,10 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       if (options.skipSourceRefresh !== true) {
         await get().refreshBackendSupport({ rebindActiveCapture: false })
         await get().refreshDevices({ rebindActiveCapture: false })
+        await get().refreshDawSources()
       }
 
-      const { selectedDeviceId, selectedSystemSourceId, backendSupport } = get()
+      const { selectedDeviceId, selectedSystemSourceId, selectedDawSourceId, backendSupport } = get()
 
       const startDefaultInputFallback = async (reason: string | null): Promise<void> => {
         const message = buildSystemCaptureFallbackMessage(reason)
@@ -580,6 +785,9 @@ export const useAudioStore = create<AudioState>((set, get) => ({
           currentState.selectedSystemSourceId,
           null,
           currentState.rollingCaptureSeconds,
+          currentState.selectedDawSourceId,
+          currentState.channelRoutingBySource,
+          currentState.rollingCaptureFormat,
         ))
         set({
           selectedDeviceId: null,
@@ -587,7 +795,10 @@ export const useAudioStore = create<AudioState>((set, get) => ({
           captureNotice: message,
         })
         showSystemCaptureFallbackBanner(message)
-        await audioCapture.startDevice(undefined, { forceDeviceRestart: true })
+        await audioCapture.startDevice(undefined, {
+          forceDeviceRestart: true,
+          channelRouting: resolveRoutingForState(get()),
+        })
       }
 
       if (captureMode === 'system') {
@@ -595,23 +806,31 @@ export const useAudioStore = create<AudioState>((set, get) => ({
           await startDefaultInputFallback(backendSupport?.nativeBackend.reason ?? null)
         } else {
           try {
-            await audioCapture.startSystemAudio(selectedSystemSourceId ?? undefined)
+            await audioCapture.startSystemAudio(selectedSystemSourceId ?? undefined, {
+              channelRouting: resolveRoutingForState(get()),
+            })
           } catch (error) {
             const reason = error instanceof Error ? error.message : 'Native system capture failed.'
             await startDefaultInputFallback(reason)
           }
         }
-      } else {
+      } else if (captureMode === 'device') {
         await audioCapture.startDevice(selectedDeviceId ?? undefined, {
           forceDeviceRestart: options.forceDeviceRestart === true,
+          channelRouting: resolveRoutingForState(get()),
         })
+      } else {
+        if (!selectedDawSourceId) {
+          throw new Error('Select a connected Prism Bridge source first.')
+        }
+        await audioCapture.startDawBridge()
       }
 
       const status = audioCapture.getStatus()
       set((state) => ({
         ...state,
         ...applyCaptureStatus(status),
-        captureStatus: 'capturing',
+        captureStatus: status.waiting ? 'waiting' : 'capturing',
         captureError: null,
       }))
     } catch (err) {
@@ -748,7 +967,20 @@ audioCapture.subscribeStatus((status) => {
   useAudioStore.setState((state) => ({
     ...state,
     ...applyCaptureStatus(status),
+    captureStatus: status.waiting
+      ? 'waiting'
+      : status.isCapturing
+        ? 'capturing'
+        : state.captureStatus === 'error'
+          ? 'error'
+          : 'idle',
   }))
+})
+
+audioCapture.subscribeDawSources(() => {
+  void useAudioStore.getState().refreshDawSources().catch((error) => {
+    console.error('Failed to refresh DAW bridge sources:', error)
+  })
 })
 
 audioCapture.subscribeRollingCaptureStatus((rollingCaptureStatus) => {

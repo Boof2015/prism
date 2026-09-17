@@ -13,6 +13,7 @@ import LUFSMeterScope from './LUFSMeterScope'
 import VectorscopeScope from './VectorscopeScope'
 import SpectrogramScope from './SpectrogramScope'
 import WaveformScope from './WaveformScope'
+import WaterfallScope from './WaterfallScope'
 import { BridgeSpectrumAnalyzer } from './BridgeSpectrumAnalyzer'
 import { BridgeOscilloscopeAnalyzer } from './BridgeOscilloscopeAnalyzer'
 import { BridgeVUMeterAnalyzer } from './BridgeVUMeterAnalyzer'
@@ -20,8 +21,10 @@ import { BridgeLUFSMeterAnalyzer } from './BridgeLUFSMeterAnalyzer'
 import { BridgeVectorscopeAnalyzer } from './BridgeVectorscopeAnalyzer'
 import { BridgeSpectrogramAnalyzer } from './BridgeSpectrogramAnalyzer'
 import { BridgeWaveformAnalyzer } from './BridgeWaveformAnalyzer'
+import { BridgeWaterfallAnalyzer } from './BridgeWaterfallAnalyzer'
 import { PluginWebViewDataSource } from './PluginWebViewDataSource'
-import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge, connectVectorscopeBridge, connectSpectrogramBridge, connectWaveformBridge } from './juceBridge'
+import { NativeFrameScheduler } from './NativeFrameScheduler'
+import { connectOscilloscopeBridge, connectSpectrumBridge, connectVUMeterBridge, connectLUFSMeterBridge, connectVectorscopeBridge, connectSpectrogramBridge, connectWaveformBridge, connectWaterfallBridge } from './juceBridge'
 
 // The C++ plugin tells us which scope it is via JUCE initialisation data.
 // JUCE stores each value as an array (e.g. prismScope = ["oscilloscope"]).
@@ -36,6 +39,23 @@ function getScopeKind(): string {
 const dataSource = new PluginWebViewDataSource()
 
 function buildApp(): JSX.Element {
+  if (getScopeKind() === 'waterfall') {
+    const analyzer = new BridgeWaterfallAnalyzer()
+    const frameScheduler = new NativeFrameScheduler()
+    connectWaterfallBridge({
+      onFrame: (frame) => {
+        dataSource.setSampleRate(frame.sampleRate)
+        analyzer.pushFrame(frame)
+        dataSource.setPlaying(true)
+        frameScheduler.dispatchFrame()
+      },
+      getRequest: () => analyzer.getRequest(),
+    })
+    return <ScopeApp kind="waterfall" renderScope={(settings, theme) => (
+      <WaterfallScope settings={settings} theme={theme.waterfall} dataSource={dataSource} nativeAnalyzer={analyzer} frameScheduler={frameScheduler} />
+    )} />
+  }
+
   if (getScopeKind() === 'waveform') {
     const analyzer = new BridgeWaveformAnalyzer()
     connectWaveformBridge({
@@ -188,7 +208,8 @@ function buildApp(): JSX.Element {
   const analyzer = new BridgeSpectrumAnalyzer(2048)
   connectSpectrumBridge({
     onFrame: (frame) => {
-      analyzer.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax)
+      analyzer.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax, frame.hasSpectrumData)
+      analyzer.setReferenceLevel(frame.referenceMeanSquare ?? 0, frame.referenceSeconds ?? 0)
       dataSource.setSampleRate(frame.sampleRate)
       dataSource.setPlaying(true)
     },

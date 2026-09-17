@@ -6,7 +6,7 @@ import type {
   NowPlayingProviderState,
 } from '../../types/nowPlaying'
 
-export type ManagedNowPlayingProviderId = Exclude<NowPlayingProviderId, 'tidal'>
+export type ManagedNowPlayingProviderId = NowPlayingProviderId
 
 export interface NowPlayingProviderService<K extends ManagedNowPlayingProviderId = ManagedNowPlayingProviderId> {
   readonly providerId: K

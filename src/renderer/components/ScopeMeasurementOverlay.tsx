@@ -10,12 +10,14 @@ import {
   type RefObject,
 } from 'react'
 import type { ScopeDisplayRotation } from '../../types/scopeTransform'
+import type { LinkedAnalysisProjection } from '../../types/analysis'
 import {
   resolveMeasurementReadoutPosition,
   resolveMeasurementSourcePoint,
   type ActiveScopeMeasurement,
   type ScopeMeasurementSource,
 } from '../scopeMeasurement'
+import { transformNormalizedScopePoint } from '../scopeCanvasTransform'
 
 interface ScopeMeasurementControllerOptions {
   containerRef: RefObject<HTMLDivElement | null>
@@ -24,6 +26,12 @@ interface ScopeMeasurementControllerOptions {
   rotation: ScopeDisplayRotation
   mirrorHorizontal: boolean
   onActiveChange?: (active: boolean) => void
+  onMeasurementChange?: (change: ScopeMeasurementChange) => void
+}
+
+export interface ScopeMeasurementChange {
+  interactionId: string
+  measurement: ActiveScopeMeasurement | null
 }
 
 interface ScopeMeasurementPointerBindings {
@@ -47,14 +55,18 @@ export function useScopeMeasurement({
   rotation,
   mirrorHorizontal,
   onActiveChange,
+  onMeasurementChange,
 }: ScopeMeasurementControllerOptions): ScopeMeasurementController {
   const [measurement, setMeasurement] = useState<ActiveScopeMeasurement | null>(null)
   const activePointerIdRef = useRef<number | null>(null)
   const getSourceRef = useRef(getSource)
   const onActiveChangeRef = useRef(onActiveChange)
+  const onMeasurementChangeRef = useRef(onMeasurementChange)
+  const interactionIdRef = useRef<string | null>(null)
   const transformRef = useRef({ rotation, mirrorHorizontal })
   getSourceRef.current = getSource
   onActiveChangeRef.current = onActiveChange
+  onMeasurementChangeRef.current = onMeasurementChange
   transformRef.current = { rotation, mirrorHorizontal }
 
   const setActive = useCallback((active: boolean): void => {
@@ -66,11 +78,16 @@ export function useScopeMeasurement({
     const pointerId = activePointerIdRef.current
     if (pointerId === null) return
     activePointerIdRef.current = null
+    const interactionId = interactionIdRef.current
+    interactionIdRef.current = null
     const container = containerRef.current
     if (container?.hasPointerCapture(pointerId)) {
       container.releasePointerCapture(pointerId)
     }
     setMeasurement(null)
+    if (interactionId) {
+      onMeasurementChangeRef.current?.({ interactionId, measurement: null })
+    }
     setActive(false)
   }, [containerRef, setActive])
 
@@ -89,18 +106,25 @@ export function useScopeMeasurement({
       transformRef.current.rotation,
       transformRef.current.mirrorHorizontal,
     )
-    setMeasurement({
+    const interactionId = interactionIdRef.current
+    if (!interactionId) return
+    const nextMeasurement: ActiveScopeMeasurement = {
       pointerId: event.pointerId,
       viewportPoint,
       sourcePoint,
       measurement: source.getMeasurementAt(sourcePoint),
-    })
+    }
+    setMeasurement(nextMeasurement)
+    onMeasurementChangeRef.current?.({ interactionId, measurement: nextMeasurement })
   }, [containerRef])
 
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
     if (!enabled || event.altKey || event.button !== 0 || !event.isPrimary || activePointerIdRef.current !== null) return
     if (!getSourceRef.current()) return
     event.preventDefault()
+    interactionIdRef.current = typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${event.pointerId.toString(36)}-${Math.random().toString(36).slice(2)}`
     activePointerIdRef.current = event.pointerId
     event.currentTarget.setPointerCapture(event.pointerId)
     setActive(true)
@@ -215,6 +239,106 @@ export function ScopeMeasurementOverlay({
             <span className="scope-measurement__value">{value}</span>
           </span>
         ))}
+      </div>
+    </div>
+  )
+}
+
+interface ScopeLinkedAnalysisOverlayProps {
+  containerRef: RefObject<HTMLDivElement | null>
+  projection: LinkedAnalysisProjection | null
+  rotation: ScopeDisplayRotation
+  mirrorHorizontal: boolean
+}
+
+interface ViewportGuide {
+  axis: 'horizontal' | 'vertical'
+  position: number
+}
+
+function transformLinkedGuide(
+  guide: LinkedAnalysisProjection['guides'][number],
+  rotation: ScopeDisplayRotation,
+  mirrorHorizontal: boolean,
+): ViewportGuide {
+  const from = transformNormalizedScopePoint(guide.from, rotation, mirrorHorizontal)
+  const to = transformNormalizedScopePoint(guide.to, rotation, mirrorHorizontal)
+  if (Math.abs(from.x - to.x) <= Math.abs(from.y - to.y)) {
+    return { axis: 'vertical', position: (from.x + to.x) / 2 }
+  }
+  return { axis: 'horizontal', position: (from.y + to.y) / 2 }
+}
+
+export function ScopeLinkedAnalysisOverlay({
+  containerRef,
+  projection,
+  rotation,
+  mirrorHorizontal,
+}: ScopeLinkedAnalysisOverlayProps): JSX.Element | null {
+  const labelRef = useRef<HTMLDivElement>(null)
+  const [labelSize, setLabelSize] = useState<Size>({ width: 90, height: 26 })
+  const [viewportSize, setViewportSize] = useState<Size>({ width: 1, height: 1 })
+  const active = projection !== null
+
+  useLayoutEffect(() => {
+    if (!active) return
+    const label = labelRef.current
+    const container = containerRef.current
+    if (!label || !container) return
+    const measure = (): void => {
+      const nextLabelSize = { width: label.offsetWidth, height: label.offsetHeight }
+      setLabelSize((previous) => previous.width === nextLabelSize.width
+        && previous.height === nextLabelSize.height ? previous : nextLabelSize)
+      const rect = container.getBoundingClientRect()
+      const nextViewportSize = { width: rect.width, height: rect.height }
+      setViewportSize((previous) => previous.width === nextViewportSize.width
+        && previous.height === nextViewportSize.height ? previous : nextViewportSize)
+    }
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(label)
+    observer?.observe(container)
+    return () => observer?.disconnect()
+  }, [active, containerRef])
+
+  if (!projection) return null
+  const guides = projection.guides.map((guide) => transformLinkedGuide(
+    guide,
+    rotation,
+    mirrorHorizontal,
+  ))
+  const anchor = guides.reduce((sum, guide) => {
+    if (guide.axis === 'vertical') return { x: sum.x + guide.position, y: sum.y + 0.5 }
+    return { x: sum.x + 0.5, y: sum.y + guide.position }
+  }, { x: 0, y: 0 })
+  const divisor = Math.max(1, guides.length)
+  const pointer = {
+    x: (anchor.x / divisor) * viewportSize.width,
+    y: (anchor.y / divisor) * viewportSize.height,
+  }
+  const labelPosition = resolveMeasurementReadoutPosition(
+    pointer,
+    viewportSize,
+    labelSize,
+  )
+
+  return (
+    <div className="scope-linked-analysis" aria-hidden="true">
+      {guides.map((guide, index) => (
+        <span
+          key={`${guide.axis}:${guide.position}:${index}`}
+          className={`scope-linked-analysis__line scope-linked-analysis__line--${guide.axis}`}
+          style={guide.axis === 'vertical'
+            ? { left: `${guide.position * 100}%` }
+            : { top: `${guide.position * 100}%` }}
+        />
+      ))}
+      <div
+        ref={labelRef}
+        className="scope-linked-analysis__label"
+        style={{ left: `${labelPosition.left}px`, top: `${labelPosition.top}px` }}
+      >
+        {projection.label}
       </div>
     </div>
   )

@@ -68,6 +68,7 @@ export function normalizeTrayRendererState(value: unknown): TrayRendererState {
 
   const candidate = value as Partial<TrayRendererState>
   const captureStatus = candidate.captureStatus === 'connecting'
+    || candidate.captureStatus === 'waiting'
     || candidate.captureStatus === 'capturing'
     || candidate.captureStatus === 'error'
     ? candidate.captureStatus
@@ -81,18 +82,24 @@ export function normalizeTrayRendererState(value: unknown): TrayRendererState {
     activeSourceLabel: typeof candidate.activeSourceLabel === 'string'
       ? normalizeText(candidate.activeSourceLabel, 'Audio Source')
       : null,
-    captureMode: candidate.captureMode === 'device' ? 'device' : 'system',
+    captureMode: candidate.captureMode === 'device' || candidate.captureMode === 'daw'
+      ? candidate.captureMode
+      : 'system',
     selectedSystemSourceId: typeof candidate.selectedSystemSourceId === 'string'
       ? candidate.selectedSystemSourceId
       : null,
     selectedDeviceId: typeof candidate.selectedDeviceId === 'string'
       ? candidate.selectedDeviceId
       : null,
+    selectedDawSourceId: typeof candidate.selectedDawSourceId === 'string'
+      ? candidate.selectedDawSourceId
+      : null,
     rollingCaptureSeconds: isRollingCaptureDuration(candidate.rollingCaptureSeconds)
       ? candidate.rollingCaptureSeconds
       : null,
     systemSources: normalizeSources(candidate.systemSources),
     inputSources: normalizeSources(candidate.inputSources),
+    dawSources: normalizeSources(candidate.dawSources),
   }
 }
 
@@ -102,6 +109,8 @@ export function buildTrayMenuModel(state: TrayMenuState): TrayMenuModel {
     ? sourceLabel ? `Capturing · ${sourceLabel}` : 'Capturing'
     : state.rendererState.captureStatus === 'connecting'
       ? 'Connecting to audio…'
+      : state.rendererState.captureStatus === 'waiting'
+        ? 'Waiting for DAW bridge…'
       : state.rendererState.captureStatus === 'error'
         ? 'Audio capture error'
         : 'Capture stopped'
@@ -115,6 +124,7 @@ export function buildTrayMenuModel(state: TrayMenuState): TrayMenuModel {
     mainWindowActionLabel: state.mainWindowVisible ? 'Hide Prism' : 'Show Prism',
     captureActionLabel: state.rendererState.captureStatus === 'capturing'
       || state.rendererState.captureStatus === 'connecting'
+      || state.rendererState.captureStatus === 'waiting'
       ? 'Stop Capture'
       : 'Start Capture',
     captureActionEnabled: state.rendererReady,

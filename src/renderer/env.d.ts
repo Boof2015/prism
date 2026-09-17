@@ -1,3 +1,5 @@
+import type { SpectrumReferenceTransport } from '../types/spectrumReference'
+import type { WindowDockingSnapshot } from '../types/windowDocking'
 /// <reference types="vite/client" />
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
@@ -27,12 +29,14 @@ import type {
   ProfileLibrarySnapshot,
 } from '../types/profile'
 import type { ScopeKind } from '../types/scope'
+import type { LinkedAnalysisMessage } from '../types/analysis'
 import type {
   LegacyThemeMigrationPayload,
   LegacyThemeMigrationResult,
+  ResolvedInterfaceTheme,
   ThemeLibrarySnapshot,
 } from '../types/theme'
-import type { DialogOptions, DialogResult } from '../types/dialog'
+import type { DialogConfig, DialogLayout, DialogOptions, DialogResult } from '../types/dialog'
 import type { UpdateCheckResult } from '../types/updates'
 import type { WindowCapabilities } from '../types/windowCapabilities'
 import type { ResizeDirection } from '../types/windowResize'
@@ -43,15 +47,26 @@ import type {
   TrayRendererCommand,
   TrayRendererState,
 } from '../types/desktopIntegration'
+import type { DawBridgeRendererAPI } from '../types/dawBridge'
 
 declare global {
   interface Window {
     visualizerAPI: VisualizerDSP | null
     nativeCaptureAPI: NativeCaptureAPI | null
     electronAPI: {
+      docking: {
+        get(): Promise<WindowDockingSnapshot>
+        setEnabled(enabled: boolean): Promise<WindowDockingSnapshot | null>
+        onChanged(callback: (snapshot: WindowDockingSnapshot) => void): () => void
+        showSettings(height: number): Promise<boolean>
+        closeSettings(): void
+        onSettingsClosed(callback: () => void): () => void
+      }
+      referenceTracks: SpectrumReferenceTransport
       platform: string
       windowCapabilities: WindowCapabilities
       getAppBuildInfo: () => Promise<AppBuildInfo>
+      requestMicrophoneAccess: () => Promise<boolean>
       minimize: () => void
       close: () => void
       desktopIntegration: {
@@ -80,6 +95,7 @@ declare global {
       setWindowBackground: (state: WindowBackgroundState) => Promise<WindowBackgroundSnapshot>
       isCursorInsideWindow: () => Promise<boolean>
       getCaptureBackendSupport: () => Promise<CaptureBackendSupport>
+      dawBridge: DawBridgeRendererAPI
       audioClips: {
         startDrag: (payload: AudioClipDragPayload) => void
         revealFolder: () => Promise<void>
@@ -129,6 +145,8 @@ declare global {
       notifyScopePopoutReady: (kind: ScopeKind) => void
       requestScopePopIn: (kind: ScopeKind) => void
       sendScopePopoutSettingsUpdate: (kind: ScopeKind, partial: unknown) => void
+      sendLinkedAnalysisMessage: (message: LinkedAnalysisMessage) => void
+      onLinkedAnalysisMessage: (callback: (message: LinkedAnalysisMessage) => void) => () => void
       onAlwaysOnTopChanged: (callback: (isOnTop: boolean) => void) => () => void
       onWindowBackgroundChanged: (callback: (snapshot: WindowBackgroundSnapshot) => void) => () => void
       onMainWindowBoundsChanged: (callback: (bounds: WindowBounds) => void) => () => void
@@ -152,7 +170,9 @@ declare global {
       onScopePopoutAudio: (callback: (kind: ScopeKind, batch: ScopePopoutAudioBatch) => void) => () => void
       onScopePopoutSession: (callback: (kind: ScopeKind, session: ScopePopoutSessionState) => void) => () => void
       showDialog: (options: DialogOptions) => Promise<DialogResult>
-      onDialogConfig: (callback: (options: DialogOptions) => void) => () => void
+      getDialogConfig: () => Promise<DialogConfig>
+      onDialogThemeChanged: (callback: (theme: ResolvedInterfaceTheme) => void) => () => void
+      reportDialogLayout: (layout: DialogLayout) => void
       sendDialogResult: (result: DialogResult) => void
     }
   }

@@ -3,7 +3,7 @@ import type { NowPlayingControlCommand } from './nowPlaying'
 
 export type NativeWindowsMediaSupport = NativeCaptureSupport
 
-export interface NativeWindowsSpotifyPlaybackState {
+export interface NativeWindowsPlaybackState {
   album: string
   artworkDataUrl: string | null
   artist: string
@@ -14,7 +14,11 @@ export interface NativeWindowsSpotifyPlaybackState {
   title: string
 }
 
+export type NativeWindowsSpotifyPlaybackState = NativeWindowsPlaybackState
+
 export interface NativeWindowsMediaAPI {
+  getTidalPlaybackState?: () => NativeWindowsPlaybackState | null
+  sendTidalControl?: (command: NowPlayingControlCommand) => boolean
   getSupport: () => NativeWindowsMediaSupport
   getSpotifyPlaybackState: () => NativeWindowsSpotifyPlaybackState | null
   sendSpotifyControl: (command: NowPlayingControlCommand) => boolean

@@ -11,6 +11,8 @@ endif()
 
 project(PrismPlugins VERSION 0.1.0 LANGUAGES C CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -27,6 +29,11 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include(cmake/PrismLinuxWebView.cmake)
+    prism_isolate_linux_webview()
+endif()
+
 # Reused, unmodified Prism DSP (no N-API dependency).
 set(PRISM_NATIVE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../native/src)
 
@@ -35,19 +42,23 @@ option(PRISM_DEV_SERVER "Load the webview UI from the Vite dev server instead of
 
 # Build controls. Defaults preserve the full local build; CI narrows these to
 # the formats that are actually packaged. AU is macOS-only, so Linux/Windows
-# default to the portable VST3 + Standalone set.
+# default to the portable VST3 + CLAP + Standalone set.
 if(APPLE)
-    set(PRISM_DEFAULT_PLUGIN_FORMATS "AU;VST3;Standalone")
+    set(PRISM_DEFAULT_PLUGIN_FORMATS "AU;VST3;CLAP;Standalone")
 else()
-    set(PRISM_DEFAULT_PLUGIN_FORMATS "VST3;Standalone")
+    set(PRISM_DEFAULT_PLUGIN_FORMATS "VST3;CLAP;Standalone")
 endif()
-set(PRISM_PLUGIN_FORMATS "${PRISM_DEFAULT_PLUGIN_FORMATS}" CACHE STRING "JUCE plugin formats to build")
+set(PRISM_PLUGIN_FORMATS "${PRISM_DEFAULT_PLUGIN_FORMATS}" CACHE STRING "Plugin formats to build (including CLAP)")
 option(PRISM_COPY_PLUGIN_AFTER_BUILD "Copy built plugins into user plugin folders after build" ON)
+
+set(PRISM_JUCE_PLUGIN_FORMATS ${PRISM_PLUGIN_FORMATS})
+list(REMOVE_ITEM PRISM_JUCE_PLUGIN_FORMATS CLAP)
+include(cmake/PrismClap.cmake)
 
 set(PRISM_LINUX_UI_MODE "webview" CACHE STRING "Linux-only UI diagnostic mode: webview, web_smoke, native_smoke, or floating_webview")
 set_property(CACHE PRISM_LINUX_UI_MODE PROPERTY STRINGS webview web_smoke native_smoke floating_webview)
 set(PRISM_VALID_LINUX_UI_MODES webview web_smoke native_smoke floating_webview)
-option(PRISM_LINUX_UI_DIAGNOSTICS "Write Linux VST UI diagnostic logs" OFF)
+option(PRISM_LINUX_UI_DIAGNOSTICS "Write Linux plugin UI diagnostic logs" OFF)
 
 if(UNIX AND NOT APPLE)
     list(FIND PRISM_VALID_LINUX_UI_MODES "${PRISM_LINUX_UI_MODE}" PRISM_LINUX_UI_MODE_INDEX)
@@ -105,7 +116,7 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         BUNDLE_ID com.astra.prism.${TARGET}
         PLUGIN_MANUFACTURER_CODE Prsm
         PLUGIN_CODE ${PLUGIN_CODE}
-        FORMATS ${PRISM_PLUGIN_FORMATS}
+        FORMATS ${PRISM_JUCE_PLUGIN_FORMATS}
         IS_SYNTH FALSE
         NEEDS_MIDI_INPUT FALSE
         NEEDS_MIDI_OUTPUT FALSE
@@ -115,8 +126,11 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
 
     target_sources(${TARGET} PRIVATE
         Source/PluginProcessor.cpp
+        Source/ReferenceTrackManager.cpp
         Source/PluginEditor.cpp
         ${PRISM_NATIVE_DIR}/spectrum.cpp
+        ${PRISM_NATIVE_DIR}/reference_analysis.cpp
+        ${PRISM_NATIVE_DIR}/reference_decode.cpp
         ${PRISM_NATIVE_DIR}/oscilloscope.cpp
         ${PRISM_NATIVE_DIR}/vumeter.cpp
         ${PRISM_NATIVE_DIR}/lufsmeter.cpp
@@ -124,6 +138,7 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         ${PRISM_NATIVE_DIR}/multiband.cpp
         ${PRISM_NATIVE_DIR}/spectrogram.cpp
         ${PRISM_NATIVE_DIR}/waveform.cpp
+        ${PRISM_NATIVE_DIR}/waterfall.cpp
         ${PRISM_NATIVE_DIR}/dsp_utils.cpp)
 
     target_include_directories(${TARGET} PRIVATE Source ${PRISM_NATIVE_DIR})
@@ -136,6 +151,8 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         PRISM_LINUX_UI_DIAGNOSTICS=$<BOOL:${PRISM_LINUX_UI_DIAGNOSTICS}>
         ${PRISM_LINUX_UI_MODE_DEFINITIONS})
     if(WIN32)
+        # r8brain includes Windows.h; keep its min/max macros out of the DSP sources.
+        target_compile_definitions(${TARGET} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
         # NEEDS_WEBVIEW2 links the WebView2 SDK but doesn't turn on the JUCE compile
         # paths that gate withResourceProvider. JUCE_USE_WIN_WEBVIEW2=1 enables the
         # WebView2-aware code (incl. the resource provider); _WITH_STATIC_LINKING=1
@@ -186,7 +203,13 @@ function(add_prism_scope TARGET PRODUCT PLUGIN_CODE SCOPE_DEFINE)
         # directly after fork(), which is unsafe in multi-threaded hosts and has
         # crashed during pluginval/DAW editor creation.
         juce_link_with_embedded_linux_subprocess(${TARGET})
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            set_property(TARGET juce_linux_subprocess_helper PROPERTY SOURCES
+                "${CMAKE_CURRENT_SOURCE_DIR}/Source/LinuxWebViewHelper.cpp")
+        endif()
     endif()
+
+    prism_add_clap(${TARGET} analyzer)
 endfunction()
 
 add_prism_scope(PrismSpectrum     "Prism Spectrum"     Pspc "")
@@ -196,6 +219,110 @@ add_prism_scope(PrismLUFSMeter    "Prism Loudness Meter" Pluf "PRISM_SCOPE_LUFSM
 add_prism_scope(PrismVectorscope  "Prism Vectorscope"  Pvct "PRISM_SCOPE_VECTORSCOPE=1")
 add_prism_scope(PrismSpectrogram  "Prism Spectrogram"  Pspg "PRISM_SCOPE_SPECTROGRAM=1")
 add_prism_scope(PrismWaveform     "Prism Waveform"     Pwav "PRISM_SCOPE_WAVEFORM=1")
+add_prism_scope(PrismWaterfall    "Prism Waterfall"    Pwfl "PRISM_SCOPE_WATERFALL=1")
+
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(PrismLinuxWebViewHelperProbe SHARED Tests/LinuxWebViewHelperProbe.cpp)
+    target_link_libraries(PrismLinuxWebViewHelperProbe PRIVATE ${CMAKE_DL_LIBS})
+    set(host_override_dir "${CMAKE_CURRENT_BINARY_DIR}/host-library-override")
+    set(host_override_library "${host_override_dir}/libprism_host_override.so")
+    add_custom_command(TARGET PrismLinuxWebViewHelperProbe POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${host_override_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:PrismLinuxWebViewHelperProbe> "${host_override_library}"
+        VERBATIM)
+    add_test(NAME PrismLinuxWebViewHelperTests COMMAND juce_linux_subprocess_helper
+        $<TARGET_FILE:PrismLinuxWebViewHelperProbe> prismWebViewHelperProbe
+        "argument with spaces" second "${host_override_library}")
+    set_tests_properties(PrismLinuxWebViewHelperTests PROPERTIES
+        ENVIRONMENT "LD_LIBRARY_PATH=${host_override_dir};LD_PRELOAD=${host_override_library}")
+endif()
+
+# Prism Bridge is intentionally a small native-only pass-through plug-in. It has
+# no standalone target and never creates a webview or performs networking on the
+# audio thread.
+set(PRISM_BRIDGE_FORMATS ${PRISM_JUCE_PLUGIN_FORMATS})
+list(REMOVE_ITEM PRISM_BRIDGE_FORMATS Standalone)
+
+juce_add_plugin(PrismBridge
+    PRODUCT_NAME "Prism Bridge"
+    COMPANY_NAME "Prism"
+    BUNDLE_ID com.astra.prism.PrismBridge
+    PLUGIN_MANUFACTURER_CODE Prsm
+    PLUGIN_CODE Pbrg
+    FORMATS ${PRISM_BRIDGE_FORMATS}
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    AU_SANDBOX_SAFE FALSE
+    COPY_PLUGIN_AFTER_BUILD ${PRISM_COPY_PLUGIN_AFTER_BUILD})
+
+target_sources(PrismBridge PRIVATE
+    Source/BridgeProcessor.cpp
+    Source/BridgeEditor.cpp)
+
+target_include_directories(PrismBridge PRIVATE Source)
+target_compile_definitions(PrismBridge PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0)
+target_link_libraries(PrismBridge PRIVATE
+    juce::juce_audio_utils
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags)
+
+prism_add_clap(PrismBridge utility)
+
+if(APPLE)
+    # Keep local/CI AU bundles structurally valid before the release pipeline
+    # replaces this ad-hoc signature with the distribution identity.
+    foreach(au_target IN ITEMS PrismBridge_AU PrismWaterfall_AU)
+        if(TARGET ${au_target})
+            add_custom_command(TARGET ${au_target} POST_BUILD
+                COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:${au_target}>"
+                VERBATIM)
+        endif()
+    endforeach()
+endif()
+
+if(BUILD_TESTING)
+    juce_add_console_app(PrismReferenceTests PRODUCT_NAME "Prism Reference Tests")
+    target_sources(PrismReferenceTests PRIVATE Tests/ReferenceTrackTests.cpp)
+    target_include_directories(PrismReferenceTests PRIVATE Source ${PRISM_NATIVE_DIR} ${JUCE_SOURCE_DIR}/modules)
+    target_compile_definitions(PrismReferenceTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_WEB_BROWSER=1 JucePlugin_Name="Prism Spectrum")
+    target_link_libraries(PrismReferenceTests PRIVATE PrismSpectrum)
+    add_test(NAME PrismReferenceTests COMMAND PrismReferenceTests)
+
+    juce_add_console_app(PrismWaterfallTests PRODUCT_NAME "Prism Waterfall Tests")
+    target_sources(PrismWaterfallTests PRIVATE Tests/WaterfallTests.cpp)
+    target_include_directories(PrismWaterfallTests PRIVATE Source ${PRISM_NATIVE_DIR} ${JUCE_SOURCE_DIR}/modules)
+    target_compile_definitions(PrismWaterfallTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+        JUCE_WEB_BROWSER=1
+        JucePlugin_Name="Prism Waterfall")
+    target_link_libraries(PrismWaterfallTests PRIVATE PrismWaterfall)
+    add_test(NAME PrismWaterfallTests COMMAND PrismWaterfallTests)
+
+    juce_add_console_app(PrismBridgeTests PRODUCT_NAME "Prism Bridge Tests")
+    target_sources(PrismBridgeTests PRIVATE
+        Tests/BridgeProcessorTests.cpp
+        Tests/BridgeEditorTests.cpp
+        Source/BridgeProcessor.cpp
+        Source/BridgeEditor.cpp)
+    target_include_directories(PrismBridgeTests PRIVATE Source)
+    target_compile_definitions(PrismBridgeTests PRIVATE
+        PRISM_BRIDGE_TESTING=1
+        JucePlugin_Name="Prism Bridge"
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+    target_link_libraries(PrismBridgeTests PRIVATE
+        juce::juce_audio_utils
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+    add_test(NAME PrismBridgeProcessorTests COMMAND PrismBridgeTests)
+endif()
 
 set(PRISM_SCOPE_TARGETS
     PrismSpectrum
@@ -204,10 +331,16 @@ set(PRISM_SCOPE_TARGETS
     PrismLUFSMeter
     PrismVectorscope
     PrismSpectrogram
-    PrismWaveform)
+    PrismWaveform
+    PrismWaterfall
+    PrismBridge)
 
 add_custom_target(PrismInstallerPlugins)
 foreach(PRISM_SCOPE_TARGET IN LISTS PRISM_SCOPE_TARGETS)
+    if("CLAP" IN_LIST PRISM_PLUGIN_FORMATS)
+        add_dependencies(PrismInstallerPlugins ${PRISM_SCOPE_TARGET}_CLAP)
+    endif()
+
     if("VST3" IN_LIST PRISM_PLUGIN_FORMATS)
         add_dependencies(PrismInstallerPlugins ${PRISM_SCOPE_TARGET}_VST3)
     endif()

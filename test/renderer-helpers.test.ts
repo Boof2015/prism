@@ -1,3 +1,8 @@
+import { Waterfall } from '../src/renderer/visualizers/Waterfall'
+import { observeDialogLayout } from '../src/renderer/utils/dialogLayout'
+import { ChannelActivity, sourcePeakToOpacity } from '../src/renderer/audio/ChannelActivity'
+import { softenWaterfallSpectra, waterfallRidgeHeight, waterfallPlotLayout } from '../src/renderer/visualizers/waterfallPlot'
+import type { WaterfallFrame } from '../src/types/waterfall'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -65,10 +70,19 @@ import {
   frequencyAtNormalizedPosition,
   resolveMeasurementReadoutPosition,
   resolveOscilloscopeMeasurement,
+  resolveOscilloscopeLinkedAnalysisProjection,
   resolveSpectrogramMeasurement,
+  resolveSpectrogramLinkedAnalysisProjection,
   resolveSpectrumMeasurement,
+  resolveSpectrumLinkedAnalysisProjection,
   resolveWaveformMeasurement,
+  resolveWaveformLinkedAnalysisProjection,
 } from '../src/renderer/scopeMeasurement'
+import {
+  normalizeLinkedAnalysisMessage,
+  type LinkedAnalysisProbe,
+} from '../src/types/analysis'
+import { reduceLinkedAnalysisProbe } from '../src/renderer/useLinkedAnalysis'
 import {
   applyInputGainToStereoSamples,
   inputGainDbToLinear,
@@ -92,6 +106,7 @@ import {
 } from '../src/renderer/visualizers/vuMeterBallistics'
 import { FrameScheduler } from '../src/renderer/visualizers/frameScheduler'
 import { VisualizerFrameLoop } from '../src/renderer/visualizers/visualizerFrameLoop'
+import { resolveTimelineSeam, ScrollingTimeline } from '../src/renderer/visualizers/scrollingTimeline'
 import {
   NativeVisualizerTransport,
   type NativeVisualizerTransportBridge,
@@ -119,13 +134,17 @@ import { LUFSMeter, formatMaxTruePeakDb } from '../src/renderer/visualizers/LUFS
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
 import { BridgeSpectrumAnalyzer } from '../src/plugin-ui/BridgeSpectrumAnalyzer'
-import { decodeLUFSMeterFrame, decodeSpectrumFrame } from '../src/plugin-ui/juceBridge'
+import { BridgeWaterfallAnalyzer } from '../src/plugin-ui/BridgeWaterfallAnalyzer'
+import { NativeFrameScheduler } from '../src/plugin-ui/NativeFrameScheduler'
+import { waterfallSettingsToOptions } from '../src/plugin-ui/waterfallOptions'
+import { decodeLUFSMeterFrame, decodeSpectrumFrame, decodeWaterfallFrame } from '../src/plugin-ui/juceBridge'
 import { formatSpectrumPeakDbfs } from '../src/plugin-ui/peakOverlay'
 import { spectrogramSettingsToOptions } from '../src/plugin-ui/spectrogramOptions'
 import { spectrumSettingsToOptions } from '../src/plugin-ui/spectrumOptions'
+import { REFERENCE_FFT_SIZES, encodeReferencePower, type SpectrumReferenceSettings, type SpectrumReferenceAsset } from '../src/types/spectrumReference'
 import { vectorscopeSettingsToOptions } from '../src/plugin-ui/vectorscopeOptions'
 import { Spectrogram, type SpectrogramOptions } from '../src/renderer/visualizers/Spectrogram'
-import { Vectorscope } from '../src/renderer/visualizers/Vectorscope'
+import { Vectorscope, type VectorscopeMode } from '../src/renderer/visualizers/Vectorscope'
 import { Waveform } from '../src/renderer/visualizers/Waveform'
 import {
   VUMeter,
@@ -467,6 +486,7 @@ function seedProfileDraftState(profile: Profile): void {
     hiddenScopes: new Set(profile.hiddenScopes),
     widthWeights: { ...profile.widthWeights },
     scopeSettings: JSON.parse(JSON.stringify(profile.scopeSettings)) as Profile['scopeSettings'],
+    analysisSettings: { ...profile.analysisSettings },
     scopePopouts: JSON.parse(JSON.stringify(profile.scopePopouts)) as Profile['scopePopouts'],
     windowBounds: profile.windowBounds,
     profiles: {
@@ -608,6 +628,7 @@ function readSpectrumMagnitudes(transport: NativeVisualizerTransport, size = 8):
 }
 
 interface FakeCanvasRecorder {
+  gradients: Array<{ coordinates: number[]; stops: Array<{ offset: number; color: string }> }>
   fillRects: Array<{ x: number; y: number; width: number; height: number; fillStyle: string }>
   fillTexts: Array<{ text: string; x: number; y: number; fillStyle: string; font: string }>
   lineStrokes: Array<{
@@ -636,6 +657,7 @@ interface FakeCanvasRecorder {
 
 function createFakeCanvasRecorder(): FakeCanvasRecorder {
   return {
+    gradients: [],
     fillRects: [],
     fillTexts: [],
     lineStrokes: [],
@@ -711,9 +733,11 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     getLineDash() {
       return [...currentLineDash]
     },
-    createLinearGradient() {
+    createLinearGradient(...coordinates: number[]) {
+      const gradient = { coordinates, stops: [] as Array<{ offset: number; color: string }> }
+      recorder?.gradients.push(gradient)
       return {
-        addColorStop() {},
+        addColorStop(offset: number, color: string) { gradient.stops.push({ offset, color }) },
       } as CanvasGradient
     },
     measureText(text: string) {
@@ -1087,6 +1111,7 @@ function createFakeSpectrumNativeAnalyzer(): FakeSpectrumNativeAnalyzer {
 
   const analyzer: FakeSpectrumNativeAnalyzer = {
     calls,
+    hasSpectrumData: () => bufferedSamples > 0,
     isAvailable: () => true,
     setFFTSize: (size) => {
       if (size !== fftSize) {
@@ -1339,6 +1364,101 @@ function projectSpectrumDb(options: Partial<SpectrumAnalyzerOptions>, db: number
     dom.restore()
   }
 }
+
+function flatReference(db = -20, view: SpectrumReferenceSettings['view'] = 'difference', trimDb = 0): SpectrumReferenceSettings {
+  const asset: SpectrumReferenceAsset = { version: 1, id: 'renderer-reference', name: 'Reference.wav', sampleRate: 48000,
+    sourceNyquistHz: 24000, durationSeconds: 10, meanSquare: 10 ** (db / 10),
+    curves: Object.fromEntries(REFERENCE_FFT_SIZES.map(size => [size, encodeReferencePower(new Float32Array(size / 2).fill(10 ** (db / 10)))])) as SpectrumReferenceAsset['curves'] }
+  return { asset, trimDb, view }
+}
+
+test('Spectrum reference Difference centers equality and applies trim before clipping', () => {
+  const equal = projectSpectrumDb({ reference: flatReference() }, -20)
+  assert.ok(equal.yPoints.every(y => Math.abs(y - 50) < 0.001))
+  const offset = projectSpectrumDb({ reference: flatReference(-20, 'difference', -6) }, -20)
+  assert.ok(offset.yPoints.every(y => Math.abs(y - 37.5) < 0.001))
+  const low = projectSpectrumDb({ reference: flatReference(-100), minDecibels: -80 }, -110)
+  assert.ok(low.yPoints.every(y => Math.abs(y - (50 + 1000 / 48)) < 0.001))
+  const overlay = projectSpectrumDb({ reference: flatReference(-20, 'overlay'), minDecibels: -80, maxDecibels: 0 }, -20)
+  const preview = projectSpectrumDb({ reference: flatReference(-20), referenceImporting: true, minDecibels: -80, maxDecibels: 0 }, -20)
+  assert.deepEqual(preview.yPoints, overlay.yPoints)
+  assert.deepEqual(equal.heatmapIntensity, offset.heatmapIntensity)
+})
+
+test('Spectrum Difference cancels display tilt and exports only frequency to linked analysis', () => {
+  const reference = flatReference(-40)
+  const a = renderSpectrumSnapshot({ reference, tiltDbPerOctave: 0 })
+  const b = renderSpectrumSnapshot({ reference, tiltDbPerOctave: 6 })
+  assert.deepEqual(a.primaryPointY, b.primaryPointY)
+  const dom = installFakeCanvasDom()
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(), { reference,
+    dataSource: { getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [], getSampleRate: () => 48000, isPlaying: () => false, subscribeToSessionChanges: () => () => {} },
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer() })
+  try {
+    const measurement = analyzer.getMeasurementAt({ x: 0.5, y: 0.25 })
+    assert.equal(measurement.dimensions.spectralLevelDb, undefined)
+    assert.ok(measurement.dimensions.frequencyHz! > 0)
+    assert.equal(measurement.values[0], '+12.00dB relative')
+  } finally { analyzer.dispose(); dom.restore() }
+})
+
+test('Spectrum Difference draws both signs from zero and leaves no floor trace during silence or startup', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const heatmapFill of [false, true]) {
+      const recorder = createFakeCanvasRecorder()
+      const native = createFakeSpectrumNativeAnalyzer()
+      let db = -100, seconds = 0, meanSquare = 0
+      native.hasSpectrumData = () => true
+      native.getReferenceLevel = () => ({ seconds, meanSquare })
+      native.fillMagnitudes = native.fillRawMagnitudes = output => { output.fill(db); return output.length }
+      const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder, 320, 180), {
+        reference: flatReference(-20), nativeAnalyzer: native, heatmapFill, fillGradient: !heatmapFill,
+        showSideLine: false, showGrid: false, heatBaseColor: '#123456',
+        gradientColors: ['transparent', '#567890'],
+        dataSource: { getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+          getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {} },
+      })
+      const state = analyzer as unknown as { drawFrame(): void; primaryPointY: Float32Array }
+      try {
+        for (const sample of [
+          { db: -100, seconds: 0, meanSquare: 0 },
+          { db: -40, seconds: 0.01, meanSquare: 0.01 },
+          { db: -120, seconds: 3, meanSquare: 0.01 },
+        ]) {
+          ;({ db, seconds, meanSquare } = sample)
+          state.drawFrame()
+          assert.equal(recorder.lineStrokes.length, 0, 'no fabricated trace along the lower edge')
+          assert.equal(recorder.fillRects.length, 0)
+          assert.equal(recorder.fills.length, 0)
+        }
+        seconds = 3; meanSquare = 0.01
+        for (const delta of [0, 6, -6]) {
+          db = -20 + delta
+          recorder.lineStrokes.length = recorder.fillRects.length = recorder.fills.length = 0
+          state.drawFrame()
+          const expectedY = 90 - delta * 180 / 48
+          assert.ok(state.primaryPointY.every(y => Math.abs(y - expectedY) < 0.001), `delta ${delta}: ${Array.from(state.primaryPointY).filter(y => Math.abs(y - expectedY) >= 0.001 || !Number.isFinite(y)).slice(0, 8)}`)
+          const zero = recorder.lineStrokes[0]
+          assert.deepEqual(zero.commands, [{ kind: 'moveTo', x: 0, y: 90 }, { kind: 'lineTo', x: 320, y: 90 }])
+          if (heatmapFill) {
+            const fills = recorder.fillRects.filter(rect => rect.fillStyle === '#123456')
+            if (delta === 0) assert.equal(fills.length, 0, 'equality has no shaded area')
+            else assert.ok(fills.every(rect => rect.y === Math.floor(Math.min(90, expectedY)) && rect.height === Math.ceil(Math.abs(90 - expectedY))))
+          } else {
+            const commands = recorder.fills[0].commands
+            assert.equal(commands[0].y, 90)
+            assert.equal(commands.at(-1)!.y, 90)
+            assert.ok(commands.slice(1, -1).every(point => Math.abs(point.y - expectedY) < 0.001))
+            assert.deepEqual(recorder.gradients.at(-1)!.stops, [
+              { offset: 0, color: '#567890' }, { offset: 0.5, color: 'transparent' }, { offset: 1, color: '#567890' },
+            ])
+          }
+        }
+      } finally { analyzer.dispose() }
+    }
+  } finally { dom.restore() }
+})
 
 function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, values: number[]): number[] {
   const recorder = createFakeCanvasRecorder()
@@ -1698,6 +1818,7 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'vumeter',
     'lufsmeter',
     'waveform',
+    'waterfall',
     'nowPlaying',
   ])
 })
@@ -1891,6 +2012,162 @@ test('spectrogram measurement follows scale mode and rendered history speed', ()
     )
     assert.deepEqual(historyMeasurement.values.slice(0, 2), [expectedTime, '20.00Hz'])
   }
+})
+
+test('linked analysis projects exact semantic values through each target scale', () => {
+  const spectrumProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'spectrum-probe',
+    sourceKind: 'spectrum',
+    dimensions: { frequencyHz: 1000, spectralLevelDb: -42 },
+  }
+  const spectrumToSpectrogram = resolveSpectrogramLinkedAnalysisProjection(spectrumProbe, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleMode: 'log',
+    fftSize: 4096,
+    scrollSpeed: 2,
+    canvasPixelWidth: 121,
+  })
+  assert.ok(spectrumToSpectrogram)
+  assert.equal(spectrumToSpectrogram.label, '1.00kHz')
+  assertAlmostEqual(
+    spectrumToSpectrogram.guides[0].from.y,
+    1 - Math.log10(1000 / 20) / Math.log10(20000 / 20),
+    1e-12,
+    'spectrogram frequency guide',
+  )
+  assert.equal(spectrumToSpectrogram.guides[0].from.x, 0)
+  assert.equal(spectrumToSpectrogram.guides[0].to.x, 1)
+
+  const spectrogramProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'spectrogram-probe',
+    sourceKind: 'spectrogram',
+    dimensions: { frequencyHz: 1000, historySecondsAgo: 0.25 },
+  }
+  const spectrogramToSpectrum = resolveSpectrumLinkedAnalysisProjection(spectrogramProbe, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleType: 'linear',
+  })
+  assert.ok(spectrogramToSpectrum)
+  assertAlmostEqual(
+    spectrogramToSpectrum.guides[0].from.x,
+    (1000 - 20) / (20000 - 20),
+    1e-12,
+    'linear spectrum frequency guide',
+  )
+
+  const spectrogramToWaveform = resolveWaveformLinkedAnalysisProjection(spectrogramProbe, {
+    mode: 'mono',
+    scrollSpeed: 1,
+    canvasPixelWidth: 129,
+  })
+  assert.ok(spectrogramToWaveform)
+  assertAlmostEqual(spectrogramToWaveform.guides[0].from.x, 0.75, 1e-12, 'waveform history guide')
+
+  const waveformProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'waveform-probe',
+    sourceKind: 'waveform',
+    dimensions: { historySecondsAgo: 0.32, signedAmplitude: 0.5, channel: 'R' },
+  }
+  const waveformToSpectrogram = resolveSpectrogramLinkedAnalysisProjection(waveformProbe, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleMode: 'mel',
+    fftSize: 4096,
+    scrollSpeed: 4,
+    canvasPixelWidth: 121,
+  })
+  assert.ok(waveformToSpectrogram)
+  assertAlmostEqual(waveformToSpectrogram.guides[0].from.x, 0, 1e-12, 'spectrogram history guide')
+
+  const waveformToOscilloscope = resolveOscilloscopeLinkedAnalysisProjection(waveformProbe)
+  assert.ok(waveformToOscilloscope)
+  assertAlmostEqual(waveformToOscilloscope.guides[0].from.y, 0.25, 1e-12, 'oscilloscope amplitude guide')
+})
+
+test('linked analysis hides out-of-range values and duplicates unchanneled amplitude across stereo waveform lanes', () => {
+  const outOfRangeFrequency: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'frequency-outside',
+    sourceKind: 'spectrogram',
+    dimensions: { frequencyHz: 22000 },
+  }
+  assert.equal(resolveSpectrumLinkedAnalysisProjection(outOfRangeFrequency, {
+    sampleRate: 48000,
+    minFrequency: 20,
+    maxFrequency: 20000,
+    scaleType: 'log',
+  }), null)
+
+  const outOfRangeHistory: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'history-outside',
+    sourceKind: 'spectrogram',
+    dimensions: { historySecondsAgo: 1.01 },
+  }
+  assert.equal(resolveWaveformLinkedAnalysisProjection(outOfRangeHistory, {
+    mode: 'mono',
+    scrollSpeed: 1,
+    canvasPixelWidth: 129,
+  }), null)
+
+  const oscilloscopeProbe: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'oscilloscope-probe',
+    sourceKind: 'oscilloscope',
+    dimensions: { signedAmplitude: 0.5, frameTimeSeconds: 0.01 },
+  }
+  const stereoProjection = resolveWaveformLinkedAnalysisProjection(oscilloscopeProbe, {
+    mode: 'stereo',
+    scrollSpeed: 1,
+    canvasPixelWidth: 129,
+  })
+  assert.ok(stereoProjection)
+  assert.equal(stereoProjection.guides.length, 2)
+  assertAlmostEqual(stereoProjection.guides[0].from.y, 0.13125, 1e-12, 'left waveform lane')
+  assertAlmostEqual(stereoProjection.guides[1].from.y, 0.63125, 1e-12, 'right waveform lane')
+  assert.equal(stereoProjection.label, '+0.500')
+})
+
+test('linked analysis messages normalize payloads and stale endings cannot clear newer probes', () => {
+  const first = normalizeLinkedAnalysisMessage({
+    active: true,
+    interactionId: 'first',
+    sourceKind: 'spectrum',
+    dimensions: { frequencyHz: 62, spectralLevelDb: -40, signedAmplitude: Number.NaN },
+  })
+  assert.ok(first?.active)
+  assert.deepEqual(first.dimensions, { frequencyHz: 62, spectralLevelDb: -40 })
+  assert.equal(normalizeLinkedAnalysisMessage({
+    active: true,
+    interactionId: '',
+    sourceKind: 'spectrum',
+    dimensions: {},
+  }), null)
+
+  const second: LinkedAnalysisProbe = {
+    active: true,
+    interactionId: 'second',
+    sourceKind: 'waveform',
+    dimensions: { signedAmplitude: 0.25 },
+  }
+  assert.equal(reduceLinkedAnalysisProbe(second, {
+    active: false,
+    interactionId: 'first',
+    sourceKind: 'spectrum',
+  }), second)
+  assert.equal(reduceLinkedAnalysisProbe(second, {
+    active: false,
+    interactionId: 'second',
+    sourceKind: 'waveform',
+  }), null)
 })
 
 test('frequency scale transforms are monotonic, invertible, and Nyquist-safe', () => {
@@ -3071,6 +3348,195 @@ test('SpectrumAnalyzer tilt can change the visible peak while each readout stays
   }
 })
 
+test('SpectrumAnalyzer leaves idle startup and settled silence empty across display options', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const sampleRate of [44100, 48000]) {
+      for (const tiltDbPerOctave of [-2, 8]) {
+        for (const showSideLine of [false, true]) {
+          for (const heatmapFill of [false, true]) {
+            for (const capturePeakInfo of [false, true]) {
+              const recorder = createFakeCanvasRecorder()
+              const native = createFakeSpectrumNativeAnalyzer()
+              const peaks: Array<SpectrumPeakInfo | null> = []
+              let sessionChanged = () => {}
+              const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+                nativeAnalyzer: native, showGrid: true, showSideLine, heatmapFill,
+                fillGradient: !heatmapFill, heatBaseColor: '#123456', capturePeakInfo,
+                tiltDbPerOctave, heatmapTiltDbPerOctave: tiltDbPerOctave, smoothing: 0,
+                onPeakInfo: peak => peaks.push(peak),
+                dataSource: {
+                  getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+                  getSampleRate: () => sampleRate, isPlaying: () => true,
+                  subscribeToSessionChanges: listener => {
+                    sessionChanged = () => listener({ sessionId: 2, sampleRate, channelCount: 2,
+                      capturing: true, suspended: false, backendKind: null })
+                    return () => {}
+                  },
+                },
+              })
+              const state = analyzer as unknown as { drawFrame(): void }
+              try {
+                state.drawFrame()
+                state.drawFrame()
+                assert.equal(native.calls.fillMagnitudes, 0, 'startup placeholders must not be read as measurements')
+                native.pushStereoSamples(new Float32Array(2048), new Float32Array(2048))
+                assert.equal(native.hasSpectrumData(), true)
+                state.drawFrame()
+                assert.ok(native.calls.fillMagnitudes > 0, 'actual silence must reach the silence-floor check')
+                sessionChanged()
+                state.drawFrame()
+                analyzer.setOptions({ fftSize: 4096 })
+                state.drawFrame()
+                assert.ok(recorder.drawImageCalls.length >= 5, 'the background and guides still render')
+                assert.equal(recorder.lineStrokes.length, 0, 'no tilted live trace')
+                assert.equal(recorder.fills.length, 0, 'no gradient fill')
+                assert.equal(recorder.fillRects.length, 0, 'no heatmap fill')
+                assert.ok(peaks.length >= 5 && peaks.every(peak => peak === null), 'no fabricated peak tooltip')
+              } finally { analyzer.dispose() }
+            }
+          }
+        }
+      }
+    }
+  } finally { dom.restore() }
+})
+
+test('SpectrumAnalyzer preserves reference curves while waiting for its first audio block', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const native = createFakeSpectrumNativeAnalyzer()
+  const reference = flatReference(-20, 'overlay')
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+    nativeAnalyzer: native, reference, showGrid: false, referenceLineColor: '#abcdef',
+    dataSource: {
+      getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+      getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+    },
+  })
+  try {
+    ;(analyzer as unknown as { drawFrame(): void }).drawFrame()
+    assert.equal(recorder.lineStrokes.length, 1)
+    assert.equal(recorder.lineStrokes[0].strokeStyle, '#abcdef')
+    assert.equal(recorder.fills.length, 0)
+  } finally { analyzer.dispose(); dom.restore() }
+})
+
+test('SpectrumAnalyzer renders quiet real audio and retains it between blocks until reset', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const dbfs of [-40, -100, -105]) {
+      const native = createFakeSpectrumNativeAnalyzer()
+      const recorder = createFakeCanvasRecorder()
+      const peaks: Array<SpectrumPeakInfo | null> = []
+      let pending: Array<{ left: Float32Array; right: Float32Array }> = []
+      const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+        nativeAnalyzer: native, fftSize: 2048, smoothing: 0, tiltDbPerOctave: 0,
+        minFrequency: 900, maxFrequency: 1100,
+        minDecibels: -120, showGrid: false, fillGradient: false, capturePeakInfo: true,
+        onPeakInfo: peak => peaks.push(peak),
+        dataSource: {
+          getPendingSpectrumSamples: () => [],
+          getPendingSpectrumStereoSamples: () => { const chunks = pending; pending = []; return chunks },
+          getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+        },
+      })
+      const state = analyzer as unknown as { drawFrame(): void; primaryPointY: Float32Array }
+      try {
+        state.drawFrame()
+        assert.equal(peaks.at(-1), null)
+        const tone = Float32Array.from({ length: 2048 }, (_, index) =>
+          Math.sin(2 * Math.PI * 42 * index / 2048) * 10 ** (dbfs / 20))
+        pending = [{ left: tone, right: tone }]
+        state.drawFrame()
+        const peak = peaks.at(-1)
+        assert.ok(peak)
+        assertAlmostEqual(peak.dbfs, dbfs, 0.3, 'quiet-tone dBFS')
+        assert.ok(state.primaryPointY.some(y => y < 180), 'the quiet tone remains visible')
+        const points = Array.from(state.primaryPointY)
+        state.drawFrame()
+        assert.deepEqual(peaks.at(-1), peak)
+        assert.deepEqual(Array.from(state.primaryPointY), points, 'no new block must not clear valid data')
+        const strokeCount = recorder.lineStrokes.length
+        native.reset()
+        state.drawFrame()
+        assert.equal(peaks.at(-1), null)
+        assert.equal(recorder.lineStrokes.length, strokeCount, 'reset removes the old live trace')
+      } finally { analyzer.dispose() }
+    }
+  } finally { dom.restore() }
+})
+
+test('SpectrumAnalyzer keeps an active side channel when the mid channel is at the silence floor', () => {
+  const dom = installFakeCanvasDom()
+  const native = createFakeSpectrumNativeAnalyzer()
+  const recorder = createFakeCanvasRecorder()
+  const tone = Float32Array.from({ length: 2048 }, (_, index) => Math.sin(2 * Math.PI * 42 * index / 2048) * 0.1)
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+    nativeAnalyzer: native, smoothing: 0, showSideLine: true, showGrid: false, fillGradient: false,
+    secondaryLineColor: '#abcdef',
+    dataSource: {
+      getPendingSpectrumSamples: () => [],
+      getPendingSpectrumStereoSamples: () => [{ left: tone, right: tone.map(value => -value) }],
+      getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+    },
+  })
+  try {
+    ;(analyzer as unknown as { drawFrame(): void }).drawFrame()
+    assert.ok(native.getMagnitudes()?.every(db => db <= -119.9))
+    const side = recorder.lineStrokes.find(stroke => stroke.strokeStyle === '#abcdef')
+    assert.ok(side?.commands.some(point => point.y < 180), 'side audio prevents the empty-spectrum path')
+  } finally { analyzer.dispose(); dom.restore() }
+})
+
+test('spectrum plugin bridge carries readiness and renders host frames without renderer PCM', () => {
+  const dom = installFakeCanvasDom()
+  const bridge = new BridgeSpectrumAnalyzer()
+  const recorder = createFakeCanvasRecorder()
+  const magnitudes = new Float32Array(1024).fill(-100)
+  const peaks: Array<SpectrumPeakInfo | null> = []
+  const analyzer = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+    nativeAnalyzer: bridge, capturePeakInfo: true, showGrid: false, fillGradient: false,
+    onPeakInfo: peak => peaks.push(peak),
+    dataSource: {
+      getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+      getSampleRate: () => 48000, isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+    },
+  })
+  const state = analyzer as unknown as { drawFrame(): void }
+  const receive = (hasSpectrumData?: boolean) => {
+    const frame = decodeSpectrumFrame({
+      magnitudes: Buffer.from(magnitudes.buffer).toString('base64'), hasSpectrumData,
+    })
+    assert.ok(frame)
+    assert.equal(frame.hasSpectrumData, hasSpectrumData)
+    bridge.setMagnitudes(frame.magnitudes, frame.side, frame.channelMax, frame.hasSpectrumData)
+  }
+  try {
+    state.drawFrame()
+    receive(false)
+    state.drawFrame()
+    assert.equal(bridge.hasSpectrumData(), false)
+    assert.equal(recorder.lineStrokes.length, 0)
+    assert.equal(peaks.at(-1), null)
+    magnitudes[42] = -20
+    for (const ready of [true, undefined]) {
+      receive(ready)
+      assert.equal(bridge.hasSpectrumData(), true, 'legacy frames become ready on receipt')
+      state.drawFrame()
+      assert.ok(peaks.at(-1))
+      bridge.reset()
+      assert.equal(bridge.hasSpectrumData(), false)
+    }
+    receive(true)
+    bridge.setFFTSize(4096)
+    assert.equal(bridge.hasSpectrumData(), false)
+    receive(false)
+    state.drawFrame()
+    assert.equal(peaks.at(-1), null)
+  } finally { analyzer.dispose(); dom.restore() }
+})
+
 test('spectrum plugin bridge carries channel-max data and falls back for legacy frames', () => {
   const encode = (values: Float32Array): string => Buffer.from(
     values.buffer,
@@ -3714,6 +4180,89 @@ test('native and JavaScript vectorscope paths project identical channel samples'
   }
 })
 
+test('Vectorscope preserves every dot across history shifts, changed snapshots, and live options', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    for (const multiband of [false, true]) {
+      const canvas = createFakeCanvas()
+      let history: number[][] = []
+      let pending: Array<{ left: Float32Array; right: Float32Array }> = []
+      let resetSession = () => {}
+      let displayPoints = 17
+      let mode: VectorscopeMode = 'polar-unipolar'
+      let zoomDb = 6
+      const nativeAnalyzer = createFakeVectorscopeNativeAnalyzer()
+      nativeAnalyzer.fillPoints = (x, y) => {
+        const points = history.slice(-displayPoints)
+        points.forEach((point, index) => { x[index] = point[1]; y[index] = point[0] })
+        return points.length
+      }
+      nativeAnalyzer.getMultibandPoints = () => {
+        const points = history.slice(-displayPoints)
+        return { count: points.length, data: new Float32Array(points.flat()) }
+      }
+      const scope = new Vectorscope(canvas, {
+        nativeAnalyzer, multiband, displayPoints, mode, zoomDb, showGrid: false,
+        dataSource: {
+          getPendingVectorscopeSamples: () => pending,
+          getSampleRate: () => 48000,
+          isPlaying: () => true,
+          subscribeToSessionChanges: (callback) => { resetSession = callback; return () => {} },
+        },
+      })
+      const state = scope as unknown as { drawFrame: () => void; offscreenCtx: CanvasRenderingContext2D }
+      const dots: Array<{ x: number; y: number; color: string | CanvasGradient | CanvasPattern; alpha: number }> = []
+      const ctx = state.offscreenCtx
+      ctx.fillRect = (x, y) => {
+        if (ctx.globalCompositeOperation === 'source-over') dots.push({ x, y, color: ctx.fillStyle, alpha: ctx.globalAlpha })
+      }
+      try {
+        let sequence = 0
+        for (let frame = 0; frame < 20; frame++) {
+          const newCount = frame === 0 ? 17 : frame % 4 === 0 ? 0 : frame % 3 === 0 ? 24 : 3
+          pending = newCount ? [{ left: new Float32Array(newCount), right: new Float32Array(newCount) }] : []
+          for (let i = 0; i < newCount; i++) {
+            sequence++
+            history.push(Array.from(new Float32Array(Array.from({ length: 6 }, (_, channel) => Math.sin(sequence * (channel + 1)) * 0.7))))
+          }
+          history = history.slice(-displayPoints)
+          if (frame === 4) history.reverse() // Different snapshot without any new samples.
+          if (frame === 8) { zoomDb = -3; scope.setOptions({ zoomDb }) }
+          if (frame === 9) { mode = 'linear-bipolar'; scope.setOptions({ mode }) }
+          if (frame === 10) { displayPoints = 9; scope.setOptions({ displayPoints }); history = history.slice(-displayPoints) }
+          if (frame === 12) resetSession()
+          if (frame === 13) { canvas.width = 480; scope.resize() }
+          if (frame === 14) { mode = 'polar-bipolar'; scope.setOptions({ mode }) }
+          if (frame === 16) { zoomDb = 0; scope.setOptions({ zoomDb }) }
+          dots.length = 0
+          state.drawFrame()
+          const expected: typeof dots = []
+          const layout = getVectorscopeLayout(canvas.width, canvas.height, mode)
+          const perSegment = Math.ceil(history.length / 8)
+          for (let segment = 0; segment < 8 && segment * perSegment < history.length; segment++) {
+            for (let band = 0; band < (multiband ? 3 : 1); band++) {
+              for (let i = segment * perSegment; i < Math.min((segment + 1) * perSegment, history.length); i++) {
+                const point = transformPoint(history[i][band * 2], history[i][band * 2 + 1], mode, zoomDb)
+                expected.push({
+                  x: layout.centerX + point.dx * layout.radius - 0.75,
+                  y: layout.centerY - point.dy * layout.radius - 0.75,
+                  color: multiband ? ['#ff4444', '#44dd44', '#4488ff'][band] : '#00ffff',
+                  alpha: 0.15 + 0.85 * (segment / 7),
+                })
+              }
+            }
+          }
+          assert.deepEqual(dots, expected, `frame ${frame}, multiband ${multiband}`)
+        }
+      } finally {
+        scope.dispose()
+      }
+    }
+  } finally {
+    dom.restore()
+  }
+})
+
 test('Vectorscope applies live calibrated zoom and clears the previous projection', () => {
   const dom = installFakeCanvasDom()
   const nativeAnalyzer = createFakeVectorscopeNativeAnalyzer()
@@ -4199,6 +4748,7 @@ test('profile draft comparisons return to clean after reverting a change', () =>
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
     scopeSettings: baselineProfile.scopeSettings,
+    analysisSettings: baselineProfile.analysisSettings,
     scopePopouts: baselineProfile.scopePopouts,
     windowBounds: baselineProfile.windowBounds,
   }, baselineProfile.name)
@@ -4214,6 +4764,7 @@ test('profile draft comparisons return to clean after reverting a change', () =>
         scrollSpeed: baselineProfile.scopeSettings.waveform.scrollSpeed + 1,
       },
     },
+    analysisSettings: baselineProfile.analysisSettings,
     scopePopouts: baselineProfile.scopePopouts,
     windowBounds: baselineProfile.windowBounds,
   }, baselineProfile.name)
@@ -4223,12 +4774,42 @@ test('profile draft comparisons return to clean after reverting a change', () =>
     hiddenScopes: baselineProfile.hiddenScopes,
     widthWeights: baselineProfile.widthWeights,
     scopeSettings: baselineProfile.scopeSettings,
+    analysisSettings: baselineProfile.analysisSettings,
     scopePopouts: baselineProfile.scopePopouts,
     windowBounds: baselineProfile.windowBounds,
   }, baselineProfile.name)
 
   assert.equal(profilesMatch(baselineDraft, changedDraft), false)
   assert.equal(profilesMatch(baselineDraft, revertedDraft), true)
+
+  const linkedAnalysisDraft = buildProfileDraft({
+    scopeOrder: baselineProfile.scopeOrder,
+    hiddenScopes: baselineProfile.hiddenScopes,
+    widthWeights: baselineProfile.widthWeights,
+    scopeSettings: baselineProfile.scopeSettings,
+    analysisSettings: { linkedAnalysis: true },
+    scopePopouts: baselineProfile.scopePopouts,
+    windowBounds: baselineProfile.windowBounds,
+  }, baselineProfile.name)
+  assert.equal(profilesMatch(baselineDraft, linkedAnalysisDraft), false)
+})
+
+test('linked analysis is a profile-scoped setting that dirties and cleans with its baseline', () => {
+  const previousSettingsState = useSettingsStore.getState()
+  try {
+    const profile = createDefaultProfile(DEFAULT_PROFILE_NAME)
+    seedProfileDraftState(profile)
+
+    useSettingsStore.getState().updateAnalysisSettings({ linkedAnalysis: true })
+    assert.equal(useSettingsStore.getState().analysisSettings.linkedAnalysis, true)
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, true)
+
+    useSettingsStore.getState().updateAnalysisSettings({ linkedAnalysis: false })
+    assert.equal(useSettingsStore.getState().analysisSettings.linkedAnalysis, false)
+    assert.equal(useSettingsStore.getState().hasUnsavedProfileChanges, false)
+  } finally {
+    useSettingsStore.setState(previousSettingsState)
+  }
 })
 
 test('buildProfileDraft omits theme metadata from the runtime draft', () => {
@@ -4239,6 +4820,7 @@ test('buildProfileDraft omits theme metadata from the runtime draft', () => {
     hiddenScopes: profile.hiddenScopes,
     widthWeights: profile.widthWeights,
     scopeSettings: profile.scopeSettings,
+    analysisSettings: profile.analysisSettings,
     scopePopouts: profile.scopePopouts,
     windowBounds: profile.windowBounds,
   }, profile.name)
@@ -4364,18 +4946,50 @@ test('BottomBar theme section renders compact credit metadata and opens valid li
   assert.match(stylesSource, /\.bottom-bar__theme-credit--link \{/)
 })
 
-test('BottomBar keeps Window controls on one row', async () => {
+test('BottomBar separates appearance from startup behavior while keeping controls on one row', async () => {
   const componentSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
   const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
 
-  const windowSection = componentSource.match(
-    /<section className="bottom-bar__section bottom-bar__section--window">([\s\S]*?)<div className="bottom-bar__divider" \/>/,
+  const appearanceSection = componentSource.match(
+    /<section className="bottom-bar__group" aria-label="Appearance">([\s\S]*?)<\/section>/,
   )?.[1]
-  assert.ok(windowSection)
-  assert.equal(windowSection.match(/bottom-bar__inline--window/g)?.length, 1)
-  assert.doesNotMatch(windowSection, /bottom-bar__inline--desktop-integration/)
-  assert.match(stylesSource, /\.bottom-bar__section--window \{[\s\S]*min-width: 880px;/)
-  assert.match(stylesSource, /\.bottom-bar__inline--window \{[\s\S]*gap: 8px;/)
+  const startupSection = componentSource.match(
+    /<section className="bottom-bar__section bottom-bar__section--startup" aria-label="Startup & Tray">([\s\S]*?)<\/section>/,
+  )?.[1]
+  assert.ok(appearanceSection)
+  assert.ok(startupSection)
+  assert.equal(appearanceSection.match(/bottom-bar__inline--window/g)?.length, 1)
+  assert.match(appearanceSection, /Window snapping is disabled/)
+  assert.doesNotMatch(appearanceSection, /desktopIntegration|loginItemStatusMessage/)
+  assert.equal(startupSection.match(/bottom-bar__inline--startup/g)?.length, 1)
+  assert.match(startupSection, /loginItemStatusMessage/)
+  assert.doesNotMatch(startupSection, /windowBackground/)
+  assert.ok(startupSection.indexOf('Open at login') < startupSection.indexOf('Login: Show Prism'))
+  assert.ok(startupSection.indexOf('Login: Show Prism') < startupSection.indexOf('Close to tray'))
+  assert.match(stylesSource, /\.bottom-bar__section--window \{[\s\S]*?min-width: 440px;/)
+  assert.match(stylesSource, /\.bottom-bar__section--startup \{[\s\S]*?min-width: 480px;/)
+  assert.match(stylesSource, /\.bottom-bar__inline--window,[\s\S]*?\.bottom-bar__inline--startup \{[\s\S]*?gap: 8px;/)
+})
+
+test('BottomBar channel routing uses horizontal space without increasing the settings height', async () => {
+  const bottomBarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'BottomBar.tsx'), 'utf8')
+  const matrixSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ChannelRoutingMatrix.tsx'), 'utf8')
+  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+
+  const sourceSection = bottomBarSource.match(
+    /<div className="bottom-bar__section bottom-bar__section--source">([\s\S]*?)\n            <\/div>/,
+  )?.[1]
+
+  assert.ok(sourceSection)
+  assert.doesNotMatch(sourceSection, /ChannelRoutingMatrix/)
+  assert.match(bottomBarSource, /bottom-bar__section--routing/)
+  assert.match(bottomBarSource, /<div className="bottom-bar__section-title">Channel Routing<\/div>/)
+  assert.doesNotMatch(matrixSource, /channel-routing__header/)
+  assert.match(matrixSource, /\{channel\.index \+ 1\}/)
+  assert.match(stylesSource, /\.bottom-bar__section--routing \{[\s\S]*gap: 1px;/)
+  assert.match(stylesSource, /\.channel-routing__scroll \{[\s\S]*height: 43px;/)
+  assert.match(stylesSource, /\.channel-routing__scroll \{[\s\S]*border: 1px solid var\(--control-border\);/)
+  assert.match(stylesSource, /\.channel-routing__cell \{[\s\S]*width: 28px;[\s\S]*height: 19px;/)
 })
 
 test('BottomBar close button uses flat themed control backgrounds', async () => {
@@ -4396,7 +5010,7 @@ test('BottomBar close button uses flat themed control backgrounds', async () => 
 test('pin buttons use a persistent filled active state distinct from inactive hover', async () => {
   const toolbarSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Toolbar.tsx'), 'utf8')
   const popoutSource = await readFile(join(process.cwd(), 'src', 'renderer', 'popouts', 'ScopePopoutWindow.tsx'), 'utf8')
-  const stylesSource = await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')
+  const stylesSource = (await readFile(join(process.cwd(), 'src', 'renderer', 'styles', 'globals.css'), 'utf8')).replace(/\r\n/g, '\n')
   const toolbarHoverBlock = stylesSource.match(
     /\.toolbar__icon-button--pin:hover:not\(:disabled\):not\(\.is-active\) \{([\s\S]*?)\n\}/,
   )?.[1]
@@ -4672,7 +5286,8 @@ test('main and detached windows keep frameless Prism chrome while enabling snap-
   // Blurred and clear windows drop the native thick frame on Windows, so the
   // JS resize overlay mounts for both; the now-playing config window always
   // keeps native semantics.
-  assert.match(appSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
+  assert.match(appSource, /docking\.enabled \|\| windowBackgroundMode !== 'solid'/)
+  assert.match(appSource, /directions=\{docking\.enabled \? \[docking\.edge === 'top' \? 's' : 'n'\]/)
   assert.match(popoutSource, /windowBackgroundMode !== 'solid' && <WindowResizeOverlay \/>/)
   assert.doesNotMatch(nowPlayingSource, /WindowResizeOverlay/)
 })
@@ -4690,7 +5305,7 @@ test('detached scope interactions accept the first macOS click and hide chrome d
   assert.match(mainSource, /function createScopePopoutWindow\([\s\S]*?process\.platform === 'darwin' \? \{ acceptFirstMouse: true \} : \{\}/)
   assert.doesNotMatch(mainWindowFactorySource, /acceptFirstMouse/)
   assert.match(scopeModuleSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
-  assert.match(scopeModuleSource, /onActiveChange: onMeasurementActiveChange/)
+  assert.match(scopeModuleSource, /onMeasurementActiveChangeRef\.current\?\.\(analysisActive\)/)
   assert.match(popoutSource, /measurementActive \? 'is-measuring' : ''/)
   assert.match(popoutSource, /onMeasurementActiveChange=\{setMeasurementActive\}/)
   assert.match(stylesSource, /\.scope-popout__chrome:has\(:focus-visible\)/)
@@ -4703,10 +5318,28 @@ test('main window hides its toolbar while a docked scope measurement is active',
   const stripSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'Strip.tsx'), 'utf8')
 
   assert.match(stripSource, /onMeasurementActiveChange\?: \(active: boolean\) => void/)
-  assert.match(stripSource, /onMeasurementActiveChange=\{onMeasurementActiveChange\}/)
+  assert.match(stripSource, /handleScopeMeasurementActiveChange/)
   assert.match(appSource, /const \[measurementActive, setMeasurementActive\] = useState\(false\)/)
   assert.match(appSource, /toolbarVisible && !measurementActive \? 'is-visible' : ''/)
-  assert.match(appSource, /<Strip onMeasurementActiveChange=\{setMeasurementActive\} \/>/)
+  assert.match(appSource, /<Strip[\s\S]*?onMeasurementActiveChange=\{setMeasurementActive\}/)
+})
+
+test('linked analysis relays coalesced probes across docked and detached scopes', async () => {
+  const mainSource = await readFile(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const preloadSource = await readFile(join(process.cwd(), 'src', 'preload', 'index.ts'), 'utf8')
+  const hookSource = await readFile(join(process.cwd(), 'src', 'renderer', 'useLinkedAnalysis.ts'), 'utf8')
+  const bridgeSource = await readFile(join(process.cwd(), 'src', 'renderer', 'components', 'ScopePopoutBridge.tsx'), 'utf8')
+
+  assert.match(mainSource, /ipcMain\.on\('linked-analysis:update'/)
+  assert.match(mainSource, /normalizeLinkedAnalysisMessage\(rawMessage\)/)
+  assert.match(mainSource, /message\.sourceKind !== popoutKind/)
+  assert.match(mainSource, /sender\.once\('destroyed',[\s\S]*?broadcastLinkedAnalysisMessage/)
+  assert.match(preloadSource, /sendLinkedAnalysisMessage:[\s\S]*?linked-analysis:update/)
+  assert.match(preloadSource, /onLinkedAnalysisMessage:[\s\S]*?removeListener\('linked-analysis:update'/)
+  assert.match(hookSource, /window\.requestAnimationFrame/)
+  assert.match(hookSource, /const isNewInteraction[\s\S]*?sendLinkedAnalysisMessage\(message\)/)
+  assert.match(hookSource, /cancelPendingFrame\(\)[\s\S]*?sendLinkedAnalysisMessage\(message\)/)
+  assert.match(bridgeSource, /analysisSettings: useSettingsStore\.getState\(\)\.analysisSettings/)
 })
 
 test('programmatic top/bottom reposition flushes fresh bounds through persistence channels', async () => {
@@ -5606,6 +6239,7 @@ test('moveDockedScopeOrder preserves hidden scope positions in the full order', 
     'vumeter',
     'lufsmeter',
     'waveform',
+    'waterfall',
     'nowPlaying',
   ])
 })
@@ -5627,6 +6261,7 @@ test('moveDockedScopeOrder preserves popped-out scope positions in the full orde
     'vumeter',
     'lufsmeter',
     'waveform',
+    'waterfall',
     'nowPlaying',
   ])
 })
@@ -6812,6 +7447,213 @@ test('LUFSMeter drains audio and renders silence when native DSP is unavailable'
   }
 })
 
+test('channel activity maps the dB floor and ceiling to bounded fill opacity', () => {
+  for (const peak of [0, -1, 0.0005, 0.001, NaN, Infinity, -Infinity]) {
+    assert.equal(sourcePeakToOpacity(peak), 0)
+  }
+  assertAlmostEqual(sourcePeakToOpacity(10 ** (-30 / 20)), 0.25, 1e-6, '-30 dBFS')
+  assertAlmostEqual(sourcePeakToOpacity(0.1), 1 / 3, 1e-6, '-20 dBFS')
+  assert.equal(sourcePeakToOpacity(1), 0.5)
+  assert.equal(sourcePeakToOpacity(2), 0.5)
+})
+
+test('channel activity retains brief signals and releases by elapsed time rather than frame count', () => {
+  const activity = new ChannelActivity()
+  activity.beginSession(1, 'device:interface', 3)
+  activity.ingest(new Float32Array([1, 0.01, 0]), 100)
+  activity.ingest(new Float32Array([0, 0, 0]), 110)
+  const firstPaint = activity.getSnapshot(120)!
+  assertAlmostEqual(firstPaint.opacities[0], 0.5 * Math.exp(-20 / 300), 1e-6, 'brief pulse retained')
+  assert.equal(firstPaint.opacities[2], 0)
+  // Reading does not consume activity or change its release curve.
+  activity.getSnapshot(200)
+  const afterRelease = activity.getSnapshot(400)!
+  assertAlmostEqual(afterRelease.opacities[0], 0.5 / Math.E, 1e-6, '300 ms release')
+  activity.ingest(new Float32Array([1, 0, 0]), 410)
+  assert.equal(activity.getSnapshot(410)!.opacities[0], 0.5, 'attack is immediate')
+  assert.equal(activity.getSnapshot(1410), null, 'stale activity expires')
+  activity.ingest(new Float32Array([0, 0, 0]), 1411)
+  assert.deepEqual(activity.getSnapshot(1411)!.opacities, [0, 0, 0], 'expired signals do not return')
+})
+
+test('channel activity isolates sessions and sources and resets on channel-count or metadata changes', () => {
+  const activity = new ChannelActivity()
+  assert.equal(activity.getSnapshot(0), null)
+  activity.beginSession(1, 'system:first', 2)
+  activity.ingest(new Float32Array([1, 1]), 10)
+  const oldSnapshot = activity.getSnapshot(10)!
+  activity.beginSession(2, 'device:second', 2)
+  assert.equal(activity.getSnapshot(11), null)
+  activity.ingest(new Float32Array([0, 0.1]), 20)
+  const next = activity.getSnapshot(20)!
+  assert.equal(next.sourceKey, 'device:second')
+  assert.equal(next.sessionId, 2)
+  assert.equal(next.opacities[0], 0)
+  assert.deepEqual(oldSnapshot.opacities, [0.5, 0.5], 'snapshots do not share mutable buffers')
+  activity.ingest(new Float32Array([0, 0, 0]), 30)
+  assert.deepEqual(activity.getSnapshot(30)!.opacities, [0, 0, 0])
+  activity.ingest(new Float32Array([NaN, Infinity, -1]), 40)
+  assert.deepEqual(activity.getSnapshot(40)!.opacities, [0, 0, 0])
+  activity.ingest(new Float32Array([1, 1, 1]), 39)
+  assert.deepEqual(activity.getSnapshot(40)!.opacities, [0, 0, 0], 'out-of-order data is ignored')
+  activity.ingest(undefined, 50)
+  assert.equal(activity.getSnapshot(50), null, 'older backends need no activity metadata')
+  activity.ingest(new Float32Array([1, 0, 0]), 60)
+  activity.reset()
+  assert.equal(activity.getSnapshot(60), null)
+  activity.ingest(new Float32Array([1, 1, 1]), 70)
+  assert.equal(activity.getSnapshot(70), null, 'late chunks cannot restore stopped activity')
+})
+
+for (const [exportName, kind] of [
+  ['macosCapture', 'native-macos'], ['windowsCapture', 'native-windows'], ['linuxCapture', 'native-linux'],
+] as const) {
+test(`${kind} keeps pre-gain activity across routing and clears it on restart and stop`, async () => {
+  const timers = installFakeTimeouts()
+  const { audioCapture } = await import('../src/renderer/audio/AudioCapture')
+  const { audioRouter } = await import('../src/renderer/audio/AudioRouter')
+  const originalNativeAPI = window.nativeCaptureAPI
+  const originalSupport = audioCapture.getStatus().backendSupport
+  const originalSource = audioCapture.getSelectedSystemSourceId()
+  const originalMode = audioCapture.getCaptureMode()
+  const originalGain = useAudioStore.getState().inputGainDb
+  const pending: import('../src/types/nativeCapture').NativeCapturedChunk[] = []
+  const routes: Array<{ left: number; right: number }> = []
+  window.nativeCaptureAPI = {
+    [exportName]: {
+      getSupport: () => ({ available: true, reason: null }),
+      listOutputDevices: () => [],
+      start: (deviceId = 'first') => ({ sampleRate: 48000, channelCount: 2, sourceChannelCount: 3, deviceId, deviceLabel: deviceId }),
+      setChannelRouting: (left, right) => { routes.push({ left, right }); return { left, right } },
+      stop: () => {},
+      drain: () => ({ chunks: pending.splice(0), overwriteCount: 0, queueDepth: 0 }),
+      nowMilliseconds: () => 1000,
+    },
+  } as typeof window.nativeCaptureAPI
+  const support = {
+    nativeBackend: { kind, available: true, reason: null, channelRoutingAvailable: true },
+    deviceInput: { kind: 'device-input' as const, available: false, reason: null },
+    dawBridge: { kind: 'daw-bridge' as const, available: false, reason: null },
+  }
+  window.electronAPI.getCaptureBackendSupport = async () => support
+  try {
+    await audioCapture.refreshBackendSupport()
+    audioCapture.setInputGain(20 * Math.log10(2))
+    audioRouter.setVisualizerConsumerDemand('channel-activity-test', { vectorscope: true })
+    await audioCapture.startSystemAudio('first', { channelRouting: { left: 0, right: 1 } })
+    const peaks = new Float32Array([0.25, 0.5, 1])
+    pending.push({ left: new Float32Array([0.25]), right: new Float32Array([0.5]), sourceChannelPeaks: peaks,
+      channelCount: 2, capturedAtMilliseconds: 1000, sequence: 1 })
+    timers.runNext()
+    const snapshot = audioCapture.getChannelActivity()!
+    assert.equal(snapshot.sourceKey, 'system:first')
+    assertAlmostEqual(snapshot.opacities[0], sourcePeakToOpacity(0.25), 0.01, 'pre-gain activity')
+    assert.deepEqual([...peaks], [0.25, 0.5, 1])
+    const [stereo] = audioRouter.flushPendingVectorscopeSamples()
+    assert.deepEqual([...stereo.left], [0.5])
+    assert.deepEqual([...stereo.right], [1])
+    audioCapture.setChannelRouting({ left: 2, right: 2 })
+    assert.deepEqual(routes.at(-1), { left: 2, right: 2 })
+    assert.deepEqual(audioCapture.getChannelActivity(snapshot.updatedAt)!.opacities,
+      [sourcePeakToOpacity(0.25), sourcePeakToOpacity(0.5), 0.5].map(Math.fround))
+    await audioCapture.startSystemAudio('second')
+    assert.equal(audioCapture.getChannelActivity(), null)
+    pending.push({ left: new Float32Array([0]), right: new Float32Array([0]), sourceChannelPeaks: new Float32Array([0, 0, 0]),
+      channelCount: 2, capturedAtMilliseconds: 1000, sequence: 1 })
+    timers.runNext()
+    const restarted = audioCapture.getChannelActivity()!
+    assert.equal(restarted.sourceKey, 'system:second')
+    assert.notEqual(restarted.sessionId, snapshot.sessionId)
+    assert.deepEqual(restarted.opacities, [0, 0, 0])
+    audioCapture.stop()
+    assert.equal(audioCapture.getChannelActivity(), null)
+    assert.equal(timers.pendingCount(), 0)
+  } finally {
+    audioCapture.stop()
+    audioCapture.setInputGain(originalGain)
+    audioCapture.setSelectedSystemSourceId(originalSource)
+    audioCapture.setCaptureMode(originalMode)
+    audioRouter.clearVisualizerConsumerDemand('channel-activity-test')
+    window.electronAPI.getCaptureBackendSupport = async () => originalSupport ?? support
+    await audioCapture.refreshBackendSupport()
+    window.nativeCaptureAPI = originalNativeAPI
+    timers.restore()
+  }
+})
+
+}
+
+test('native input capture exposes channels, forwards routing and peaks, and normalizes a changed layout', async () => {
+  const { NativeDeviceInputCaptureBackend } = await import('../src/renderer/audio/AudioCapture')
+  const timers = installFakeTimeouts()
+  const originalAPI = window.nativeCaptureAPI
+  const originalRequest = window.electronAPI.requestMicrophoneAccess
+  const pending: import('../src/types/nativeCapture').NativeCapturedChunk[] = []
+  const starts: Array<{ deviceId: string | undefined; routing: unknown }> = []
+  const routes: Array<{ left: number; right: number }> = []
+  let sourceChannels = 6
+  let allowed = true
+  let failure: Error | null = null
+  window.electronAPI.requestMicrophoneAccess = async () => allowed
+  window.nativeCaptureAPI = {
+    deviceInputCapture: {
+      getSupport: () => ({ available: true, reason: null }),
+      listInputDevices: () => [{ id: 'interface', label: 'Interface', kind: 'device', isDefault: true,
+        sampleRate: 48000, channelCount: sourceChannels, channelRoutingAvailable: true,
+        channels: Array.from({ length: sourceChannels }, (_, index) => ({ index, label: `Input ${index + 1}` })) }],
+      start: (deviceId, routing) => {
+        if (failure) throw failure
+        starts.push({ deviceId, routing })
+        return { sampleRate: 48000, channelCount: sourceChannels > 1 ? 2 : 1,
+          sourceChannelCount: sourceChannels, deviceId: 'interface', deviceLabel: 'Interface' }
+      },
+      setChannelRouting: (left, right) => { const route = { left, right }; routes.push(route); return route },
+      stop: () => {}, drain: () => ({ chunks: pending.splice(0), overwriteCount: 0, queueDepth: 0 }),
+      nowMilliseconds: () => 1000,
+    },
+  } as typeof window.nativeCaptureAPI
+  const backend = new NativeDeviceInputCaptureBackend({
+    kind: 'device-input', available: true, reason: null, channelRoutingAvailable: true,
+  })
+  try {
+    const [source] = await backend.listSources()
+    assert.equal(source.channels!.length, 6)
+    assert.equal(source.channelRoutingAvailable, true)
+    await backend.start({ deviceId: 'interface', channelRouting: { left: 5, right: 3 } })
+    assert.deepEqual(starts, [{ deviceId: 'interface', routing: { left: 5, right: 3 } }])
+    assert.equal(backend.getStatus().sourceChannelCount, 6)
+    assert.equal(backend.getStatus().channelCount, 2)
+    assert.deepEqual(routes.at(-1), { left: 5, right: 3 })
+    const received: Float32Array[] = []
+    backend.subscribe(chunk => { received.push(chunk.sourceChannelPeaks!) })
+    const peaks = new Float32Array([0, 0.25, 0, 0.5, 0.75, 1])
+    pending.push({ left: new Float32Array([1]), right: new Float32Array([0.5]), channelCount: 2,
+      sourceChannelPeaks: peaks, sequence: 1, capturedAtMilliseconds: 1000 })
+    timers.runNext()
+    assert.deepEqual(received, [peaks])
+    backend.setChannelRouting({ left: 4, right: 4 })
+    assert.equal(starts.length, 1, 'routing does not restart capture')
+    assert.deepEqual(routes.at(-1), { left: 4, right: 4 })
+    await backend.stop()
+    sourceChannels = 1
+    await backend.start({ deviceId: 'interface', channelRouting: { left: 5, right: 3 } })
+    assert.equal(backend.getStatus().sourceChannelCount, 1)
+    assert.equal(backend.getStatus().channelCount, 1)
+    assert.deepEqual(routes.at(-1), { left: 0, right: 0 })
+    await backend.stop()
+    failure = new Error('Device disconnected')
+    await assert.rejects(backend.start(), /Device disconnected/)
+    assert.equal(timers.pendingCount(), 0)
+    allowed = false
+    await assert.rejects(backend.start(), /Microphone access/)
+  } finally {
+    await backend.stop()
+    window.nativeCaptureAPI = originalAPI
+    window.electronAPI.requestMicrophoneAccess = originalRequest
+    timers.restore()
+  }
+})
+
 test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-document backoff, and cancels on stop', async () => {
   const timers = installFakeTimeouts()
 
@@ -6827,6 +7669,7 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
             channelCount: 2,
             capturedAtMilliseconds: 5,
             sequence: 1,
+            sourceChannelPeaks: new Float32Array([0.25, 0.5, 0.75]),
           },
           {
             left: new Float32Array([0.5, 0.6]),
@@ -6888,9 +7731,11 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
     })
     const receivedSequences: number[] = []
     const receivedChunkTimes: number[] = []
+    const receivedPeaks: Array<Float32Array | undefined> = []
     backend.subscribe((chunk) => {
       receivedSequences.push(chunk.sequence)
       receivedChunkTimes.push(chunk.capturedAt)
+      receivedPeaks.push(chunk.sourceChannelPeaks)
     })
 
     await backend.start()
@@ -6899,6 +7744,7 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
     timers.runNext()
     assert.deepEqual(receivedSequences, [1, 2])
     assert.equal(receivedChunkTimes.length, 2)
+    assert.deepEqual(receivedPeaks, [new Float32Array([0.25, 0.5, 0.75]), undefined])
     assert.equal(timers.nextDelay(), 0)
 
     timers.runNext()
@@ -7044,4 +7890,363 @@ test('NativePolledCaptureBackend trims stale backlog to the newest live slice wh
   } finally {
     timers.restore()
   }
+})
+
+test('DAW timeline seams distinguish gaps, loops, seeks, and stopped resumption', () => {
+  const previous = {
+    sequence: 10,
+    frameCount: 512,
+    timeInSamples: 48000,
+    isPlaying: true,
+    isLooping: false,
+  }
+  const transport = {
+    sequence: 11,
+    timeInSamples: 48512,
+    isPlaying: true,
+    isRecording: false,
+    isLooping: false,
+  }
+
+  assert.equal(resolveTimelineSeam(previous, transport), undefined)
+  assert.equal(resolveTimelineSeam(previous, { ...transport, sequence: 12 }), 'Gap')
+  assert.equal(resolveTimelineSeam(previous, { ...transport, timeInSamples: 96000 }), 'Jump')
+  assert.equal(resolveTimelineSeam(previous, {
+    ...transport,
+    timeInSamples: 12000,
+    isLooping: true,
+  }), 'Loop')
+  assert.equal(resolveTimelineSeam({ ...previous, isPlaying: false }, transport), 'Jump')
+})
+
+test('DAW musical ruler labels every roomy beat and every bar in dense history', () => {
+  const dom = installFakeCanvasDom()
+  try {
+    const roomyRecorder = createFakeCanvasRecorder()
+    const roomy = new ScrollingTimeline()
+    roomy.append({
+      frameCount: 192000,
+      sampleRate: 48000,
+      transport: {
+        sequence: 1,
+        timeInSamples: 0,
+        timeInSeconds: 0,
+        ppqPosition: 0,
+        ppqPositionOfLastBarStart: 0,
+        bpm: 120,
+        timeSignature: { numerator: 4, denominator: 4 },
+        isPlaying: true,
+        isRecording: false,
+        isLooping: false,
+      },
+    }, 800, 800)
+    roomy.draw(
+      createFakeCanvasContext(roomyRecorder),
+      800,
+      180,
+      'bars-beats',
+      'daw-bridge',
+      '#333',
+      '#fff',
+    )
+    assert.deepEqual(
+      roomyRecorder.fillTexts.slice(0, 7).map(({ text }) => text),
+      ['1|2', '1|3', '1|4', '2|1', '2|2', '2|3', '2|4'],
+    )
+
+    const denseRecorder = createFakeCanvasRecorder()
+    const dense = new ScrollingTimeline()
+    dense.append({
+      frameCount: 768000,
+      sampleRate: 48000,
+      transport: {
+        sequence: 1,
+        timeInSamples: 0,
+        timeInSeconds: 0,
+        ppqPosition: 0,
+        ppqPositionOfLastBarStart: 0,
+        bpm: 120,
+        timeSignature: { numerator: 4, denominator: 4 },
+        isPlaying: true,
+        isRecording: false,
+        isLooping: false,
+      },
+    }, 160, 160)
+    dense.draw(
+      createFakeCanvasContext(denseRecorder),
+      160,
+      180,
+      'bars-beats',
+      'daw-bridge',
+      '#333',
+      '#fff',
+    )
+    assert.deepEqual(
+      denseRecorder.fillTexts.map(({ text }) => text),
+      ['2', '3', '4', '5', '6', '7', '8', '9'],
+    )
+  } finally {
+    dom.restore()
+  }
+})
+
+
+test('Waterfall popouts preserve stereo samples and discontinuity sequence numbers', () => {
+  const source = new ScopePopoutDataSource('waterfall')
+  const left = new Float32Array([0.2, 0.4])
+  const right = new Float32Array([-0.2, -0.4])
+  source.pushAudioBatch([{ left, right, sequence: 17 }])
+  assert.deepEqual(source.getPendingWaterfallSamples(), [{ left, right, sequence: 17 }])
+  assert.equal(source.getPendingWaterfallSamples().length, 0)
+})
+
+
+test('Waterfall holds history and detaches rendering while capture is suspended', () => {
+  const raf = installFakeAnimationFrame()
+  const dom = installFakeCanvasDom()
+  const canvas = createFakeCanvas()
+  canvas.getContext('2d')!.setTransform = () => {}
+  let session = { sessionId: 1, sampleRate: 48000, channelCount: 2, capturing: true, suspended: false, backendKind: null }
+  let notify: (state: typeof session) => void = () => {}
+  let pulls = 0, processed = 0, resets = 0
+  const waterfall = new Waterfall(canvas, {
+    frameScheduler: new FrameScheduler({ frameTarget: 'display-sync' }),
+    dataSource: {
+      getSampleRate: () => session.sampleRate,
+      isPlaying: () => true,
+      getPendingWaterfallSamples: () => [{ left: new Float32Array(10), right: new Float32Array(10), sequence: ++pulls }],
+      subscribeToSessionChanges: (callback) => { notify = callback; callback(session); return () => {} },
+    },
+    nativeAnalyzer: { configure: () => {}, processStereo: () => { processed++ }, getFrame: () => null, reset: () => { resets++ } },
+  })
+  try {
+    waterfall.start()
+    raf.runFrame(0)
+    assert.equal(processed, 1)
+    session = { ...session, suspended: true }
+    notify(session)
+    raf.runFrame(17)
+    assert.equal(processed, 1)
+    assert.equal(resets, 1, 'pausing must preserve native history')
+    assert.equal(raf.pendingCount(), 0, 'paused capture must release its frame subscription')
+    session = { ...session, suspended: false }
+    notify(session)
+    raf.runFrame(34)
+    assert.equal(processed, 2)
+    assert.equal(resets, 1)
+    session = { ...session, sessionId: 2, sampleRate: 96000 }
+    notify(session)
+    assert.equal(resets, 2, 'a new source session clears its history')
+  } finally {
+    waterfall.dispose()
+    dom.restore()
+    raf.restore()
+  }
+})
+
+test('Waterfall plot fits history and clear spectrum peaks inside large and small panels', () => {
+  for (const height of [55, 100, 140, 300, 600]) {
+    for (const density of ['sparse', 'balanced', 'dense'] as const) {
+      for (const guides of [false, true]) {
+        const layout = waterfallPlotLayout(height, density, guides)
+        assert.ok(layout.ridgeCount >= 2 && layout.ridgeCount <= 64)
+        assert.ok(layout.spacing >= 4)
+        assert.ok(layout.bottom - layout.historyHeight - layout.amplitude >= 8 - 1e-6, 'oldest peaks retain top clearance')
+        assert.equal(waterfallRidgeHeight(-100, layout.amplitude), 0)
+        assert.equal(waterfallRidgeHeight(0, layout.amplitude), layout.amplitude)
+      }
+    }
+  }
+  const normal = waterfallPlotLayout(300, 'balanced', true)
+  assert.ok(normal.spacing >= 4 && normal.spacing <= 7)
+  assert.ok(3 / (normal.ridgeCount - 1) >= 0.06 && 3 / (normal.ridgeCount - 1) <= 0.1)
+  assert.ok(waterfallPlotLayout(100, 'balanced', true).ridgeCount < normal.ridgeCount)
+  assert.ok(waterfallRidgeHeight(-40, normal.amplitude) > normal.spacing * 4, 'clear peaks must retain substantial relief')
+  assert.equal(waterfallPlotLayout(300, 'sparse', true).amplitude, waterfallPlotLayout(300, 'dense', true).amplitude, 'density must not flatten the spectrum')
+})
+
+function waterfallFrame(columns: number, ages: number[], levelAt: (column: number, ridge: number) => number): WaterfallFrame {
+  return {
+    columns, ages: new Float32Array(ages), frequencies: new Float32Array(columns), audioSeconds: 3,
+    levels: Float32Array.from({ length: columns * ages.length }, (_, i) => levelAt(i % columns, Math.floor(i / columns))),
+  }
+}
+
+test('Waterfall plot smoothing preserves constant levels and does not modify native snapshots', () => {
+  for (const columns of [2, 128, 512]) {
+    for (const db of [-100, -60, -20]) {
+      const frame = waterfallFrame(columns, [0, 0.07, 0.14], () => db)
+      const before = structuredClone(frame)
+      const result = softenWaterfallSpectra(frame)
+      assert.ok(result.every((value) => Math.abs(value - db) < 1e-4))
+      assert.deepEqual(frame, before)
+      assert.deepEqual(softenWaterfallSpectra(frame), result, 'redraws must not advance smoothing')
+    }
+  }
+  assert.equal(softenWaterfallSpectra(waterfallFrame(128, [], () => 0)).length, 0)
+})
+
+test('Waterfall plot softens fine bin jitter while retaining peak location and relief', () => {
+  const columns = 512
+  const frame = waterfallFrame(columns, [0], (column) => {
+    const x = column / (columns - 1)
+    return -75 + 30 * Math.exp(-0.5 * ((x - 0.3) / 0.055) ** 2) + (column % 2 ? 6 : -6)
+  })
+  const result = softenWaterfallSpectra(frame)
+  const roughness = (values: Float32Array): number => {
+    let total = 0
+    for (let i = 1; i < values.length - 1; ++i) total += Math.abs(values[i - 1] - 2 * values[i] + values[i + 1])
+    return total
+  }
+  assert.ok(roughness(result) < roughness(frame.levels) * 0.3)
+  const peak = Math.max(...result)
+  assert.ok(Math.abs(result.indexOf(peak) / (columns - 1) - 0.3) < 0.02)
+  assert.ok(peak - result[columns - 1] > 20, 'smoothing should retain a broad hill')
+})
+
+test('Waterfall plot preserves a spectrum as it moves from the live edge into history', () => {
+  const shape = (column: number) => column === 32 ? -20 : -60
+  const frame = waterfallFrame(128, [0, 0.05, 0.1, 0.15, 1], (column, ridge) => ridge === 2 ? shape(column) : -60)
+  const result = softenWaterfallSpectra(frame)
+  const live = softenWaterfallSpectra(waterfallFrame(128, [0], shape))
+  assert.deepEqual(result.subarray(128 * 2, 128 * 3), live, 'age and neighboring spectra must not reshape a captured trace')
+  for (const row of [0, 1, 3, 4]) {
+    assert.ok(result.subarray(row * 128, (row + 1) * 128).every((db) => Math.abs(db + 60) < 1e-4), 'a transient must not bleed into another moment')
+  }
+})
+
+test('Waterfall plot keeps narrow peaks distinct with only light attenuation', () => {
+  const columns = 512
+  const frame = waterfallFrame(columns, [0, 0.064, 0.128, 0.192], (column) => column === 200 ? -6 : -100)
+  const result = softenWaterfallSpectra(frame)
+  const newest = result.subarray(0, columns)
+  const peak = Math.max(...newest)
+  assert.ok(peak >= -8.3, 'even a single-column peak should lose less than 2.3 dB')
+  assert.ok(Math.abs(newest.indexOf(peak) - 200) <= 1)
+  assert.ok(newest[199] > -14 && newest[201] > -14, 'soften the immediate shoulders')
+  assert.ok(newest[197] < -80 && newest[203] < -80, 'retain a narrow peak rather than broadening it into a hill')
+  for (let row = 1; row < frame.ages.length; ++row) {
+    assert.ok(newest.every((value, column) => Math.abs(value - result[row * columns + column]) < 1e-4))
+  }
+})
+
+test('Waterfall plot smoothing retains its frequency shape across plot resolutions', () => {
+  const sample = (columns: number) => softenWaterfallSpectra(waterfallFrame(columns, [0], (column) =>
+    -70 + 25 * Math.exp(-0.5 * ((column / (columns - 1) - 0.4) / 0.08) ** 2)))
+  const small = sample(129), large = sample(513)
+  for (let i = 0; i < small.length; ++i) assert.ok(Math.abs(small[i] - large[i * 4]) < 0.75)
+})
+
+test('Waterfall plugin decodes bounded native snapshots and rejects malformed frames', () => {
+  const encode = (values: number[]): string => Buffer.from(new Float32Array(values).buffer).toString('base64')
+  const payload = {
+    sampleRate: 48000, revision: 3, columns: 3, audioSeconds: 6,
+    ages: encode([0, 2.5, 5]), frequencies: encode([20, 1000, 20000]),
+    levels: encode([-80, -6, -80, -70, -6, -70, -60, -6, -60]),
+  }
+  const decoded = decodeWaterfallFrame(payload)
+  assert.ok(decoded)
+  assert.deepEqual(Array.from(decoded.ages), [0, 2.5, 5])
+  assert.equal(decoded.levels.length, 9)
+  assert.equal(decoded.levels[1], -6)
+  assert.equal(decoded.revision, 3)
+  assert.ok(decodeWaterfallFrame({ ...payload, ages: '', levels: '' }), 'empty history is a valid snapshot')
+  for (const invalid of [
+    null, {}, { ...payload, columns: 513 }, { ...payload, sampleRate: Infinity },
+    { ...payload, levels: 'invalid' }, { ...payload, ages: encode([2, 1]) },
+    { ...payload, levels: encode([NaN, ...new Array(8).fill(-80)]) },
+    { ...payload, frequencies: encode([20, 20000]) }, { ...payload, revision: -1 },
+    { ...payload, ages: encode([0, 31, 32]) },
+    { ...payload, levels: Buffer.from([0, 0, 0, 0, 1]).toString('base64') },
+    { ...payload, levels: 'A'.repeat(200000) },
+  ]) assert.equal(decodeWaterfallFrame(invalid), null)
+})
+
+test('Waterfall plugin retains one snapshot and ignores responses preceding a resize or reset', () => {
+  const commands: unknown[] = []
+  const analyzer = new BridgeWaterfallAnalyzer((command) => commands.push(command))
+  analyzer.configure({ sampleRate: 48000, fftSize: 2048, historySeconds: 5, smoothing: 0.9,
+    tiltDbPerOctave: 2, scaleMode: 'log', minFrequency: 10, maxFrequency: 24000 })
+  analyzer.getFrame(8, 3)
+  const frame = { ...waterfallFrame(3, [0, 2, 4], () => -30), sampleRate: 48000, revision: analyzer.getRequest().revision }
+  analyzer.pushFrame(frame)
+  assert.equal(analyzer.getFrame(8, 3), frame)
+  assert.equal(commands.length, 2, 'unchanged viewport does not send repeated requests')
+  assert.equal(analyzer.getFrame(16, 7), frame, 'keep available history while the native viewport catches up')
+  analyzer.pushFrame({ ...frame, audioSeconds: 999 })
+  assert.equal(analyzer.getFrame(16, 7), frame, 'stale response is discarded')
+  const resized = { ...waterfallFrame(7, [0, 2, 4], () => -20), sampleRate: 48000, revision: analyzer.getRequest().revision }
+  analyzer.pushFrame(resized)
+  assert.equal(analyzer.getFrame(16, 7), resized)
+  analyzer.reset()
+  analyzer.pushFrame(resized)
+  assert.equal(analyzer.getFrame(16, 7).ages.length, 0, 'late frames cannot resurrect cleared history')
+  assert.deepEqual(commands[commands.length - 1], { revision: analyzer.getRequest().revision, reset: true })
+})
+
+test('Waterfall plugin uses the desktop appearance and normalized settings', () => {
+  const profile = createDefaultProfile('Default')
+  const theme = resolveTheme(createDefaultTheme())
+  assert.deepEqual(waterfallSettingsToOptions(profile.scopeSettings.waterfall, theme.waterfall),
+    scopeSettingsToOptions('waterfall', profile.scopeSettings.waterfall, theme.waterfall))
+})
+
+test('plugin native frame clock paints without browser animation callbacks and stops on disposal', () => {
+  const scheduler = new NativeFrameScheduler()
+  let paints = 0
+  const unsubscribe = scheduler.subscribe(() => { paints++ })
+  assert.equal(paints, 0)
+  scheduler.dispatchFrame()
+  scheduler.dispatchFrame()
+  assert.equal(paints, 2)
+  unsubscribe()
+  scheduler.dispatchFrame()
+  assert.equal(paints, 2)
+})
+
+test('hidden dialog reports layout after fonts load even when animation frames never fire', async (t) => {
+  let resolveFonts!: () => void
+  const fonts = new Promise<void>((resolve) => { resolveFonts = resolve })
+  let resized!: () => void
+  let disconnected = false
+  const observed: Element[] = []
+  const elements = [{}, {}] as Element[]
+  const originalRaf = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame')
+  Object.defineProperty(globalThis, 'requestAnimationFrame', { configurable: true, value: () => 0 })
+  const originalObserver = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver')
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: class {
+    constructor(callback: () => void) { resized = callback }
+    observe(element: Element): void { observed.push(element) }
+    disconnect(): void { disconnected = true }
+  } })
+  t.after(() => {
+    if (originalRaf) Object.defineProperty(globalThis, 'requestAnimationFrame', originalRaf)
+    else Reflect.deleteProperty(globalThis, 'requestAnimationFrame')
+    if (originalObserver) Object.defineProperty(globalThis, 'ResizeObserver', originalObserver)
+    else Reflect.deleteProperty(globalThis, 'ResizeObserver')
+  })
+  let reports = 0
+  const stop = observeDialogLayout(elements, () => { reports++ }, fonts)
+  assert.equal(reports, 0)
+  resolveFonts()
+  await fonts
+  assert.equal(reports, 1, 'initial measurement must not need a visible compositor frame')
+  assert.deepEqual(observed, elements)
+  resized()
+  assert.equal(reports, 2)
+  stop()
+  assert.equal(disconnected, true)
+  resized()
+  assert.equal(reports, 2)
+})
+
+test('dialog unmounted before its fonts load never starts layout observation', async () => {
+  let resolveFonts!: () => void
+  const fonts = new Promise<void>((resolve) => { resolveFonts = resolve })
+  let reports = 0
+  const stop = observeDialogLayout([], () => { reports++ }, fonts)
+  stop()
+  resolveFonts()
+  await fonts
+  assert.equal(reports, 0)
 })

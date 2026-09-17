@@ -10,9 +10,11 @@ import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './
 import { FrameScheduler } from './frameScheduler'
 import { VisualizerFrameLoop } from './visualizerFrameLoop'
 import {
+  resolveOscilloscopeLinkedAnalysisProjection,
   resolveOscilloscopeMeasurement,
   type ScopeMeasurement,
 } from '../scopeMeasurement'
+import type { LinkedAnalysisProbe, LinkedAnalysisProjection } from '../../types/analysis'
 import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 
 export interface OscilloscopeDataSource extends VisualizerSessionSource {
@@ -199,6 +201,10 @@ export class Oscilloscope {
       sampleRate,
       getNormalizedOscilloscopeDisplaySamples(sampleRate),
     )
+  }
+
+  getLinkedAnalysisProjection(probe: LinkedAnalysisProbe): LinkedAnalysisProjection | null {
+    return resolveOscilloscopeLinkedAnalysisProjection(probe)
   }
 
   private ensureRenderBuffer(size: number): Float32Array {

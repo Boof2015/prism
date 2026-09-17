@@ -321,7 +321,7 @@ test('createTemplateThemeFile presents a simplified recommended theme layout', (
   assert.match(template, /^\[Controls\]$/m)
   assert.match(template, /^\[Scopes\]$/m)
   assert.match(template, /^\[Spectrum\]$/m)
-  assert.match(template, /^# phase_risk = 255, 191, 0$/m)
+  assert.match(template, /^# phase_risk = 56, 189, 248$/m)
   assert.match(template, /^# flat_controls = false$/m)
   assert.match(template, /^# toolbar_bg = 4, 8, 12, 199$/m)
   assert.equal(parsed.app.accent, 'rgb(56, 189, 248)')
@@ -584,4 +584,20 @@ test('library falls back when legacy active theme ids target retired bundled the
   } finally {
     await harness.cleanup()
   }
+})
+
+
+test('Waterfall inherits Spectrum colors and its own optional tokens round-trip', () => {
+  const base = createDefaultTheme()
+  base.spectrum.line = '#123456'
+  base.spectrum.heatLow = '#112233'
+  const inherited = resolveTheme(base)
+  assert.equal(inherited.waterfall.line, inherited.spectrum.line)
+  assert.equal(inherited.waterfall.labels, inherited.interface.textMuted)
+  assert.deepEqual(inherited.waterfall.heatColors, inherited.spectrum.heatColors)
+  base.waterfall = { line: '#abcdef', heatHigh: '#fedcba', background: '#010203', guides: '#aabbcc' }
+  const text = serializeThemeFile(base)
+  assert.match(text, /\[Waterfall\]/)
+  const parsed = parseThemeFileContent(text, 'Waterfall')
+  assert.deepEqual(resolveTheme(parsed).waterfall, resolveTheme(base).waterfall)
 })

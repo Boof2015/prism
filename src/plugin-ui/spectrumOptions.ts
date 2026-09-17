@@ -14,8 +14,10 @@ export function spectrumSettingsToOptions(
 ): SpectrumAnalyzerOptions {
   const range = nominalFrequencyBoundsForRange(settings.frequencyRangeMode)
   return {
+    reference: settings.reference ?? null,
     lineColor: theme.line,
     secondaryLineColor: theme.sideLine,
+    referenceLineColor: theme.referenceLine,
     gradientColors: theme.fillGradient,
     heatColors: theme.heatColors,
     heatBaseColor: theme.heatBase,

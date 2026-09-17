@@ -20,6 +20,7 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     sampleRate: 48000,
     channelCount: 2,
     capturing: false,
+    suspended: false,
     backendKind: null,
   }
 
@@ -84,8 +85,16 @@ export class PluginWebViewDataSource implements SpectrumAnalyzerDataSource {
     return []
   }
 
+  getPendingWaterfallSamples(): SpectrumStereoChunk[] {
+    return []
+  }
+
   getSampleRate(): number {
     return this.sessionState.sampleRate
+  }
+
+  getBackendKind(): null {
+    return null
   }
 
   isPlaying(): boolean {

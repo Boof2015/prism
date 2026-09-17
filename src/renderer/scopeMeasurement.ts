@@ -7,9 +7,15 @@ import type { SpectrogramScaleMode } from '../types/spectrogram'
 import {
   clampFrequencyRangeToNyquist,
   frequencyAtNormalizedPosition,
+  normalizedPositionAtFrequency,
   type FrequencyScaleMode,
 } from '../types/frequencyScale'
 import type { WaveformMode } from '../types/waveform'
+import type {
+  LinkedAnalysisProbe,
+  LinkedAnalysisProjection,
+  ScopeMeasurementDimensions,
+} from '../types/analysis'
 import {
   inverseTransformNormalizedScopePoint,
   type NormalizedScopePoint,
@@ -19,6 +25,7 @@ export type MeasurableScopeKind = 'spectrum' | 'spectrogram' | 'oscilloscope' | 
 
 export interface ScopeMeasurement {
   values: string[]
+  dimensions: ScopeMeasurementDimensions
 }
 
 export interface ScopeMeasurementSource {
@@ -104,6 +111,10 @@ export function resolveSpectrumMeasurement(
       formatMeasurementFrequency(frequencyHz),
       formatMeasurementPitch(frequencyHz),
     ],
+    dimensions: {
+      frequencyHz,
+      spectralLevelDb: db,
+    },
   }
 }
 
@@ -136,6 +147,10 @@ export function resolveSpectrogramMeasurement(
       formatMeasurementFrequency(frequencyHz),
       formatMeasurementPitch(frequencyHz),
     ],
+    dimensions: {
+      frequencyHz,
+      historySecondsAgo: secondsAgo,
+    },
   }
 }
 
@@ -152,6 +167,10 @@ export function resolveOscilloscopeMeasurement(
       formatMeasurementAmplitude(amplitude),
       formatMeasurementDb(amplitudeToDbfs(amplitude), 'dBFS'),
     ],
+    dimensions: {
+      frameTimeSeconds: timeSeconds,
+      signedAmplitude: amplitude,
+    },
   }
 }
 
@@ -177,7 +196,141 @@ export function resolveWaveformMeasurement(
     formatMeasurementDb(amplitudeToDbfs(amplitude), 'dBFS'),
   ]
   if (channel) values.unshift(channel)
-  return { values }
+  return {
+    values,
+    dimensions: {
+      historySecondsAgo: secondsAgo,
+      signedAmplitude: amplitude,
+      ...(channel ? { channel } : {}),
+    },
+  }
+}
+
+function isWithinInclusiveRange(value: number, min: number, max: number): boolean {
+  return Number.isFinite(value) && value >= min && value <= max
+}
+
+function verticalGuide(x: number): LinkedAnalysisProjection['guides'][number] {
+  return { from: { x, y: 0 }, to: { x, y: 1 } }
+}
+
+function horizontalGuide(y: number): LinkedAnalysisProjection['guides'][number] {
+  return { from: { x: 0, y }, to: { x: 1, y } }
+}
+
+export function resolveSpectrumLinkedAnalysisProjection(
+  probe: LinkedAnalysisProbe,
+  options: {
+    sampleRate: number
+    minFrequency: number
+    maxFrequency: number
+    scaleType: FrequencyScaleMode
+  },
+): LinkedAnalysisProjection | null {
+  if (probe.sourceKind !== 'spectrogram') return null
+  const frequencyHz = probe.dimensions.frequencyHz
+  if (frequencyHz === undefined) return null
+  const range = clampFrequencyRangeToNyquist(options.sampleRate, options.minFrequency, options.maxFrequency)
+  if (!isWithinInclusiveRange(frequencyHz, range.minFrequency, range.maxFrequency)) return null
+
+  return {
+    guides: [verticalGuide(normalizedPositionAtFrequency(
+      frequencyHz,
+      range.minFrequency,
+      range.maxFrequency,
+      options.scaleType,
+    ))],
+    label: formatMeasurementFrequency(frequencyHz),
+  }
+}
+
+export function resolveSpectrogramLinkedAnalysisProjection(
+  probe: LinkedAnalysisProbe,
+  options: {
+    sampleRate: number
+    minFrequency: number
+    maxFrequency: number
+    scaleMode: SpectrogramScaleMode
+    fftSize: number
+    scrollSpeed: number
+    canvasPixelWidth: number
+  },
+): LinkedAnalysisProjection | null {
+  if (probe.sourceKind === 'spectrum') {
+    const frequencyHz = probe.dimensions.frequencyHz
+    if (frequencyHz === undefined) return null
+    const range = clampFrequencyRangeToNyquist(options.sampleRate, options.minFrequency, options.maxFrequency)
+    if (!isWithinInclusiveRange(frequencyHz, range.minFrequency, range.maxFrequency)) return null
+    const normalizedFrequency = normalizedPositionAtFrequency(
+      frequencyHz,
+      range.minFrequency,
+      range.maxFrequency,
+      options.scaleMode,
+    )
+    return {
+      guides: [horizontalGuide(1 - normalizedFrequency)],
+      label: formatMeasurementFrequency(frequencyHz),
+    }
+  }
+
+  if (probe.sourceKind !== 'waveform') return null
+  const secondsAgo = probe.dimensions.historySecondsAgo
+  if (secondsAgo === undefined) return null
+  const hopDivisor = Math.max(2, Math.min(64, Math.round(8 * options.scrollSpeed)))
+  const hopSize = Math.max(1, Math.floor(options.fftSize / hopDivisor))
+  const maxHistorySeconds = (Math.max(0, options.canvasPixelWidth - 1) * hopSize)
+    / Math.max(1, options.sampleRate)
+  if (!isWithinInclusiveRange(secondsAgo, 0, maxHistorySeconds) || maxHistorySeconds <= 0) return null
+  return {
+    guides: [verticalGuide(1 - secondsAgo / maxHistorySeconds)],
+    label: formatMeasurementTime(secondsAgo, true),
+  }
+}
+
+export function resolveOscilloscopeLinkedAnalysisProjection(
+  probe: LinkedAnalysisProbe,
+): LinkedAnalysisProjection | null {
+  if (probe.sourceKind !== 'waveform') return null
+  const amplitude = probe.dimensions.signedAmplitude
+  if (amplitude === undefined || !isWithinInclusiveRange(amplitude, -1, 1)) return null
+  return {
+    guides: [horizontalGuide((1 - amplitude) / 2)],
+    label: formatMeasurementAmplitude(amplitude),
+  }
+}
+
+export function resolveWaveformLinkedAnalysisProjection(
+  probe: LinkedAnalysisProbe,
+  options: {
+    mode: WaveformMode
+    scrollSpeed: number
+    canvasPixelWidth: number
+  },
+): LinkedAnalysisProjection | null {
+  if (probe.sourceKind === 'spectrogram') {
+    const secondsAgo = probe.dimensions.historySecondsAgo
+    if (secondsAgo === undefined) return null
+    const maxHistorySeconds = Math.max(0, options.canvasPixelWidth - 1)
+      / (WAVEFORM_BASE_PIXELS_PER_SECOND * Math.max(0.01, options.scrollSpeed))
+    if (!isWithinInclusiveRange(secondsAgo, 0, maxHistorySeconds) || maxHistorySeconds <= 0) return null
+    return {
+      guides: [verticalGuide(1 - secondsAgo / maxHistorySeconds)],
+      label: formatMeasurementTime(secondsAgo, true),
+    }
+  }
+
+  if (probe.sourceKind !== 'oscilloscope') return null
+  const amplitude = probe.dimensions.signedAmplitude
+  const maxAmplitude = 1 / WAVEFORM_DISPLAY_MARGIN
+  if (amplitude === undefined || !isWithinInclusiveRange(amplitude, -maxAmplitude, maxAmplitude)) return null
+  const laneY = 0.5 - amplitude * 0.5 * WAVEFORM_DISPLAY_MARGIN
+  const guides = options.mode === 'stereo'
+    ? [horizontalGuide(laneY / 2), horizontalGuide(0.5 + laneY / 2)]
+    : [horizontalGuide(laneY)]
+  return {
+    guides,
+    label: formatMeasurementAmplitude(amplitude),
+  }
 }
 
 export function resolveMeasurementSourcePoint(

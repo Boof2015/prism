@@ -44,6 +44,9 @@ public:
     /** Temporary UI interaction state. Most scopes do not need DSP changes. */
     virtual void setMeasurementActive(bool) {}
 
+    /** Audio was interrupted or discarded. History scopes must start a new span. */
+    virtual void resetAudioHistory() {}
+
     /** Feed audio (called off the realtime thread). numSamples may be 0. */
     virtual void process(const float* left, const float* right, int numSamples) = 0;
 

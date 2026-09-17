@@ -32,18 +32,22 @@ import {
   normalizeHeatDb,
 } from './heatScale'
 import {
+  resolveSpectrogramLinkedAnalysisProjection,
   resolveSpectrogramMeasurement,
   type ScopeMeasurement,
 } from '../scopeMeasurement'
+import type { LinkedAnalysisProbe, LinkedAnalysisProjection } from '../../types/analysis'
 import type { NormalizedScopePoint } from '../scopeCanvasTransform'
 import {
   buildFrequencyGuides,
   clampFrequencyRangeToNyquist,
 } from '../../types/frequencyScale'
+import type { DawTransportSnapshot, TimelineUnit } from '../../types/dawBridge'
+import { ScrollingTimeline } from './scrollingTimeline'
 
 export interface SpectrogramDataSource extends VisualizerSessionSource {
   getPendingSpectrogramSamples: () => Float32Array[]
-  getPendingSpectrogramStereoSamples?: () => Array<{ left: Float32Array; right: Float32Array }>
+  getPendingSpectrogramStereoSamples?: () => Array<{ left: Float32Array; right: Float32Array; transport?: DawTransportSnapshot }>
 }
 
 export interface SpectrogramOptions {
@@ -65,6 +69,7 @@ export interface SpectrogramOptions {
   showGrid?: boolean
   gridColor?: string
   labelColor?: string
+  timelineUnit?: TimelineUnit
   dataSource?: SpectrogramDataSource
   frameScheduler?: FrameScheduler
   nativeAnalyzer?: SpectrogramNativeAnalyzer | null
@@ -91,6 +96,7 @@ const defaultOptions: ResolvedSpectrogramOptions = {
   showGrid: true,
   gridColor: 'rgba(255, 255, 255, 0.12)',
   labelColor: 'rgba(255, 255, 255, 0.4)',
+  timelineUnit: 'bars-beats',
 }
 
 const defaultSpectrogramDataSource: SpectrogramDataSource = {
@@ -137,6 +143,7 @@ function resolveOptions(base: ResolvedSpectrogramOptions, overrides: Partial<Spe
     showGrid: overrides.showGrid ?? base.showGrid,
     gridColor: overrides.gridColor ?? base.gridColor,
     labelColor: overrides.labelColor ?? base.labelColor,
+    timelineUnit: overrides.timelineUnit ?? base.timelineUnit,
   }
 }
 
@@ -257,6 +264,7 @@ export class Spectrogram {
 
   private lastNativeConfigKey: string | null = null
   private unsubscribeSessionChange: (() => void) | null = null
+  private readonly timeline = new ScrollingTimeline()
 
   constructor(canvas: HTMLCanvasElement, options: SpectrogramOptions = {}) {
     this.canvas = canvas
@@ -301,6 +309,7 @@ export class Spectrogram {
     this.nativeAnalyzer?.reset()
     this.lastNativeConfigKey = null
     this.waterfallCtx.clearRect(0, 0, this.waterfallCanvas.width, this.waterfallCanvas.height)
+    this.timeline.reset()
     this.invalidate()
   }
 
@@ -353,6 +362,18 @@ export class Spectrogram {
 
   getMeasurementAt(point: NormalizedScopePoint): ScopeMeasurement {
     return resolveSpectrogramMeasurement(point, {
+      sampleRate: Math.max(1, this.dataSource.getSampleRate()),
+      minFrequency: this.options.minFrequency,
+      maxFrequency: this.options.maxFrequency,
+      scaleMode: this.options.scaleMode,
+      fftSize: this.options.fftSize,
+      scrollSpeed: this.options.scrollSpeed,
+      canvasPixelWidth: this.canvas.width,
+    })
+  }
+
+  getLinkedAnalysisProjection(probe: LinkedAnalysisProbe): LinkedAnalysisProjection | null {
+    return resolveSpectrogramLinkedAnalysisProjection(probe, {
       sampleRate: Math.max(1, this.dataSource.getSampleRate()),
       minFrequency: this.options.minFrequency,
       maxFrequency: this.options.maxFrequency,
@@ -489,7 +510,7 @@ export class Spectrogram {
 
   private tryDrawNativeColumns(
     pendingSamples: Float32Array[],
-    pendingStereoSamples: Array<{ left: Float32Array; right: Float32Array }>,
+    pendingStereoSamples: Array<{ left: Float32Array; right: Float32Array; transport?: DawTransportSnapshot }>,
     width: number,
     height: number,
   ): boolean {
@@ -504,7 +525,11 @@ export class Spectrogram {
 
     this.ensureColumnBuffers(config.rowCount)
 
-    const results: SpectrogramNativeResult[] = []
+    const results: Array<{
+      result: SpectrogramNativeResult
+      frameCount: number
+      transport?: DawTransportSnapshot
+    }> = []
     try {
       if (!this.configureNativeAnalyzer(config)) {
         return false
@@ -515,9 +540,11 @@ export class Spectrogram {
         if (!this.isValidNativeResult(result, config.rowCount)) {
           return false
         }
-        if (result.columnCount > 0) {
-          results.push(result)
-        }
+        results.push({
+          result,
+          frameCount: Math.min(chunk.left.length, chunk.right.length),
+          transport: chunk.transport,
+        })
       }
 
       for (const chunk of pendingSamples) {
@@ -525,9 +552,7 @@ export class Spectrogram {
         if (!this.isValidNativeResult(result, config.rowCount)) {
           return false
         }
-        if (result.columnCount > 0) {
-          results.push(result)
-        }
+        results.push({ result, frameCount: chunk.length })
       }
     } catch (error) {
       console.warn('Spectrogram: native analyzer failed', error)
@@ -536,8 +561,14 @@ export class Spectrogram {
       return false
     }
 
-    for (const result of results) {
+    for (const entry of results) {
+      const { result } = entry
       this.shiftAndPaintColumns(result.display, result.heat, result.columnCount, result.rowCount)
+      this.timeline.append({
+        frameCount: entry.frameCount,
+        sampleRate: Math.max(1, this.dataSource.getSampleRate()),
+        transport: entry.transport,
+      }, result.columnCount, this.options.orientation === 'vertical' ? height : width)
     }
 
     return true
@@ -579,6 +610,16 @@ export class Spectrogram {
     }
     this.ctx.drawImage(this.waterfallCanvas, 0, 0)
     this.drawFrequencyGrid(width, height)
+    this.timeline.draw(
+      this.ctx,
+      width,
+      height,
+      this.options.timelineUnit,
+      this.dataSource.getBackendKind?.() ?? null,
+      this.options.gridColor,
+      this.options.labelColor,
+      this.options.orientation,
+    )
   }
 
   private drawFrequencyGrid(width: number, height: number): void {
@@ -653,6 +694,7 @@ export class Spectrogram {
       this.waterfallCanvas.width = width
       this.waterfallCanvas.height = height
       this.waterfallCtx.imageSmoothingEnabled = false
+      this.timeline.resize(this.options.orientation === 'vertical' ? height : width)
 
       if (previousCtx && previousCanvas.width > 0 && previousCanvas.height > 0) {
         if (this.options.orientation === 'vertical') {

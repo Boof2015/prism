@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import { createEmptyWindowLocalState, normalizeWindowLocalState } from '../shared/windowState'
 import type { WindowBounds } from '../types/popout'
 import type { ScopeKind } from '../types/scope'
+import type { WindowDockingPreferences } from '../types/windowDocking'
 import type { PrismWindowLocalStateV1, WindowBackgroundState } from '../types/windowState'
 
 export class FileBackedWindowStateStore {
@@ -20,6 +21,16 @@ export class FileBackedWindowStateStore {
 
   getMainAlwaysOnTop(): boolean {
     return this.state.mainAlwaysOnTop
+  }
+
+  getDocking(): WindowDockingPreferences {
+    return structuredClone(this.state.docking)
+  }
+
+  async setDocking(docking: WindowDockingPreferences): Promise<void> {
+    await this.ensureInitialized()
+    this.state = normalizeWindowLocalState({ ...this.state, docking })
+    await this.persistState()
   }
 
   getPopoutAlwaysOnTop(kind: ScopeKind): boolean {

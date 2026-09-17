@@ -1,0 +1,2 @@
+*.sh text eol=lf
+resources/installer/macos-scripts/* text eol=lf

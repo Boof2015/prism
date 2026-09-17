@@ -1,3 +1,7 @@
+import type { WaterfallFrame } from '../types/waterfall'
+import type { WaterfallFrameRequest } from './BridgeWaterfallAnalyzer'
+import { frequencyAtNormalizedPosition } from '../types/frequencyScale'
+
 /**
  * Bridge between the JUCE 8 plugin host (C++) and this webview UI.
  *
@@ -10,6 +14,10 @@
  */
 
 export interface SpectrumFrame {
+  /** Absent in legacy frames, which are treated as ready on receipt. */
+  hasSpectrumData?: boolean
+  referenceMeanSquare?: number
+  referenceSeconds?: number
   /** Host sample rate in Hz. */
   sampleRate: number
   /** Mid (mono) magnitudes in dB, length = fftSize/2. */
@@ -21,6 +29,9 @@ export interface SpectrumFrame {
 }
 
 interface SpectrumFramePayload {
+  hasSpectrumData?: boolean
+  referenceMeanSquare?: number
+  referenceSeconds?: number
   sampleRate?: number
   magnitudes?: string
   side?: string
@@ -103,15 +114,101 @@ export function base64ToFloat32Array(b64: string): Float32Array {
   return new Float32Array(bytes.buffer, 0, byteLength >> 2)
 }
 
+export interface WaterfallPluginFrame extends WaterfallFrame {
+  sampleRate: number
+  revision: number
+}
+
+export function decodeWaterfallFrame(payload: unknown): WaterfallPluginFrame | null {
+  if (!payload || typeof payload !== 'object') return null
+  const p = payload as Record<string, unknown>
+  const { columns, audioSeconds, sampleRate, revision } = p
+  if (typeof columns !== 'number' || !Number.isInteger(columns) || columns < 2 || columns > 512
+    || typeof audioSeconds !== 'number' || !Number.isFinite(audioSeconds) || audioSeconds < 0
+    || typeof sampleRate !== 'number' || !Number.isFinite(sampleRate) || sampleRate < 8000 || sampleRate > 384000
+    || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return null
+  const decode = (value: unknown, limit: number): Float32Array | null => {
+    if (typeof value !== 'string' || value.length > Math.ceil(limit * 4 / 3) * 4) return null
+    try {
+      const binary = atob(value)
+      if (binary.length % 4 !== 0) return null
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+      const result = new Float32Array(bytes.buffer)
+      return result.length <= limit && result.every(Number.isFinite) ? result : null
+    } catch { return null }
+  }
+  const ages = decode(p.ages, 64), frequencies = decode(p.frequencies, columns)
+  if (!ages || !frequencies || frequencies.length !== columns
+    || ages.some((age, i) => age < 0 || age > 30.1 || (i > 0 && age < ages[i - 1]))
+    || frequencies.some((hz, i) => hz <= 0 || (i > 0 && hz < frequencies[i - 1]))) return null
+  const levels = decode(p.levels, ages.length * columns)
+  if (!levels || levels.length !== ages.length * columns) return null
+  return { levels, ages, frequencies, columns, audioSeconds, sampleRate, revision }
+}
+
+export function connectWaterfallBridge(handlers: {
+  onFrame: (frame: WaterfallPluginFrame) => void
+  getRequest: () => WaterfallFrameRequest
+}): () => void {
+  let disposed = false
+  let listenerId: number | null = null
+  let mockRaf: number | null = null
+  void ensureBackend().then((backend) => {
+    if (disposed) return
+    if (backend) {
+      listenerId = backend.addEventListener('waterfallFrame', (payload) => {
+        const frame = decodeWaterfallFrame(payload)
+        if (frame) handlers.onFrame(frame)
+      })
+      return
+    }
+    console.warn('[prism-plugin] no JUCE host — using synthetic waterfall (browser dev mode)')
+    const started = performance.now()
+    const tick = (): void => {
+      if (disposed) return
+      const { config, columns, ridges, revision } = handlers.getRequest()
+      const audioSeconds = (performance.now() - started) / 1000
+      const spacing = config.historySeconds / (ridges - 1)
+      const anchor = Math.floor(audioSeconds / spacing) * spacing
+      const ages = new Float32Array(Array.from({ length: ridges }, (_, i) =>
+        i === 0 ? 0 : audioSeconds - anchor + (i - 1) * spacing).filter((age) => age <= audioSeconds && age <= config.historySeconds))
+      const frequencies = Float32Array.from({ length: columns }, (_, x) =>
+        frequencyAtNormalizedPosition(x / (columns - 1), config.minFrequency, config.maxFrequency, config.scaleMode))
+      const levels = new Float32Array(ages.length * columns)
+      for (let row = 0; row < ages.length; row++) {
+        const time = audioSeconds - ages[row]
+        for (let x = 0; x < columns; x++) {
+          const octave = Math.log2(frequencies[x] / 80)
+          levels[row * columns + x] = -85 +
+            46 * Math.exp(-octave * octave * 1.8) * (0.8 + 0.2 * Math.sin(time * 3)) +
+            30 * Math.exp(-Math.pow((octave - 3.8 - Math.sin(time) * 0.15) * 3, 2)) +
+            22 * Math.exp(-Math.pow((octave - 6) * 2, 2)) * (0.6 + 0.4 * Math.sin(time * 2))
+        }
+      }
+      handlers.onFrame({ levels, ages, frequencies, columns, audioSeconds, sampleRate: config.sampleRate, revision })
+      mockRaf = requestAnimationFrame(tick)
+    }
+    mockRaf = requestAnimationFrame(tick)
+  })
+  return () => {
+    disposed = true
+    if (mockRaf !== null) cancelAnimationFrame(mockRaf)
+    if (listenerId !== null) window.__JUCE__?.backend?.removeEventListener?.(listenerId)
+  }
+}
+
 export function decodeSpectrumFrame(payload: unknown): SpectrumFrame | null {
   if (typeof payload !== 'object' || payload === null) return null
-  const { sampleRate, magnitudes, side, channelMax } = payload as SpectrumFramePayload
+  const { sampleRate, magnitudes, side, channelMax, referenceMeanSquare, referenceSeconds, hasSpectrumData } = payload as SpectrumFramePayload
   if (typeof magnitudes !== 'string' || magnitudes.length === 0) return null
   const decodedMagnitudes = base64ToFloat32Array(magnitudes)
   const decodedChannelMax = typeof channelMax === 'string'
     ? base64ToFloat32Array(channelMax)
     : new Float32Array(0)
   return {
+    hasSpectrumData: typeof hasSpectrumData === 'boolean' ? hasSpectrumData : undefined,
+    referenceMeanSquare: referenceMeanSquare ?? 0,
+    referenceSeconds: referenceSeconds ?? 0,
     sampleRate: typeof sampleRate === 'number' && sampleRate > 0 ? sampleRate : 48000,
     magnitudes: decodedMagnitudes,
     side: typeof side === 'string' ? base64ToFloat32Array(side) : new Float32Array(0),

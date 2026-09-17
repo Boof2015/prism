@@ -1,0 +1,89 @@
+.settings-scope-section__controls[hidden] { display: none; }
+
+.settings-scope-tabs {
+  display: inline-flex; align-self: flex-start; gap: 3px; padding: 3px;
+  border: 1px solid var(--control-border); border-radius: 10px; background: var(--control-bg);
+}
+.settings-scope-tabs .settings-chip {
+  min-height: 24px; padding: 0 10px; border-color: transparent; border-radius: 7px; background: transparent; font-size: 9px;
+}
+.settings-scope-tabs .settings-chip.is-active { border-color: var(--control-border-active); background: var(--control-bg-active); }
+.settings-scope-tabs button:focus-visible,
+.reference-settings button:focus-visible,
+.reference-status button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.reference-settings { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.reference-settings__file { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.reference-settings__file > .settings-chip { flex-shrink: 0; min-height: 34px; }
+.reference-settings__filename {
+  flex: 1; min-width: 0; padding: 9px 12px;
+  border: 1px solid var(--control-border); border-radius: 10px;
+  box-shadow: inset 0 1px 0 var(--glass-highlight); background: var(--control-bg); color: var(--control-text);
+  font-size: 11px; line-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.reference-settings__filename.is-empty { color: var(--text-tertiary); }
+.reference-settings__comparison {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 14px; align-items: start;
+}
+.reference-settings__trim-label { min-height: 13px; }
+.reference-settings__trim-readout { display: flex; align-items: center; gap: 5px; height: 13px; }
+.reference-settings__trim-value { display: inline-flex; align-items: baseline; gap: 3px; font-variant-numeric: tabular-nums; }
+.reference-settings__trim-value input {
+  appearance: textfield; width: 6ch; min-width: 0; padding: 2px 3px; border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: right;
+}
+.reference-settings__trim-value input::-webkit-inner-spin-button,
+.reference-settings__trim-value input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.reference-settings__trim-value input:hover:not(:disabled) { background: var(--control-bg-hover); border-color: var(--control-border); }
+.reference-settings__trim-value input:focus-visible { outline: none; background: var(--input-bg-focus); border-color: var(--input-border-focus); }
+.reference-settings__trim-value input:disabled { color: var(--text-muted); }
+.reference-settings__trim-actions { display: flex; justify-content: flex-end; }
+.reference-settings__icon-button {
+  display: inline-grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; padding: 6px;
+  border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-tertiary); cursor: pointer;
+}
+.reference-settings__icon-button svg {
+  display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
+.reference-settings__icon-button:hover:not(:disabled) { color: var(--control-text); background: var(--control-bg-hover); border-color: var(--control-border); }
+.reference-settings__icon-button:disabled { color: var(--text-muted); opacity: 0.5; cursor: default; }
+.reference-settings__reset { width: 22px; height: 22px; padding: 3px; }
+
+.reference-status {
+  position: absolute; inset: auto 0 0; z-index: 5; display: flex; align-items: center; gap: 12px; min-width: 0;
+  min-height: 32px; padding: 5px 10px 7px; border-top: 1px solid var(--scope-overlay-border);
+  background: var(--scope-overlay-bg); color: var(--scope-overlay-text); font-size: 10px; line-height: 16px; pointer-events: auto;
+}
+.reference-status.is-inline {
+  position: relative; border: 1px solid var(--control-border); border-radius: 7px;
+  background: var(--control-bg); color: var(--text-secondary); overflow: hidden;
+}
+.reference-status__filename { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.reference-status__phase,
+.reference-status__action {
+  flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.reference-status__phase { display: flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+.reference-status__percent { font-variant-numeric: tabular-nums; }
+.reference-status__action {
+  padding: 2px 5px; margin-right: -5px; border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.reference-status__action:hover { background: var(--control-bg-hover); border-color: var(--control-border); color: var(--control-text); }
+.reference-status__progress { position: absolute; inset: auto 0 0; height: 2px; background: var(--slider-track); overflow: hidden; }
+.reference-status__progress > span { display: block; height: 100%; background: var(--slider-fill); transform-origin: left; transition: transform 100ms linear; }
+.reference-status__progress.is-indeterminate > span { width: 30%; animation: reference-progress 1.5s ease-in-out infinite; }
+.reference-status.is-error { border-color: var(--danger); }
+.reference-status.is-error .reference-status__filename { white-space: normal; overflow-wrap: anywhere; }
+@keyframes reference-progress { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) {
+  .reference-status__progress > span { transition: none; }
+  .reference-status__progress.is-indeterminate > span { animation: none; width: 100%; opacity: 0.4; }
+}
+
+.is-reference-drop { outline: 2px solid var(--accent); outline-offset: -3px; }
+.reference-drop-label {
+  position: absolute; inset: 0; z-index: 6; display: grid; place-items: center;
+  color: var(--scope-overlay-text); background: var(--scope-overlay-bg);
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; pointer-events: none;
+}

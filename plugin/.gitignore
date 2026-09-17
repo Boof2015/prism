@@ -1,2 +1,6 @@
 build/
 webview-dist/
+
+# Local WebView2 SDK download and extraction
+/sdk/
+/webview2.zip

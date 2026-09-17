@@ -1,3 +1,5 @@
+import { emitToHost } from './juceBridge'
+import type { SpectrumReferenceLevel } from '../types/spectrumReference'
 import type { SpectrumNativeAnalyzer } from '../renderer/audio/native'
 
 const FFT_SILENCE_DB = -100
@@ -16,6 +18,26 @@ const FFT_SILENCE_DB = -100
  * through the webview.
  */
 export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
+  private spectrumDataReady = false
+
+  hasSpectrumData(): boolean {
+    return this.spectrumDataReady
+  }
+
+  private referenceEnabled = false
+  private referenceLevel: SpectrumReferenceLevel = { meanSquare: 0, seconds: 0 }
+  private referenceFrameTime = 0
+  setReferenceEnabled(enabled: boolean): void {
+    if (enabled === this.referenceEnabled) return
+    this.referenceEnabled = enabled
+    emitToHost('prismSpectrumReferenceConfig', { referenceEnabled: enabled })
+  }
+  setReferenceLevel(meanSquare: number, seconds: number): void {
+    this.referenceLevel = { meanSquare, seconds }; this.referenceFrameTime = performance.now()
+  }
+  getReferenceLevel(): SpectrumReferenceLevel {
+    return performance.now() - this.referenceFrameTime < 300 ? this.referenceLevel : { meanSquare: 0, seconds: 0 }
+  }
   private fftSize = 2048
   private sampleRate = 48000
   private magnitudes: Float32Array
@@ -30,7 +52,8 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
   }
 
   /** Called by the bridge whenever the host emits a new frame. */
-  setMagnitudes(magnitudes: Float32Array, side?: Float32Array, channelMax?: Float32Array): void {
+  setMagnitudes(magnitudes: Float32Array, side?: Float32Array, channelMax?: Float32Array, hasSpectrumData = true): void {
+    this.spectrumDataReady = hasSpectrumData && magnitudes.length > 0
     if (magnitudes.length !== this.magnitudes.length) {
       this.magnitudes = new Float32Array(magnitudes.length)
     }
@@ -56,6 +79,7 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
 
   setFFTSize(size: number): void {
     if (size > 0 && size !== this.fftSize) {
+      this.spectrumDataReady = false
       this.fftSize = size
       this.magnitudes = new Float32Array(size / 2).fill(FFT_SILENCE_DB)
       this.sideMagnitudes = new Float32Array(size / 2).fill(FFT_SILENCE_DB)
@@ -129,10 +153,12 @@ export class BridgeSpectrumAnalyzer implements SpectrumNativeAnalyzer {
   }
 
   binToFrequency(bin: number): number {
-    return (bin * this.sampleRate) / this.fftSize
+    return (bin * (this.referenceEnabled ? 48000 : this.sampleRate)) / this.fftSize
   }
 
   reset(): void {
+    this.spectrumDataReady = false
+    this.referenceLevel = { meanSquare: 0, seconds: 0 }
     this.magnitudes.fill(FFT_SILENCE_DB)
     this.sideMagnitudes.fill(FFT_SILENCE_DB)
     this.channelMaxMagnitudes.fill(FFT_SILENCE_DB)

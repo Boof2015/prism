@@ -2,6 +2,7 @@
 node_modules/
 
 # Build outputs
+artifacts/linux-tests/
 out/
 dist/
 native/build/
@@ -36,3 +37,6 @@ yarn-error.log*
 
 # notes
 untitled-1
+
+# Local latency benchmark recordings, traces, and isolated settings
+benchmark-results/

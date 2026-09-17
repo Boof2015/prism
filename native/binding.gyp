@@ -8,8 +8,16 @@
       "sources": [
         "src/main.cpp",
         "src/system_audio_capture_napi.cpp",
+        "src/device_input_capture_napi.cpp",
+        "src/capture_channel_selection.cpp",
+        "src/capture_channel_selection_napi.cpp",
         "src/oscilloscope.cpp",
         "src/spectrum.cpp",
+        "src/reference_analysis.cpp",
+        "src/reference_decode.cpp",
+        "src/reference_napi.cpp",
+        "src/waterfall.cpp",
+        "src/waterfall_napi.cpp",
         "src/spectrogram.cpp",
         "src/vectorscope.cpp",
         "src/multiband.cpp",
@@ -17,6 +25,7 @@
         "src/vumeter.cpp",
         "src/lufsmeter.cpp",
         "src/window_chrome.cpp",
+        "src/window_docking.cpp",
         "src/dsp_utils.cpp"
       ],
       "include_dirs": [
@@ -28,6 +37,7 @@
         ["OS=='mac'", {
           "sources": [
             "src/macos_capture.mm",
+            "src/macos_input_capture.mm",
             "src/windows_capture_stub.cpp"
           ],
           "xcode_settings": {
@@ -55,7 +65,10 @@
             "avrt.lib",
             "runtimeobject.lib",
             "uuid.lib",
-            "dwmapi.lib"
+            "ksuser.lib",
+            "dwmapi.lib",
+            "shell32.lib",
+            "comctl32.lib"
           ],
           "msvs_settings": {
             "VCCLCompilerTool": {

@@ -48,6 +48,35 @@ $machinePathBefore = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $uninstalled = $false
 $legacyDirectoryCreated = $false
 
+$pluginNames = @('Spectrum', 'Oscilloscope', 'VU Meter', 'Loudness Meter', 'Vectorscope', 'Spectrogram', 'Waveform', 'Waterfall', 'Bridge')
+$commonFiles = if ($env:CommonProgramW6432) { $env:CommonProgramW6432 } else { $env:CommonProgramFiles }
+$clapRoot = Join-Path $commonFiles 'CLAP'
+$vstRoot = Join-Path $commonFiles 'VST3'
+$unrelatedClap = Join-Path $clapRoot "Prism Unrelated-$testId.clap"
+
+function Assert-PluginFormats {
+  param([bool]$Vst3, [bool]$Clap)
+  foreach ($name in $pluginNames) {
+    $vstPath = Join-Path $vstRoot "Prism $name.vst3"
+    $clapPath = Join-Path $clapRoot "Prism $name.clap"
+    if ((Test-Path -LiteralPath $vstPath -PathType Container) -ne $Vst3) {
+      throw "Unexpected VST3 install state for $vstPath (expected $Vst3)."
+    }
+    if ((Test-Path -LiteralPath $clapPath -PathType Leaf) -ne $Clap) {
+      throw "Unexpected CLAP install state for $clapPath (expected $Clap)."
+    }
+    if ($Clap) {
+      $source = Join-Path $installRoot "resources\plugins\CLAP\Prism $name.clap"
+      if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $clapPath).Hash) {
+        throw "Installed CLAP differs from bundled file: $clapPath"
+      }
+    }
+  }
+  if (-not (Test-Path -LiteralPath $unrelatedClap)) {
+    throw 'The installer removed an unrelated CLAP plugin.'
+  }
+}
+
 function Get-PathEntries {
   param([AllowNull()][string]$Value)
 
@@ -156,6 +185,15 @@ try {
     }
   }
 
+  foreach ($name in $pluginNames) {
+    if ((Test-Path -LiteralPath (Join-Path $vstRoot "Prism $name.vst3")) -or
+        (Test-Path -LiteralPath (Join-Path $clapRoot "Prism $name.clap"))) {
+      throw "Refusing to overwrite a preexisting Prism plugin during installer smoke testing: $name"
+    }
+  }
+  New-Item -ItemType Directory -Force -Path $clapRoot | Out-Null
+  Set-Content -LiteralPath $unrelatedClap -Value 'Unrelated plugin fixture'
+
   $seededEntries = @($originalEntries) + $legacyEntry
   [Environment]::SetEnvironmentVariable('Path', ($seededEntries -join ';'), 'Machine')
 
@@ -169,6 +207,8 @@ try {
   if (-not (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
     throw "The installer did not create the expected uninstaller at $uninstallerPath."
   }
+
+  Assert-PluginFormats -Vst3 $true -Clap $true
 
   $installedEntries = @(Get-PathEntries ([Environment]::GetEnvironmentVariable('Path', 'Machine')))
   $expectedInstalledEntries = @($originalEntries) + $tuiDirectory
@@ -204,6 +244,8 @@ try {
   [Environment]::SetEnvironmentVariable('Path', ((@($installedEntries) + $legacyEntry) -join ';'), 'Machine')
   Invoke-CheckedProcess -FilePath $InstallerPath -Arguments "/S /D=$installRoot" | Out-Null
 
+  Assert-PluginFormats -Vst3 $true -Clap $true
+
   $reinstalledEntries = @(Get-PathEntries ([Environment]::GetEnvironmentVariable('Path', 'Machine')))
   $expectedReinstalledEntries = @($originalEntries) + $legacyEntry + $tuiDirectory
   Assert-PathEntriesEqual -Expected $expectedReinstalledEntries -Actual $reinstalledEntries -Context 'Reinstalled machine PATH'
@@ -213,6 +255,7 @@ try {
   # NSIS requires this to be the final argument and forbids quoting its value.
   Invoke-CheckedProcess -FilePath $uninstallerPath -Arguments "/S _?=$installRoot" | Out-Null
   $uninstalled = $true
+  Assert-PluginFormats -Vst3 $false -Clap $false
 
   $uninstalledEntries = @(Get-PathEntries ([Environment]::GetEnvironmentVariable('Path', 'Machine')))
   $expectedUninstalledEntries = @($originalEntries) + $legacyEntry
@@ -221,7 +264,15 @@ try {
     throw "The uninstaller left the Prism TUI PATH entry in place: $tuiDirectory"
   }
 
-  Write-Host "Windows installer PATH smoke test passed for $InstallerPath"
+  foreach ($selection in @(@(0, 0), @(1, 0), @(0, 1), @(1, 1))) {
+    $uninstalled = $false
+    Invoke-CheckedProcess -FilePath $InstallerPath -Arguments "/S /VST3=$($selection[0]) /CLAP=$($selection[1]) /D=$installRoot" | Out-Null
+    Assert-PluginFormats -Vst3 ([bool]$selection[0]) -Clap ([bool]$selection[1])
+    Invoke-CheckedProcess -FilePath $uninstallerPath -Arguments "/S _?=$installRoot" | Out-Null
+    $uninstalled = $true
+    Assert-PluginFormats -Vst3 $false -Clap $false
+  }
+  Write-Host "Windows installer plugin formats and PATH smoke tests passed for $InstallerPath"
 } finally {
   if (-not $uninstalled -and (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
     try {
@@ -231,6 +282,7 @@ try {
     }
   }
 
+  Remove-Item -LiteralPath $unrelatedClap -Force -ErrorAction SilentlyContinue
   [Environment]::SetEnvironmentVariable('Path', $machinePathBefore, 'Machine')
 
   if (Test-Path -LiteralPath $installRoot) {

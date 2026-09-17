@@ -1,5 +1,13 @@
+import { ReferenceImportStatus, useReferenceDrop, useSpectrumReference } from './SpectrumReference'
+import { Waterfall, type WaterfallDataSource } from '../visualizers/Waterfall'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { isTransformableScopeKind, type ScopeKind } from '../../types/scope'
+import {
+  isLinkedAnalysisCompatibleScopeKind,
+  type LinkedAnalysisMessage,
+  type LinkedAnalysisProbe,
+  type LinkedAnalysisProjection,
+} from '../../types/analysis'
 import type { ScopeSettings } from '../../types/settings'
 import { nominalFrequencyBoundsForRange } from '../../types/frequencyScale'
 import type { ScopeDisplayRotation } from '../../types/scopeTransform'
@@ -12,6 +20,7 @@ import type {
   ResolvedSpectrumTheme,
   ResolvedVectorscopeTheme,
   ResolvedVUMeterTheme,
+  ResolvedWaterfallTheme,
   ResolvedWaveformTheme,
 } from '../../types/theme'
 import type { SpectrumPeakInfo } from '../../types/spectrum'
@@ -28,10 +37,11 @@ import { LUFSMeter, type LUFSMeterDataSource } from '../visualizers/LUFSMeter'
 import { Waveform, type WaveformDataSource } from '../visualizers/Waveform'
 import type { FrameScheduler } from '../visualizers/frameScheduler'
 import {
+  ScopeLinkedAnalysisOverlay,
   ScopeMeasurementOverlay,
   useScopeMeasurement,
 } from './ScopeMeasurementOverlay'
-import type { ScopeMeasurementSource } from '../scopeMeasurement'
+import type { ActiveScopeMeasurement, ScopeMeasurementSource } from '../scopeMeasurement'
 import {
   getScopeCanvasTransformStyle,
   isSameScopeCanvasLayout,
@@ -47,6 +57,7 @@ type ScopeModuleTheme =
   | ResolvedSpectrogramTheme
   | ResolvedVUMeterTheme
   | ResolvedLUFSMeterTheme
+  | ResolvedWaterfallTheme
   | ResolvedWaveformTheme
   | ResolvedAstraTheme
 
@@ -56,7 +67,11 @@ interface ScopeModuleProps {
   settings?: ScopeSettings[ScopeKind]
   frameScheduler?: FrameScheduler
   onMeasurementActiveChange?: (active: boolean) => void
+  linkedAnalysisEnabled?: boolean
+  linkedAnalysisProbe?: LinkedAnalysisProbe | null
+  onLinkedAnalysisMessage?: (message: LinkedAnalysisMessage) => void
   dataSource?:
+    | WaterfallDataSource
     | SpectrumAnalyzerDataSource
     | OscilloscopeDataSource
     | VectorscopeDataSource
@@ -74,6 +89,7 @@ interface Visualizer {
   setOptions(options: Record<string, unknown>): void
   getMeasurementAt?: ScopeMeasurementSource['getMeasurementAt']
   setMeasurementActive?: ScopeMeasurementSource['setMeasurementActive']
+  getLinkedAnalysisProjection?: (probe: LinkedAnalysisProbe) => LinkedAnalysisProjection | null
 }
 
 const SPECTRUM_PEAK_OVERLAY_MARGIN_PX = 10
@@ -167,13 +183,20 @@ export function scopeSettingsToOptions(
   theme: ScopeModuleTheme,
 ): Record<string, unknown> {
   switch (kind) {
+    case 'waterfall': {
+      const s = settings as ScopeSettings['waterfall']
+      const t = theme as ResolvedWaterfallTheme
+      return { ...s, lineColor: t.line, heatColors: t.heatColors, backgroundColor: t.background, gridColor: t.guides, labelColor: t.labels }
+    }
     case 'spectrum': {
       const s = settings as ScopeSettings['spectrum']
       const t = theme as ResolvedSpectrumTheme
       const range = nominalFrequencyBoundsForRange(s.frequencyRangeMode)
       return {
+        reference: s.reference ?? null,
         lineColor: t.line,
         secondaryLineColor: t.sideLine,
+        referenceLineColor: t.referenceLine,
         gradientColors: t.fillGradient,
         heatColors: t.heatColors,
         heatBaseColor: t.heatBase,
@@ -253,6 +276,7 @@ export function scopeSettingsToOptions(
         showGrid: s.showGrid,
         orientation: 'horizontal',
         colorScheme: s.colorScheme,
+        timelineUnit: s.timelineUnit,
       }
     }
     case 'vumeter': {
@@ -297,6 +321,7 @@ export function scopeSettingsToOptions(
         lineColor: t.line,
         gridMajorColor: t.guides,
         gridMinorColor: t.guidesSecondary,
+        labelColor: t.line,
         bandColors: {
           low: t.bandLow,
           mid: t.bandMid,
@@ -305,6 +330,7 @@ export function scopeSettingsToOptions(
         mode: s.mode,
         scrollSpeed: s.scrollSpeed,
         multiband: s.multiband,
+        timelineUnit: s.timelineUnit,
       }
     }
     case 'nowPlaying':
@@ -354,6 +380,8 @@ function createVisualizer(
     frameScheduler,
   }
   switch (scopeKind) {
+    case 'waterfall':
+      return new Waterfall(canvas, { ...opts, ...(dataSource ? { dataSource: dataSource as WaterfallDataSource } : {}) })
     case 'spectrum':
       return new SpectrumAnalyzer(canvas, {
         ...opts,
@@ -404,9 +432,14 @@ export default function ScopeModule({
   settings,
   frameScheduler,
   onMeasurementActiveChange,
+  linkedAnalysisEnabled = false,
+  linkedAnalysisProbe = null,
+  onLinkedAnalysisMessage,
   dataSource,
 }: ScopeModuleProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const referenceController = useSpectrumReference()
+  const referenceDrop = useReferenceDrop(scopeKind === 'spectrum')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const visualizerRef = useRef<Visualizer | null>(null)
   const initializedRef = useRef(false)
@@ -417,6 +450,12 @@ export default function ScopeModule({
   const peakOverlayRef = useRef<HTMLDivElement | null>(null)
   const [spectrumPeakInfo, setSpectrumPeakInfo] = useState<SpectrumPeakInfo | null>(null)
   const [peakOverlaySize, setPeakOverlaySize] = useState<SizeMeasurement | null>(null)
+  const [linkedProjection, setLinkedProjection] = useState<LinkedAnalysisProjection | null>(null)
+  const linkedAnalysisProbeRef = useRef(linkedAnalysisProbe)
+  const refreshLinkedProjectionRef = useRef<() => void>(() => {})
+  const onMeasurementActiveChangeRef = useRef(onMeasurementActiveChange)
+  linkedAnalysisProbeRef.current = linkedAnalysisProbe
+  onMeasurementActiveChangeRef.current = onMeasurementActiveChange
 
   const storeSettings = useSettingsStore((s) => s.scopeSettings[scopeKind])
   const activeTheme = useThemeStore((s) => s.activeTheme)
@@ -440,6 +479,26 @@ export default function ScopeModule({
     || scopeKind === 'spectrogram'
     || scopeKind === 'oscilloscope'
     || scopeKind === 'waveform'
+  const handleMeasurementChange = useCallback((change: {
+    interactionId: string
+    measurement: ActiveScopeMeasurement | null
+  }): void => {
+    if (!linkedAnalysisEnabled || !isLinkedAnalysisCompatibleScopeKind(scopeKind)) return
+    if (change.measurement) {
+      onLinkedAnalysisMessage?.({
+        active: true,
+        interactionId: change.interactionId,
+        sourceKind: scopeKind,
+        dimensions: change.measurement.measurement.dimensions,
+      })
+      return
+    }
+    onLinkedAnalysisMessage?.({
+      active: false,
+      interactionId: change.interactionId,
+      sourceKind: scopeKind,
+    })
+  }, [linkedAnalysisEnabled, onLinkedAnalysisMessage, scopeKind])
   const measurementController = useScopeMeasurement({
     containerRef,
     enabled: measurementEnabled,
@@ -451,8 +510,28 @@ export default function ScopeModule({
         ? visualizer as ScopeMeasurementSource
         : null
     },
-    onActiveChange: onMeasurementActiveChange,
+    onMeasurementChange: handleMeasurementChange,
   })
+  const refreshLinkedProjection = useCallback((): void => {
+    const probe = linkedAnalysisProbeRef.current
+    const visualizer = visualizerRef.current
+    const nextProjection = linkedAnalysisEnabled
+      && probe
+      && probe.sourceKind !== scopeKind
+      && visualizer?.getLinkedAnalysisProjection
+      ? visualizer.getLinkedAnalysisProjection(probe)
+      : null
+    setLinkedProjection(nextProjection)
+  }, [linkedAnalysisEnabled, scopeKind])
+  refreshLinkedProjectionRef.current = refreshLinkedProjection
+  const analysisActive = measurementController.active || linkedProjection !== null
+
+  useEffect(() => {
+    onMeasurementActiveChangeRef.current?.(analysisActive)
+    return () => {
+      if (analysisActive) onMeasurementActiveChangeRef.current?.(false)
+    }
+  }, [analysisActive])
 
   useEffect(() => {
     if (!captureSpectrumPeakInfo) {
@@ -527,6 +606,7 @@ export default function ScopeModule({
 
     visualizerRef.current = viz
     viz.start()
+    refreshLinkedProjectionRef.current()
 
     requestAnimationFrame(() => {
       initializedRef.current = true
@@ -543,7 +623,7 @@ export default function ScopeModule({
   }, [dataSource, frameScheduler, handleSpectrumPeakInfo, scopeKind])
 
   useEffect(() => {
-    if (!visualizerRef.current || !initializedRef.current) return
+    if (!visualizerRef.current) return
     const opts = {
       ...applyWindowBackgroundAlphaToOptions(
         scopeSettingsToOptions(scopeKind, mySettings, myTheme),
@@ -560,6 +640,10 @@ export default function ScopeModule({
     }
     visualizerRef.current.setOptions(opts)
   }, [captureSpectrumPeakInfo, dataSource, frameScheduler, handleSpectrumPeakInfo, mySettings, myTheme, scopeKind, windowBgAlpha])
+
+  useEffect(() => {
+    refreshLinkedProjection()
+  }, [linkedAnalysisProbe, mySettings, refreshLinkedProjection])
 
   useLayoutEffect(() => {
     const container = containerRef.current
@@ -614,6 +698,7 @@ export default function ScopeModule({
 
       appliedResizeRef.current = nextResize
       visualizerRef.current?.resize()
+      refreshLinkedProjectionRef.current()
     }
 
     const scheduleResize = (): void => {
@@ -647,6 +732,14 @@ export default function ScopeModule({
     }
   }, [rotation])
 
+  useEffect(() => {
+    if (scopeKind !== 'spectrum') return
+    const analyzer = visualizerRef.current as SpectrumAnalyzer | null
+    analyzer?.setOptions({ referencePreview: referenceController?.state.preview ?? null,
+      referenceImporting: referenceController?.busy ?? false,
+      onReferenceLevel: referenceController?.reportLevel ?? (() => {}) })
+  }, [scopeKind, referenceController?.state.preview, referenceController?.busy, referenceController?.reportLevel])
+
   const spectrumPeakOverlayStyle = scopeKind === 'spectrum'
     && spectrumPeakMode === 'following'
     && spectrumPeakInfo
@@ -663,11 +756,13 @@ export default function ScopeModule({
     <div
       className={[
         'scope-module',
+        referenceDrop.dragging ? 'is-reference-drop' : '',
         measurementEnabled ? 'scope-measurement-surface' : '',
-        measurementController.active ? 'is-measuring' : '',
+        analysisActive ? 'is-measuring' : '',
       ].filter(Boolean).join(' ')}
       ref={containerRef}
       {...measurementController.pointerBindings}
+      {...referenceDrop.bindings}
       style={{
         minWidth: 0,
         height: '100%',
@@ -681,11 +776,21 @@ export default function ScopeModule({
           ...getScopeCanvasTransformStyle(rotation, mirrorHorizontal),
         }}
       />
+      {scopeKind === 'spectrum' && <ReferenceImportStatus />}
+      {referenceDrop.dragging && <div className="reference-drop-label">Drop audio to use as reference</div>}
       <ScopeMeasurementOverlay
         containerRef={containerRef}
         measurement={measurementController.measurement}
       />
-      {!measurementController.active && scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
+      {!measurementController.active && (
+        <ScopeLinkedAnalysisOverlay
+          containerRef={containerRef}
+          projection={linkedProjection}
+          rotation={rotation}
+          mirrorHorizontal={mirrorHorizontal}
+        />
+      )}
+      {!analysisActive && scopeKind === 'spectrum' && spectrumPeakMode !== 'off' && spectrumPeakInfo && (
         <div
           ref={spectrumPeakMode === 'following' ? peakOverlayRef : null}
           className={[
@@ -694,7 +799,7 @@ export default function ScopeModule({
           ].join(' ')}
           style={spectrumPeakOverlayStyle}
         >
-          <span className="scope-module__peak-info-value">{formatSpectrumPeakDbfs(spectrumPeakInfo.dbfs)}</span>
+          <span className="scope-module__peak-info-value">{spectrumPeakInfo.deltaDb !== undefined ? `${spectrumPeakInfo.deltaDb >= 0 ? '+' : ''}${spectrumPeakInfo.deltaDb.toFixed(1)} dB relative` : formatSpectrumPeakDbfs(spectrumPeakInfo.dbfs)}</span>
           <span className="scope-module__peak-info-separator">/</span>
           <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(spectrumPeakInfo.frequencyHz)}</span>
           <span className="scope-module__peak-info-separator">/</span>

@@ -14,17 +14,22 @@
 
 Prism is a free, open-source audio analyzer and meter rack for Windows, macOS, and Linux.
 
-Monitor system audio or an input with a configurable set of real-time scopes and meters, arrange them however you like, and save the setup as a profile. The same analyzers are also available as VST3/AU plugins, and Prism includes a native terminal interface for lightweight monitoring.
+Monitor system audio or an input with a configurable set of real-time scopes and meters, arrange them however you like, and save the setup as a profile. The same analyzers are also available as VST3/AU/CLAP plugins, and Prism includes a native terminal interface for lightweight monitoring.
+
+### Multichannel input routing
+
+The desktop app's Channel Routing matrix works with system audio and device inputs on macOS, Windows, and Linux. Select any source channel independently for Prism's Left and Right channels, including the same channel for both. Activity fills show the incoming signal on every available channel, before routing and input trim; routes are saved per source.
 
 ![Prism scopes](assets/prism-demo-readme-optimized.gif)
 
 ## Scopes
 
-Prism includes seven real-time scopes and meters:
+Prism includes eight real-time scopes and meters:
 
 * **Spectrum Analyzer** — FFT spectrum with calibrated dBFS levels, configurable FFT size, spectral tilt, Log/Mel/Linear scales, heatmap and fill modes, and peak/pitch readouts
 * **Oscilloscope** — Time-domain waveform with fundamental-frequency pitch locking and sub-sample triggering for a stable display
 * **Vectorscope** — Full-band stereo phase analysis with XY, Polar, and M/S Linear views, calibrated references, adjustable zoom, and optional multiband RGB
+* **Waterfall** — Layered spectrum history with 1–30 seconds of audio, adaptive ridge density, theme or heat colors, and frequency/time guides in the desktop app, TUI, and DAW plugin
 * **Spectrogram** — Scrolling frequency-over-time display with Log/Mel/Linear scales, stereo-energy analysis, and frequency reassignment in Sharp and Sharper modes
 * **VU Meter** — 300 ms metering with adjustable 0 VU reference, stereo correlation, and needle or bar displays
 * **Loudness Meter** — ITU-R BS.1770 momentary, short-term, and integrated LUFS metering with BS.1770 true-peak activity
@@ -32,9 +37,11 @@ Prism includes seven real-time scopes and meters:
 
 Every scope can be configured independently. Resize and rearrange them into a rack, rotate supported scopes, pop them into separate windows, or pin them on top of other applications.
 
+On Windows, enable Reserve screen space in the rack's Top/Bottom reposition menu or its tray equivalent to dock the main rack across one monitor. Maximized applications use the remaining workspace. Resize the edge facing the workspace, drag the grab handle to return to a floating rack, or disable the option to restore its previous position and size. Settings open in a separate panel beside the dock. Docking is remembered on this computer independently of profiles; minimizing or hiding Prism releases the reserved space.
+
 ![Prism customize](assets/prism-showcase-layout-readme.gif)
 
-Spectrum, Spectrogram, Oscilloscope, and Waveform also include interactive measurement overlays for inspecting frequency, level, pitch, amplitude, or time directly from the display.
+Spectrum, Spectrogram, Oscilloscope, and Waveform also include interactive measurement overlays for inspecting frequency, level, pitch, amplitude, or time directly from the display. Optional Linked Analysis mirrors compatible frequency, history-time, and amplitude guides across docked and detached scopes.
 
 <details> <summary><strong>Stats for nerds</strong></summary>
 
@@ -51,6 +58,25 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * Independent spectral and heatmap tilt around a 1 kHz reference
 * Peak analysis can report dBFS, frequency, musical note, octave, and cents offset
 * Interactive measurement overlay exposes frequency, level, and pitch directly from the graph
+* One whole-track reference: drop a mono/stereo WAV, AIFF, FLAC, or MP3 onto the spectrum, or use Spectrum settings → Reference → Load track
+* Dashed Overlay and a centered ±24 dB Difference view, with ±24 dB reference trim and one-shot Match level using the latest three seconds of live Mid audio
+* Cancellable background analysis with an evolving preview; analyzed curves are saved with profiles and Spectrum plugin state, so recall does not need the original file
+
+Spectrum settings have General and Reference tabs. Matching requires at least one second of current, non-silent audio. During import, the spectrum temporarily shows Overlay; the previous reference remains available if loading fails or is canceled. Reference analysis uses a shared 48 kHz path with all five FFT sizes cached, while respecting the original file's bandwidth. This affects analysis only.
+
+### Waterfall
+
+* Independent native FFT analyzer with the same calibrated channel-max stereo spectrum as Spectrum
+* Stores 60 spectrum slices per second on the audio clock, independent of terminal or desktop refresh rate
+* Bounded 1–30 second history; defaults to 5 seconds
+* Sparse, Balanced, and Dense ridge settings adapt to panel size while retaining the selected history duration
+* Desktop shows a lightly softened live spectrum followed by its history, retaining distinct peaks and a common frequency axis
+* Frequency scale, FFT size, smoothing, range, and spectral tilt controls
+* Theme-colored ridges fading with age, or level-based heat colors
+* Foreground ridges hide covered sections of older lines
+* Available through the desktop add-scope menu and TUI layout editor (shortcut **8**)
+* Desktop popouts and saved profiles are supported; existing layouts stay unchanged
+* Dedicated Prism Waterfall VST3/AU/CLAP plugin shares the desktop renderer and native history, with settings saved in DAW projects
 
 ### Spectrogram
 
@@ -134,16 +160,17 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 ### Rolling capture
 
 * Keeps the previous 5, 10, 30, or 60 seconds of audio available without starting a recording beforehand
-* Buffer is stored as PCM and exported as a standard RIFF/WAV file
+* Buffer retains 32-bit floating-point samples and exports standard RIFF/WAV files
 * Mono and stereo capture are supported
-* Exported clips use 16-bit PCM
+* Choose 16-bit PCM (default) or 32-bit float WAV export in Rolling Capture settings; the choice is remembered across launches
 * The export path supports source sample rates up to 384 kHz
 * Captured audio can be dragged directly out of Prism as a file
 
 ### DAW plugins
 
-* All seven Prism analyzers are built from the same native DSP source used by the desktop application
-* VST3 on Windows, macOS, and Linux
+* All eight Prism analyzers are built from the same native DSP source used by the desktop application
+* Prism Bridge streams one DAW track or bus into the standalone app without changing the track audio
+* VST3 and CLAP on Windows, macOS, and Linux
 * AU on macOS
 * Mono and stereo host layouts are supported
 * Analyzer plugins are pure pass-through: Prism does not modify the host's audio buffer
@@ -154,7 +181,7 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 
 ### Terminal UI
 
-* Native C++ frontend using the same Spectrum, Oscilloscope, Vectorscope, VU, Loudness, Spectrogram, Waveform, and system-capture implementations
+* Native C++ frontend using the same Spectrum, Waterfall, Oscilloscope, Vectorscope, VU, Loudness, Spectrogram, Waveform, and system-capture implementations
 * 60 FPS default rendering
 * Experimental 120 FPS mode
 * Compatibility mode uses 256-color output at up to 60 FPS
@@ -170,6 +197,7 @@ Most of Prism's analysis runs in native C++, with the same DSP implementations r
 * Desktop visualizers can target 10, 30, 60, 120, or 144 FPS, or synchronize to the display refresh rate
 * Spectrum, Spectrogram, Oscilloscope, and Waveform support interactive measurement overlays
 * Measurement coordinates account for scope rotation and mirroring, so displayed readouts continue to correspond to the underlying signal after transforming a scope
+* Linked Analysis maps only compatible semantic axes between scopes and hides guides when an exact value is outside the target's visible range
 
 </details>
 
@@ -180,31 +208,52 @@ Prism can capture system output directly through CoreAudio on macOS, WASAPI on W
 
 No virtual audio cable is required for normal system capture.
 
+The default rack measured [around 7 ms median capture-to-render latency](docs/latency.md) on an M5 Pro at 120 FPS.
+
 The main rack and scope popouts can use solid, blurred, or clear backgrounds, making Prism usable as a normal desktop application or as a set of unobtrusive overlays.
 
 Prism can also live in the system tray, start automatically with your computer, and launch either normally or out of the way when you want it running all the time.
 
 ## Rolling Capture
 
-Prism can continuously keep the last **5, 10, 30, or 60 seconds** of audio in memory.
+Prism can continuously keep the last 5, 10, 30, or 60 seconds of audio in memory.
 
 When you hear something you want to keep, drag the buffered audio out of Prism as a WAV file. There is no need to start recording beforehand.
+
+Choose 16-bit PCM for smaller files or 32-bit float to preserve captured floating-point precision and samples above full scale for DAW editing. Changing the format applies to the next export without clearing buffered audio. Exports retain the source sample rate and do not normalize or dither audio.
+
+The float buffer uses approximately 23 MB for 60 seconds of stereo at 48 kHz. Rolling Capture allocates no recorder buffer while off.
 
 ## DAW Plugins
 
 Every Prism scope is also available as a DAW plugin.
 
-Drop a **Spectrum**, **Oscilloscope**, **Vectorscope**, **Spectrogram**, **VU Meter**, **Loudness Meter**, or **Waveform** onto a track and analyze it using the same interface and analysis engine as the desktop app.
+Drop a Spectrum, Oscilloscope, Vectorscope, Spectrogram, VU Meter, Loudness Meter, or Waveform onto a track and analyze it using the same interface and analysis engine as the desktop app.
 
-* **VST3** on Windows, macOS, and Linux
-* **AU** on macOS
+* VST3 and CLAP on Windows, macOS, and Linux
+* AU on macOS
 * Settings are stored with your project
 * Plugins follow your Prism themes and profiles
 * Audio passes through untouched
 
-Tested in Ableton Live, FL Studio, and Reaper.
+Prism also installs Prism Bridge, a lightweight pass-through plugin for sending
+one DAW track or bus to the standalone application. Keep Prism open, insert Bridge
+on the source you want to inspect, then choose it under DAW Bridges in Prism's
+audio selector. Multiple Bridge instances can be available at once; only the one
+you select streams audio. Waveform and Spectrogram can optionally show host-derived
+Bars + Beats or Seconds rulers, including loop, seek, and packet-gap seams.
 
-The plugins install alongside Prism, so there is no separate download.
+Bridge is available as VST3 and CLAP on Windows, macOS, and Linux and as AU on macOS. The AU
+is intentionally not marked sandbox-safe because it requires localhost access.
+Protocol details and host-validation notes are in [docs/daw-bridge.md](docs/daw-bridge.md).
+
+Existing VST3/AU versions have been tested in Ableton Live, FL Studio, and Reaper.
+CLAP requires a DAW that supports CLAP; see [plugin build and validation notes](plugin/README.md).
+
+The plugins ship alongside Prism. The Windows installer offers separate VST3 and
+CLAP checkboxes, both enabled by default. The macOS package installs VST3, AU, and
+CLAP; Linux deb/rpm packages install VST3 and CLAP. Archives support manual plugin
+installation; the Linux AppImage remains app-only. See [installation instructions](plugin/README.md).
 
 ## Terminal UI
 
@@ -258,13 +307,17 @@ On Windows, the NSIS installer adds `prism-tui` to the machine `PATH`. Open a ne
 
 ## Building from Source
 
-**Prerequisites:** Node.js 18+, npm, CMake 3.22+, and a C++ compiler toolchain.
+**Prerequisites:** Node.js 20.19+ or 22.12+ (Node 22.x is used in CI), npm, CMake 3.22+, and a C++ compiler toolchain.
 
 | Platform | Toolchain                                                                                               |
 | -------- | ------------------------------------------------------------------------------------------------------- |
 | macOS    | Xcode Command Line Tools                                                                                |
 | Windows  | Visual Studio Build Tools                                                                               |
 | Linux    | `build-essential`, `python3`, `libasound2-dev`, `libpulse-dev`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev` |
+
+To build and test Linux from Windows using WSL2 or a Fedora VM over SSH, see
+[Linux testing](docs/linux-testing.md). After setup, run `npm run test:linux`;
+add `-- --target fedora --suite full` for Fedora plugin and package checks.
 
 ```bash
 git clone https://github.com/Boof2015/prism.git
@@ -274,12 +327,21 @@ npm install
 
 The `postinstall` script compiles the native C++ module for your platform.
 
+Use `npm run rebuild:native` to rebuild it for the installed Electron version
+before running the desktop app. `npm run build:native` builds for your current
+Node.js version, for example when running native tests directly with Node.
+These commands select the project's `node-gyp` dependency explicitly to avoid
+conflicts with the older copy bundled by Electron's build tools on Windows.
+
 ```bash
 npm run dev              # Development
 npm run build            # Build application assets
 npm run configure:tui    # Configure the standalone CMake project
 npm run build:tui        # Build prism-tui
 npm run test:tui         # Build and run native TUI tests
+npm run build:plugins    # Build bundled UI and native DAW plugins
+npm run test:plugins     # Build plugins and run native plugin tests
+npm run install:plugins  # Install built plugins (Windows prompts for UAC)
 npm run test:lufsmeter-native # Run generated BS.1770/EBU true-peak vectors
 npm run dist             # Package for current platform
 npm run dist:mac         # macOS
@@ -295,7 +357,7 @@ npm run test:lufsmeter-ebu -- /path/to/extracted-ebu-loudness-test-set
 
 The TUI build downloads the pinned FTXUI source through CMake. Linux also requires the PulseAudio development package.
 
-The DAW plugins build with CMake from the [`plugin/`](plugin/) directory. See [`plugin/README.md`](plugin/README.md) for per-platform build and installation details.
+`npm run build:plugins` compiles the DAW plugins locally. `npm run install:plugins` copies the built files, requesting Windows UAC only for the protected copy; macOS/Linux default to user plugin folders. `npm run dist` builds and stages the complete plugin set before packaging on the current OS (the Linux AppImage remains app-only). See [`plugin/README.md`](plugin/README.md) for prerequisites and options.
 
 ## Astra Integration
 

@@ -1,3 +1,5 @@
+import { SpectrumReferenceProvider } from '../components/SpectrumReference'
+import { desktopReferenceTransport } from '../components/DesktopReferenceProvider'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { ScopePopoutSnapshot } from '../../types/popout'
 import { SCOPE_LABELS, type ScopeKind } from '../../types/scope'
@@ -12,6 +14,7 @@ import { useWindowBackgroundStore } from '../stores/windowBackgroundStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { ScopePopoutDataSource } from './ScopePopoutDataSource'
 import { FrameScheduler } from '../visualizers/frameScheduler'
+import { useLinkedAnalysis } from '../useLinkedAnalysis'
 
 function PopInIcon(): JSX.Element {
   return (
@@ -138,6 +141,8 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
 
   const effectiveSettings = (snapshot?.settings ?? DEFAULT_SCOPE_SETTINGS[scopeKind]) as ScopeSettings[ScopeKind]
   const effectiveScopeTheme = snapshot?.scopeTheme ?? defaultTheme[scopeKind]
+  const linkedAnalysisEnabled = snapshot?.analysisSettings.linkedAnalysis ?? false
+  const linkedAnalysis = useLinkedAnalysis(linkedAnalysisEnabled)
   const settingsHeight = miniSettingsOpen ? POPOUT_SETTINGS_EXPAND_HEIGHT : 0
 
   const handleUpdateScopeSettings = <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>): void => {
@@ -214,6 +219,9 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   }, [])
 
   return (
+    <SpectrumReferenceProvider reference={scopeKind === 'spectrum' ? (effectiveSettings as ScopeSettings['spectrum']).reference : null}
+      transport={desktopReferenceTransport()} commitResults={false}
+      onChange={reference => handleUpdateScopeSettings('spectrum', { reference })}>
     <div
       className="scope-popout"
       onMouseEnter={() => setCursorInsideWindow(true)}
@@ -298,6 +306,9 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
               frameScheduler={frameScheduler}
               dataSource={dataSource}
               onMeasurementActiveChange={setMeasurementActive}
+              linkedAnalysisEnabled={linkedAnalysisEnabled}
+              linkedAnalysisProbe={linkedAnalysis.probe}
+              onLinkedAnalysisMessage={linkedAnalysis.publish}
             />
           </div>
         </div>
@@ -320,5 +331,6 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
 
       {windowBackgroundMode !== 'solid' && <WindowResizeOverlay />}
     </div>
+    </SpectrumReferenceProvider>
   )
 }

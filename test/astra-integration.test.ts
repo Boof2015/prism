@@ -520,11 +520,62 @@ test('service schedules reconnect when the SSE stream closes', async () => {
 
     await waitFor(() => eventStreamRequests === 2, 'expected second SSE connection attempt')
     await waitFor(() => service.getState().connectionState === 'connected', 'expected connected state after reconnect')
+
+    await service.setConsumerActive(2, true)
+    steadyStream.close()
+    await waitFor(() => timers.pendingCount() === 1, 'expected another scheduled reconnect')
+    await service.setConsumerActive(1, false)
+    assert.equal(timers.pendingCount(), 1)
+    await service.setConsumerActive(2, false)
+    assert.equal(timers.pendingCount(), 0)
+    assert.equal(service.getState().connectionState, 'disabled')
   } finally {
     await service.dispose()
     await harness.cleanup()
   }
 })
+
+for (const firstRemoved of [1, 2]) {
+  test(`Astra keeps its shared stream until both consumers close (remove ${firstRemoved} first)`, async () => {
+    const harness = await createConfigFile({ baseUrl: DEFAULT_ASTRA_BASE_URL, token: 'stored-token' })
+    const sse = createSseStream()
+    let streamSignal: AbortSignal | null | undefined
+    const requests: string[] = []
+    const service = new AstraIntegrationService({
+      configPath: harness.configPath,
+      secretVault: new MemorySecretVault(),
+      fetchImpl: async (input, init) => {
+        const pathname = new URL(String(input)).pathname
+        requests.push(pathname)
+        if (pathname === '/v1/now-playing') return createJsonResponse({ playbackState: 'paused' })
+        assert.equal(pathname, '/v1/events')
+        streamSignal = init?.signal
+        streamSignal?.addEventListener('abort', () => sse.close(), { once: true })
+        return sse.response
+      },
+    })
+
+    try {
+      await service.initialize()
+      assert.deepEqual(requests, [])
+      await service.setConsumerActive(1, true)
+      await waitFor(() => service.getState().connectionState === 'connected', 'expected active connection')
+      await service.setConsumerActive(2, true)
+      await service.setConsumerActive(firstRemoved, false)
+      assert.equal(service.getState().connectionState, 'connected')
+      assert.equal(streamSignal?.aborted, false)
+      assert.deepEqual(requests, ['/v1/now-playing', '/v1/events'])
+
+      await service.setConsumerActive(firstRemoved === 1 ? 2 : 1, false)
+      assert.equal(service.getState().connectionState, 'disabled')
+      assert.equal(service.getState().snapshot, null)
+      assert.equal(streamSignal?.aborted, true)
+    } finally {
+      await service.dispose()
+      await harness.cleanup()
+    }
+  })
+}
 
 test('service surfaces 401 and 403 control errors and clears them after success', async () => {
   const harness = await createConfigFile({

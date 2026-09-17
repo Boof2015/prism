@@ -13,17 +13,29 @@ struct Support {
     std::string reason;
 };
 
+struct ChannelDescriptor {
+    uint32_t index = 0;
+    std::string label;
+};
+
+struct ChannelRouting {
+    uint32_t left = 0;
+    uint32_t right = 1;
+};
+
 struct OutputDevice {
     std::string id;
     std::string label;
     double sampleRate = 48000.0;
     uint32_t channelCount = 2;
     bool isDefault = false;
+    std::vector<ChannelDescriptor> channels;
 };
 
 struct StartResult {
     double sampleRate = 48000.0;
     uint32_t channelCount = 2;
+    uint32_t sourceChannelCount = 2;
     std::string deviceId;
     std::string deviceLabel;
 };
@@ -34,6 +46,8 @@ struct AudioChunk {
     uint32_t channelCount = 2;
     double capturedAtMilliseconds = 0.0;
     uint64_t sequence = 0;
+    // Empty when the backend does not provide activity for every source channel.
+    std::vector<float> sourceChannelPeaks;
 };
 
 struct DrainResult {
@@ -51,6 +65,9 @@ public:
     virtual bool start(const std::string& requestedDeviceId,
                        StartResult* result,
                        std::string* errorMessage) = 0;
+    virtual ChannelRouting setChannelRouting(uint32_t left, uint32_t right) {
+        return {left, right};
+    }
     virtual void stop() = 0;
     virtual DrainResult drain(size_t maxChunks = 64) = 0;
     virtual double nowMilliseconds() const = 0;

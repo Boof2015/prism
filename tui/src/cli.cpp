@@ -90,7 +90,7 @@ std::string usageText() {
         "  a                 Add a removed scope by name while editing.\n"
         "  ?                 Show layout editing help and fallback keys.\n"
         "  1 / 2 / 3 / 4 / 5 Focus Spectrum, Oscilloscope, Vectorscope, VU, or LUFS.\n"
-        "  6 / 7             Focus Spectrogram or Waveform (also layout shortcuts).\n"
+        "  6 / 7 / 8         Focus Spectrogram, Waveform, or Waterfall (also layout shortcuts).\n"
         "  r                 Reset analyzers and integrated loudness.\n"
         "  q / Esc / Ctrl-C  Quit.\n";
 }

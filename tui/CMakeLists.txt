@@ -40,10 +40,13 @@ add_library(prism_tui_analysis STATIC
     src/profile_library.cpp
     src/scrolling_history.cpp
     src/scope_plot_model.cpp
+    src/waterfall_plot_model.cpp
     src/spectrum_peak_model.cpp
     src/tui_theme.cpp
     src/tui_settings.cpp
     ${PRISM_NATIVE_DIR}/spectrum.cpp
+    ${PRISM_NATIVE_DIR}/reference_analysis.cpp
+    ${PRISM_NATIVE_DIR}/waterfall.cpp
     ${PRISM_NATIVE_DIR}/oscilloscope.cpp
     ${PRISM_NATIVE_DIR}/vectorscope.cpp
     ${PRISM_NATIVE_DIR}/multiband.cpp
@@ -57,10 +60,12 @@ target_include_directories(prism_tui_analysis PUBLIC
     ${PRISM_NATIVE_DIR})
 target_link_libraries(prism_tui_analysis PUBLIC Threads::Threads)
 if(WIN32)
+    # r8brain includes Windows.h; keep its min/max macros out of the DSP sources.
+    target_compile_definitions(prism_tui_analysis PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_link_libraries(prism_tui_analysis PUBLIC shell32 ole32)
 endif()
 
-add_library(prism_system_capture STATIC)
+add_library(prism_system_capture STATIC ${PRISM_NATIVE_DIR}/capture_channel_selection.cpp)
 target_include_directories(prism_system_capture PUBLIC ${PRISM_NATIVE_DIR})
 target_compile_definitions(prism_system_capture PRIVATE PRISM_CAPTURE_CORE_ONLY=1)
 target_link_libraries(prism_system_capture PUBLIC Threads::Threads)
@@ -75,7 +80,7 @@ if(APPLE)
 elseif(WIN32)
     target_sources(prism_system_capture PRIVATE ${PRISM_NATIVE_DIR}/windows_capture.cpp)
     target_compile_definitions(prism_system_capture PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(prism_system_capture PRIVATE ole32 avrt uuid)
+    target_link_libraries(prism_system_capture PRIVATE ole32 avrt uuid ksuser)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)

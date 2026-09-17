@@ -46,6 +46,32 @@ function interpolatePeakDb(magnitudes) {
   return y2 - (0.25 * (y1 - y3) * offset)
 }
 
+test('spectrum readiness tracks audio rather than allocated magnitude buffers', () => {
+  assert.equal(spectrum.hasSpectrumData(), false, 'a fresh analyzer has only placeholders')
+  spectrum.getMagnitudes()
+  spectrum.pushSamples(new Float32Array(0))
+  spectrum.pushStereoSamples(new Float32Array(0), new Float32Array(0))
+  assert.equal(spectrum.hasSpectrumData(), false, 'reads and empty pushes do not supply audio')
+
+  spectrum.pushSamples(new Float32Array([0]))
+  assert.equal(spectrum.hasSpectrumData(), true, 'even a partial silent PCM block is real data')
+  spectrum.getMagnitudes()
+  spectrum.pushSamples(new Float32Array(0))
+  assert.equal(spectrum.hasSpectrumData(), true, 'data remains ready between audio blocks')
+  spectrum.setFFTSize(spectrum.getFFTSize())
+  assert.equal(spectrum.hasSpectrumData(), true, 'unchanged FFT size preserves data')
+
+  spectrum.reset()
+  assert.equal(spectrum.hasSpectrumData(), false)
+  spectrum.pushStereoSamples(new Float32Array([0.25]), new Float32Array([0.5]))
+  assert.equal(spectrum.hasSpectrumData(), true)
+  spectrum.setFFTSize(spectrum.getFFTSize() * 2)
+  assert.equal(spectrum.hasSpectrumData(), false, 'FFT resizing replaces the audio history')
+  spectrum.process(new Float32Array([0.25]))
+  assert.equal(spectrum.hasSpectrumData(), true)
+  spectrum.reset()
+})
+
 test('native capture exports preserve the renderer-facing API shape', () => {
   for (const exportName of ['macosCapture', 'windowsCapture', 'linuxCapture']) {
     const capture = nativeAddon[exportName]
@@ -55,11 +81,30 @@ test('native capture exports preserve the renderer-facing API shape', () => {
     }
   }
 
+  const deviceInputCapture = nativeAddon.deviceInputCapture
+  assert.ok(deviceInputCapture, 'deviceInputCapture should be exported')
+  for (const method of [
+    'getSupport',
+    'listInputDevices',
+    'start',
+    'setChannelRouting',
+    'stop',
+    'drain',
+    'nowMilliseconds',
+  ]) {
+    assert.equal(typeof deviceInputCapture[method], 'function', `deviceInputCapture.${method} should be a function`)
+  }
+  const inputSupport = deviceInputCapture.getSupport()
+  assert.equal(typeof inputSupport.available, 'boolean')
+  assert.ok(inputSupport.reason === null || typeof inputSupport.reason === 'string')
+  if (!inputSupport.available) assert.ok(inputSupport.reason, 'runtime failures include a reason')
+
   const activeExport = process.platform === 'darwin'
     ? 'macosCapture'
     : process.platform === 'win32'
       ? 'windowsCapture'
       : 'linuxCapture'
+  assert.equal(typeof nativeAddon[activeExport].setChannelRouting, 'function')
   const support = nativeAddon[activeExport].getSupport()
   assert.equal(typeof support.available, 'boolean')
   assert.ok(support.reason === null || typeof support.reason === 'string')

@@ -30,6 +30,8 @@ MinimumSize panelMinimumSize(PanelId panel) {
             return {30, 8};
         case PanelId::Waveform:
             return {30, 7};
+        case PanelId::Waterfall:
+            return {30, 8};
     }
     return {1, 1};
 }
@@ -175,6 +177,7 @@ const char* panelConfigName(PanelId panel) {
         case PanelId::LUFSMeter: return "lufs";
         case PanelId::Spectrogram: return "spectrogram";
         case PanelId::Waveform: return "waveform";
+        case PanelId::Waterfall: return "waterfall";
     }
     return "spectrum";
 }
@@ -187,6 +190,7 @@ std::optional<PanelId> parsePanelConfigName(const std::string& value) {
     if (value == "lufs") return PanelId::LUFSMeter;
     if (value == "spectrogram") return PanelId::Spectrogram;
     if (value == "waveform") return PanelId::Waveform;
+    if (value == "waterfall") return PanelId::Waterfall;
     return std::nullopt;
 }
 
@@ -524,6 +528,7 @@ std::vector<PanelId> panelOrder() {
         PanelId::LUFSMeter,
         PanelId::Spectrogram,
         PanelId::Waveform,
+        PanelId::Waterfall,
     };
 }
 

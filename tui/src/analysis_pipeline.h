@@ -10,6 +10,7 @@
 #include "vectorscope.h"
 #include "vumeter.h"
 #include "waveform.h"
+#include "waterfall.h"
 
 #include <optional>
 #include <string>
@@ -45,6 +46,7 @@ struct WaveformFrame {
 };
 
 struct AnalysisFrame {
+    Visualizer::WaterfallFrame waterfall;
     std::vector<float> magnitudes;
     std::optional<SpectrumPeakInfo> spectrumPeak;
     Visualizer::VUMeterSnapshot vu{};
@@ -60,10 +62,11 @@ public:
     explicit AnalysisPipeline(float sampleRate, size_t fftSize = kDefaultFftSize);
 
     void process(const Prism::Capture::AudioChunk& chunk);
-    AnalysisFrame snapshot();
+    AnalysisFrame snapshot(size_t waterfallRidges = 64, size_t waterfallColumns = 256);
     void reset();
     void setInputTrimDb(float db);
     void setSpectrumTilt(float dbPerOctave);
+    void setWaterfallSettings(Visualizer::WaterfallConfig config, size_t ridges, bool enabled);
     void setOscilloscopePitchLock(bool enabled);
     void setSpectrogramSettings(float scrollSpeed,
                                 float contrast,
@@ -74,6 +77,10 @@ public:
     void setWaveformSettings(bool stereo, int scrollSpeed);
 
 private:
+    Visualizer::WaterfallAnalyzer waterfall_;
+    size_t waterfallRidges_ = 32;
+    bool waterfallEnabled_ = false;
+    uint64_t waterfallLastSequence_ = 0;
     Visualizer::Spectrum spectrum_;
     Visualizer::VUMeterAnalyzer vu_;
     Visualizer::LUFSMeterAnalyzer lufs_;

@@ -70,10 +70,23 @@ export function transformPoint(
   mode: VectorscopeMode,
   zoomDb: number = 0,
 ): VectorscopePoint {
-  const gain = vectorscopeZoomDbToGain(zoomDb)
+  const point = { dx: 0, dy: 0 }
+  transformPointInto(left, right, mode, vectorscopeZoomDbToGain(zoomDb), point)
+  return point
+}
 
+/** Project into reusable storage with a gain already calculated for this zoom. */
+export function transformPointInto(
+  left: number,
+  right: number,
+  mode: VectorscopeMode,
+  gain: number,
+  point: VectorscopePoint,
+): void {
   if (mode === 'lissajous') {
-    return { dx: right * gain, dy: left * gain }
+    point.dx = right * gain
+    point.dy = left * gain
+    return
   }
 
   const isFolded = mode === 'polar-unipolar' || mode === 'linear-unipolar'
@@ -91,14 +104,15 @@ export function transformPoint(
 
     const amplitude = Math.hypot(mid, side)
     if (amplitude < 1e-12) {
-      return { dx: 0, dy: 0 }
+      point.dx = 0
+      point.dy = 0
+      return
     }
 
     const shapedAmplitude = Math.pow(amplitude * gain, 0.35)
-    return {
-      dx: side / amplitude * shapedAmplitude,
-      dy: mid / amplitude * shapedAmplitude,
-    }
+    point.dx = side / amplitude * shapedAmplitude
+    point.dy = mid / amplitude * shapedAmplitude
+    return
   }
 
   let mid = (left + right) / 2
@@ -107,7 +121,8 @@ export function transformPoint(
     mid = -mid
     side = -side
   }
-  return { dx: side * gain, dy: mid * gain }
+  point.dx = side * gain
+  point.dy = mid * gain
 }
 
 function fillPhaseRiskRegions(

@@ -1,3 +1,4 @@
+import { AUDIO_CLIP_FORMAT_LABELS } from '../../types/audioClip'
 import {
   useState,
   useEffect,
@@ -14,6 +15,7 @@ import { useUiStore } from '../stores/uiStore'
 import { useAudioStore } from '../stores/audioStore'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import PrismLogo from './PrismLogo'
+import { useWindowDockingStore } from '../stores/windowDockingStore'
 
 function SettingsIcon(): JSX.Element {
   return (
@@ -181,6 +183,8 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const releaseName = useUpdateStore((s) => s.releaseName)
   const openReleasesPage = useUpdateStore((s) => s.openReleasesPage)
   const rollingCaptureSeconds = useAudioStore((s) => s.rollingCaptureSeconds)
+  const rollingCaptureFormat = useAudioStore((s) => s.rollingCaptureFormat)
+  const clipFormatLabel = AUDIO_CLIP_FORMAT_LABELS[rollingCaptureFormat]
   const rollingCaptureStatus = useAudioStore((s) => s.rollingCaptureStatus)
   const startRollingClipDrag = useAudioStore((s) => s.startRollingClipDrag)
   const [appBuildInfo, setAppBuildInfo] = useState<AppBuildInfo | null>(null)
@@ -188,7 +192,9 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   const [showReposition, setShowReposition] = useState(false)
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
   const profileButtonRef = useRef<HTMLButtonElement>(null)
-  const { useNativeDragRegions, supportsProgrammaticReposition } = getRendererWindowCapabilities()
+  const docking = useWindowDockingStore()
+  const { supportsProgrammaticReposition } = getRendererWindowCapabilities()
+  const useNativeDragRegions = getRendererWindowCapabilities().useNativeDragRegions && !docking.enabled
 
   const showProfileErrorBanner = useCallback((error: unknown, fallback: string, includeOpenFolder = false) => {
     const actions = includeOpenFolder
@@ -465,15 +471,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   }, [useNativeDragRegions])
 
   const handleDragEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
-    if (useNativeDragRegions) {
-      return
-    }
-
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     window.electronAPI.stopWindowMove()
-  }, [useNativeDragRegions])
+  }, [])
 
   const handleToolbarDragStart = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
     if (useNativeDragRegions || isToolbarInteractiveTarget(event.target) || event.button !== 0) return
@@ -483,15 +485,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
   }, [useNativeDragRegions])
 
   const handleToolbarDragEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (useNativeDragRegions) {
-      return
-    }
-
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     window.electronAPI.stopWindowMove()
-  }, [useNativeDragRegions])
+  }, [])
 
   const activeProfile = activeProfileId ? profiles[activeProfileId] : null
 
@@ -499,17 +497,17 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
     <div
       className={`toolbar ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}
       onPointerDown={useNativeDragRegions ? undefined : handleToolbarDragStart}
-      onPointerUp={useNativeDragRegions ? undefined : handleToolbarDragEnd}
-      onPointerCancel={useNativeDragRegions ? undefined : handleToolbarDragEnd}
-      onLostPointerCapture={useNativeDragRegions ? undefined : handleToolbarDragEnd}
+      onPointerUp={handleToolbarDragEnd}
+      onPointerCancel={handleToolbarDragEnd}
+      onLostPointerCapture={handleToolbarDragEnd}
     >
       <button
         type="button"
         className={`toolbar__grab ${useNativeDragRegions ? 'is-native-drag' : ''}`.trim()}
         onPointerDown={useNativeDragRegions ? undefined : handleDragStart}
-        onPointerUp={useNativeDragRegions ? undefined : handleDragEnd}
-        onPointerCancel={useNativeDragRegions ? undefined : handleDragEnd}
-        onLostPointerCapture={useNativeDragRegions ? undefined : handleDragEnd}
+        onPointerUp={handleDragEnd}
+        onPointerCancel={handleDragEnd}
+        onLostPointerCapture={handleDragEnd}
         title="Drag window"
         aria-label="Drag window"
       >
@@ -561,11 +559,11 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           disabled={!rollingCaptureStatus.hasAudio}
           onDragStart={handleAudioClipDragStart}
           title={rollingCaptureStatus.ready
-            ? `Drag the latest ${rollingCaptureSeconds} seconds as a WAV file`
+            ? `Drag the latest ${rollingCaptureSeconds} seconds as a ${clipFormatLabel} WAV file`
             : rollingCaptureStatus.hasAudio
-              ? `Buffer filling; drag the audio captured so far (up to ${rollingCaptureSeconds} seconds)`
+              ? `Buffer filling; drag the audio captured so far (up to ${rollingCaptureSeconds} seconds) as a ${clipFormatLabel} WAV file`
               : 'Waiting for captured audio'}
-          aria-label={`Drag the latest ${rollingCaptureSeconds} seconds as a WAV file`}
+          aria-label={`Drag the latest ${rollingCaptureSeconds} seconds as a ${clipFormatLabel} WAV file`}
         >
           <span className="toolbar__clip-dot" aria-hidden="true" />
           <span className="toolbar__clip-prefix">Clip </span>{rollingCaptureSeconds}s
@@ -605,6 +603,18 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
               >
                 Bottom
               </button>
+              {docking.supported && (
+                <button type="button" className="toolbar__reposition-option toolbar__docking-option"
+                  role="menuitemcheckbox" aria-checked={docking.enabled}
+                  onClick={() => {
+                    setShowReposition(false)
+                    void window.electronAPI.docking.setEnabled(!docking.enabled).catch(() => {
+                      showBanner({ tone: 'error', message: 'Prism could not change screen docking.', actions: [] })
+                    })
+                  }}>
+                  <span aria-hidden="true">{docking.enabled ? '✓ ' : ''}</span>Reserve screen space
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -623,7 +633,8 @@ export default function Toolbar({ onOpenSettings, settingsOpen }: ToolbarProps):
           type="button"
           className={`toolbar__icon-button toolbar__icon-button--pin ${isAlwaysOnTop ? 'is-active' : ''}`.trim()}
           onClick={handlePin}
-          title={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
+          disabled={docking.enabled}
+          title={docking.enabled ? 'Managed while docked to the screen' : isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
           aria-label={isAlwaysOnTop ? 'Unpin from top' : 'Pin to top'}
           aria-pressed={isAlwaysOnTop}
         >

@@ -681,6 +681,17 @@ bool parseIroThemeText(const std::string& content,
         tokens, "spectrum", "labels", colorOr(
             tokens, "spectrum", "guides", guidesRaw)), theme.spectrumBackground);
 
+    const RgbaColor waterfallBackgroundRaw = colorOr(tokens, "waterfall", "background", colorOr(tokens, "spectrum", "background", scopeBackgroundRaw));
+    theme.waterfallBackground = flatten(waterfallBackgroundRaw, background);
+    theme.waterfallLine = flatten(colorOr(tokens, "waterfall", "line", spectrumLineRaw), theme.waterfallBackground);
+    theme.waterfallGuides = flatten(colorOr(tokens, "waterfall", "guides", colorOr(tokens, "spectrum", "guides", guidesRaw)), theme.waterfallBackground);
+    theme.waterfallLabels = flatten(colorOr(tokens, "waterfall", "labels", colorOr(tokens, "waterfall", "guides", colorOr(tokens, "spectrum", "labels", mutedRaw))), theme.waterfallBackground);
+    theme.waterfallHeat = {{
+        flatten(colorOr(tokens, "waterfall", "heat_low", colorOr(tokens, "spectrum", "heat_low", rgba(15, 7, 33))), theme.waterfallBackground),
+        flatten(colorOr(tokens, "waterfall", "heat_mid", colorOr(tokens, "spectrum", "heat_mid", rgba(163, 26, 121))), theme.waterfallBackground),
+        flatten(colorOr(tokens, "waterfall", "heat_high", colorOr(tokens, "spectrum", "heat_high", rgba(255, 241, 209))), theme.waterfallBackground),
+    }};
+
     theme.oscilloscopeBackground = resolveBackground("oscilloscope");
     theme.oscilloscopeLine = flatten(colorOr(
         tokens, "oscilloscope", "line", accentRaw), theme.oscilloscopeBackground);

@@ -11,12 +11,19 @@ import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getHorizontalWheelScrollResult } from '../utils/horizontalWheelScroll'
 import type { ScopeKind } from '../../types/scope'
 import { VISUALIZER_FRAME_TARGETS, type VisualizerFrameTarget } from '../../types/performance'
-import { ROLLING_CAPTURE_DURATIONS } from '../../types/audioClip'
+import { AUDIO_CLIP_FORMAT_LABELS, ROLLING_CAPTURE_DURATIONS } from '../../types/audioClip'
 import { SCOPE_KINDS } from '../../types/scope'
+import {
+  getCaptureRoutingStorageKey,
+  normalizeCaptureChannelRouting,
+  type CaptureSourceDescriptor,
+} from '../../types/capture'
 import type { WindowBackgroundMode, WindowBackgroundState } from '../../types/windowState'
 import ThemedSelect from './ThemedSelect'
+import ChannelRoutingMatrix from './ChannelRoutingMatrix'
 
 const SCOPE_LABELS: Record<ScopeKind, string> = {
+  waterfall: 'Waterfall',
   spectrum: 'Spectrum',
   oscilloscope: 'Oscilloscope',
   vectorscope: 'Vectorscope',
@@ -42,6 +49,22 @@ const FRAME_TARGET_LABELS: Record<VisualizerFrameTarget, string> = {
 }
 
 const DEFAULT_INPUT_DEVICE_ID = '__default_input__'
+const DEFAULT_SYSTEM_SOURCE_ID = '__default_system_output__'
+
+function resolveRoutingSource(
+  captureMode: 'system' | 'device' | 'daw',
+  sources: CaptureSourceDescriptor[],
+  selectedId: string | null,
+): CaptureSourceDescriptor | null {
+  if (captureMode === 'daw') return null
+  const defaultSentinel = captureMode === 'system' ? DEFAULT_SYSTEM_SOURCE_ID : null
+  if (selectedId && selectedId !== defaultSentinel) {
+    return sources.find((source) => source.id === selectedId) ?? null
+  }
+  return sources.find((source) => source.id !== defaultSentinel && source.isDefault)
+    ?? sources.find((source) => source.id !== defaultSentinel)
+    ?? null
+}
 
 const WINDOW_BACKGROUND_MODES: readonly WindowBackgroundMode[] = ['solid', 'blurred', 'clear']
 
@@ -153,6 +176,8 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const toggleScope = useSettingsStore((s) => s.toggleScope)
+  const linkedAnalysis = useSettingsStore((s) => s.analysisSettings.linkedAnalysis)
+  const updateAnalysisSettings = useSettingsStore((s) => s.updateAnalysisSettings)
   const frameTarget = usePerformanceStore((s) => s.frameTarget)
   const dockedRenderFps = usePerformanceStore((s) => s.dockedRenderFps)
   const setFrameTarget = usePerformanceStore((s) => s.setFrameTarget)
@@ -171,25 +196,34 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
   const {
     systemSources,
     devices,
+    dawSources,
     selectedSystemSourceId,
     selectedDeviceId,
+    selectedDawSourceId,
     captureMode,
     isCapturing,
     captureStatus,
+    activeSourceId,
     captureError,
     captureNotice,
     inputGainDb,
     rollingCaptureSeconds,
+    rollingCaptureFormat,
     rollingCaptureStatus,
+    channelRoutingBySource,
     clearCaptureNotice,
     selectSystemSource,
     selectDevice,
+    selectDawSource,
     startCapture,
     setInputGain,
+    setChannelRouting,
     setRollingCaptureSeconds,
+    setRollingCaptureFormat,
     revealRollingCaptureFolder,
   } = useAudioStore()
   const showBanner = useUiStore((s) => s.showBanner)
+  const settingsOpen = useUiStore((s) => s.settingsOpen)
   const desktopIntegration = useDesktopIntegrationStore((s) => s.snapshot)
   const desktopIntegrationBusy = useDesktopIntegrationStore((s) => s.busy)
   const desktopIntegrationError = useDesktopIntegrationStore((s) => s.error)
@@ -236,25 +270,69 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       const deviceId = value.slice('device:'.length)
       await selectDevice(deviceId === DEFAULT_INPUT_DEVICE_ID ? null : deviceId)
       await startCapture()
+      return
+    }
+
+    if (value.startsWith('daw:')) {
+      const sourceId = value.slice('daw:'.length)
+      await selectDawSource(sourceId)
+      await startCapture()
     }
   }
 
-  const visibleSystemSources = systemSources.length
+  const visibleSystemSources: CaptureSourceDescriptor[] = systemSources.length
     ? systemSources
-    : [{ id: '__default_system_output__', label: 'Default Output', kind: 'system', isDefault: true }]
-  const defaultSystemSourceId = visibleSystemSources[0]?.id ?? '__default_system_output__'
+    : [{ id: DEFAULT_SYSTEM_SOURCE_ID, label: 'Default Output', kind: 'system', isDefault: true }]
+  const defaultSystemSourceId = visibleSystemSources[0]?.id ?? DEFAULT_SYSTEM_SOURCE_ID
+  const matchingDawSources = dawSources.filter((source) => (
+    source.id === selectedDawSourceId || source.persistentId === selectedDawSourceId
+  ))
+  const selectedDawLiveSourceId = captureMode === 'daw'
+    && activeSourceId
+    && dawSources.some((source) => source.id === activeSourceId)
+    ? activeSourceId
+    : matchingDawSources.length === 1
+      ? matchingDawSources[0]!.id
+      : null
 
   const selectedSourceValue = captureMode === 'system'
     ? `system:${selectedSystemSourceId ?? defaultSystemSourceId}`
-    : `device:${selectedDeviceId ?? DEFAULT_INPUT_DEVICE_ID}`
+    : captureMode === 'device'
+      ? `device:${selectedDeviceId ?? DEFAULT_INPUT_DEVICE_ID}`
+      : `daw:${selectedDawLiveSourceId ?? selectedDawSourceId ?? ''}`
 
-  const indicatorLabel = isCapturing
-    ? 'Capturing'
+  const routingSource = captureMode === 'system'
+    ? resolveRoutingSource(captureMode, visibleSystemSources, selectedSystemSourceId)
+    : resolveRoutingSource(captureMode, devices, selectedDeviceId)
+  const routingChannels = routingSource?.channelRoutingAvailable
+    ? routingSource.channels ?? Array.from(
+      { length: Math.max(1, routingSource.channelCount ?? 1) },
+      (_, index) => ({ index, label: `Channel ${index + 1}` }),
+    )
+    : []
+  const routingKey = routingSource
+    ? getCaptureRoutingStorageKey(
+      routingSource.kind === 'system' ? 'system' : 'device',
+      routingSource.id,
+    )
+    : null
+  const selectedChannelRouting = normalizeCaptureChannelRouting(
+    routingKey ? channelRoutingBySource[routingKey] : undefined,
+    routingChannels.length,
+  )
+  const routingSectionStyle = {
+    width: Math.max(128, Math.min(620, 48 + routingChannels.length * 31)),
+  } as CSSProperties
+
+  const indicatorLabel = captureStatus === 'waiting'
+    ? 'Waiting'
     : captureStatus === 'connecting'
       ? 'Connecting'
       : captureStatus === 'error'
         ? 'Capture Failed'
-        : 'Idle'
+        : isCapturing
+          ? 'Capturing'
+          : 'Idle'
 
   const trimPercent = Math.min(100, Math.max(0, ((inputGainDb + 12) / 24) * 100))
   const roundedDockedRenderFps = Math.max(0, Math.round(dockedRenderFps))
@@ -419,7 +497,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
       : nowPlayingSummary
   const canUseDefaultSource = captureMode === 'system'
     ? selectedSystemSourceId !== defaultSystemSourceId
-    : selectedDeviceId !== null
+    : captureMode === 'device' && selectedDeviceId !== null
   const loginItemStatusMessage = desktopIntegration.loginItemStatus === 'requires-approval'
     ? 'Approval required in system login settings'
     : desktopIntegration.loginItemStatus === 'blocked'
@@ -432,200 +510,392 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     <div className="bottom-bar" ref={rootRef}>
       <div className="bottom-bar__rail" aria-label="Global settings" onWheel={handleRailWheel}>
         <div className="bottom-bar__rail-content">
-          <section className="bottom-bar__section bottom-bar__section--modules">
+          <section className="bottom-bar__section bottom-bar__section--modules" aria-label="Modules">
             <div className="bottom-bar__section-title">Modules</div>
             <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--chips">
-                {SCOPE_KINDS.map((kind) => {
-                  const active = scopeOrder.includes(kind) && !hiddenScopes.has(kind)
-                  return (
-                    <button
-                      key={kind}
-                      type="button"
-                      className={`settings-chip ${active ? 'is-active' : ''}`.trim()}
-                      onClick={() => toggleScope(kind)}
-                      title={SCOPE_LABELS[kind]}
-                    >
-                      {SCOPE_LABELS[kind]}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--theme">
-            <div className="bottom-bar__section-header">
-              <div className="bottom-bar__section-title">Theme</div>
-              {themeCredit.credit ? (
-                <span className="bottom-bar__theme-metadata">
-                  {themeCredit.url ? (
-                    <a
-                      className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
-                      href={themeCredit.url}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        void handleOpenThemeWebsite(themeCredit.url!)
-                      }}
-                    >
-                      By {themeCredit.credit}
-                    </a>
-                  ) : (
-                    <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
-                  )}
-                  {themeCredit.description ? (
-                    <span className="bottom-bar__theme-description">
-                      <span className="bottom-bar__theme-separator" aria-hidden="true">·</span>
-                      <span>{themeCredit.description}</span>
-                    </span>
-                  ) : null}
-                </span>
-              ) : null}
-            </div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--theme">
-                <ThemedSelect
-                  value={activeThemeId ?? ''}
-                  onChange={(event) => {
-                    void handleThemeChange(event.target.value)
-                  }}
-                  className="bottom-bar__select"
-                >
-                  {themeEntries.map(([id, theme]) => (
-                    <option key={id} value={id}>
-                      {resolveThemeOptionLabel(theme)}
-                    </option>
-                  ))}
-                </ThemedSelect>
-                <button
-                  type="button"
-                  className="settings-chip"
-                  onClick={() => {
-                    void handleReloadThemes()
-                  }}
-                  disabled={isRefreshingThemes}
-                >
-                  {isRefreshingThemes ? 'Refreshing...' : 'Refresh'}
-                </button>
-                <button
-                  type="button"
-                  className="settings-chip"
-                  onClick={() => {
-                    void handleShowThemesFolder()
-                  }}
-                >
-                  Folder
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--window">
-            <div className="bottom-bar__section-header">
-              <div className="bottom-bar__section-title">Window</div>
-              {windowBackground.mode !== 'solid' || loginItemStatusMessage ? (
-                <span className="bottom-bar__window-metadata">
-                  {windowBackground.mode !== 'solid' ? (
-                    <span className="bottom-bar__window-note">
-                      Window snapping is disabled in this mode
-                    </span>
-                  ) : null}
-                  {windowBackground.mode !== 'solid' && loginItemStatusMessage ? (
-                    <span className="bottom-bar__metadata-separator" aria-hidden="true">·</span>
-                  ) : null}
-                  {loginItemStatusMessage ? (
-                    <span
-                      className={`${desktopIntegrationError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__desktop-status`.trim()}
-                      role="status"
-                    >
-                      {loginItemStatusMessage}
-                    </span>
-                  ) : null}
-                </span>
-              ) : null}
-            </div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--window">
+              <div className="bottom-bar__inline">
                 <div className="bottom-bar__inline bottom-bar__inline--chips">
-                  {WINDOW_BACKGROUND_MODES.map((mode) => {
-                    const unsupported = mode === 'blurred' && !supportsBlurredBackground
+                  {SCOPE_KINDS.map((kind) => {
+                    const active = scopeOrder.includes(kind) && !hiddenScopes.has(kind)
                     return (
                       <button
-                        key={mode}
+                        key={kind}
                         type="button"
-                        className={`settings-chip ${windowBackground.mode === mode ? 'is-active' : ''}`.trim()}
-                        onClick={() => handleWindowBackgroundMode(mode)}
-                        disabled={unsupported}
-                        title={unsupported
-                          ? 'Blurred background requires Windows 11'
-                          : WINDOW_BACKGROUND_MODE_TITLES[mode]}
+                        className={`settings-chip ${active ? 'is-active' : ''}`.trim()}
+                        onClick={() => toggleScope(kind)}
+                        title={SCOPE_LABELS[kind]}
                       >
-                        {WINDOW_BACKGROUND_MODE_LABELS[mode]}
+                        {SCOPE_LABELS[kind]}
                       </button>
                     )
                   })}
                 </div>
-                <span className="bottom-bar__trim-value">
-                  {windowBackground.transparency}%
-                </span>
-                <input
-                  className="settings-control__range bottom-bar__trim-slider"
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={windowBackground.transparency}
-                  disabled={windowBackground.mode === 'solid'}
-                  style={{ '--range-percent': `${windowBackground.transparency}%` } as CSSProperties}
-                  onChange={(event) => {
-                    queueWindowBackgroundSave({
-                      ...windowBackground,
-                      transparency: Number(event.target.value),
-                    })
-                  }}
-                  title="How much of the desktop shows through"
-                />
                 <span className="bottom-bar__inline-divider" aria-hidden="true" />
-                <button
-                  type="button"
-                  className={`settings-chip ${desktopIntegration.closeToTray ? 'is-active' : ''}`.trim()}
-                  disabled={desktopIntegrationBusy}
-                  onClick={() => void setCloseToTray(!desktopIntegration.closeToTray)}
-                  title="Closing Prism hides every Prism window; use the tray menu to quit"
-                >
-                  Close to tray
-                </button>
-                <button
-                  type="button"
-                  className={`settings-chip ${desktopIntegration.openAtLogin ? 'is-active' : ''}`.trim()}
-                  disabled={desktopIntegrationBusy || desktopIntegration.loginItemStatus === 'unavailable'}
-                  onClick={() => void setOpenAtLogin(!desktopIntegration.openAtLogin)}
-                >
-                  Open at login
-                </button>
-                <ThemedSelect
-                  value={desktopIntegration.loginLaunchMode}
-                  disabled={desktopIntegrationBusy || !desktopIntegration.openAtLogin}
-                  onChange={(event) => {
-                    void setLoginLaunchMode(event.target.value === 'tray' ? 'tray' : 'show')
-                  }}
-                  className="bottom-bar__login-select"
-                  title="What Prism should show when opened automatically at login"
-                >
-                  <option value="show">Login: Show Prism</option>
-                  <option value="tray">Login: Start in tray</option>
-                </ThemedSelect>
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
+                  <button
+                    type="button"
+                    className={`settings-chip ${linkedAnalysis ? 'is-active' : ''}`.trim()}
+                    onClick={() => updateAnalysisSettings({ linkedAnalysis: !linkedAnalysis })}
+                    aria-pressed={linkedAnalysis}
+                    title="Link compatible frequency, history, and amplitude guides across scopes"
+                  >
+                    Linked Analysis
+                  </button>
+                </div>
               </div>
             </div>
           </section>
 
           <div className="bottom-bar__divider" />
 
-          <section className="bottom-bar__section bottom-bar__section--now-playing">
+          <section className="bottom-bar__group" aria-label="Audio">
+            <div className="bottom-bar__section bottom-bar__section--source">
+              <div className="bottom-bar__section-title">
+                Audio <span className="bottom-bar__section-subtitle">Source</span>
+              </div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline">
+                  <ThemedSelect
+                    aria-label="Audio source"
+                    value={selectedSourceValue}
+                    onChange={(event) => {
+                      void handleSourceChange(event.target.value)
+                    }}
+                    className="bottom-bar__select"
+                  >
+                    <optgroup label="Output Devices">
+                      {visibleSystemSources.map((source) => (
+                        <option key={source.id} value={`system:${source.id}`}>
+                          {source.isDefault && !source.label.toLowerCase().includes('default')
+                            ? `${source.label} (Default)`
+                            : source.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Input Devices">
+                      <option value={`device:${DEFAULT_INPUT_DEVICE_ID}`}>Default Input</option>
+                      {devices.filter((device) => device.id !== 'default').map((device) => (
+                        <option key={device.id} value={`device:${device.id}`}>
+                          {device.label || `Input ${device.id.slice(0, 8)}`}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="DAW Bridges">
+                      {captureMode === 'daw'
+                        && selectedDawSourceId
+                        && !selectedDawLiveSourceId ? (
+                          <option value={`daw:${selectedDawSourceId}`}>
+                            Waiting for selected bridge…
+                          </option>
+                        ) : null}
+                      {dawSources.length === 0 && captureMode !== 'daw' ? (
+                        <option value="daw:" disabled>No bridges connected</option>
+                      ) : null}
+                      {dawSources.map((source) => (
+                        <option key={source.id} value={`daw:${source.id}`}>
+                          {source.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </ThemedSelect>
+
+                  <div className={`settings-status-pill is-${captureStatus}`.trim()}>
+                    <span className="settings-status-pill__dot" />
+                    <span>{indicatorLabel}</span>
+                  </div>
+                </div>
+
+                {captureMessage ? (
+                  <>
+                    <div className={`${captureError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__error-text`.trim()}>
+                      {captureMessage}
+                    </div>
+                    <div className="settings-inline-actions">
+                      <button
+                        type="button"
+                        className="settings-chip"
+                        onClick={() => {
+                          void handleRetryCapture()
+                        }}
+                      >
+                        Retry
+                      </button>
+                      {canUseDefaultSource ? (
+                        <button
+                          type="button"
+                          className="settings-chip"
+                          onClick={() => {
+                            void handleUseDefaultSource()
+                          }}
+                        >
+                          Use Default
+                        </button>
+                      ) : null}
+                      {!captureError && captureNotice ? (
+                        <button
+                          type="button"
+                          className="settings-chip"
+                          onClick={clearCaptureNotice}
+                        >
+                          Dismiss
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </div>
+
+            {routingChannels.length > 0 ? (
+              <>
+                <span className="bottom-bar__inline-divider" aria-hidden="true" />
+
+                <div
+                  className="bottom-bar__section bottom-bar__section--routing"
+                  style={routingSectionStyle}
+                >
+                  <div className="bottom-bar__section-title">Channel Routing</div>
+                  <div className="bottom-bar__section-body">
+                    <ChannelRoutingMatrix
+                      activityEnabled={settingsOpen}
+                      sourceKey={routingKey}
+                      channels={routingChannels}
+                      routing={selectedChannelRouting}
+                      onChange={setChannelRouting}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            <span className="bottom-bar__inline-divider" aria-hidden="true" />
+
+            <div className="bottom-bar__section bottom-bar__section--trim">
+              <div className="bottom-bar__section-title">Trim</div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline">
+                  <span className="bottom-bar__trim-value">
+                    {inputGainDb > 0 ? '+' : ''}{inputGainDb.toFixed(1)}dB
+                  </span>
+                  <input
+                    className="settings-control__range bottom-bar__trim-slider"
+                    type="range"
+                    min={-12}
+                    max={12}
+                    step={0.5}
+                    aria-label="Input trim"
+                    value={inputGainDb}
+                    style={{ '--range-percent': `${trimPercent}%` } as CSSProperties}
+                    onChange={(event) => setInputGain(Number(event.target.value))}
+                    onDoubleClick={() => setInputGain(0)}
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--rolling-capture" aria-label="Rolling Capture">
+            <div className="bottom-bar__section-title">Rolling Capture</div>
+            <div className="bottom-bar__section-body">
+              <div className="bottom-bar__inline bottom-bar__inline--rolling-capture">
+                <div className="bottom-bar__inline bottom-bar__inline--chips">
+                  <button
+                    type="button"
+                    className={`settings-chip ${rollingCaptureSeconds === null ? 'is-active' : ''}`.trim()}
+                    onClick={() => setRollingCaptureSeconds(null)}
+                  >
+                    Off
+                  </button>
+                  {ROLLING_CAPTURE_DURATIONS.map((duration) => (
+                    <button
+                      key={duration}
+                      type="button"
+                      className={`settings-chip ${rollingCaptureSeconds === duration ? 'is-active' : ''}`.trim()}
+                      onClick={() => setRollingCaptureSeconds(duration)}
+                    >
+                      {duration}s
+                    </button>
+                  ))}
+                </div>
+
+                <div
+                  className={`settings-status-pill ${rollingCaptureStatus.ready ? 'is-capturing' : ''}`.trim()}
+                  title={rollingCaptureSeconds === null
+                    ? 'Rolling capture uses no recorder memory while off'
+                    : `Keeps up to ${rollingCaptureSeconds} seconds in memory`}
+                >
+                  <span className="settings-status-pill__dot" />
+                  <span>{rollingCaptureStatusLabel}</span>
+                </div>
+
+                <button
+                  type="button"
+                  className="settings-chip"
+                  onClick={() => {
+                    void handleRevealRollingCaptureFolder()
+                  }}
+                >
+                  Folder
+                </button>
+
+                <div className="bottom-bar__inline" role="group" aria-label="WAV format">
+                  <span className="bottom-bar__section-title">WAV format</span>
+                  <div className="bottom-bar__inline bottom-bar__inline--chips">
+                    {(['pcm16', 'float32'] as const).map((format) => (
+                      <button
+                        key={format}
+                        type="button"
+                        className={`settings-chip ${rollingCaptureFormat === format ? 'is-active' : ''}`.trim()}
+                        aria-pressed={rollingCaptureFormat === format}
+                        onClick={() => setRollingCaptureFormat(format)}
+                      >
+                        {AUDIO_CLIP_FORMAT_LABELS[format]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__group" aria-label="Appearance">
+            <div className="bottom-bar__section bottom-bar__section--theme">
+              <div className="bottom-bar__section-header">
+                <div className="bottom-bar__section-title">
+                  Appearance <span className="bottom-bar__section-subtitle">Theme</span>
+                </div>
+                {themeCredit.credit ? (
+                  <span
+                    className="bottom-bar__theme-metadata"
+                    title={[themeCredit.credit, themeCredit.description].filter(Boolean).join(' · ')}
+                  >
+                    {themeCredit.url ? (
+                      <a
+                        className="bottom-bar__theme-credit bottom-bar__theme-credit--link"
+                        href={themeCredit.url}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          void handleOpenThemeWebsite(themeCredit.url!)
+                        }}
+                      >
+                        By {themeCredit.credit}
+                      </a>
+                    ) : (
+                      <span className="bottom-bar__theme-credit">By {themeCredit.credit}</span>
+                    )}
+                    {themeCredit.description ? (
+                      <span className="bottom-bar__theme-description">
+                        <span className="bottom-bar__theme-separator" aria-hidden="true">·</span>
+                        <span>{themeCredit.description}</span>
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline bottom-bar__inline--theme">
+                  <ThemedSelect
+                    aria-label="Theme"
+                    value={activeThemeId ?? ''}
+                    onChange={(event) => {
+                      void handleThemeChange(event.target.value)
+                    }}
+                    className="bottom-bar__select"
+                  >
+                    {themeEntries.map(([id, theme]) => (
+                      <option key={id} value={id}>
+                        {resolveThemeOptionLabel(theme)}
+                      </option>
+                    ))}
+                  </ThemedSelect>
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      void handleReloadThemes()
+                    }}
+                    disabled={isRefreshingThemes}
+                  >
+                    {isRefreshingThemes ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      void handleShowThemesFolder()
+                    }}
+                  >
+                    Folder
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <span className="bottom-bar__inline-divider" aria-hidden="true" />
+
+            <div className="bottom-bar__section bottom-bar__section--window">
+              <div className="bottom-bar__section-header">
+                <div className="bottom-bar__section-title">Background</div>
+                {windowBackground.mode !== 'solid' ? (
+                  <span className="bottom-bar__window-note" title="Window snapping is disabled in this mode">
+                    Window snapping is disabled in this mode
+                  </span>
+                ) : null}
+              </div>
+              <div className="bottom-bar__section-body">
+                <div className="bottom-bar__inline bottom-bar__inline--window">
+                  <div className="bottom-bar__inline bottom-bar__inline--chips">
+                    {WINDOW_BACKGROUND_MODES.map((mode) => {
+                      const unsupported = mode === 'blurred' && !supportsBlurredBackground
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`settings-chip ${windowBackground.mode === mode ? 'is-active' : ''}`.trim()}
+                          onClick={() => handleWindowBackgroundMode(mode)}
+                          disabled={unsupported}
+                          title={unsupported
+                            ? 'Blurred background requires Windows 11'
+                            : WINDOW_BACKGROUND_MODE_TITLES[mode]}
+                        >
+                          {WINDOW_BACKGROUND_MODE_LABELS[mode]}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <span className="bottom-bar__trim-value">
+                    {windowBackground.transparency}%
+                  </span>
+                  <input
+                    className="settings-control__range bottom-bar__trim-slider"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    aria-label="Window transparency"
+                    value={windowBackground.transparency}
+                    disabled={windowBackground.mode === 'solid'}
+                    style={{ '--range-percent': `${windowBackground.transparency}%` } as CSSProperties}
+                    onChange={(event) => {
+                      queueWindowBackgroundSave({
+                        ...windowBackground,
+                        transparency: Number(event.target.value),
+                      })
+                    }}
+                    title="How much of the desktop shows through"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div className="bottom-bar__divider" />
+
+          <section className="bottom-bar__section bottom-bar__section--now-playing" aria-label="Now Playing">
             <div className="bottom-bar__section-header bottom-bar__section-header--now-playing">
               <div className="bottom-bar__section-title">Now Playing</div>
               <div
@@ -669,127 +939,51 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
 
           <div className="bottom-bar__divider" />
 
-          <section className="bottom-bar__section bottom-bar__section--source">
-            <div className="bottom-bar__section-title">Audio Source</div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline">
-                <ThemedSelect
-                  value={selectedSourceValue}
-                  onChange={(event) => {
-                    void handleSourceChange(event.target.value)
-                  }}
-                  className="bottom-bar__select"
+          <section className="bottom-bar__section bottom-bar__section--startup" aria-label="Startup & Tray">
+            <div className="bottom-bar__section-header">
+              <div className="bottom-bar__section-title">Startup &amp; Tray</div>
+              {loginItemStatusMessage ? (
+                <span
+                  className={`${desktopIntegrationError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__desktop-status`.trim()}
+                  role="status"
+                  title={loginItemStatusMessage}
                 >
-                  <optgroup label="Output Devices">
-                    {visibleSystemSources.map((source) => (
-                      <option key={source.id} value={`system:${source.id}`}>
-                        {source.isDefault && !source.label.toLowerCase().includes('default')
-                          ? `${source.label} (Default)`
-                          : source.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Input Devices">
-                    <option value={`device:${DEFAULT_INPUT_DEVICE_ID}`}>Default Input</option>
-                    {devices.map((device) => (
-                      <option key={device.deviceId} value={`device:${device.deviceId}`}>
-                        {device.label || `Input ${device.deviceId.slice(0, 8)}`}
-                      </option>
-                    ))}
-                  </optgroup>
-                </ThemedSelect>
-
-                <div className={`settings-status-pill is-${captureStatus}`.trim()}>
-                  <span className="settings-status-pill__dot" />
-                  <span>{indicatorLabel}</span>
-                </div>
-              </div>
-
-              {captureMessage ? (
-                <>
-                  <div className={`${captureError ? 'settings-error-text' : 'settings-info-text'} bottom-bar__error-text`.trim()}>
-                    {captureMessage}
-                  </div>
-                  <div className="settings-inline-actions">
-                    <button
-                      type="button"
-                      className="settings-chip"
-                      onClick={() => {
-                        void handleRetryCapture()
-                      }}
-                    >
-                      Retry
-                    </button>
-                    {canUseDefaultSource ? (
-                      <button
-                        type="button"
-                        className="settings-chip"
-                        onClick={() => {
-                          void handleUseDefaultSource()
-                        }}
-                      >
-                        Use Default
-                      </button>
-                    ) : null}
-                    {!captureError && captureNotice ? (
-                      <button
-                        type="button"
-                        className="settings-chip"
-                        onClick={clearCaptureNotice}
-                      >
-                        Dismiss
-                      </button>
-                    ) : null}
-                  </div>
-                </>
+                  {loginItemStatusMessage}
+                </span>
               ) : null}
             </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--rolling-capture">
-            <div className="bottom-bar__section-title">Rolling Capture</div>
             <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline bottom-bar__inline--rolling-capture">
-                <div className="bottom-bar__inline bottom-bar__inline--chips">
-                  <button
-                    type="button"
-                    className={`settings-chip ${rollingCaptureSeconds === null ? 'is-active' : ''}`.trim()}
-                    onClick={() => setRollingCaptureSeconds(null)}
-                  >
-                    Off
-                  </button>
-                  {ROLLING_CAPTURE_DURATIONS.map((duration) => (
-                    <button
-                      key={duration}
-                      type="button"
-                      className={`settings-chip ${rollingCaptureSeconds === duration ? 'is-active' : ''}`.trim()}
-                      onClick={() => setRollingCaptureSeconds(duration)}
-                    >
-                      {duration}s
-                    </button>
-                  ))}
-                </div>
-
-                <div
-                  className={`settings-status-pill ${rollingCaptureStatus.ready ? 'is-capturing' : ''}`.trim()}
-                  title={rollingCaptureSeconds === null
-                    ? 'Rolling capture uses no recorder memory while off'
-                    : `Keeps up to ${rollingCaptureSeconds} seconds in memory`}
-                >
-                  <span className="settings-status-pill__dot" />
-                  <span>{rollingCaptureStatusLabel}</span>
-                </div>
-
+              <div className="bottom-bar__inline bottom-bar__inline--startup">
                 <button
                   type="button"
-                  className="settings-chip"
-                  onClick={() => {
-                    void handleRevealRollingCaptureFolder()
-                  }}
+                  className={`settings-chip ${desktopIntegration.openAtLogin ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy || desktopIntegration.loginItemStatus === 'unavailable'}
+                  onClick={() => void setOpenAtLogin(!desktopIntegration.openAtLogin)}
                 >
-                  Folder
+                  Open at login
+                </button>
+                <ThemedSelect
+                  aria-label="Login behavior"
+                  value={desktopIntegration.loginLaunchMode}
+                  disabled={desktopIntegrationBusy || !desktopIntegration.openAtLogin}
+                  onChange={(event) => {
+                    void setLoginLaunchMode(event.target.value === 'tray' ? 'tray' : 'show')
+                  }}
+                  className="bottom-bar__login-select"
+                  title="What Prism should show when opened automatically at login"
+                >
+                  <option value="show">Login: Show Prism</option>
+                  <option value="tray">Login: Start in tray</option>
+                </ThemedSelect>
+                <span className="bottom-bar__inline-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className={`settings-chip ${desktopIntegration.closeToTray ? 'is-active' : ''}`.trim()}
+                  disabled={desktopIntegrationBusy}
+                  onClick={() => void setCloseToTray(!desktopIntegration.closeToTray)}
+                  title="Closing Prism hides every Prism window; use the tray menu to quit"
+                >
+                  Close to tray
                 </button>
               </div>
             </div>
@@ -797,7 +991,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
 
           <div className="bottom-bar__divider" />
 
-          <section className="bottom-bar__section bottom-bar__section--performance">
+          <section className="bottom-bar__section bottom-bar__section--performance" aria-label="Performance">
             <div className="bottom-bar__section-title">Performance</div>
             <div className="bottom-bar__section-body">
               <div className="bottom-bar__inline bottom-bar__inline--performance">
@@ -818,30 +1012,6 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                 <div className="settings-status-pill bottom-bar__fps-pill" title="Docked visualizer render FPS">
                   <span>{roundedDockedRenderFps} FPS</span>
                 </div>
-              </div>
-            </div>
-          </section>
-
-          <div className="bottom-bar__divider" />
-
-          <section className="bottom-bar__section bottom-bar__section--trim">
-            <div className="bottom-bar__section-title">Trim</div>
-            <div className="bottom-bar__section-body">
-              <div className="bottom-bar__inline">
-                <span className="bottom-bar__trim-value">
-                  {inputGainDb > 0 ? '+' : ''}{inputGainDb.toFixed(1)}dB
-                </span>
-                <input
-                  className="settings-control__range bottom-bar__trim-slider"
-                  type="range"
-                  min={-12}
-                  max={12}
-                  step={0.5}
-                  value={inputGainDb}
-                  style={{ '--range-percent': `${trimPercent}%` } as CSSProperties}
-                  onChange={(event) => setInputGain(Number(event.target.value))}
-                  onDoubleClick={() => setInputGain(0)}
-                />
               </div>
             </div>
           </section>

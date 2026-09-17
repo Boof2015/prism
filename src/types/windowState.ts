@@ -1,5 +1,6 @@
 import type { ScopeKind } from './scope'
 import type { WindowBounds } from './popout'
+import type { WindowDockingPreferences } from './windowDocking'
 
 export const WINDOW_LOCAL_STATE_FORMAT = 'prism-window-local'
 export const WINDOW_LOCAL_STATE_VERSION = 1
@@ -26,4 +27,5 @@ export interface PrismWindowLocalStateV1 {
   popoutAlwaysOnTop: Partial<Record<ScopeKind, boolean>>
   nowPlayingConfigWindowBounds?: WindowBounds
   windowBackground: WindowBackgroundState
+  docking: WindowDockingPreferences
 }

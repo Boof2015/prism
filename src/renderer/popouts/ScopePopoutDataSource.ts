@@ -1,3 +1,4 @@
+import type { WaterfallDataSource } from '../visualizers/Waterfall'
 import type {
   ScopePopoutAudioBatch,
   ScopePopoutSessionState,
@@ -14,6 +15,7 @@ import type { VUMeterDataSource } from '../visualizers/VUMeter'
 import type { WaveformDataSource } from '../visualizers/Waveform'
 
 type AnyScopeDataSource =
+  & WaterfallDataSource
   & SpectrumAnalyzerDataSource
   & OscilloscopeDataSource
   & VectorscopeDataSource
@@ -27,6 +29,7 @@ const INITIAL_SESSION_STATE: ScopePopoutSessionState = {
   sampleRate: 48000,
   channelCount: 2,
   capturing: false,
+  suspended: false,
   backendKind: null,
 }
 
@@ -35,7 +38,7 @@ function isStereoBatch(batch: ScopePopoutAudioBatch): batch is ScopePopoutStereo
 }
 
 function isStereoScope(kind: ScopeKind): boolean {
-  return kind === 'spectrogram' || kind === 'vectorscope' || kind === 'vumeter' || kind === 'lufsmeter'
+  return kind === 'waterfall' || kind === 'spectrogram' || kind === 'vectorscope' || kind === 'vumeter' || kind === 'lufsmeter'
 }
 
 export class ScopePopoutDataSource implements AnyScopeDataSource {
@@ -80,7 +83,7 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
   setSessionState(nextState: ScopePopoutSessionState): void {
     this.sessionState = nextState
     this.nativeVisualizerTransport.reset(nextState)
-    if (!nextState.capturing) {
+    if (!nextState.capturing || nextState.suspended) {
       this.monoQueue = []
       this.stereoQueue = []
     }
@@ -95,7 +98,11 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
   }
 
   isPlaying(): boolean {
-    return this.sessionState.capturing
+    return this.sessionState.capturing && !this.sessionState.suspended
+  }
+
+  getBackendKind(): ScopePopoutSessionState['backendKind'] {
+    return this.sessionState.backendKind
   }
 
   subscribeToSessionChanges(listener: (state: ScopePopoutSessionState) => void): () => void {
@@ -106,6 +113,12 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     }
   }
 
+
+  getPendingWaterfallSamples(): ScopePopoutStereoBatch {
+    const result = this.stereoQueue
+    this.stereoQueue = []
+    return result
+  }
 
   getPendingSpectrumSamples(): Float32Array[] {
     const batch = this.monoQueue
@@ -147,6 +160,10 @@ export class ScopePopoutDataSource implements AnyScopeDataSource {
     const batch = this.stereoQueue
     this.stereoQueue = []
     return this.scopeKind === 'waveform' ? batch : []
+  }
+
+  getPendingWaveformAnnotatedSamples(): ScopePopoutStereoBatch {
+    return this.getPendingWaveformStereoSamples()
   }
 
   getPendingVectorscopeSamples(): ScopePopoutStereoBatch {

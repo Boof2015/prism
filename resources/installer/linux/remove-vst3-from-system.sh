@@ -1,6 +1,6 @@
 #!/bin/sh
 # Package removal hook for Linux .deb/.rpm builds. Remove only Prism's known
-# VST3 bundles from the global VST3 scan path.
+# VST3 bundles and CLAP files from their global scan paths.
 
 set -eu
 
@@ -21,7 +21,8 @@ case "$remove_action" in
     ;;
 esac
 
-DEST_DIR="${PRISM_VST3_DEST_DIR:-/usr/lib/vst3}"
+VST3_DEST="${PRISM_VST3_DEST_DIR:-/usr/lib/vst3}"
+CLAP_DEST="${PRISM_CLAP_DEST_DIR:-/usr/lib/clap}"
 TUI_LINK="${PRISM_TUI_LINK_PATH:-/usr/bin/prism-tui}"
 
 remove_tui_link() {
@@ -41,17 +42,10 @@ remove_tui_link() {
   esac
 }
 
-remove_plugin() {
-  rm -rf "$DEST_DIR/$1"
-}
-
-remove_plugin "Prism Spectrum.vst3"
-remove_plugin "Prism Oscilloscope.vst3"
-remove_plugin "Prism VU Meter.vst3"
-remove_plugin "Prism Loudness Meter.vst3"
-remove_plugin "Prism Vectorscope.vst3"
-remove_plugin "Prism Spectrogram.vst3"
-remove_plugin "Prism Waveform.vst3"
+for name in Spectrum Oscilloscope "VU Meter" "Loudness Meter" Vectorscope Spectrogram Waveform Waterfall Bridge; do
+  rm -rf "$VST3_DEST/Prism $name.vst3"
+  rm -f "$CLAP_DEST/Prism $name.clap"
+done
 remove_tui_link
 
-echo "Prism VST3 plugins removed from $DEST_DIR"
+echo "Prism VST3 and CLAP plugins removed"

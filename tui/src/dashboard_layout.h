@@ -15,6 +15,7 @@ enum class PanelId {
     LUFSMeter,
     Spectrogram,
     Waveform,
+    Waterfall,
 };
 
 enum class SplitAxis {

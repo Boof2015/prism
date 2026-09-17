@@ -1,3 +1,4 @@
+import { ReferenceImportStatus, useReferenceDrop, useSpectrumReference } from '../renderer/components/SpectrumReference'
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { SpectrumAnalyzer } from '../renderer/visualizers/SpectrumAnalyzer'
 import type { ScopeSettings } from '../types/settings'
@@ -34,6 +35,8 @@ export default function SpectrumScope({
   settings,
   theme,
 }: SpectrumScopeProps): JSX.Element {
+  const referenceController = useSpectrumReference()
+  const referenceDrop = useReferenceDrop()
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const analyzerRef = useRef<SpectrumAnalyzer | null>(null)
@@ -106,6 +109,11 @@ export default function SpectrumScope({
     })
   }, [settings, theme])
 
+  useEffect(() => {
+    analyzerRef.current?.setOptions({ referencePreview: referenceController?.state.preview ?? null,
+      referenceImporting: referenceController?.busy ?? false, onReferenceLevel: referenceController?.reportLevel ?? (() => {}) })
+  }, [referenceController?.state.preview, referenceController?.busy, referenceController?.reportLevel])
+
   useLayoutEffect(() => {
     applySizeRef.current?.()
   }, [settings.rotation])
@@ -142,14 +150,17 @@ export default function SpectrumScope({
   return (
     <div
       ref={containerRef}
-      className={`spectrum-scope scope-measurement-surface ${measurementController.active ? 'is-measuring' : ''}`.trim()}
+      className={`spectrum-scope scope-measurement-surface ${measurementController.active ? 'is-measuring' : ''} ${referenceDrop.dragging ? 'is-reference-drop' : ''}`.trim()}
       {...measurementController.pointerBindings}
+      {...referenceDrop.bindings}
     >
       <canvas
         ref={canvasRef}
         className="spectrum-scope__canvas"
         style={getScopeCanvasTransformStyle(settings.rotation, settings.mirrorHorizontal)}
       />
+      <ReferenceImportStatus />
+      {referenceDrop.dragging && <div className="reference-drop-label">Drop audio to use as reference</div>}
       <ScopeMeasurementOverlay
         containerRef={containerRef}
         measurement={measurementController.measurement}
@@ -160,7 +171,7 @@ export default function SpectrumScope({
           className={['scope-module__peak-info', peakMode === 'following' ? 'is-following' : 'is-corner'].join(' ')}
           style={overlayStyle}
         >
-          <span className="scope-module__peak-info-value">{formatSpectrumPeakDbfs(peak.dbfs)}</span>
+          <span className="scope-module__peak-info-value">{peak.deltaDb !== undefined ? `${peak.deltaDb >= 0 ? '+' : ''}${peak.deltaDb.toFixed(1)} dB relative` : formatSpectrumPeakDbfs(peak.dbfs)}</span>
           <span className="scope-module__peak-info-separator">/</span>
           <span className="scope-module__peak-info-value">{formatSpectrumPeakFrequency(peak.frequencyHz)}</span>
           <span className="scope-module__peak-info-separator">/</span>

@@ -1,3 +1,5 @@
+import type { ResolvedInterfaceTheme } from './theme'
+
 export interface DialogOptions {
   type: 'confirm' | 'prompt'
   title: string
@@ -13,4 +15,13 @@ export interface DialogOptions {
 export interface DialogResult {
   buttonIndex: number
   value?: string
+}
+
+export interface DialogConfig {
+  options: DialogOptions
+  theme: ResolvedInterfaceTheme
+}
+
+export interface DialogLayout {
+  height: number
 }
