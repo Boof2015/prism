@@ -5,8 +5,9 @@ type Listener = (peaks: Array<DetectedPitch | undefined>) => void
 interface PendingRequest { owner: symbol; samples: Float32Array; sampleRate: number; settings: PitchSettings }
 
 // Hard application-wide budget: no combination of Pitch instances may run
-// more than roughly three analyses per second.
-const MIN_ANALYSIS_INTERVAL_MS = 333
+// more than two analyses per second. The canvas interpolates between results,
+// so this remains visually smooth on low-end systems.
+const MIN_ANALYSIS_INTERVAL_MS = 500
 const worker = new Worker(new URL('../workers/pitchDetection.worker.ts', import.meta.url), { type: 'module' })
 const listeners = new Map<symbol, Listener>()
 const pending = new Map<symbol, PendingRequest>()
