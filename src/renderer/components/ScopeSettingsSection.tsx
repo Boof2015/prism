@@ -756,6 +756,13 @@ export default function ScopeSettingsSection({
           const current = settings as ScopeSettings['vumeter']
           return (
             <>
+              <ToggleGroup label="Audio">
+                <ToggleChip label="Correlation" active={current.showCorrelation !== false} onClick={() => onUpdate('vumeter', { showCorrelation: current.showCorrelation === false })} />
+              </ToggleGroup>
+              <RangeControl label="Low Cut" value={Math.round(1000 * Math.log((current.lowCutHz ?? 20) / 20) / Math.log(1000))} valueLabel={`${current.lowCutHz ?? 20} Hz`} min={0} max={1000} step={1} onChange={(value) => { const hz = 20 * 1000 ** (value / 1000); onUpdate('vumeter', { lowCutHz: Math.min(current.highCutHz ?? 20000, hz < 1000 ? Math.round(hz) : Math.round(hz / 100) * 100) }) }} />
+              <RangeControl label="High Cut" value={Math.round(1000 * Math.log((current.highCutHz ?? 20000) / 20) / Math.log(1000))} valueLabel={`${current.highCutHz ?? 20000} Hz`} min={0} max={1000} step={1} onChange={(value) => { const hz = 20 * 1000 ** (value / 1000); onUpdate('vumeter', { highCutHz: Math.max(current.lowCutHz ?? 20, hz < 1000 ? Math.round(hz) : Math.round(hz / 100) * 100) }) }} />
+              <RangeControl label="Attack" value={current.attackMs ?? 5} valueLabel={`${current.attackMs ?? 5} ms`} min={1} max={200} step={1} onChange={(value) => onUpdate('vumeter', { attackMs: value })} />
+              <RangeControl label="Release" value={current.releaseMs ?? 180} valueLabel={`${current.releaseMs ?? 180} ms`} min={1} max={2000} step={1} onChange={(value) => onUpdate('vumeter', { releaseMs: value })} />
               <SelectControl
                 label="Mode"
                 value={current.mode}

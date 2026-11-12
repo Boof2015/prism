@@ -6285,6 +6285,15 @@ test('VUMeterBallistics holds VU, bar, and correlation steady when an active fra
   assert.notEqual(held.vuLDb, VU_METER_MIN_DB)
 })
 
+test('VU attack and release at 1 ms respond within a short audio block', () => {
+  const meter = new VUMeterBallistics(48000)
+  meter.setResponse(1, 1)
+  const loud = meter.process([createFilledStereoChunk(0.5, 0.5, 480)], 10)
+  assert.ok(loud.vuLDb > -8, `attack stayed at ${loud.vuLDb} dB`)
+  const quiet = meter.process([createFilledStereoChunk(0, 0, 480)], 20)
+  assert.ok(quiet.vuLDb < -35, `release stayed at ${quiet.vuLDb} dB`)
+})
+
 test('VUMeterBallistics produces the same VU, bar, and correlation for contiguous and irregular chunk delivery', () => {
   const sampleRate = 48000
   const windowSamples = Math.round((sampleRate * VU_INTEGRATION_WINDOW_MS) / 1000)

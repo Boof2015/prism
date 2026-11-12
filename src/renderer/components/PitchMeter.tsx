@@ -115,7 +115,7 @@ export default function PitchMeter({ settings, dataSource, frameScheduler }: { s
       }
       const ctx = canvas.getContext('2d'); if (!ctx) return
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      const w = rect.width, h = rect.height, cx = w / 2, cy = h * 0.86, rx = w * 0.43, ry = h * 0.68
+      const w = rect.width, h = rect.height, cx = w / 2, cy = h * 0.72, rx = w * 0.43, ry = Math.min(h * 0.52, w * 0.43)
       const interpolation = 1 - Math.exp(-elapsed / 0.16)
       for (let index = 0; index < 2; index += 1) {
         const target = peaksRef.current[index]
@@ -142,8 +142,8 @@ export default function PitchMeter({ settings, dataSource, frameScheduler }: { s
       }
       drawNeedle(displayedPeaksRef.current[1], 'rgba(91,183,255,.48)', 2, .9)
       drawNeedle(displayedPeaksRef.current[0], '#ff477e', 3, .98)
-      ctx.fillStyle = '#ff477e'; ctx.font = '700 15px ui-monospace, monospace'; ctx.fillText(formatPitch(displayedPeaksRef.current[0]?.hz ?? 0), cx, h - 28)
-      ctx.fillStyle = 'rgba(91,183,255,.7)'; ctx.font = '600 12px ui-monospace, monospace'; ctx.fillText(formatPitch(displayedPeaksRef.current[1]?.hz ?? 0), cx, h - 10)
+      ctx.fillStyle = '#ff477e'; ctx.font = '700 15px ui-monospace, monospace'; ctx.fillText(formatPitch(displayedPeaksRef.current[0]?.hz ?? 0), cx, Math.min(h - 28, cy + 24))
+      ctx.fillStyle = 'rgba(91,183,255,.7)'; ctx.font = '600 12px ui-monospace, monospace'; ctx.fillText(formatPitch(displayedPeaksRef.current[1]?.hz ?? 0), cx, Math.min(h - 10, cy + 43))
     }
     unsubscribe = frameScheduler.subscribe(draw)
     return () => { disposed = true; analysisClient.dispose(); unsubscribe?.() }

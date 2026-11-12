@@ -16,7 +16,7 @@ import type { BassVUMeterSettings, PitchSettings } from '../../types/moduleInsta
 import { useScopeChannelStore } from '../stores/scopeChannelStore'
 
 function DuplicateScope({ instance, frameScheduler }: { instance: ModuleInstance; frameScheduler: FrameScheduler }): JSX.Element {
-  const bassSettings = instance.kind === 'bassvumeter' ? instance.settings as BassVUMeterSettings : undefined
+  const bassSettings = instance.kind === 'bassvumeter' ? { ...(instance.settings as BassVUMeterSettings), bassMode: true } : undefined
   const dataSource = useMemo(
     () => createScopeInstanceDataSource(instance.kind, instance.channelPairLeft, bassSettings?.cutoffHz),
     [instance.id, instance.kind],
@@ -53,6 +53,7 @@ export default function Strip({
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopePopouts = useSettingsStore((s) => s.scopePopouts)
   const moduleInstances = useModuleInstanceStore((s) => s.instances)
+  const instanceKinds = [...new Set(moduleInstances.map((item) => item.kind))].sort().join('|')
   const removeModuleInstance = useModuleInstanceStore((s) => s.removeInstance)
   const workspaceOrder = useSettingsStore((s) => s.workspaceOrder)
   const setWorkspaceOrder = useSettingsStore((s) => s.setWorkspaceOrder)
@@ -90,6 +91,14 @@ export default function Strip({
     if (next.every((key, index) => key === workspaceKeys[index])) return
     setWorkspaceOrder(next)
   }, [draggingKey, setWorkspaceOrder, workspaceKeys])
+  const shiftWorkspaceTile = useCallback((key: string, direction: -1 | 1) => {
+    const index = workspaceKeys.indexOf(key)
+    const nextIndex = index + direction
+    if (index < 0 || nextIndex < 0 || nextIndex >= workspaceKeys.length) return
+    const next = [...workspaceKeys]
+    ;[next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!]
+    setWorkspaceOrder(next)
+  }, [setWorkspaceOrder, workspaceKeys])
 
   useEffect(() => {
     frameScheduler.setFrameTarget(frameTarget)
@@ -123,14 +132,14 @@ export default function Strip({
   }, [dockedScopes])
 
   useEffect(() => {
-    const visibleAudioScopeSet = new Set([...dockedScopes.filter(isAudioScopeKind), ...moduleInstances.map((item) => item.kind)])
+    const visibleAudioScopeSet = new Set([...dockedScopes.filter(isAudioScopeKind), ...instanceKinds.split('|')])
     audioRouter.setVisualizerConsumerDemand('docked-strip', {
       waterfall: visibleAudioScopeSet.has('waterfall'),
       spectrum: visibleAudioScopeSet.has('spectrum'),
       oscilloscope: visibleAudioScopeSet.has('oscilloscope'),
       vectorscope: visibleAudioScopeSet.has('vectorscope'),
       spectrogram: visibleAudioScopeSet.has('spectrogram'),
-      vumeter: visibleAudioScopeSet.has('vumeter'),
+      vumeter: visibleAudioScopeSet.has('vumeter') || visibleAudioScopeSet.has('bassvumeter'),
       pitch: visibleAudioScopeSet.has('pitch'),
       lufsmeter: visibleAudioScopeSet.has('lufsmeter'),
       waveform: visibleAudioScopeSet.has('waveform'),
@@ -139,7 +148,7 @@ export default function Strip({
     return () => {
       audioRouter.clearVisualizerConsumerDemand('docked-strip')
     }
-  }, [visibleScopeKey, dockedScopes, moduleInstances])
+  }, [visibleScopeKey, instanceKinds])
 
   useEffect(() => {
     const strip = stripRef.current
@@ -347,6 +356,10 @@ export default function Strip({
         {moduleInstances.map((instance, index) => (
           <div key={instance.id} className="scope-strip__cell" style={{ order: workspacePosition.get(`instance:${instance.id}`) ?? dockedScopes.length + index, gridColumn: `span ${workspaceSpans[`instance:${instance.id}`]?.columns ?? 1}`, gridRow: `span ${workspaceSpans[`instance:${instance.id}`]?.rows ?? 1}` }} onDragOver={(event) => { event.preventDefault(); moveWorkspaceTile(`instance:${instance.id}`) }}>
             <button type="button" draggable className="scope-strip__drag-button" title="Drag module" onDragStart={() => setDraggingKey(`instance:${instance.id}`)} onDragEnd={() => setDraggingKey(null)}>⠿</button>
+            <div className="scope-strip__reorder-controls">
+              <button type="button" className="scope-strip__reorder-button" aria-label="Move instance left" disabled={workspacePosition.get(`instance:${instance.id}`) === 0} onClick={() => shiftWorkspaceTile(`instance:${instance.id}`, -1)}>←</button>
+              <button type="button" className="scope-strip__reorder-button" aria-label="Move instance right" disabled={workspacePosition.get(`instance:${instance.id}`) === workspaceKeys.length - 1} onClick={() => shiftWorkspaceTile(`instance:${instance.id}`, 1)}>→</button>
+            </div>
             <button type="button" className="scope-strip__span-button scope-strip__span-button--width" title="Cycle width" onClick={() => { const key = `instance:${instance.id}`; const span = workspaceSpans[key] ?? { columns: 1, rows: 1 }; setWorkspaceSpan(key, span.columns % 3 + 1, span.rows) }}>W{workspaceSpans[`instance:${instance.id}`]?.columns ?? 1}</button>
             <button type="button" className="scope-strip__span-button scope-strip__span-button--height" title="Cycle height" onClick={() => { const key = `instance:${instance.id}`; const span = workspaceSpans[key] ?? { columns: 1, rows: 1 }; setWorkspaceSpan(key, span.columns, span.rows % 3 + 1) }}>H{workspaceSpans[`instance:${instance.id}`]?.rows ?? 1}</button>
             <button

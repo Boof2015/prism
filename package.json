@@ -85,15 +85,15 @@
     "zustand": "^5.0.10"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.7.1",
+    "@electron/rebuild": "^4.2.1",
     "@types/react": "^19.2.9",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
     "autoprefixer": "^10.4.23",
-    "electron": "^40.0.0",
-    "electron-builder": "^26.0.0",
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^5.0.0",
-    "node-gyp": "^12.4.0",
+    "node-gyp": "^13.1.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
@@ -121,7 +121,9 @@
       {
         "from": "native/build/Release/",
         "to": "native/",
-        "filter": ["*.node"]
+        "filter": [
+          "*.node"
+        ]
       },
       {
         "from": "resources/icon.png",
@@ -149,7 +151,10 @@
       }
     ],
     "mac": {
-      "target": ["pkg", "zip"],
+      "target": [
+        "pkg",
+        "zip"
+      ],
       "icon": "resources/icon.icns",
       "category": "public.app-category.music",
       "extendInfo": {
@@ -166,8 +171,18 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "resources/icon.ico"
     },
@@ -178,7 +193,12 @@
       "include": "resources/installer/windows-vst3.nsh"
     },
     "linux": {
-      "target": ["AppImage", "deb", "rpm", "tar.gz"],
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm",
+        "tar.gz"
+      ],
       "icon": "resources/icon.png",
       "category": "Audio"
     },
@@ -216,5 +236,11 @@
         "webkit2gtk4.1"
       ]
     }
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.0": true,
+    "electron@40.10.6": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true
   }
 }

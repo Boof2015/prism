@@ -72,15 +72,15 @@ export function normalizeModuleInstances(raw: unknown): ModuleInstance[] {
   return raw.flatMap((entry): ModuleInstance[] => {
     if (!entry || typeof entry !== 'object') return []
     const item = entry as Partial<ModuleInstance>
-    if (typeof item.id !== 'string' || !MODULE_INSTANCE_KINDS.includes(item.kind as ModuleInstanceKind)) return []
-    const kind = item.kind as ModuleInstanceKind
+    if (typeof item.id !== 'string' || (item.kind !== 'bassvumeter' && !MODULE_INSTANCE_KINDS.includes(item.kind as ModuleInstanceKind))) return []
+    const kind = item.kind === 'bassvumeter' ? 'vumeter' : item.kind as ModuleInstanceKind
     const settings = kind === 'pitch'
       ? { ...DEFAULT_PITCH_SETTINGS, ...(item.settings as object ?? {}) }
       : kind === 'bassvumeter'
         ? { ...DEFAULT_SCOPE_SETTINGS.vumeter, ...(item.settings as object ?? {}), cutoffHz: Math.min(350, Math.max(20, Number((item.settings as { cutoffHz?: unknown } | undefined)?.cutoffHz) || 120)) }
       : { ...DEFAULT_SCOPE_SETTINGS[kind], ...(item.settings as object ?? {}) }
     const left = item.channelPairLeft
-    return [{ id: item.id, kind, settings: settings as ModuleInstance['settings'], linkSettings: item.linkSettings === true,
+    return [{ id: item.id, kind, settings: { ...settings, ...((item.kind === 'bassvumeter' || (item.settings as { bassMode?: boolean } | undefined)?.bassMode) ? { highCutHz: (item.settings as { highCutHz?: number; cutoffHz?: number } | undefined)?.highCutHz ?? (item.settings as { cutoffHz?: number } | undefined)?.cutoffHz ?? 120 } : {}) } as ModuleInstance['settings'], linkSettings: item.linkSettings === true,
       ...(typeof left === 'number' && left >= 0 && left < 8 && left % 2 === 0 ? { channelPairLeft: left } : {}) }]
   })
 }
@@ -302,6 +302,11 @@ export function mergeScopeSettings(
         ? rawVUMeter.needleChannels
         : DEFAULT_SCOPE_SETTINGS.vumeter.needleChannels,
       referenceDb: sanitizeVUReferenceDbfs(rawVUMeter.referenceDb),
+      lowCutHz: Math.min(19900, Math.max(20, Number(rawVUMeter.lowCutHz) || 20)),
+      highCutHz: Math.min(20000, Math.max(20, Number(rawVUMeter.highCutHz) || ((rawVUMeter as { bassMode?: boolean; cutoffHz?: number }).bassMode ? Number((rawVUMeter as { cutoffHz?: number }).cutoffHz) || 120 : 20000))),
+      attackMs: Math.min(200, Math.max(1, Number(rawVUMeter.attackMs) || 5)),
+      releaseMs: Math.min(2000, Math.max(1, Number(rawVUMeter.releaseMs) || 180)),
+      showCorrelation: rawVUMeter.showCorrelation !== false,
     },
     pitch: {
       ...DEFAULT_SCOPE_SETTINGS.pitch,

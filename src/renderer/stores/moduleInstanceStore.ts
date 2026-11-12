@@ -24,13 +24,13 @@ function loadInstances(): ModuleInstance[] {
     return parsed.flatMap((value): ModuleInstance[] => {
       if (!value || typeof value !== 'object') return []
       const item = value as Partial<ModuleInstance>
-      if (typeof item.id !== 'string' || !MODULE_INSTANCE_KINDS.includes(item.kind as ModuleInstanceKind)) return []
-      const kind = item.kind as ModuleInstanceKind
+      if (typeof item.id !== 'string' || (item.kind !== 'bassvumeter' && !MODULE_INSTANCE_KINDS.includes(item.kind as ModuleInstanceKind))) return []
+      const kind = item.kind === 'bassvumeter' ? 'vumeter' : item.kind as ModuleInstanceKind
       const left = item.channelPairLeft
       return [{
         id: item.id,
         kind,
-        settings: { ...cloneInstanceSettings(kind), ...(item.settings ?? {}) } as ModuleInstance['settings'],
+        settings: { ...cloneInstanceSettings(kind), ...(item.settings ?? {}), ...((item.kind === 'bassvumeter' || (item.settings as { bassMode?: boolean } | undefined)?.bassMode) ? { highCutHz: (item.settings as { highCutHz?: number; cutoffHz?: number } | undefined)?.highCutHz ?? (item.settings as { cutoffHz?: number } | undefined)?.cutoffHz ?? 120 } : {}) } as ModuleInstance['settings'],
         linkSettings: item.linkSettings === true,
         ...(typeof left === 'number' && left >= 0 && left < 8 && left % 2 === 0 ? { channelPairLeft: left } : {}),
       }]

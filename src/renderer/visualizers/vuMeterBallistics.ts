@@ -59,8 +59,12 @@ export class VUMeterBallistics {
   private lastPeakUpdateMs: number | null = null
   private barEnvelopeL = 0
   private barEnvelopeR = 0
+  private responsePowerL = 0
+  private responsePowerR = 0
   private barAttackCoeff = 0
   private barReleaseCoeff = 0
+  private attackMs = BAR_ATTACK_MS
+  private releaseMs = BAR_RELEASE_MS
   private snapshot: VUMeterSnapshot = { ...INITIAL_SNAPSHOT }
 
   constructor(sampleRate: number) {
@@ -80,9 +84,15 @@ export class VUMeterBallistics {
     this.sqL = new Float64Array(this.integrationWindowSamples)
     this.sqR = new Float64Array(this.integrationWindowSamples)
     this.cross = new Float64Array(this.integrationWindowSamples)
-    this.barAttackCoeff = Math.exp(-1 / (this.sampleRate * (BAR_ATTACK_MS / 1000)))
-    this.barReleaseCoeff = Math.exp(-1 / (this.sampleRate * (BAR_RELEASE_MS / 1000)))
+    this.setResponse(this.attackMs, this.releaseMs)
     this.reset()
+  }
+
+  setResponse(attackMs: number, releaseMs: number): void {
+    this.attackMs = Math.min(200, Math.max(1, attackMs))
+    this.releaseMs = Math.min(2000, Math.max(1, releaseMs))
+    this.barAttackCoeff = Math.exp(-1 / (this.sampleRate * (this.attackMs / 1000)))
+    this.barReleaseCoeff = Math.exp(-1 / (this.sampleRate * (this.releaseMs / 1000)))
   }
 
   reset(): void {
@@ -99,6 +109,8 @@ export class VUMeterBallistics {
     this.lastPeakUpdateMs = null
     this.barEnvelopeL = 0
     this.barEnvelopeR = 0
+    this.responsePowerL = 0
+    this.responsePowerR = 0
     this.snapshot = { ...INITIAL_SNAPSHOT }
   }
 
@@ -144,6 +156,8 @@ export class VUMeterBallistics {
         const absR = Math.abs(right)
         this.barEnvelopeL = this.updateBarEnvelope(this.barEnvelopeL, absL)
         this.barEnvelopeR = this.updateBarEnvelope(this.barEnvelopeR, absR)
+        this.responsePowerL = this.updatePowerEnvelope(this.responsePowerL, sqL)
+        this.responsePowerR = this.updatePowerEnvelope(this.responsePowerR, sqR)
         if (absL > maxPeakL) maxPeakL = absL
         if (absR > maxPeakR) maxPeakR = absR
       }
@@ -173,8 +187,9 @@ export class VUMeterBallistics {
     const meanSqR = Math.max(0, this.sumSqR) / this.sampleCount
     const denominator = Math.sqrt(Math.max(0, this.sumSqL) * Math.max(0, this.sumSqR))
 
-    this.snapshot.vuLDb = amplitudeToDb(Math.sqrt(meanSqL))
-    this.snapshot.vuRDb = amplitudeToDb(Math.sqrt(meanSqR))
+    const useAdjustableResponse = this.attackMs !== BAR_ATTACK_MS || this.releaseMs !== BAR_RELEASE_MS
+    this.snapshot.vuLDb = amplitudeToDb(Math.sqrt(useAdjustableResponse ? this.responsePowerL : meanSqL))
+    this.snapshot.vuRDb = amplitudeToDb(Math.sqrt(useAdjustableResponse ? this.responsePowerR : meanSqR))
     this.snapshot.barLDb = amplitudeToDb(this.barEnvelopeL)
     this.snapshot.barRDb = amplitudeToDb(this.barEnvelopeR)
     this.snapshot.correlation = denominator > 1e-10
@@ -183,6 +198,11 @@ export class VUMeterBallistics {
   }
 
   private updateBarEnvelope(current: number, input: number): number {
+    const coeff = input > current ? this.barAttackCoeff : this.barReleaseCoeff
+    return coeff * current + (1 - coeff) * input
+  }
+
+  private updatePowerEnvelope(current: number, input: number): number {
     const coeff = input > current ? this.barAttackCoeff : this.barReleaseCoeff
     return coeff * current + (1 - coeff) * input
   }

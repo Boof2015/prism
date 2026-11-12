@@ -71,6 +71,11 @@ export interface ScopeSettings {
   }
   vumeter: {
     mode: VUMeterMode
+    lowCutHz: number
+    highCutHz: number
+    attackMs: number
+    releaseMs: number
+    showCorrelation: boolean
     orientation: VUMeterOrientation
     needleChannels: VUMeterNeedleChannels
     referenceDb: number
@@ -102,7 +107,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   oscilloscope: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, pitchLock: true, underfillEnabled: false, showGrid: true, lineWidth: 2 },
   vectorscope: { mode: 'lissajous', zoomDb: DEFAULT_VECTORSCOPE_ZOOM_DB, multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
   spectrogram: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, fftSize: 4096, tiltDbPerOctave: DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE, scrollSpeed: 2, contrast: DEFAULT_SPECTROGRAM_CONTRAST, clarityMode: 'sharper', scaleMode: 'log', frequencyRangeMode: DEFAULT_FREQUENCY_RANGE_MODE, showGrid: true, colorScheme: 'heat', timelineUnit: DEFAULT_TIMELINE_UNIT },
-  vumeter: { mode: 'bar', orientation: 'horizontal', needleChannels: 'stereo', referenceDb: DEFAULT_VU_REFERENCE_DBFS },
+  vumeter: { mode: 'bar', lowCutHz: 20, highCutHz: 20000, attackMs: 5, releaseMs: 180, showCorrelation: true, orientation: 'horizontal', needleChannels: 'stereo', referenceDb: DEFAULT_VU_REFERENCE_DBFS },
   pitch: { ...DEFAULT_PITCH_SETTINGS },
   lufsmeter: { mode: 'bar', readout: DEFAULT_LUFS_METER_READOUT },
   waveform: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: DEFAULT_WAVEFORM_SCROLL_SPEED, multiband: false, timelineUnit: DEFAULT_TIMELINE_UNIT },

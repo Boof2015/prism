@@ -8,7 +8,7 @@ import { SCOPE_LABELS, type AudioScopeKind, type ScopeKind } from '../../types/s
 import type { ScopeSettings } from '../../types/settings'
 import ThemedSelect from './ThemedSelect'
 import { useAudioStore } from '../stores/audioStore'
-import { DEFAULT_BASS_VU_SETTINGS, DEFAULT_PITCH_SETTINGS, MODULE_INSTANCE_KINDS, type BassVUMeterSettings, type ModuleInstanceKind, type PitchSettings } from '../../types/moduleInstance'
+import { DEFAULT_PITCH_SETTINGS, MODULE_INSTANCE_KINDS, type BassVUMeterSettings, type ModuleInstanceKind, type PitchSettings } from '../../types/moduleInstance'
 
 interface SettingsPanelProps {
   onHeightChange?: (height: number) => void
@@ -72,9 +72,9 @@ export default function SettingsPanel({ onHeightChange }: SettingsPanelProps): J
       <div className="settings-panel__utility-row">
         <span>Add module</span>
         <ThemedSelect value={newKind} onChange={(event) => setNewKind(event.target.value as ModuleInstanceKind)}>
-          {MODULE_INSTANCE_KINDS.map((kind) => <option key={kind} value={kind}>{kind === 'pitch' ? 'Pitch' : kind === 'bassvumeter' ? 'Bass VU Meter' : SCOPE_LABELS[kind]}</option>)}
+          {MODULE_INSTANCE_KINDS.map((kind) => <option key={kind} value={kind}>{kind === 'pitch' ? 'Pitch' : SCOPE_LABELS[kind as AudioScopeKind]}</option>)}
         </ThemedSelect>
-        <button type="button" className="settings-chip" onClick={() => addInstance(newKind, newKind === 'pitch' ? DEFAULT_PITCH_SETTINGS : newKind === 'bassvumeter' ? DEFAULT_BASS_VU_SETTINGS : scopeSettings[newKind])}>Add</button>
+        <button type="button" className="settings-chip" onClick={() => addInstance(newKind, newKind === 'pitch' ? DEFAULT_PITCH_SETTINGS : scopeSettings[newKind as AudioScopeKind])}>Add</button>
       </div>
       <div className="settings-panel__scope-track" style={scopeTrackStyle} ref={scopeTrackRef}>
         {dockedScopes.map((kind) => (
@@ -112,7 +112,7 @@ export default function SettingsPanel({ onHeightChange }: SettingsPanelProps): J
             onRemove={() => removeInstance(instance.id)}
             settingsLinked={instance.linkSettings === true}
             onSettingsLinkedChange={(linked) => setSettingsLinked(instance.id, linked)}
-            extraControls={<label className="settings-control settings-control--full"><span className="settings-control__label">Low-pass cutoff<span className="settings-control__value">{current.cutoffHz.toFixed(0)} Hz</span></span><input className="settings-control__range" type="range" min="20" max="350" step="1" value={current.cutoffHz} style={{ '--range-percent': `${((current.cutoffHz - 20) / 330) * 100}%` } as CSSProperties} onChange={(event) => updateSettings(instance.id, { cutoffHz: Math.min(350, Math.max(20, Number(event.target.value))) })} /></label>}
+            extraControls={undefined}
             onUpdate={((_kind: ScopeKind, partial: Partial<ScopeSettings[ScopeKind]>) => updateSettings(instance.id, partial as Partial<BassVUMeterSettings>)) as typeof updateScopeSettings}
           />
         })() : (

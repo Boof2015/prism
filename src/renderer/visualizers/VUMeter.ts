@@ -28,6 +28,11 @@ export interface VUMeterDataSource extends VisualizerSessionSource {
 }
 
 export interface VUMeterOptions {
+  lowCutHz?: number
+  highCutHz?: number
+  attackMs?: number
+  releaseMs?: number
+  showCorrelation?: boolean
   mode?: VUMeterMode
   orientation?: VUMeterOrientation
   backgroundColor?: string
@@ -51,6 +56,11 @@ type ResolvedVUMeterOptions = Required<Omit<VUMeterOptions, 'dataSource' | 'fram
 
 const defaultOptions: ResolvedVUMeterOptions = {
   mode: 'bar',
+  lowCutHz: 20,
+  highCutHz: 20000,
+  attackMs: 5,
+  releaseMs: 180,
+  showCorrelation: true,
   orientation: DEFAULT_VU_METER_ORIENTATION,
   backgroundColor: 'transparent',
   lineColor: '#38bdf8',
@@ -298,6 +308,30 @@ export function resolveVUNeedleReadings({
 // ---- VU Meter class ----
 
 export class VUMeter {
+  private lowPassState = [{ x1: 0, x2: 0, y1: 0, y2: 0 }, { x1: 0, x2: 0, y1: 0, y2: 0 }]
+  private highPassState = [{ x1: 0, x2: 0, y1: 0, y2: 0 }, { x1: 0, x2: 0, y1: 0, y2: 0 }]
+  private filterBand(samples: Float32Array, channel: number): Float32Array {
+    const sampleRate = Math.max(1, this.dataSource.getSampleRate())
+    const apply = (input: Float32Array, cutoff: number, highPass: boolean, state: typeof this.lowPassState[number]): Float32Array => {
+      const omega = 2 * Math.PI * Math.min(cutoff, sampleRate * 0.45) / sampleRate
+      const cosine = Math.cos(omega), alpha = Math.sin(omega) / (2 * Math.SQRT1_2), a0 = 1 + alpha
+      const b0 = (1 + (highPass ? cosine : -cosine)) / (2 * a0)
+      const b1 = (highPass ? -(1 + cosine) : 1 - cosine) / a0
+      const a1 = -2 * cosine / a0, a2 = (1 - alpha) / a0
+      const output = new Float32Array(input.length)
+      for (let i = 0; i < input.length; i += 1) {
+        const x = input[i]!, y = b0 * x + b1 * state.x1 + b0 * state.x2 - a1 * state.y1 - a2 * state.y2
+        output[i] = y; state.x2 = state.x1; state.x1 = x; state.y2 = state.y1; state.y1 = y
+      }
+      return output
+    }
+    const lowCut = Math.max(20, this.options.lowCutHz)
+    const highCut = Math.min(20000, this.options.highCutHz)
+    let output = samples
+    if (lowCut > 20) output = apply(output, lowCut, true, this.highPassState[channel]!)
+    if (highCut < 20000) output = apply(output, highCut, false, this.lowPassState[channel]!)
+    return output
+  }
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
   private options: ResolvedVUMeterOptions
@@ -333,6 +367,7 @@ export class VUMeter {
     this.dataSource = dataSource ?? defaultVUMeterDataSource
     this.nativeAnalyzer = nativeAnalyzer === undefined ? nativeVUMeter : nativeAnalyzer
     this.meterBallistics = new VUMeterBallistics(this.dataSource.getSampleRate())
+    this.meterBallistics.setResponse(this.options.attackMs, this.options.releaseMs)
     this.frameLoop = new VisualizerFrameLoop({
       frameScheduler,
       shouldRun: () => this.dataSource.isPlaying(),
@@ -354,7 +389,7 @@ export class VUMeter {
   private resetMeters(): void {
     this.currentSampleRate = Math.max(1, this.dataSource.getSampleRate())
     this.meterBallistics.reinitialize(this.currentSampleRate)
-    if (this.isNativeAnalyzerReady()) {
+    if (this.isNativeAnalyzerReady() && this.usesNativeResponse()) {
       this.nativeAnalyzer?.setSampleRate(this.currentSampleRate)
       this.nativeAnalyzer?.reset()
     }
@@ -366,6 +401,7 @@ export class VUMeter {
   setOptions(options: Partial<VUMeterOptions>): void {
     const { dataSource, frameScheduler: _frameScheduler, nativeAnalyzer, ...optionUpdates } = options
     this.options = { ...this.options, ...optionUpdates }
+    this.meterBallistics.setResponse(this.options.attackMs, this.options.releaseMs)
     let didReset = false
     if (nativeAnalyzer !== undefined && nativeAnalyzer !== this.nativeAnalyzer) {
       this.nativeAnalyzer = nativeAnalyzer
@@ -381,6 +417,10 @@ export class VUMeter {
     if (!didReset) {
       this.invalidate()
     }
+  }
+
+  private usesNativeResponse(): boolean {
+    return this.options.lowCutHz <= 20 && this.options.highCutHz >= 20000 && this.options.attackMs === 5 && this.options.releaseMs === 180
   }
 
   start(): void {
@@ -437,7 +477,9 @@ export class VUMeter {
 
     const elapsedSeconds = clamp((nowMs - this.lastNeedleVisualUpdateMs) / 1000, 0, 0.1)
     this.lastNeedleVisualUpdateMs = nowMs
-    const amount = 1 - Math.exp(-elapsedSeconds / NEEDLE_VISUAL_SMOOTHING_SECONDS)
+    const responseMs = this.vuL > this.needleDisplayL || this.vuR > this.needleDisplayR ? this.options.attackMs : this.options.releaseMs
+    const smoothingSeconds = this.usesNativeResponse() ? NEEDLE_VISUAL_SMOOTHING_SECONDS : Math.max(0.001, responseMs / 1000)
+    const amount = 1 - Math.exp(-elapsedSeconds / smoothingSeconds)
     this.needleDisplayL += (this.vuL - this.needleDisplayL) * amount
     this.needleDisplayR += (this.vuR - this.needleDisplayR) * amount
     this.needlePeakL = this.updateNeedlePeakVisual(this.needlePeakL, this.needleDisplayL, elapsedSeconds)
@@ -464,7 +506,8 @@ export class VUMeter {
       this.resetMeters()
     }
 
-    const chunks = this.dataSource.getPendingVUMeterSamples()
+    const incoming = this.dataSource.getPendingVUMeterSamples()
+    const chunks = this.options.lowCutHz > 20 || this.options.highCutHz < 20000 ? incoming.map((chunk) => ({ left: this.filterBand(chunk.left, 0), right: this.filterBand(chunk.right, 1) })) : incoming
     if (!this.dataSource.isPlaying()) {
       const snapshot = this.isNativeAnalyzerReady()
         ? normalizeNativeSnapshot(this.nativeAnalyzer?.getSnapshot() ?? null)
@@ -473,7 +516,7 @@ export class VUMeter {
       return
     }
 
-    if (this.isNativeAnalyzerReady()) {
+    if (this.isNativeAnalyzerReady() && this.usesNativeResponse()) {
       if (chunks.length > 0) {
         const batch = this.concatStereoChunks(chunks)
         if (batch.left.length > 0 && batch.right.length > 0) {
@@ -553,7 +596,7 @@ export class VUMeter {
     const { r: cr, g: cg, b: cb } = resolveColorToRgb(this.options.lineColor)
 
     const meterHeight = Math.max(1, Math.floor(height * 0.28))
-    const corrHeight = Math.max(1, Math.floor(height * 0.16))
+    const corrHeight = this.options.showCorrelation ? Math.max(1, Math.floor(height * 0.16)) : 0
     const gap = Math.max(2, Math.floor(height * 0.04))
     const labelWidth = Math.max(24, Math.floor(width * 0.07))
     const dbLabelWidth = Math.max(52, Math.floor(width * 0.1))
@@ -562,7 +605,7 @@ export class VUMeter {
     const barWidth = Math.max(1, barRight - barLeft)
 
     // Total content height
-    const totalHeight = meterHeight * 2 + corrHeight + gap * 2
+    const totalHeight = meterHeight * 2 + corrHeight + gap * (this.options.showCorrelation ? 2 : 1)
     const topOffset = Math.max(0, Math.floor((height - totalHeight) / 2))
 
     // ---- L meter ----
@@ -579,7 +622,7 @@ export class VUMeter {
 
     // ---- Correlation meter ----
     const corrY = rY + meterHeight + gap
-    this.drawCorrelationBar(ctx, barLeft, corrY, barWidth, corrHeight, cr, cg, cb)
+    if (this.options.showCorrelation) this.drawCorrelationBar(ctx, barLeft, corrY, barWidth, corrHeight, cr, cg, cb)
   }
 
   private drawVerticalBarMode(width: number, height: number): void {
@@ -590,7 +633,7 @@ export class VUMeter {
     const channelGap = Math.max(4, Math.floor(width * 0.08))
     const labelHeight = Math.max(14, Math.floor(height * 0.08))
     const dbHeight = Math.max(14, Math.floor(height * 0.1))
-    const corrHeight = Math.max(10, Math.floor(height * 0.11))
+    const corrHeight = this.options.showCorrelation ? Math.max(10, Math.floor(height * 0.11)) : 0
     const gapY = Math.max(4, Math.floor(height * 0.03))
     const maxMeterWidth = Math.max(4, Math.floor((width - channelGap) / 2))
     const availableMeterWidth = Math.max(8, width - sidePadding * 2 - channelGap)
@@ -615,7 +658,7 @@ export class VUMeter {
     this.drawVerticalMeterBar(ctx, rX, meterTop, meterWidth, meterHeight, this.vuR, this.peakR, cr, cg, cb)
     this.drawCenteredDbLabel(ctx, rX, dbY, meterWidth, dbHeight, this.vuR)
 
-    this.drawCorrelationBar(ctx, corrX, corrY, corrWidth, corrHeight, cr, cg, cb)
+    if (this.options.showCorrelation) this.drawCorrelationBar(ctx, corrX, corrY, corrWidth, corrHeight, cr, cg, cb)
   }
 
   private drawHorizontalMeterBar(
@@ -828,8 +871,8 @@ export class VUMeter {
     const startAngle = Math.PI * 1.08
     const endAngle = Math.PI * 1.92
     const spanCos = Math.abs(Math.cos(startAngle))
-    const corrHeight = 19 * faceScale
-    const gap = 4 * faceScale
+    const corrHeight = this.options.showCorrelation ? 19 * faceScale : 0
+    const gap = this.options.showCorrelation ? 4 * faceScale : 0
     const meterAreaHeight = Math.max(1, faceHeight - corrHeight - gap)
     const sidePadding = 11 * faceScale
     const labelFontSize = 26 * faceScale
@@ -904,7 +947,7 @@ export class VUMeter {
 
     const barLeft = Math.max(10 * faceScale, sidePadding)
     const barWidth = Math.max(1, faceWidth - barLeft * 2)
-    this.drawCorrelationBar(ctx, barLeft, meterAreaHeight + gap, barWidth, corrHeight, cr, cg, cb, 0.72, 0.76, 8 * faceScale, 18 * faceScale, 0.24)
+    if (this.options.showCorrelation) this.drawCorrelationBar(ctx, barLeft, meterAreaHeight + gap, barWidth, corrHeight, cr, cg, cb, 0.72, 0.76, 8 * faceScale, 18 * faceScale, 0.24)
     ctx.restore()
   }
 

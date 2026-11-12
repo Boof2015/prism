@@ -31,6 +31,7 @@ export function createScopeInstanceDataSource(kind: ModuleInstanceKind, channelP
   let sourceSessionId = -1
   let localSessionId = 0
   let bassCutoff = Math.min(350, Math.max(20, initialBassCutoff))
+  let disposeTimer: ReturnType<typeof setTimeout> | undefined
   const filterState = {
     left: { x1: 0, x2: 0, y1: 0, y2: 0 },
     right: { x1: 0, x2: 0, y1: 0, y2: 0 },
@@ -80,6 +81,7 @@ export function createScopeInstanceDataSource(kind: ModuleInstanceKind, channelP
   }
 
   const setChannelPair = (left: number | null): void => {
+    if (disposeTimer !== undefined) { clearTimeout(disposeTimer); disposeTimer = undefined }
     router.setScopeChannelPair(routerKind, left === null ? null : { left, right: left + 1 })
   }
   setChannelPair(channelPairLeft ?? null)
@@ -115,10 +117,13 @@ export function createScopeInstanceDataSource(kind: ModuleInstanceKind, channelP
     setChannelPair,
     ...(kind === 'bassvumeter' ? { setBassCutoff: (cutoffHz: number) => { bassCutoff = Math.min(350, Math.max(20, cutoffHz)) } } : {}),
     dispose: () => {
-      unsubscribeChunks()
-      unsubscribeSession()
-      router.clearVisualizerConsumerDemand('module-instance')
-      router.endSession()
+      disposeTimer = setTimeout(() => {
+        unsubscribeChunks()
+        unsubscribeSession()
+        router.clearVisualizerConsumerDemand('module-instance')
+        router.endSession()
+        disposeTimer = undefined
+      }, 0)
     },
   }
 }
