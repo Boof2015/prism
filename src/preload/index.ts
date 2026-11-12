@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { WindowDockingSnapshot } from '../types/windowDocking'
+import type { MainWindowSettingsLayout, MainWindowSettingsRequest } from '../types/mainWindowSettings'
 import type { SpectrumReferenceImportState } from '../types/spectrumReference'
 import type { AppBuildInfo } from '../types/appBuildInfo'
 import type { AudioClipDragPayload } from '../types/audioClip'
@@ -220,6 +221,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   expandSettings: (panelHeight: number) => ipcRenderer.send('window:expand-settings', panelHeight),
   collapseSettings: (panelHeight: number) => ipcRenderer.send('window:collapse-settings', panelHeight),
   setSettingsHeight: (panelHeight: number) => ipcRenderer.send('window:set-settings-height', panelHeight),
+  setMainSettingsLayout: (request: MainWindowSettingsRequest): void => ipcRenderer.send('window:set-main-settings-layout', request),
+  onMainSettingsLayout: (callback: (layout: MainWindowSettingsLayout) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, layout: MainWindowSettingsLayout): void => callback(layout)
+    ipcRenderer.on('window:settings-layout', handler)
+    return () => ipcRenderer.removeListener('window:settings-layout', handler)
+  },
   notifyRendererReady: () => ipcRenderer.send('renderer:ready'),
   respondToCloseRequest: (shouldClose: boolean) => ipcRenderer.send('window:close-response', shouldClose),
   openProfileMenu: (request: ProfileMenuRequest) => ipcRenderer.send('profile-menu:open', request),

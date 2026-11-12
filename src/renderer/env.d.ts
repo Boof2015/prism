@@ -1,5 +1,6 @@
 import type { SpectrumReferenceTransport } from '../types/spectrumReference'
 import type { WindowDockingSnapshot } from '../types/windowDocking'
+import type { MainWindowSettingsLayout, MainWindowSettingsRequest } from '../types/mainWindowSettings'
 /// <reference types="vite/client" />
 
 import type { VisualizerDSP } from './audio/native/visualizer-dsp'
@@ -135,6 +136,8 @@ declare global {
       expandSettings: (panelHeight: number) => void
       collapseSettings: (panelHeight: number) => void
       setSettingsHeight: (panelHeight: number) => void
+      setMainSettingsLayout: (request: MainWindowSettingsRequest) => void
+      onMainSettingsLayout: (callback: (layout: MainWindowSettingsLayout) => void) => () => void
       notifyRendererReady: () => void
       respondToCloseRequest: (shouldClose: boolean) => void
       openProfileMenu: (request: ProfileMenuRequest) => void

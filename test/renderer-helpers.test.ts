@@ -45,8 +45,11 @@ import {
   clampDraggedMainWindowBounds,
   clampRestoredWindowBounds,
   raiseWindowAboveNormalPopouts,
-  resolveExpandedMainWindowBounds,
+  resolveMainWindowSettingsLayout,
+  selectMainWindowWorkArea,
+  normalizeMainWindowSettingsRequest,
 } from '../src/shared/windowGeometry'
+import { MainWindowSettingsController } from '../src/main/mainWindowSettings'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
 import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../src/shared/themeState'
 import { useAudioStore } from '../src/renderer/stores/audioStore'
@@ -5432,34 +5435,233 @@ test('resolveMainWindowSettingsPanelHeight uses intrinsic scope-track height whe
   }
 })
 
-test('expanded main-window bounds can push upward into an overlapping display above', () => {
-  const resolved = resolveExpandedMainWindowBounds(
-    { x: 700, y: 1110, width: 900, height: 180 },
-    400,
-    [
+test('settings expansion stays within the monitor holding the unexpanded window', () => {
+  const resolved = resolveMainWindowSettingsLayout({
+    logicalBounds: { x: 700, y: 1110, width: 900, height: 180 },
+    request: { panelHeight: 400, bottomBarHeight: 92 },
+    workAreas: [
       { x: 0, y: 0, width: 1920, height: 1080 },
       { x: 600, y: 1080, width: 720, height: 260 },
     ],
-  )
+  })
 
-  assert.equal(resolved.x, 700)
-  assert.equal(resolved.y, 760)
-  assert.equal(resolved.height, 580)
+  assert.equal(resolved.bounds.y, 1080)
+  assert.equal(resolved.bounds.height, 260)
+  assert.equal(resolved.settingsHeight, 160)
+  assert.equal(resolved.minimumHeight, 260)
 })
 
-test('expanded main-window bounds can span into a taller side display instead of clamping to one display', () => {
-  const resolved = resolveExpandedMainWindowBounds(
-    { x: 650, y: 650, width: 400, height: 180 },
-    300,
-    [
+test('settings choose the largest overlap, never borrowing height from adjacent displays', () => {
+  const workAreas = [
       { x: 0, y: 0, width: 800, height: 800 },
       { x: 800, y: 0, width: 800, height: 1200 },
-    ],
-  )
+  ]
+  const resolved = resolveMainWindowSettingsLayout({
+    logicalBounds: { x: 550, y: 600, width: 400, height: 180 },
+    request: { panelHeight: 1000, bottomBarHeight: 92 }, workAreas,
+  })
+  assert.equal(resolved.bounds.height, 800)
+  assert.equal(resolved.bounds.y, 0)
+  assert.deepEqual(selectMainWindowWorkArea({ x: 650, y: 600, width: 400, height: 180 }, workAreas), workAreas[1])
+})
 
-  assert.equal(resolved.x, 650)
-  assert.equal(resolved.y, 650)
-  assert.equal(resolved.height, 480)
+test('settings layout preserves scopes until the footer and usable controls need space', () => {
+  const workAreas = [{ x: -1920, y: 25, width: 1920, height: 900 }]
+  const layout = (height: number, panelHeight: number, zoomFactor = 1) => resolveMainWindowSettingsLayout({
+    logicalBounds: { x: -1800, y: 100, width: 900, height },
+    request: { panelHeight, bottomBarHeight: 92 }, workAreas, zoomFactor,
+  })
+  const fitting = layout(180, 300)
+  assert.equal(fitting.bounds.height, 573)
+  assert.equal(fitting.settingsHeight, 393)
+  assert.equal(fitting.bounds.y, 100)
+  const overflowing = layout(180, 1500)
+  assert.equal(overflowing.bounds.height, 900)
+  assert.equal(overflowing.bounds.y, 25)
+  assert.equal(overflowing.settingsHeight, 720)
+  assert.equal(overflowing.minimumHeight, 373)
+  const tall = layout(800, 1500)
+  assert.equal(tall.settingsHeight, 273)
+  assert.equal(tall.bounds.height - tall.settingsHeight, 627)
+  const zoomed = layout(180, 1500, 2)
+  assert.equal(zoomed.settingsHeight, 360)
+  assert.equal(zoomed.minimumHeight, 646)
+})
+
+test('settings reject nonfinite measurements and fit restored oversized heights', () => {
+  for (const value of [NaN, Infinity, -1, '300', undefined]) {
+    assert.equal(normalizeMainWindowSettingsRequest({ panelHeight: value, bottomBarHeight: 92 }), null)
+    assert.equal(normalizeMainWindowSettingsRequest({ panelHeight: 300, bottomBarHeight: value }), null)
+  }
+  const restored = resolveMainWindowSettingsLayout({
+    logicalBounds: { x: 2000, y: 2000, width: 900, height: 1500 },
+    request: { panelHeight: 0, bottomBarHeight: 0 },
+    workAreas: [{ x: 0, y: 25, width: 1440, height: 800 }],
+  })
+  assert.deepEqual(restored.bounds, { x: 540, y: 25, width: 900, height: 800 })
+  assert.equal(restored.settingsHeight, 0)
+})
+
+function createSettingsWindowHarness(initial = { x: 80, y: 500, width: 900, height: 180 }, geometricMaximize = false) {
+  let bounds = { ...initial }
+  let workAreas = [{ x: 0, y: 25, width: 1440, height: 900 }]
+  let fixed = false
+  let explicitlyMaximized = false
+  let normalBounds = { ...initial }
+  let zoom = 1
+  let minimumHeight = 100
+  let settingsHeight = 0
+  const controller = new MainWindowSettingsController({
+    bounds: () => ({ ...bounds }), normalBounds: () => ({ ...normalBounds }), workAreas: () => workAreas,
+    maximized: () => explicitlyMaximized || geometricMaximize && workAreas.some(area =>
+      area.x === bounds.x && area.y === bounds.y && area.width === bounds.width && area.height === bounds.height),
+    fullScreen: () => fixed, zoomFactor: () => zoom, chromeHeight: () => 0,
+    setBounds: next => { bounds = { ...next }; controller.geometryChanged() },
+    setMinimumHeight: height => { minimumHeight = height },
+    publish: layout => { settingsHeight = layout.settingsHeight },
+  })
+  return {
+    controller,
+    state: () => ({ bounds, minimumHeight, settingsHeight }),
+    resize: (next: Partial<typeof bounds>) => { bounds = { ...bounds, ...next }; controller.geometryChanged() },
+    displays: (next: typeof workAreas) => { workAreas = next; controller.refresh() },
+    fixed: (value: boolean, next: typeof bounds) => { fixed = value; bounds = next; controller.geometryChanged() },
+    maximize: (next: typeof bounds) => {
+      normalBounds = { ...bounds }
+      bounds = { ...next, height: next.height - 18 }
+      controller.geometryChanged()
+      bounds = next
+      explicitlyMaximized = true
+      controller.modeChanged('maximize')
+    },
+    unmaximize: () => {
+      explicitlyMaximized = false
+      bounds = { ...normalBounds }
+      controller.modeChanged('unmaximize')
+    },
+    zoom: (value: number) => { zoom = value; controller.refresh() },
+  }
+}
+
+test('settings open/close restores the unexpanded bounds without accumulating height or drift', () => {
+  const harness = createSettingsWindowHarness()
+  const original = harness.controller.logicalBounds
+  for (let i = 0; i < 5; i++) {
+    harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+    assert.equal(harness.state().bounds.height, 900)
+    assert.deepEqual(harness.controller.logicalBounds, original)
+    harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+    assert.deepEqual(harness.state().bounds, original)
+    assert.equal(harness.state().minimumHeight, 100)
+  }
+})
+
+test('a full-width bar restores after settings fill the screen and macOS reports it as maximized', () => {
+  for (const y of [25, 745]) {
+    const original = { x: 0, y, width: 1440, height: 180 }
+    const harness = createSettingsWindowHarness(original, true)
+    for (let i = 0; i < 3; i++) {
+      harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+      assert.deepEqual(harness.state().bounds, { x: 0, y: 25, width: 1440, height: 900 })
+      // Cover a platform that also delivers a delayed maximize notification.
+      harness.controller.modeChanged('maximize')
+      harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+      assert.deepEqual(harness.state().bounds, original)
+      assert.deepEqual(harness.controller.logicalBounds, original)
+    }
+    harness.controller.dispose()
+  }
+})
+
+test('automatic screen-filling settings still shrink when their content gets shorter', () => {
+  const harness = createSettingsWindowHarness({ x: 0, y: 25, width: 1440, height: 180 }, true)
+  harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+  harness.controller.setRequest({ panelHeight: 200, bottomBarHeight: 92 })
+  assert.equal(harness.state().bounds.height, 473)
+  assert.equal(harness.state().settingsHeight, 293)
+})
+
+test('a window already maximized before settings open stays maximized on close', () => {
+  const original = { x: 0, y: 25, width: 1440, height: 900 }
+  const harness = createSettingsWindowHarness(original, true)
+  harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, original)
+  assert.deepEqual(harness.controller.logicalBounds, original)
+})
+
+test('native maximize animation frames do not replace a closed bar\'s restore height', async () => {
+  const original = { x: 0, y: 25, width: 1440, height: 180 }
+  const harness = createSettingsWindowHarness(original, true)
+  const maximized = { ...original, height: 900 }
+  harness.maximize(maximized)
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.deepEqual(harness.controller.logicalBounds, original)
+  harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, maximized)
+  harness.unmaximize()
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.deepEqual(harness.state().bounds, original)
+  harness.controller.dispose()
+})
+
+test('settings allow temporary vertical resizing and retain intentional moves and width changes', () => {
+  const harness = createSettingsWindowHarness()
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  harness.resize({ x: 120, height: 550, width: 1000 })
+  assert.equal(harness.state().bounds.height, 550)
+  assert.equal(harness.state().settingsHeight, 370)
+  assert.equal(harness.controller.logicalBounds.height, 180)
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, { x: 120, y: 500, width: 1000, height: 180 })
+})
+
+test('settings adapt to zoom, removed displays, and short workspaces without changing profile bounds', () => {
+  const harness = createSettingsWindowHarness({ x: -1400, y: 40, width: 900, height: 800 })
+  harness.displays([{ x: -1440, y: 25, width: 1440, height: 900 }])
+  const logical = harness.controller.logicalBounds
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  harness.zoom(1.5)
+  assert.equal(harness.state().settingsHeight, 410 / 1.5)
+  harness.displays([{ x: 0, y: 25, width: 1280, height: 500 }])
+  const { bounds, settingsHeight } = harness.state()
+  assert.equal(bounds.height, 500)
+  assert.equal(bounds.y, 25)
+  assert.ok(settingsHeight * 1.5 <= 400)
+  assert.deepEqual(harness.controller.logicalBounds, logical)
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.equal(harness.state().bounds.height, 500)
+  assert.deepEqual(harness.controller.logicalBounds, logical)
+})
+
+test('maximized/fullscreen settings allocate inside fixed bounds and restore after closing', async () => {
+  const harness = createSettingsWindowHarness()
+  const original = harness.controller.logicalBounds
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  const expanded = { ...harness.state().bounds }
+  const fullscreen = { x: 0, y: 0, width: 1440, height: 960 }
+  harness.fixed(true, fullscreen)
+  assert.deepEqual(harness.state().bounds, fullscreen)
+  assert.equal(harness.state().settingsHeight, 780)
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, fullscreen)
+  harness.fixed(false, expanded)
+  // Native restore geometry may arrive after the unmaximize event.
+  harness.resize({ height: fullscreen.height })
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.deepEqual(harness.state().bounds, original)
+  harness.controller.dispose()
+})
+
+test('docking can take over settings without resizing the floating window', () => {
+  const harness = createSettingsWindowHarness()
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  const before = { ...harness.state().bounds }
+  harness.controller.reset()
+  assert.deepEqual(harness.state().bounds, before)
+  assert.equal(harness.state().settingsHeight, 0)
+  assert.equal(harness.controller.open, false)
 })
 
 test('dragged main-window bounds keep a visible grab margin without sticking at a display seam', () => {

@@ -27,7 +27,8 @@ export function resolveMainWindowSettingsHeight(
     return 0
   }
 
-  if (settingsPanelHeight <= 0 || bottomBarHeight <= 0) {
+  if (!Number.isFinite(settingsPanelHeight) || !Number.isFinite(bottomBarHeight)
+    || settingsPanelHeight <= 0 || bottomBarHeight <= 0) {
     return 0
   }
 
