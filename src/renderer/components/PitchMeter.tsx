@@ -2,54 +2,58 @@ import { useEffect, useRef, type JSX } from 'react'
 import type { PitchSettings } from '../../types/moduleInstance'
 import type { ScopeInstanceDataSource } from '../audio/scopeInstanceDataSource'
 import type { FrameScheduler } from '../visualizers/frameScheduler'
+import { createPitchAnalysisClient } from '../audio/pitchAnalysisService'
 
 interface Peak { hz: number; power: number }
+interface PitchTracker {
+  current?: Peak
+  candidate?: Peak
+  candidateSince: number
+  lastSeen: number
+}
 const MIN_HZ = 40
 const MAX_HZ = 2200
 
-function goertzel(samples: Float32Array, sampleRate: number, hz: number): number {
-  const w = 2 * Math.PI * hz / sampleRate
-  const coeff = 2 * Math.cos(w)
-  let s0 = 0, s1 = 0, s2 = 0
-  for (let i = 0; i < samples.length; i += 1) {
-    const window = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / Math.max(1, samples.length - 1))
-    s0 = samples[i]! * window + coeff * s1 - s2
-    s2 = s1; s1 = s0
-  }
-  return Math.max(0, s1 * s1 + s2 * s2 - coeff * s1 * s2)
+function semitoneDistance(a: number, b: number): number {
+  return Math.abs(12 * Math.log2(a / b))
 }
 
-function refine(samples: Float32Array, sampleRate: number, center: number, span = 0.14): Peak {
-  let best = { hz: center, power: 0 }
-  for (let i = -8; i <= 8; i += 1) {
-    const hz = center * 2 ** ((i / 8) * span)
-    const power = goertzel(samples, sampleRate, hz)
-    if (power > best.power) best = { hz, power }
+function updateTracker(tracker: PitchTracker, detected: Peak | undefined, now: number): Peak | undefined {
+  if (!detected || detected.power <= 1e-7) {
+    if (tracker.current && now - tracker.lastSeen < 550) return tracker.current
+    tracker.current = undefined
+    tracker.candidate = undefined
+    return undefined
   }
-  return best
-}
-
-function detect(samples: Float32Array, sampleRate: number, settings: PitchSettings): Peak[] {
-  if (samples.length < 128) return []
-  if (settings.mode === 'semi-auto') {
-    return [refine(samples, sampleRate, settings.primaryTargetHz), refine(samples, sampleRate, settings.secondaryTargetHz)]
+  tracker.lastSeen = now
+  if (!tracker.current) {
+    tracker.current = detected
+    tracker.candidate = undefined
+    return detected
   }
-  const candidates: Peak[] = []
-  for (let midi = 28; midi <= 100; midi += 1) {
-    const hz = 440 * 2 ** ((midi - 69) / 12)
-    if (hz < MIN_HZ || hz > Math.min(MAX_HZ, sampleRate * 0.45)) continue
-    candidates.push({ hz, power: goertzel(samples, sampleRate, hz) })
+  const distance = semitoneDistance(detected.hz, tracker.current.hz)
+  if (distance <= 2.25) {
+    // Smooth in log-frequency space so the needle moves evenly in musical pitch.
+    const alpha = 0.4
+    tracker.current = {
+      hz: tracker.current.hz * 2 ** (Math.log2(detected.hz / tracker.current.hz) * alpha),
+      power: tracker.current.power * (1 - alpha) + detected.power * alpha,
+    }
+    tracker.candidate = undefined
+    return tracker.current
   }
-  candidates.sort((a, b) => b.power - a.power)
-  const refined = candidates.slice(0, 8).map((peak) => refine(samples, sampleRate, peak.hz, 0.045)).sort((a, b) => b.power - a.power)
-  const first = refined[0]
-  if (!first) return []
-  const second = refined.find((peak) => {
-    const ratio = Math.max(peak.hz, first.hz) / Math.min(peak.hz, first.hz)
-    const harmonic = [2, 3, 4].some((multiple) => Math.abs(12 * Math.log2(ratio / multiple)) < 0.35)
-    return peak.power >= first.power * 0.08 && Math.abs(12 * Math.log2(ratio)) > 1.25 && !harmonic
-  })
-  return second ? [first, second] : [first]
+  if (!tracker.candidate || semitoneDistance(detected.hz, tracker.candidate.hz) > 1.5) {
+    tracker.candidate = detected
+    tracker.candidateSince = now
+    return tracker.current
+  }
+  tracker.candidate = detected
+  // A different note/source must remain dominant before the needle changes target.
+  if (now - tracker.candidateSince >= 240) {
+    tracker.current = detected
+    tracker.candidate = undefined
+  }
+  return tracker.current
 }
 
 function formatPitch(hz: number): string {
@@ -65,21 +69,33 @@ export default function PitchMeter({ settings, dataSource, frameScheduler }: { s
   const settingsRef = useRef(settings)
   const lastDetectionRef = useRef(0)
   const audioBufferRef = useRef<number[]>([])
+  const trackersRef = useRef<[PitchTracker, PitchTracker]>([
+    { candidateSince: 0, lastSeen: 0 },
+    { candidateSince: 0, lastSeen: 0 },
+  ])
   settingsRef.current = settings
 
   useEffect(() => {
     let disposed = false
     let unsubscribe: (() => void) | undefined
+    const analysisClient = createPitchAnalysisClient((detected) => {
+      if (disposed) return
+      const now = performance.now()
+      peaksRef.current = [
+        updateTracker(trackersRef.current[0], detected[0], now),
+        updateTracker(trackersRef.current[1], detected[1], now),
+      ].filter((peak): peak is Peak => peak !== undefined)
+    })
     const draw = (): void => {
       if (disposed) return
       const chunks = dataSource.getPendingPitchSamples()
       const now = performance.now()
       for (const chunk of chunks) for (let i = 0; i < Math.min(chunk.left.length, chunk.right.length); i += 1) audioBufferRef.current.push((chunk.left[i]! + chunk.right[i]!) * 0.5)
       if (audioBufferRef.current.length > 8192) audioBufferRef.current.splice(0, audioBufferRef.current.length - 8192)
-      if (audioBufferRef.current.length >= 2048 && now - lastDetectionRef.current >= 100) {
+      if (audioBufferRef.current.length >= 2048 && now - lastDetectionRef.current >= 333) {
         lastDetectionRef.current = now
         const analysis = Float32Array.from(audioBufferRef.current.slice(-4096))
-        peaksRef.current = detect(analysis, dataSource.getSampleRate(), settingsRef.current)
+        analysisClient.submit(analysis, dataSource.getSampleRate(), settingsRef.current)
       }
       const canvas = canvasRef.current
       if (!canvas) return
@@ -111,7 +127,7 @@ export default function PitchMeter({ settings, dataSource, frameScheduler }: { s
       ctx.fillStyle = 'rgba(91,183,255,.7)'; ctx.font = '600 12px ui-monospace, monospace'; ctx.fillText(formatPitch(peaksRef.current[1]?.hz ?? 0), cx, h - 10)
     }
     unsubscribe = frameScheduler.subscribe(draw)
-    return () => { disposed = true; unsubscribe?.() }
+    return () => { disposed = true; analysisClient.dispose(); unsubscribe?.() }
   }, [dataSource, frameScheduler])
   return <canvas
     ref={canvasRef}

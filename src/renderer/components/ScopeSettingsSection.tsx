@@ -141,7 +141,7 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
     }
     case 'pitch': {
       const current = settings as ScopeSettings['pitch']
-      return current.mode === 'auto' ? 'Auto · dual pitch' : `Targets ${current.primaryTargetHz} / ${current.secondaryTargetHz} Hz`
+      return current.mode === 'auto' ? 'Auto · vocal + bass' : `Targets ${current.primaryTargetHz} / ${current.secondaryTargetHz} Hz`
     }
     case 'lufsmeter':
       return `${lufsReadoutLabel((settings as ScopeSettings['lufsmeter']).readout)} LUFS`
@@ -819,7 +819,7 @@ export default function ScopeSettingsSection({
           const current = settings as ScopeSettings['pitch']
           return <>
             <SelectControl label="Detection" value={current.mode} onChange={(value) => onUpdate('pitch', { mode: value as ScopeSettings['pitch']['mode'] })}>
-              <option value="auto">Auto (two strongest pitches)</option><option value="semi-auto">Semi-auto (targeted)</option>
+              <option value="auto">Auto (vocal + bass)</option><option value="semi-auto">Semi-auto (targeted)</option>
             </SelectControl>
             {current.mode === 'semi-auto' && <>
               <RangeControl label="Main target" value={current.primaryTargetHz} valueLabel={`${current.primaryTargetHz.toFixed(0)} Hz`} min={40} max={2200} step={1} onChange={(value) => onUpdate('pitch', { primaryTargetHz: value })} />
