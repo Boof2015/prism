@@ -329,6 +329,7 @@ interface ScopeSettingsSectionProps {
   onRemove?: () => void
   settingsLinked?: boolean
   onSettingsLinkedChange?: (linked: boolean) => void
+  extraControls?: ReactNode
 }
 
 let spectrumSettingsTab: 'general' | 'reference' = 'general'
@@ -343,6 +344,7 @@ export default function ScopeSettingsSection({
   onRemove,
   settingsLinked = false,
   onSettingsLinkedChange,
+  extraControls,
 }: ScopeSettingsSectionProps): JSX.Element {
   const [tab, setTab] = useState(spectrumSettingsTab)
   const sourceChannelCount = useAudioStore((s) => s.sourceChannelCount)
@@ -376,6 +378,7 @@ export default function ScopeSettingsSection({
       {kind === 'spectrum' && tab === 'reference' && <div role="tabpanel" id="spectrum-reference-settings"><SpectrumReferenceControls /></div>}
       <div className="settings-scope-section__controls" id={kind === 'spectrum' ? 'spectrum-general-settings' : undefined}
         role={kind === 'spectrum' ? 'tabpanel' : undefined} hidden={kind === 'spectrum' && tab !== 'general'}>
+        {extraControls}
         {isAudioScopeKind(kind) && sourceChannelCount > 2 && (
           <SelectControl label="Source channels" value={selectedPair === undefined ? 'default' : String(selectedPair)}
             onChange={(value) => {

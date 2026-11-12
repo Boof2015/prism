@@ -21,6 +21,7 @@ Turn Prism into a reliable Windows multichannel audio-analysis workspace. The es
 - Profile persistence for added instances, workspace order, and spans.
 - Three-column two-dimensional module grid with drag ordering and W1-W3/H1-H3 spans.
 - Pitch as a normal first-class module plus duplicate Pitch instances.
+- Bass VU Meter as a duplicate-able module. It reuses the normal VU display and calibration controls but filters its independently routed input through a Butterworth low-pass with a configurable 20-350 Hz cutoff (120 Hz default).
 - Auto Pitch roles: main needle targets vocals; secondary/dim needle targets bass/sub-bass.
 - Pitch tracking uses smoothing, target hold, and delayed switching to prevent transient/overtone jumping.
 - Pitch detection runs in one shared Web Worker capped at two analyses per second globally. The canvas interpolates between detector results, and queued work is replaced by the newest buffer per Pitch tile, preventing duplicate Pitch modules from starving other visualizers.

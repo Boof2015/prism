@@ -76,6 +76,8 @@ export function normalizeModuleInstances(raw: unknown): ModuleInstance[] {
     const kind = item.kind as ModuleInstanceKind
     const settings = kind === 'pitch'
       ? { ...DEFAULT_PITCH_SETTINGS, ...(item.settings as object ?? {}) }
+      : kind === 'bassvumeter'
+        ? { ...DEFAULT_SCOPE_SETTINGS.vumeter, ...(item.settings as object ?? {}), cutoffHz: Math.min(350, Math.max(20, Number((item.settings as { cutoffHz?: unknown } | undefined)?.cutoffHz) || 120)) }
       : { ...DEFAULT_SCOPE_SETTINGS[kind], ...(item.settings as object ?? {}) }
     const left = item.channelPairLeft
     return [{ id: item.id, kind, settings: settings as ModuleInstance['settings'], linkSettings: item.linkSettings === true,

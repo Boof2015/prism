@@ -12,17 +12,20 @@ import type { LinkedAnalysisMessage, LinkedAnalysisProbe } from '../../types/ana
 import { useModuleInstanceStore, type ModuleInstance } from '../stores/moduleInstanceStore'
 import { createScopeInstanceDataSource } from '../audio/scopeInstanceDataSource'
 import PitchMeter from './PitchMeter'
-import type { PitchSettings } from '../../types/moduleInstance'
+import type { BassVUMeterSettings, PitchSettings } from '../../types/moduleInstance'
 import { useScopeChannelStore } from '../stores/scopeChannelStore'
 
 function DuplicateScope({ instance, frameScheduler }: { instance: ModuleInstance; frameScheduler: FrameScheduler }): JSX.Element {
+  const bassSettings = instance.kind === 'bassvumeter' ? instance.settings as BassVUMeterSettings : undefined
   const dataSource = useMemo(
-    () => createScopeInstanceDataSource(instance.kind, instance.channelPairLeft),
+    () => createScopeInstanceDataSource(instance.kind, instance.channelPairLeft, bassSettings?.cutoffHz),
     [instance.id, instance.kind],
   )
   useEffect(() => () => dataSource.dispose(), [dataSource])
   useEffect(() => dataSource.setChannelPair(instance.channelPairLeft ?? null), [dataSource, instance.channelPairLeft])
+  useEffect(() => dataSource.setBassCutoff?.(bassSettings?.cutoffHz ?? 120), [bassSettings?.cutoffHz, dataSource])
   if (instance.kind === 'pitch') return <PitchMeter settings={instance.settings as PitchSettings} frameScheduler={frameScheduler} dataSource={dataSource} />
+  if (instance.kind === 'bassvumeter') return <ScopeModule scopeKind="vumeter" settings={bassSettings} frameScheduler={frameScheduler} dataSource={dataSource} />
   return <ScopeModule scopeKind={instance.kind} settings={instance.settings as never} frameScheduler={frameScheduler} dataSource={dataSource} />
 }
 
@@ -350,7 +353,7 @@ export default function Strip({
               type="button"
               className="scope-strip__popout-button"
               onClick={() => removeModuleInstance(instance.id)}
-              aria-label={`Remove ${instance.kind === 'pitch' ? 'Pitch' : SCOPE_LABELS[instance.kind]} ${index + 2}`}
+              aria-label={`Remove ${instance.kind === 'pitch' ? 'Pitch' : instance.kind === 'bassvumeter' ? 'Bass VU Meter' : SCOPE_LABELS[instance.kind]} ${index + 2}`}
               title="Remove module"
             >
               <span className="scope-strip__popout-icon" aria-hidden="true">×</span>

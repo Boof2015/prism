@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { DEFAULT_SCOPE_SETTINGS, type ScopeSettings } from '../../types/settings'
 import type { AudioScopeKind } from '../../types/scope'
-import { DEFAULT_PITCH_SETTINGS, MODULE_INSTANCE_KINDS, type ModuleInstance, type ModuleInstanceKind, type PitchSettings } from '../../types/moduleInstance'
+import { DEFAULT_BASS_VU_SETTINGS, DEFAULT_PITCH_SETTINGS, MODULE_INSTANCE_KINDS, type BassVUMeterSettings, type ModuleInstance, type ModuleInstanceKind, type PitchSettings } from '../../types/moduleInstance'
 
 const STORAGE_KEY = 'prism:module-instances:v1'
 
@@ -13,6 +13,7 @@ function cloneSettings<K extends AudioScopeKind>(kind: K, source?: ScopeSettings
 
 function cloneInstanceSettings(kind: ModuleInstanceKind, source?: ModuleInstance['settings']): ModuleInstance['settings'] {
   if (kind === 'pitch') return structuredClone((source as PitchSettings | undefined) ?? DEFAULT_PITCH_SETTINGS)
+  if (kind === 'bassvumeter') return structuredClone((source as BassVUMeterSettings | undefined) ?? DEFAULT_BASS_VU_SETTINGS)
   return cloneSettings(kind, source as ScopeSettings[typeof kind] | undefined)
 }
 
