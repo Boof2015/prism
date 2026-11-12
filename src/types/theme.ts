@@ -11,7 +11,7 @@ export type ThemeSectionName =
   | 'app'
   | 'controls'
   | 'scopes'
-  | ScopeKind
+  | Exclude<ScopeKind, 'pitch'>
 
 export interface ThemeAppTokens {
   accent?: string

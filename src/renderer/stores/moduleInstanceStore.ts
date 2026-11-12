@@ -49,6 +49,8 @@ interface ModuleInstanceState {
   removeInstance: (id: string) => void
   updateSettings: (id: string, partial: Partial<ModuleInstance['settings']>) => void
   setSettingsLinked: (id: string, linked: boolean) => void
+  setKindLinked: (kind: ModuleInstanceKind, linked: boolean) => void
+  updateLinkedFromPrimary: (kind: ModuleInstanceKind, partial: Partial<ModuleInstance['settings']>) => void
   setChannelPair: (id: string, left: number | null) => void
   replaceInstances: (instances: ModuleInstance[]) => void
 }
@@ -81,6 +83,18 @@ export const useModuleInstanceStore = create<ModuleInstanceState>((set) => ({
   }),
   setSettingsLinked: (id, linked) => set((state) => {
     const instances = state.instances.map((item) => item.id === id ? { ...item, linkSettings: linked } : item)
+    persist(instances)
+    return { instances }
+  }),
+  setKindLinked: (kind, linked) => set((state) => {
+    const instances = state.instances.map((item) => item.kind === kind ? { ...item, linkSettings: linked } : item)
+    persist(instances)
+    return { instances }
+  }),
+  updateLinkedFromPrimary: (kind, partial) => set((state) => {
+    const instances = state.instances.map((item) => item.kind === kind && item.linkSettings
+      ? { ...item, settings: { ...item.settings, ...partial } as ModuleInstance['settings'] }
+      : item)
     persist(instances)
     return { instances }
   }),

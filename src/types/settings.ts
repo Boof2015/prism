@@ -24,6 +24,7 @@ import {
 } from './scopeTransform'
 import { DEFAULT_VECTORSCOPE_ZOOM_DB } from './vectorscope'
 import { DEFAULT_TIMELINE_UNIT, type TimelineUnit } from './dawBridge'
+import { DEFAULT_PITCH_SETTINGS, type PitchSettings } from './pitch'
 
 export interface ScopeSettings {
   waterfall: WaterfallSettings
@@ -74,6 +75,7 @@ export interface ScopeSettings {
     needleChannels: VUMeterNeedleChannels
     referenceDb: number
   }
+  pitch: PitchSettings
   lufsmeter: {
     mode: LUFSMeterMode
     readout: LUFSMeterReadout
@@ -101,6 +103,7 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   vectorscope: { mode: 'lissajous', zoomDb: DEFAULT_VECTORSCOPE_ZOOM_DB, multiband: false, showGrid: true, persistence: 0.10, lineWidth: 1.5 },
   spectrogram: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, fftSize: 4096, tiltDbPerOctave: DEFAULT_SPECTROGRAM_TILT_DB_PER_OCTAVE, scrollSpeed: 2, contrast: DEFAULT_SPECTROGRAM_CONTRAST, clarityMode: 'sharper', scaleMode: 'log', frequencyRangeMode: DEFAULT_FREQUENCY_RANGE_MODE, showGrid: true, colorScheme: 'heat', timelineUnit: DEFAULT_TIMELINE_UNIT },
   vumeter: { mode: 'bar', orientation: 'horizontal', needleChannels: 'stereo', referenceDb: DEFAULT_VU_REFERENCE_DBFS },
+  pitch: { ...DEFAULT_PITCH_SETTINGS },
   lufsmeter: { mode: 'bar', readout: DEFAULT_LUFS_METER_READOUT },
   waveform: { rotation: DEFAULT_SCOPE_DISPLAY_ROTATION, mirrorHorizontal: DEFAULT_SCOPE_MIRROR_HORIZONTAL, mode: DEFAULT_WAVEFORM_MODE, scrollSpeed: DEFAULT_WAVEFORM_SCROLL_SPEED, multiband: false, timelineUnit: DEFAULT_TIMELINE_UNIT },
   nowPlaying: {

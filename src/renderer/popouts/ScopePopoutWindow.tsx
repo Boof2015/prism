@@ -140,7 +140,7 @@ export default function ScopePopoutWindow({ scopeKind }: ScopePopoutWindowProps)
   }, [dataSource, scopeKind])
 
   const effectiveSettings = (snapshot?.settings ?? DEFAULT_SCOPE_SETTINGS[scopeKind]) as ScopeSettings[ScopeKind]
-  const effectiveScopeTheme = snapshot?.scopeTheme ?? defaultTheme[scopeKind]
+  const effectiveScopeTheme = snapshot?.scopeTheme ?? (scopeKind === 'pitch' ? defaultTheme.vumeter : defaultTheme[scopeKind])
   const linkedAnalysisEnabled = snapshot?.analysisSettings.linkedAnalysis ?? false
   const linkedAnalysis = useLinkedAnalysis(linkedAnalysisEnabled)
   const settingsHeight = miniSettingsOpen ? POPOUT_SETTINGS_EXPAND_HEIGHT : 0

@@ -852,6 +852,9 @@ button.toolbar__version:hover {
   display: grid;
   width: 100%;
   height: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(180px, 1fr);
+  overflow: auto;
 }
 
 .scope-strip__cell {
@@ -860,6 +863,39 @@ button.toolbar__version:hover {
   position: relative;
   overflow: hidden;
 }
+
+.scope-strip__drag-button {
+  position: absolute;
+  z-index: 5;
+  top: 6px;
+  left: 6px;
+  border: 0;
+  background: color-mix(in srgb, var(--scope-bg) 78%, transparent);
+  color: var(--text-muted);
+  cursor: grab;
+  opacity: 0;
+}
+
+.scope-strip__cell:hover .scope-strip__drag-button,
+.scope-strip__drag-button:focus-visible { opacity: 1; }
+
+.scope-strip__span-button {
+  position: absolute;
+  z-index: 5;
+  top: 6px;
+  border: 0;
+  background: color-mix(in srgb, var(--scope-bg) 78%, transparent);
+  color: var(--text-muted);
+  opacity: 0;
+  cursor: pointer;
+  font: 10px var(--font-mono);
+}
+.scope-strip__span-button--width { left: 34px; }
+.scope-strip__span-button--height { left: 62px; }
+.scope-strip__cell:hover .scope-strip__span-button,
+.scope-strip__span-button:focus-visible { opacity: 1; }
+
+.scope-strip__resize-handle { display: none !important; }
 
 .scope-module {
   position: relative;

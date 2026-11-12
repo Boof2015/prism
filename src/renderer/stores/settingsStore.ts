@@ -22,6 +22,8 @@ import {
   normalizeScopeOrder,
   normalizeScopePopouts,
   normalizeWidthWeights,
+  normalizeWorkspaceOrder,
+  normalizeWorkspaceSpans,
 } from '../../shared/profileState'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { buildProfileDraft, profilesMatch } from './profileDraft'
@@ -45,6 +47,8 @@ interface PersistedSettingsState {
   analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
+  workspaceOrder: string[]
+  workspaceSpans: Record<string, { columns: number; rows: number }>
 }
 
 interface WorkingSettingsState {
@@ -55,6 +59,8 @@ interface WorkingSettingsState {
   analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
+  workspaceOrder: string[]
+  workspaceSpans: Record<string, { columns: number; rows: number }>
 }
 
 interface SettingsState extends WorkingSettingsState {
@@ -75,6 +81,8 @@ interface SettingsState extends WorkingSettingsState {
   popInScope: (kind: ScopeKind) => void
   updatePopoutBounds: (kind: ScopeKind, bounds: WindowBounds) => void
   updateMainWindowBounds: (bounds: WindowBounds) => void
+  setWorkspaceOrder: (order: string[]) => void
+  setWorkspaceSpan: (key: string, columns: number, rows: number) => void
   discardUnsavedProfileChanges: () => Promise<void>
   guardProfileTransition: (transition: () => Promise<void>) => Promise<boolean>
   saveProfile: (name: string) => Promise<string | null>
@@ -144,6 +152,8 @@ function buildProfileBaselineSignature(profile: Profile | null): string | undefi
     scopeSettings: mergeScopeSettings(normalizedProfile.scopeSettings),
     analysisSettings: normalizeAnalysisSettings(normalizedProfile.analysisSettings),
     moduleInstances: normalizedProfile.moduleInstances,
+    workspaceOrder: normalizedProfile.workspaceOrder,
+    workspaceSpans: normalizedProfile.workspaceSpans,
     scopePopouts,
   })
 }
@@ -167,6 +177,8 @@ function normalizePersistedProfileBaselineSignature(raw: string): string | null 
       scopeSettings: mergeScopeSettings(candidate.scopeSettings),
       analysisSettings: normalizeAnalysisSettings(candidate.analysisSettings),
       moduleInstances: normalizeProfile({ moduleInstances: candidate.moduleInstances }, DEFAULT_PROFILE_NAME).moduleInstances,
+      workspaceOrder: normalizeWorkspaceOrder(candidate.workspaceOrder),
+      workspaceSpans: normalizeWorkspaceSpans(candidate.workspaceSpans),
       scopePopouts,
     })
   } catch {
@@ -274,6 +286,8 @@ function saveToStorage(
       analysisSettings: state.analysisSettings,
       scopePopouts,
       windowBounds,
+      workspaceOrder: state.workspaceOrder,
+      workspaceSpans: state.workspaceSpans,
     }))
   } catch {
     // Ignore localStorage write failures.
@@ -294,6 +308,8 @@ function hasPersistedWorkingState(state: Partial<PersistedSettingsState>): boole
     || 'analysisSettings' in state
     || 'scopePopouts' in state
     || 'windowBounds' in state
+    || 'workspaceOrder' in state
+    || 'workspaceSpans' in state
 }
 
 function canRestorePersistedWorkingState(
@@ -359,6 +375,8 @@ function createWorkingStateFromProfile(profile: Profile): WorkingSettingsState {
     analysisSettings: normalizeAnalysisSettings(normalizedProfile.analysisSettings),
     scopePopouts: normalizeScopePopouts(normalizedProfile.scopePopouts),
     windowBounds: normalizedProfile.windowBounds,
+    workspaceOrder: normalizeWorkspaceOrder(normalizedProfile.workspaceOrder),
+    workspaceSpans: normalizeWorkspaceSpans(normalizedProfile.workspaceSpans),
   }
 }
 
@@ -375,6 +393,8 @@ function createWorkingStateFromPersistedState(state: Partial<PersistedSettingsSt
     windowBounds: supportsWindowGeometryPersistence()
       ? state.windowBounds
       : undefined,
+    workspaceOrder: normalizeWorkspaceOrder(state.workspaceOrder),
+    workspaceSpans: normalizeWorkspaceSpans(state.workspaceSpans),
   }
 }
 
@@ -771,6 +791,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         },
       })
     })
+    if (kind !== 'nowPlaying') useModuleInstanceStore.getState().updateLinkedFromPrimary(kind, settings)
   },
 
   updateAnalysisSettings: (settings: Partial<AnalysisSettings>) => {
@@ -782,6 +803,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         }),
       })
     })
+  },
+
+  setWorkspaceOrder: (order: string[]) => {
+    set((state) => commitWorkingState(state, { workspaceOrder: normalizeWorkspaceOrder(order) }))
+  },
+  setWorkspaceSpan: (key, columns, rows) => {
+    set((state) => commitWorkingState(state, { workspaceSpans: normalizeWorkspaceSpans({ ...state.workspaceSpans, [key]: { columns, rows } }) }))
   },
 
   popOutScope: (kind: ScopeKind, bounds?: WindowBounds) => {

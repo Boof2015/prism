@@ -15,6 +15,7 @@ export interface ScopeInstanceDataSource {
   getPendingSpectrogramStereoSamples: AudioRouter['flushPendingSpectrogramStereoSamples']
   getPendingVectorscopeSamples: AudioRouter['flushPendingVectorscopeSamples']
   getPendingVUMeterSamples: AudioRouter['flushPendingVUMeterSamples']
+  getPendingPitchSamples: AudioRouter['flushPendingPitchSamples']
   getPendingLUFSMeterSamples: AudioRouter['flushPendingLUFSMeterSamples']
   getPendingWaveformSamples: AudioRouter['flushPendingWaveformSamples']
   getPendingWaveformStereoSamples: AudioRouter['flushPendingWaveformStereoSamples']
@@ -25,7 +26,7 @@ export interface ScopeInstanceDataSource {
 
 export function createScopeInstanceDataSource(kind: ModuleInstanceKind, channelPairLeft?: number): ScopeInstanceDataSource {
   const router = new AudioRouter()
-  const routerKind: AudioScopeKind = kind === 'pitch' ? 'vumeter' : kind
+  const routerKind: AudioScopeKind = kind
   let sourceSessionId = -1
   let localSessionId = 0
 
@@ -68,6 +69,7 @@ export function createScopeInstanceDataSource(kind: ModuleInstanceKind, channelP
     getPendingSpectrogramStereoSamples: () => router.flushPendingSpectrogramStereoSamples(),
     getPendingVectorscopeSamples: () => router.flushPendingVectorscopeSamples(),
     getPendingVUMeterSamples: () => router.flushPendingVUMeterSamples(),
+    getPendingPitchSamples: () => router.flushPendingPitchSamples(),
     getPendingLUFSMeterSamples: () => router.flushPendingLUFSMeterSamples(),
     getPendingWaveformSamples: () => router.flushPendingWaveformSamples(),
     getPendingWaveformStereoSamples: () => router.flushPendingWaveformStereoSamples(),

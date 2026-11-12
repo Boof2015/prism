@@ -72,7 +72,7 @@ export default function PitchMeter({ settings, dataSource, frameScheduler }: { s
     let unsubscribe: (() => void) | undefined
     const draw = (): void => {
       if (disposed) return
-      const chunks = dataSource.getPendingVUMeterSamples()
+      const chunks = dataSource.getPendingPitchSamples()
       const now = performance.now()
       for (const chunk of chunks) for (let i = 0; i < Math.min(chunk.left.length, chunk.right.length); i += 1) audioBufferRef.current.push((chunk.left[i]! + chunk.right[i]!) * 0.5)
       if (audioBufferRef.current.length > 8192) audioBufferRef.current.splice(0, audioBufferRef.current.length - 8192)

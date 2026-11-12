@@ -53,6 +53,7 @@ export const DEFAULT_SCOPE_WIDTH_WEIGHTS: Record<ScopeKind, number> = {
   vectorscope: 1,
   spectrogram: 1,
   vumeter: 0.5,
+  pitch: 0.75,
   lufsmeter: 0.5,
   waveform: 1,
   nowPlaying: 1,
@@ -80,6 +81,24 @@ export function normalizeModuleInstances(raw: unknown): ModuleInstance[] {
     return [{ id: item.id, kind, settings: settings as ModuleInstance['settings'], linkSettings: item.linkSettings === true,
       ...(typeof left === 'number' && left >= 0 && left < 8 && left % 2 === 0 ? { channelPairLeft: left } : {}) }]
   })
+}
+
+export function normalizeWorkspaceOrder(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return [...new Set(raw.filter((value): value is string => typeof value === 'string' && /^(scope|instance):/.test(value)))]
+}
+
+export function normalizeWorkspaceSpans(raw: unknown): Record<string, { columns: number; rows: number }> {
+  if (!raw || typeof raw !== 'object') return {}
+  return Object.entries(raw).reduce((result, [key, value]) => {
+    if (!/^(scope|instance):/.test(key) || !value || typeof value !== 'object') return result
+    const span = value as { columns?: unknown; rows?: unknown }
+    result[key] = {
+      columns: Math.min(3, Math.max(1, Math.round(Number(span.columns) || 1))),
+      rows: Math.min(3, Math.max(1, Math.round(Number(span.rows) || 1))),
+    }
+    return result
+  }, {} as Record<string, { columns: number; rows: number }>)
 }
 
 function isLegacyProfileFileVersion(version: unknown): boolean {
@@ -228,6 +247,7 @@ export function mergeScopeSettings(
   const rawVUMeter: Partial<ScopeSettings['vumeter']> = typeof parsed.vumeter === 'object' && parsed.vumeter !== null
     ? parsed.vumeter
     : {}
+  const rawPitch: Partial<ScopeSettings['pitch']> = typeof parsed.pitch === 'object' && parsed.pitch !== null ? parsed.pitch : {}
   const rawNowPlaying: Partial<ScopeSettings['nowPlaying']> = typeof legacyParsed.nowPlaying === 'object' && legacyParsed.nowPlaying !== null
     ? legacyParsed.nowPlaying
     : (typeof legacyParsed.astra === 'object' && legacyParsed.astra !== null ? legacyParsed.astra : {})
@@ -280,6 +300,13 @@ export function mergeScopeSettings(
         ? rawVUMeter.needleChannels
         : DEFAULT_SCOPE_SETTINGS.vumeter.needleChannels,
       referenceDb: sanitizeVUReferenceDbfs(rawVUMeter.referenceDb),
+    },
+    pitch: {
+      ...DEFAULT_SCOPE_SETTINGS.pitch,
+      ...rawPitch,
+      mode: rawPitch.mode === 'semi-auto' ? 'semi-auto' : 'auto',
+      primaryTargetHz: Math.min(2200, Math.max(40, Number(rawPitch.primaryTargetHz) || DEFAULT_SCOPE_SETTINGS.pitch.primaryTargetHz)),
+      secondaryTargetHz: Math.min(2200, Math.max(40, Number(rawPitch.secondaryTargetHz) || DEFAULT_SCOPE_SETTINGS.pitch.secondaryTargetHz)),
     },
     lufsmeter: {
       ...DEFAULT_SCOPE_SETTINGS.lufsmeter,
@@ -340,6 +367,8 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): Profile {
     analysisSettings: { ...DEFAULT_ANALYSIS_SETTINGS },
     scopePopouts: createDefaultScopePopouts(),
     moduleInstances: [],
+    workspaceOrder: [],
+    workspaceSpans: {},
   }
 }
 
@@ -357,6 +386,8 @@ export function normalizeProfile(raw: unknown, fallbackName = DEFAULT_PROFILE_NA
     analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeScopePopouts(parsed.scopePopouts),
     moduleInstances: normalizeModuleInstances(parsed.moduleInstances),
+    workspaceOrder: normalizeWorkspaceOrder(parsed.workspaceOrder),
+    workspaceSpans: normalizeWorkspaceSpans(parsed.workspaceSpans),
     windowBounds: normalizeWindowBounds(parsed.windowBounds),
   }
 }
@@ -403,6 +434,8 @@ export function normalizeProfileFile(
     analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeProfileFileScopePopouts(parsed.scopePopouts),
     moduleInstances: normalizeModuleInstances(parsed.moduleInstances),
+    workspaceOrder: normalizeWorkspaceOrder(parsed.workspaceOrder),
+    workspaceSpans: normalizeWorkspaceSpans(parsed.workspaceSpans),
   }
 }
 
@@ -424,6 +457,8 @@ export function profileToFileData(id: string, profile: Profile): PrismProfileFil
       return acc
     }, {} as PrismProfileFileScopePopoutMap),
     moduleInstances: structuredClone(normalized.moduleInstances),
+    workspaceOrder: [...normalized.workspaceOrder],
+    workspaceSpans: structuredClone(normalized.workspaceSpans),
   }
 }
 
@@ -529,5 +564,7 @@ export function profileFileToProfile(
     }, {} as ScopePopoutStateMap),
     windowBounds: metadata.windowBounds,
     moduleInstances: normalizeModuleInstances('moduleInstances' in file ? file.moduleInstances : undefined),
+    workspaceOrder: normalizeWorkspaceOrder('workspaceOrder' in file ? file.workspaceOrder : undefined),
+    workspaceSpans: normalizeWorkspaceSpans('workspaceSpans' in file ? file.workspaceSpans : undefined),
   }
 }

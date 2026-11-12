@@ -35,6 +35,7 @@ const EMPTY_DEMAND: Required<VisualizerConsumerDemand> = {
   vectorscope: false,
   spectrogram: false,
   vumeter: false,
+      pitch: false,
   lufsmeter: false,
   waveform: false,
 }
@@ -67,6 +68,7 @@ function normalizeDemand(demand: VisualizerConsumerDemand): Required<VisualizerC
     vectorscope: Boolean(demand.vectorscope),
     spectrogram: Boolean(demand.spectrogram),
     vumeter: Boolean(demand.vumeter),
+    pitch: false,
     lufsmeter: Boolean(demand.lufsmeter),
     waveform: Boolean(demand.waveform),
   }

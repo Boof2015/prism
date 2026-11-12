@@ -1,19 +1,10 @@
 import type { AudioScopeKind } from './scope'
 import type { ScopeSettings } from './settings'
+import type { PitchSettings } from './pitch'
 
-export type ModuleInstanceKind = AudioScopeKind | 'pitch'
+export type ModuleInstanceKind = AudioScopeKind
 
-export interface PitchSettings {
-  mode: 'auto' | 'semi-auto'
-  primaryTargetHz: number
-  secondaryTargetHz: number
-}
-
-export const DEFAULT_PITCH_SETTINGS: PitchSettings = {
-  mode: 'auto',
-  primaryTargetHz: 440,
-  secondaryTargetHz: 220,
-}
+export { DEFAULT_PITCH_SETTINGS, type PitchSettings } from './pitch'
 
 export interface ModuleInstance {
   id: string

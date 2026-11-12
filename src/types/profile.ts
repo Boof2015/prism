@@ -21,6 +21,8 @@ export interface Profile {
   analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   moduleInstances: ModuleInstance[]
+  workspaceOrder: string[]
+  workspaceSpans: Record<string, { columns: number; rows: number }>
   windowBounds?: WindowBounds
 }
 
@@ -106,6 +108,8 @@ export interface PrismProfileFileV7 extends Omit<PrismProfileFileV5, 'version'> 
 export interface PrismProfileFileV8 extends Omit<PrismProfileFileV7, 'version'> {
   version: typeof PROFILE_FILE_VERSION
   moduleInstances: ModuleInstance[]
+  workspaceOrder: string[]
+  workspaceSpans: Record<string, { columns: number; rows: number }>
 }
 
 export type PrismProfileFile = PrismProfileFileV1 | PrismProfileFileV2 | PrismProfileFileV3 | PrismProfileFileV4 | PrismProfileFileV5 | PrismProfileFileV6 | PrismProfileFileV7 | PrismProfileFileV8

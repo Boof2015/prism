@@ -20,6 +20,7 @@ const SCOPE_RING_CAPACITY: Record<AudioScopeKind, number> = {
   vectorscope: MAX_PENDING_VECTORSCOPE_CHUNKS,
   spectrogram: MAX_PENDING_SPECTRUM_CHUNKS,
   vumeter: MAX_PENDING_VECTORSCOPE_CHUNKS,
+  pitch: MAX_PENDING_VECTORSCOPE_CHUNKS,
   lufsmeter: MAX_PENDING_SPECTRUM_CHUNKS,
   waveform: MAX_PENDING_SPECTRUM_CHUNKS,
 }
@@ -40,6 +41,7 @@ export interface VisualizerConsumerDemand {
   vectorscope?: boolean
   spectrogram?: boolean
   vumeter?: boolean
+  pitch?: boolean
   lufsmeter?: boolean
   waveform?: boolean
 }
@@ -106,6 +108,7 @@ type ScopeRingMap = {
   vectorscope: FixedChunkRing<StereoChunkRecord>
   spectrogram: FixedChunkRing<StereoChunkRecord>
   vumeter: FixedChunkRing<StereoChunkRecord>
+  pitch: FixedChunkRing<StereoChunkRecord>
   lufsmeter: FixedChunkRing<StereoChunkRecord>
   waveform: FixedChunkRing<StereoChunkRecord>
 }
@@ -208,6 +211,7 @@ function createEmptyDemand(): NormalizedVisualizerConsumerDemand {
     vectorscope: false,
     spectrogram: false,
     vumeter: false,
+    pitch: false,
     lufsmeter: false,
     waveform: false,
   }
@@ -239,6 +243,7 @@ export class AudioRouter {
     vectorscope: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.vectorscope),
     spectrogram: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.spectrogram),
     vumeter: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.vumeter),
+    pitch: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.pitch),
     lufsmeter: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.lufsmeter),
     waveform: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.waveform),
   }
@@ -250,6 +255,7 @@ export class AudioRouter {
     vectorscope: createScopeLatencyTracker(),
     spectrogram: createScopeLatencyTracker(),
     vumeter: createScopeLatencyTracker(),
+    pitch: createScopeLatencyTracker(),
     lufsmeter: createScopeLatencyTracker(),
     waveform: createScopeLatencyTracker(),
   }
@@ -366,6 +372,7 @@ export class AudioRouter {
       waterfall: Boolean(demand.waterfall),
       spectrogram: Boolean(demand.spectrogram),
       vumeter: Boolean(demand.vumeter),
+      pitch: Boolean(demand.pitch),
       lufsmeter: Boolean(demand.lufsmeter),
       waveform: Boolean(demand.waveform),
     }
@@ -413,7 +420,7 @@ export class AudioRouter {
 
     const activeDemand = this.getActiveDemand()
     const needsSpectrum = Boolean(activeDemand.spectrum)
-    const needsStereo = Boolean(activeDemand.waterfall || activeDemand.spectrogram || activeDemand.vectorscope || activeDemand.vumeter || activeDemand.lufsmeter || activeDemand.waveform)
+    const needsStereo = Boolean(activeDemand.waterfall || activeDemand.spectrogram || activeDemand.vectorscope || activeDemand.vumeter || activeDemand.pitch || activeDemand.lufsmeter || activeDemand.waveform)
     const needsLeft = Boolean(activeDemand.oscilloscope)
 
     if (!needsSpectrum && !needsStereo && !needsLeft) {
@@ -454,6 +461,9 @@ export class AudioRouter {
 
     if (activeDemand.vumeter) {
       this.rings.vumeter.push({ ...scopedSamples('vumeter'), capturedAt, sequence, transport: meta.transport })
+    }
+    if (activeDemand.pitch) {
+      this.rings.pitch.push({ ...scopedSamples('pitch'), capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.lufsmeter) {
@@ -524,6 +534,12 @@ export class AudioRouter {
   flushPendingVUMeterSamples(): { left: Float32Array; right: Float32Array }[] {
     const records = this.rings.vumeter.drain()
     this.recordScopeDrain('vumeter', records)
+    return records.map((record) => ({ left: record.left, right: record.right }))
+  }
+
+  flushPendingPitchSamples(): { left: Float32Array; right: Float32Array }[] {
+    const records = this.rings.pitch.drain()
+    this.recordScopeDrain('pitch', records)
     return records.map((record) => ({ left: record.left, right: record.right }))
   }
 

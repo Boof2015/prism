@@ -102,6 +102,7 @@ interface SizeMeasurement {
 }
 
 function getScopeTheme(theme: PrismResolvedTheme, kind: ScopeKind): ScopeModuleTheme {
+  if (kind === 'pitch') return theme.vumeter
   return theme[kind] as ScopeModuleTheme
 }
 

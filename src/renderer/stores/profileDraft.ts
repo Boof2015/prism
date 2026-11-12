@@ -19,6 +19,8 @@ export interface ProfileDraftSource {
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
   moduleInstances?: ModuleInstance[]
+  workspaceOrder?: string[]
+  workspaceSpans?: Record<string, { columns: number; rows: number }>
 }
 
 export function buildProfileDraft(
@@ -35,6 +37,8 @@ export function buildProfileDraft(
     scopePopouts: normalizeScopePopouts(source.scopePopouts),
     windowBounds: source.windowBounds,
     moduleInstances: structuredClone(source.moduleInstances ?? []),
+    workspaceOrder: [...(source.workspaceOrder ?? [])],
+    workspaceSpans: structuredClone(source.workspaceSpans ?? {}),
   }, name)
 }
 
