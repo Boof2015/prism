@@ -4,9 +4,11 @@ import { resolveMainWindowSettingsPanelHeight } from '../mainWindowSettings'
 import ScopeSettingsSection from './ScopeSettingsSection'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useModuleInstanceStore } from '../stores/moduleInstanceStore'
-import { AUDIO_SCOPE_KINDS, SCOPE_LABELS, type AudioScopeKind, type ScopeKind } from '../../types/scope'
+import { SCOPE_LABELS, type AudioScopeKind, type ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import ThemedSelect from './ThemedSelect'
+import { useAudioStore } from '../stores/audioStore'
+import { DEFAULT_PITCH_SETTINGS, MODULE_INSTANCE_KINDS, type ModuleInstanceKind, type PitchSettings } from '../../types/moduleInstance'
 
 interface SettingsPanelProps {
   onHeightChange?: (height: number) => void
@@ -14,8 +16,9 @@ interface SettingsPanelProps {
 
 export default function SettingsPanel({ onHeightChange }: SettingsPanelProps): JSX.Element {
   const { scopeSettings, updateScopeSettings, hiddenScopes, scopeOrder, widthWeights, scopePopouts } = useSettingsStore()
-  const { instances, addInstance, removeInstance, updateSettings, setChannelPair } = useModuleInstanceStore()
-  const [newKind, setNewKind] = useState<AudioScopeKind>('spectrum')
+  const { instances, addInstance, removeInstance, updateSettings, setChannelPair, setSettingsLinked } = useModuleInstanceStore()
+  const sourceChannelCount = useAudioStore((state) => state.sourceChannelCount)
+  const [newKind, setNewKind] = useState<ModuleInstanceKind>('spectrum')
   const panelRef = useRef<HTMLDivElement | null>(null)
   const scopeTrackRef = useRef<HTMLDivElement | null>(null)
 
@@ -64,10 +67,10 @@ export default function SettingsPanel({ onHeightChange }: SettingsPanelProps): J
     <div className="settings-panel" ref={panelRef}>
       <div className="settings-panel__utility-row">
         <span>Add module</span>
-        <ThemedSelect value={newKind} onChange={(event) => setNewKind(event.target.value as AudioScopeKind)}>
-          {AUDIO_SCOPE_KINDS.map((kind) => <option key={kind} value={kind}>{SCOPE_LABELS[kind]}</option>)}
+        <ThemedSelect value={newKind} onChange={(event) => setNewKind(event.target.value as ModuleInstanceKind)}>
+          {MODULE_INSTANCE_KINDS.map((kind) => <option key={kind} value={kind}>{kind === 'pitch' ? 'Pitch' : SCOPE_LABELS[kind]}</option>)}
         </ThemedSelect>
-        <button type="button" className="settings-chip" onClick={() => addInstance(newKind, scopeSettings[newKind])}>Add</button>
+        <button type="button" className="settings-chip" onClick={() => addInstance(newKind, newKind === 'pitch' ? DEFAULT_PITCH_SETTINGS : scopeSettings[newKind])}>Add</button>
       </div>
       <div className="settings-panel__scope-track" style={scopeTrackStyle} ref={scopeTrackRef}>
         {dockedScopes.map((kind) => (
@@ -78,15 +81,30 @@ export default function SettingsPanel({ onHeightChange }: SettingsPanelProps): J
             onUpdate={updateScopeSettings}
           />
         ))}
-        {instances.map((instance, index) => (
+        {instances.map((instance, index) => instance.kind === 'pitch' ? (
+          <section key={instance.id} className="settings-scope-section">
+            <div className="settings-scope-section__header">
+              <div className="settings-scope-section__title">Pitch {index + 1}</div>
+              <button type="button" className={`settings-chip ${instance.linkSettings ? 'is-active' : ''}`} onClick={() => setSettingsLinked(instance.id, !instance.linkSettings)}>Link settings</button>
+              <button type="button" className="settings-chip" onClick={() => removeInstance(instance.id)}>Remove</button>
+            </div>
+            {(() => { const current = instance.settings as PitchSettings; return <div className="settings-scope-section__controls">
+              <label className="settings-control"><span className="settings-control__label">Detection</span><ThemedSelect value={current.mode} onChange={(event) => updateSettings(instance.id, { mode: event.target.value as PitchSettings['mode'] })}><option value="auto">Auto (two strongest pitches)</option><option value="semi-auto">Semi-auto (targeted)</option></ThemedSelect></label>
+              {current.mode === 'semi-auto' && <><label className="settings-control"><span className="settings-control__label">Main target Hz</span><input type="number" min="40" max="2200" step="1" value={current.primaryTargetHz} onChange={(event) => updateSettings(instance.id, { primaryTargetHz: Number(event.target.value) })} /></label><label className="settings-control"><span className="settings-control__label">Secondary target Hz</span><input type="number" min="40" max="2200" step="1" value={current.secondaryTargetHz} onChange={(event) => updateSettings(instance.id, { secondaryTargetHz: Number(event.target.value) })} /></label></>}
+              {sourceChannelCount > 2 && <label className="settings-control"><span className="settings-control__label">Source channels</span><ThemedSelect value={instance.channelPairLeft === undefined ? 'default' : String(instance.channelPairLeft)} onChange={(event) => setChannelPair(instance.id, event.target.value === 'default' ? null : Number(event.target.value))}><option value="default">Global L/R route</option>{Array.from({ length: Math.min(4, Math.floor(sourceChannelCount / 2)) }, (_, pair) => <option key={pair} value={pair * 2}>Channels {pair * 2 + 1}–{pair * 2 + 2}</option>)}</ThemedSelect></label>}
+            </div> })()}
+          </section>
+        ) : (
           <ScopeSettingsSection
             key={instance.id}
             kind={instance.kind}
             instanceLabel={`${SCOPE_LABELS[instance.kind]} ${index + 2}`}
-            settings={instance.settings}
+            settings={instance.settings as ScopeSettings[AudioScopeKind]}
             channelPairLeft={instance.channelPairLeft}
             onChannelPairChange={(left) => setChannelPair(instance.id, left)}
             onRemove={() => removeInstance(instance.id)}
+            settingsLinked={instance.linkSettings === true}
+            onSettingsLinkedChange={(linked) => setSettingsLinked(instance.id, linked)}
             onUpdate={((_kind: ScopeKind, partial: Partial<ScopeSettings[ScopeKind]>) => {
               updateSettings(instance.id, partial as Partial<ScopeSettings[AudioScopeKind]>)
             }) as typeof updateScopeSettings}

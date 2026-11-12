@@ -323,6 +323,8 @@ interface ScopeSettingsSectionProps {
   channelPairLeft?: number
   onChannelPairChange?: (left: number | null) => void
   onRemove?: () => void
+  settingsLinked?: boolean
+  onSettingsLinkedChange?: (linked: boolean) => void
 }
 
 let spectrumSettingsTab: 'general' | 'reference' = 'general'
@@ -335,6 +337,8 @@ export default function ScopeSettingsSection({
   channelPairLeft,
   onChannelPairChange,
   onRemove,
+  settingsLinked = false,
+  onSettingsLinkedChange,
 }: ScopeSettingsSectionProps): JSX.Element {
   const [tab, setTab] = useState(spectrumSettingsTab)
   const sourceChannelCount = useAudioStore((s) => s.sourceChannelCount)
@@ -346,6 +350,7 @@ export default function ScopeSettingsSection({
       <div className="settings-scope-section__header">
         <div className="settings-scope-section__title">{instanceLabel ?? SCOPE_LABELS[kind]}</div>
         <div className="settings-scope-section__summary">{scopeSummary(kind, settings)}</div>
+        {onSettingsLinkedChange && <button type="button" className={`settings-chip ${settingsLinked ? 'is-active' : ''}`} onClick={() => onSettingsLinkedChange(!settingsLinked)}>Link settings</button>}
         {onRemove && <button type="button" className="settings-chip" onClick={onRemove}>Remove</button>}
       </div>
 

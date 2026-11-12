@@ -26,6 +26,7 @@ import {
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { buildProfileDraft, profilesMatch } from './profileDraft'
 import { useUiStore } from './uiStore'
+import { useModuleInstanceStore } from './moduleInstanceStore'
 
 export type { ScopeSettings } from '../../types/settings'
 
@@ -142,6 +143,7 @@ function buildProfileBaselineSignature(profile: Profile | null): string | undefi
     widthWeights: normalizeWidthWeights(normalizedProfile.widthWeights),
     scopeSettings: mergeScopeSettings(normalizedProfile.scopeSettings),
     analysisSettings: normalizeAnalysisSettings(normalizedProfile.analysisSettings),
+    moduleInstances: normalizedProfile.moduleInstances,
     scopePopouts,
   })
 }
@@ -164,6 +166,7 @@ function normalizePersistedProfileBaselineSignature(raw: string): string | null 
       widthWeights: normalizeWidthWeights(candidate.widthWeights),
       scopeSettings: mergeScopeSettings(candidate.scopeSettings),
       analysisSettings: normalizeAnalysisSettings(candidate.analysisSettings),
+      moduleInstances: normalizeProfile({ moduleInstances: candidate.moduleInstances }, DEFAULT_PROFILE_NAME).moduleInstances,
       scopePopouts,
     })
   } catch {
@@ -389,7 +392,7 @@ function buildActiveProfileDraft(state: SettingsState): Profile | null {
     return null
   }
 
-  return buildProfileDraft(state, activeProfileName)
+  return buildProfileDraft({ ...state, moduleInstances: useModuleInstanceStore.getState().instances }, activeProfileName)
 }
 
 export function hasProfileDraftChanges(state: SettingsState, baseline = state.savedProfileBaseline): boolean {
@@ -565,6 +568,7 @@ function applyProfileSnapshot(
   })
 
   if (options.loadActiveProfile) {
+    useModuleInstanceStore.getState().replaceInstances(baselineProfile?.moduleInstances ?? [])
     applyLoadedProfileEffects(activeProfile)
     syncCurrentMainWindowBounds(set)
   }
@@ -637,6 +641,7 @@ async function restoreSavedProfileBaseline(
     persistWorkingState(nextState)
     return nextState
   })
+  useModuleInstanceStore.getState().replaceInstances(baseline.moduleInstances)
 
   if (supportsWindowGeometryPersistence()) {
     syncCurrentMainWindowBounds(set)
@@ -891,7 +896,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     const snapshot = await window.electronAPI.saveNewProfile(
       name,
-      buildProfileDraft(get(), name),
+      buildProfileDraft({ ...get(), moduleInstances: useModuleInstanceStore.getState().instances }, name),
     )
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: false })
     return snapshot.activeProfileId
@@ -911,7 +916,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     const snapshot = await window.electronAPI.overwriteProfile(
       id,
-      buildProfileDraft(state, name),
+      buildProfileDraft({ ...state, moduleInstances: useModuleInstanceStore.getState().instances }, name),
     )
     applyProfileSnapshot(set, snapshot, { loadActiveProfile: false })
   },
@@ -957,3 +962,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     await window.electronAPI.revealProfilesFolder()
   },
 }))
+
+useModuleInstanceStore.subscribe(() => {
+  useSettingsStore.setState((state) => ({
+    hasUnsavedProfileChanges: hasProfileDraftChanges(state),
+  }))
+})

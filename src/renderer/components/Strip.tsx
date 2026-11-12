@@ -12,6 +12,8 @@ import { getScopePopoutMinWidth } from '../../shared/scopeSizing'
 import type { LinkedAnalysisMessage, LinkedAnalysisProbe } from '../../types/analysis'
 import { useModuleInstanceStore, type ModuleInstance } from '../stores/moduleInstanceStore'
 import { createScopeInstanceDataSource } from '../audio/scopeInstanceDataSource'
+import PitchMeter from './PitchMeter'
+import type { PitchSettings } from '../../types/moduleInstance'
 
 function DuplicateScope({ instance, frameScheduler }: { instance: ModuleInstance; frameScheduler: FrameScheduler }): JSX.Element {
   const dataSource = useMemo(
@@ -20,7 +22,8 @@ function DuplicateScope({ instance, frameScheduler }: { instance: ModuleInstance
   )
   useEffect(() => () => dataSource.dispose(), [dataSource])
   useEffect(() => dataSource.setChannelPair(instance.channelPairLeft ?? null), [dataSource, instance.channelPairLeft])
-  return <ScopeModule scopeKind={instance.kind} settings={instance.settings} frameScheduler={frameScheduler} dataSource={dataSource} />
+  if (instance.kind === 'pitch') return <PitchMeter settings={instance.settings as PitchSettings} frameScheduler={frameScheduler} dataSource={dataSource} />
+  return <ScopeModule scopeKind={instance.kind} settings={instance.settings as never} frameScheduler={frameScheduler} dataSource={dataSource} />
 }
 
 interface StripProps {
@@ -100,7 +103,7 @@ export default function Strip({
   }, [dockedScopes])
 
   useEffect(() => {
-    const visibleAudioScopeSet = new Set([...dockedScopes.filter(isAudioScopeKind), ...moduleInstances.map((item) => item.kind)])
+    const visibleAudioScopeSet = new Set([...dockedScopes.filter(isAudioScopeKind), ...moduleInstances.map((item) => item.kind === 'pitch' ? 'vumeter' : item.kind)])
     audioRouter.setVisualizerConsumerDemand('docked-strip', {
       waterfall: visibleAudioScopeSet.has('waterfall'),
       spectrum: visibleAudioScopeSet.has('spectrum'),
@@ -321,7 +324,7 @@ export default function Strip({
               type="button"
               className="scope-strip__popout-button"
               onClick={() => removeModuleInstance(instance.id)}
-              aria-label={`Remove ${SCOPE_LABELS[instance.kind]} ${index + 2}`}
+              aria-label={`Remove ${instance.kind === 'pitch' ? 'Pitch' : SCOPE_LABELS[instance.kind]} ${index + 2}`}
               title="Remove module"
             >
               <span className="scope-strip__popout-icon" aria-hidden="true">×</span>

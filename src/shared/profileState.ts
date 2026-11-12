@@ -11,7 +11,7 @@ import {
   type ProfileLocalMetadata,
   type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV7,
+  type PrismProfileFileV8,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
@@ -41,6 +41,7 @@ import {
   normalizeAnalysisSettings,
 } from '../types/analysis'
 import { DEFAULT_TIMELINE_UNIT, isTimelineUnit } from '../types/dawBridge'
+import { DEFAULT_PITCH_SETTINGS, MODULE_INSTANCE_KINDS, type ModuleInstance, type ModuleInstanceKind } from '../types/moduleInstance'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -63,6 +64,22 @@ export function isScopeKind(value: unknown): value is ScopeKind {
 
 export function cloneScopeSettings(settings: ScopeSettings): ScopeSettings {
   return JSON.parse(JSON.stringify(settings)) as ScopeSettings
+}
+
+export function normalizeModuleInstances(raw: unknown): ModuleInstance[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((entry): ModuleInstance[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const item = entry as Partial<ModuleInstance>
+    if (typeof item.id !== 'string' || !MODULE_INSTANCE_KINDS.includes(item.kind as ModuleInstanceKind)) return []
+    const kind = item.kind as ModuleInstanceKind
+    const settings = kind === 'pitch'
+      ? { ...DEFAULT_PITCH_SETTINGS, ...(item.settings as object ?? {}) }
+      : { ...DEFAULT_SCOPE_SETTINGS[kind], ...(item.settings as object ?? {}) }
+    const left = item.channelPairLeft
+    return [{ id: item.id, kind, settings: settings as ModuleInstance['settings'], linkSettings: item.linkSettings === true,
+      ...(typeof left === 'number' && left >= 0 && left < 8 && left % 2 === 0 ? { channelPairLeft: left } : {}) }]
+  })
 }
 
 function isLegacyProfileFileVersion(version: unknown): boolean {
@@ -322,6 +339,7 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): Profile {
     scopeSettings: cloneScopeSettings(DEFAULT_SCOPE_SETTINGS),
     analysisSettings: { ...DEFAULT_ANALYSIS_SETTINGS },
     scopePopouts: createDefaultScopePopouts(),
+    moduleInstances: [],
   }
 }
 
@@ -338,6 +356,7 @@ export function normalizeProfile(raw: unknown, fallbackName = DEFAULT_PROFILE_NA
     scopeSettings: mergeScopeSettings(parsed.scopeSettings),
     analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeScopePopouts(parsed.scopePopouts),
+    moduleInstances: normalizeModuleInstances(parsed.moduleInstances),
     windowBounds: normalizeWindowBounds(parsed.windowBounds),
   }
 }
@@ -359,9 +378,9 @@ export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-) : PrismProfileFileV7 {
+) : PrismProfileFileV8 {
   const parsed = typeof raw === 'object' && raw !== null
-    ? raw as Omit<Partial<PrismProfileFileV7>, 'version'> & { version?: unknown }
+    ? raw as Omit<Partial<PrismProfileFileV8>, 'version'> & { version?: unknown }
     : {}
 
   const id = typeof parsed.id === 'string' && parsed.id.trim()
@@ -383,10 +402,11 @@ export function normalizeProfileFile(
     }),
     analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeProfileFileScopePopouts(parsed.scopePopouts),
+    moduleInstances: normalizeModuleInstances(parsed.moduleInstances),
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV7 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV8 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {
@@ -403,6 +423,7 @@ export function profileToFileData(id: string, profile: Profile): PrismProfileFil
       acc[kind] = { poppedOut: normalized.scopePopouts[kind]?.poppedOut === true }
       return acc
     }, {} as PrismProfileFileScopePopoutMap),
+    moduleInstances: structuredClone(normalized.moduleInstances),
   }
 }
 
@@ -507,5 +528,6 @@ export function profileFileToProfile(
       return acc
     }, {} as ScopePopoutStateMap),
     windowBounds: metadata.windowBounds,
+    moduleInstances: normalizeModuleInstances('moduleInstances' in file ? file.moduleInstances : undefined),
   }
 }

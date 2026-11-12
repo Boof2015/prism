@@ -2,9 +2,10 @@ import type { ScopePopoutStateMap, WindowBounds } from './popout'
 import type { ScopeKind } from './scope'
 import type { ScopeSettings } from './settings'
 import type { AnalysisSettings } from './analysis'
+import type { ModuleInstance } from './moduleInstance'
 
 export const PROFILE_FILE_FORMAT = 'prism-profile'
-export const PROFILE_FILE_VERSION = 7
+export const PROFILE_FILE_VERSION = 8
 export const PROFILE_LOCAL_STATE_FORMAT = 'prism-profile-local'
 export const PROFILE_LOCAL_STATE_VERSION = 1
 export const LEGACY_PROFILE_MIGRATION_VERSION = 1
@@ -19,6 +20,7 @@ export interface Profile {
   scopeSettings: ScopeSettings
   analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
+  moduleInstances: ModuleInstance[]
   windowBounds?: WindowBounds
 }
 
@@ -98,10 +100,15 @@ export interface PrismProfileFileV6 extends Omit<PrismProfileFileV5, 'version'> 
 }
 
 export interface PrismProfileFileV7 extends Omit<PrismProfileFileV5, 'version'> {
-  version: typeof PROFILE_FILE_VERSION
+  version: 7
 }
 
-export type PrismProfileFile = PrismProfileFileV1 | PrismProfileFileV2 | PrismProfileFileV3 | PrismProfileFileV4 | PrismProfileFileV5 | PrismProfileFileV6 | PrismProfileFileV7
+export interface PrismProfileFileV8 extends Omit<PrismProfileFileV7, 'version'> {
+  version: typeof PROFILE_FILE_VERSION
+  moduleInstances: ModuleInstance[]
+}
+
+export type PrismProfileFile = PrismProfileFileV1 | PrismProfileFileV2 | PrismProfileFileV3 | PrismProfileFileV4 | PrismProfileFileV5 | PrismProfileFileV6 | PrismProfileFileV7 | PrismProfileFileV8
 
 export interface ProfileLocalMetadata {
   windowBounds?: WindowBounds

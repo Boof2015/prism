@@ -1,4 +1,5 @@
 import type { AudioScopeKind } from '../../types/scope'
+import type { ModuleInstanceKind } from '../../types/moduleInstance'
 import { AudioRouter, audioRouter } from './AudioRouter'
 
 export interface ScopeInstanceDataSource {
@@ -22,12 +23,13 @@ export interface ScopeInstanceDataSource {
   dispose: () => void
 }
 
-export function createScopeInstanceDataSource(kind: AudioScopeKind, channelPairLeft?: number): ScopeInstanceDataSource {
+export function createScopeInstanceDataSource(kind: ModuleInstanceKind, channelPairLeft?: number): ScopeInstanceDataSource {
   const router = new AudioRouter()
+  const routerKind: AudioScopeKind = kind === 'pitch' ? 'vumeter' : kind
   let sourceSessionId = -1
   let localSessionId = 0
 
-  router.setVisualizerConsumerDemand('module-instance', { [kind]: true })
+  router.setVisualizerConsumerDemand('module-instance', { [routerKind]: true })
   const syncSession = (state: ReturnType<typeof audioRouter.getSessionState>): void => {
     if (!state.capturing) {
       sourceSessionId = -1
@@ -43,7 +45,7 @@ export function createScopeInstanceDataSource(kind: AudioScopeKind, channelPairL
   }
 
   const setChannelPair = (left: number | null): void => {
-    router.setScopeChannelPair(kind, left === null ? null : { left, right: left + 1 })
+    router.setScopeChannelPair(routerKind, left === null ? null : { left, right: left + 1 })
   }
   setChannelPair(channelPairLeft ?? null)
 
