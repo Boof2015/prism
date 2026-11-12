@@ -244,6 +244,8 @@ select {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
   overflow: hidden;
   background:
     linear-gradient(180deg, var(--settings-bg-top), var(--settings-bg-bottom)),
@@ -665,6 +667,19 @@ button.toolbar__version:hover {
 .toolbar__reposition-option:disabled {
   cursor: not-allowed;
   opacity: 0.46;
+}
+
+@media (max-height: 120px) {
+  /* Keep all three actions within the rack's 100px minimum height. */
+  .toolbar__reposition-menu:has(> .toolbar__docking-option) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: max-content;
+  }
+
+  .toolbar__reposition-menu > .toolbar__docking-option {
+    grid-column: 1 / -1;
+  }
 }
 
 .toolbar__chip {
@@ -1514,6 +1529,16 @@ button.toolbar__version:hover {
   gap: 14px 18px;
   flex-wrap: wrap;
   padding: 0 14px 10px;
+}
+
+.prism-settings-region > .settings-panel {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior-y: contain;
+}
+
+.prism-settings-region .settings-panel__scope-track {
+  flex-shrink: 0;
 }
 
 .settings-utility-section {

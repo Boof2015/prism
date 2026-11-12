@@ -40,8 +40,8 @@ import {
   clampDraggedMainWindowBounds,
   clampRestoredWindowBounds,
   raiseWindowAboveNormalPopouts,
-  resolveExpandedMainWindowBounds,
 } from '../shared/windowGeometry'
+import { MainWindowSettingsController } from './mainWindowSettings'
 import { calculateResizedWindowBounds } from '../shared/windowResize'
 import { FileBackedProfileLibrary } from './profileLibrary'
 import { AudioClipLibrary } from './audioClipLibrary'
@@ -109,7 +109,7 @@ let allowMainWindowClose = false
 let mainWindowClosePending = false
 let pendingMainWindowCloseDisposition: MainWindowCloseDisposition | null = null
 let suppressMainWindowSyncUntil = 0
-let mainWindowLogicalBounds: WindowBounds | null = null
+let mainWindowSettings: MainWindowSettingsController | null = null
 let windowRecreationPending = false
 let isAppQuitting = false
 let dockingQuitFlushed = false
@@ -1117,6 +1117,7 @@ function scheduleMainWindowBoundsSave(window: BrowserWindow): void {
   mainWindowBoundsTimer = setTimeout(() => {
     mainWindowBoundsTimer = null
     if (isMainWindowSyncSuppressed()) {
+      scheduleMainWindowBoundsSave(window)
       return
     }
     sendMainWindowBoundsChanged(window)
@@ -1251,8 +1252,8 @@ function setSettingsHeightForWindow(window: BrowserWindow, height: number): void
 }
 
 function toLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): WindowBounds {
-  if (isMainRendererWindow(window) && mainWindowLogicalBounds) {
-    return { ...mainWindowLogicalBounds }
+  if (isMainRendererWindow(window) && mainWindowSettings) {
+    return mainWindowSettings.logicalBounds
   }
 
   return {
@@ -1261,42 +1262,10 @@ function toLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): Wi
   }
 }
 
-function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getBounds()): void {
-  if (windowDocking?.controller.ownsGeometry) return
-  if (!isMainRendererWindow(window)) {
-    return
-  }
-
-  const x = supportsGeometryPersistence()
-    ? bounds.x
-    : mainWindowLogicalBounds?.x ?? 0
-  const y = supportsGeometryPersistence()
-    ? bounds.y
-    : mainWindowLogicalBounds?.y ?? 0
-
-  mainWindowLogicalBounds = normalizeMainWindowBounds({
-    x,
-    y,
-    width: bounds.width,
-    height: Math.max(WINDOW_DEFAULTS.minHeight, bounds.height - getSettingsHeight(window)),
-  })
-}
-
 function applyMainWindowLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
-  if (windowDocking?.controller.ownsGeometry) return
-  const logicalBounds = clampRestoredWindowBounds(
-    normalizeMainWindowBounds(bounds),
-    getDisplayWorkAreas(),
-    RESTORED_WINDOW_VISIBLE_MARGIN,
-  )
-  mainWindowLogicalBounds = logicalBounds
+  if (windowDocking?.controller.ownsGeometry || !isMainRendererWindow(window)) return
   suppressMainWindowSync()
-  const expandedBounds = resolveExpandedMainWindowBounds(logicalBounds, getSettingsHeight(window), getDisplayWorkAreas())
-  if (!supportsGeometryPersistence()) {
-    window.setSize(expandedBounds.width, expandedBounds.height)
-    return
-  }
-  window.setBounds(expandedBounds)
+  mainWindowSettings?.setLogicalBounds(normalizeMainWindowBounds(bounds))
 }
 
 function applyLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
@@ -1334,7 +1303,8 @@ function setWindowHeight(window: BrowserWindow, bounds: WindowBounds, height: nu
 }
 
 function applySettingsHeight(window: BrowserWindow, rawNextHeight: number): void {
-  if (isMainRendererWindow(window) && windowDocking?.controller.ownsGeometry) return
+  // Floating main settings have their own measured, screen-bounded layout protocol.
+  if (isMainRendererWindow(window) || !Number.isFinite(rawNextHeight)) return
   const currentSettingsHeight = getSettingsHeight(window)
   const nextSettingsHeight = Math.max(0, Math.round(rawNextHeight))
   const baseMinHeight = getBaseMinHeight(window)
@@ -1343,18 +1313,6 @@ function applySettingsHeight(window: BrowserWindow, rawNextHeight: number): void
   window.setMinimumSize(minW, baseMinHeight + nextSettingsHeight)
 
   if (currentSettingsHeight === nextSettingsHeight) {
-    return
-  }
-
-  if (isMainRendererWindow(window)) {
-    if (!mainWindowLogicalBounds) {
-      syncMainWindowLogicalBounds(window)
-    }
-    setSettingsHeightForWindow(window, nextSettingsHeight)
-    applyMainWindowLogicalBounds(window, toLogicalBounds(window))
-    if (currentSettingsHeight === 0 && nextSettingsHeight > 0) {
-      raiseMainWindowAboveNormalPopouts()
-    }
     return
   }
 
@@ -1809,7 +1767,42 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
   } else if (background.mode === 'blurred') {
     applyAcrylicBlurBehind(mainWindow)
   }
-  syncMainWindowLogicalBounds(mainWindow)
+  const window = mainWindow
+  mainWindowSettings = new MainWindowSettingsController({
+    bounds: () => window.getBounds(),
+    normalBounds: () => window.getNormalBounds(),
+    workAreas: getDisplayWorkAreas,
+    zoomFactor: () => window.webContents.getZoomFactor(),
+    chromeHeight: () => Math.max(0, window.getBounds().height - window.getContentBounds().height),
+    maximized: () => window.isMaximized(),
+    fullScreen: () => window.isFullScreen(),
+    setMinimumHeight: height => {
+      const [width, previousHeight] = window.getMinimumSize()
+      if (previousHeight !== height) window.setMinimumSize(width, height)
+    },
+    setBounds: bounds => {
+      suppressMainWindowSync()
+      if (supportsGeometryPersistence()) window.setBounds(bounds)
+      else window.setSize(bounds.width, bounds.height)
+    },
+    publish: layout => window.webContents.send('window:settings-layout', layout),
+  })
+  if (restoreBounds) mainWindowSettings.setLogicalBounds(normalizeMainWindowBounds(restoreBounds))
+
+  const refreshSettingsLayout = (): void => {
+    if (!window.isDestroyed() && !windowDocking?.controller.ownsGeometry) mainWindowSettings?.refresh()
+  }
+  screen.on('display-added', refreshSettingsLayout)
+  screen.on('display-removed', refreshSettingsLayout)
+  screen.on('display-metrics-changed', refreshSettingsLayout)
+  window.webContents.on('zoom-changed', () => setImmediate(refreshSettingsLayout))
+  const windowModeChanged = (event: 'maximize' | 'unmaximize' | 'enter-full-screen' | 'leave-full-screen'): void => {
+    if (!windowDocking?.controller.ownsGeometry) mainWindowSettings?.modeChanged(event)
+  }
+  window.on('maximize', () => windowModeChanged('maximize'))
+  window.on('unmaximize', () => windowModeChanged('unmaximize'))
+  window.on('enter-full-screen', () => windowModeChanged('enter-full-screen'))
+  window.on('leave-full-screen', () => windowModeChanged('leave-full-screen'))
 
   mainWindow.on('close', (event) => {
     if (allowMainWindowClose || isAppQuitting || mainWindow?.webContents.isDestroyed()) {
@@ -1841,7 +1834,11 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
       windowSettingsHeights.delete(mainWindow.id)
       windowSettingsBottomAnchors.delete(mainWindow.id)
     }
-    mainWindowLogicalBounds = null
+    screen.removeListener('display-added', refreshSettingsLayout)
+    screen.removeListener('display-removed', refreshSettingsLayout)
+    screen.removeListener('display-metrics-changed', refreshSettingsLayout)
+    mainWindowSettings?.dispose()
+    mainWindowSettings = null
     suppressMainWindowSyncUntil = 0
     mainRendererReady = false
     trayRendererReady = false
@@ -1863,16 +1860,12 @@ function createMainWindow(restoreBounds?: WindowBounds): void {
 
   mainWindow.on('move', () => {
     if (!mainWindow) return
-    if (!isMainWindowSyncSuppressed()) {
-      syncMainWindowLogicalBounds(mainWindow)
-    }
+    if (!windowDocking?.controller.ownsGeometry) mainWindowSettings?.geometryChanged()
     scheduleMainWindowBoundsSave(mainWindow)
   })
   mainWindow.on('resize', () => {
     if (!mainWindow) return
-    if (!isMainWindowSyncSuppressed()) {
-      syncMainWindowLogicalBounds(mainWindow)
-    }
+    if (!windowDocking?.controller.ownsGeometry) mainWindowSettings?.geometryChanged()
     scheduleMainWindowBoundsSave(mainWindow)
   })
   mainWindow.on('focus', () => {
@@ -2794,6 +2787,15 @@ function setupIPC(): void {
     applySettingsHeight(targetWindow, panelHeight)
   })
 
+  ipcMain.on('window:set-main-settings-layout', (event, request: unknown) => {
+    const targetWindow = getWindowFromSender(event.sender)
+    if (!targetWindow || !isMainRendererWindow(targetWindow) || windowDocking?.controller.ownsGeometry) return
+    const wasOpen = mainWindowSettings?.open
+    if (mainWindowSettings?.setRequest(request) && !wasOpen && mainWindowSettings.open) {
+      raiseMainWindowAboveNormalPopouts()
+    }
+  })
+
   ipcMain.handle('desktop-integration:get', async () => {
     return refreshDesktopIntegrationSnapshot()
   })
@@ -2956,10 +2958,12 @@ if (!hasSingleInstanceLock) {
       geometryChanging: () => dockingGeometryGuard.systemChange(),
       logicalBounds: toLogicalBounds,
       prepare: window => {
+        mainWindowSettings?.reset()
         setSettingsHeightForWindow(window, 0)
         window.setMinimumSize(WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight)
       },
       restore: (window, bounds) => {
+        mainWindowSettings?.reset()
         setSettingsHeightForWindow(window, 0)
         window.setMinimumSize(WINDOW_DEFAULTS.minWidth, WINDOW_DEFAULTS.minHeight)
         applyMainWindowLogicalBounds(window, bounds)

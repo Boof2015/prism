@@ -45,8 +45,11 @@ import {
   clampDraggedMainWindowBounds,
   clampRestoredWindowBounds,
   raiseWindowAboveNormalPopouts,
-  resolveExpandedMainWindowBounds,
+  resolveMainWindowSettingsLayout,
+  selectMainWindowWorkArea,
+  normalizeMainWindowSettingsRequest,
 } from '../src/shared/windowGeometry'
+import { MainWindowSettingsController } from '../src/main/mainWindowSettings'
 import { calculateResizedWindowBounds } from '../src/shared/windowResize'
 import { createDefaultTheme, resolveNativeThemeSource, resolveTheme } from '../src/shared/themeState'
 import { useAudioStore } from '../src/renderer/stores/audioStore'
@@ -132,6 +135,7 @@ import {
 } from '../src/renderer/visualizers/heatScale'
 import { LUFSMeter, formatMaxTruePeakDb } from '../src/renderer/visualizers/LUFSMeter'
 import { Oscilloscope } from '../src/renderer/visualizers/Oscilloscope'
+import { BridgeOscilloscopeAnalyzer } from '../src/plugin-ui/BridgeOscilloscopeAnalyzer'
 import { SpectrumAnalyzer, type SpectrumAnalyzerOptions } from '../src/renderer/visualizers/SpectrumAnalyzer'
 import { BridgeSpectrumAnalyzer } from '../src/plugin-ui/BridgeSpectrumAnalyzer'
 import { BridgeWaterfallAnalyzer } from '../src/plugin-ui/BridgeWaterfallAnalyzer'
@@ -719,8 +723,13 @@ function createFakeCanvasContext(recorder: FakeCanvasRecorder | null = null): Ca
     drawImage(...args: unknown[]) {
       recorder?.drawImageCalls.push({ compositeOperation: currentCompositeOperation, args })
     },
-    putImageData(imageData: ImageData, x: number, y: number) {
-      recorder?.imageDataWrites.push({ x, y, width: imageData.width, height: imageData.height, data: Array.from(imageData.data) })
+    putImageData(imageData: ImageData, x: number, y: number, sx = 0, sy = 0, width = imageData.width, height = imageData.height) {
+      const data: number[] = []
+      for (let row = sy; row < sy + height; row++) {
+        const offset = (row * imageData.width + sx) * 4
+        data.push(...imageData.data.subarray(offset, offset + width * 4))
+      }
+      recorder?.imageDataWrites.push({ x: x + sx, y: y + sy, width, height, data })
     },
     save() {},
     restore() {},
@@ -1301,6 +1310,113 @@ function renderSpectrumHeatmap(
   }
 }
 
+test('disabled heatmap skips raw reads and projection, then primes the current snapshot without resetting the analyzer', () => {
+  const dom = installFakeCanvasDom()
+  const native = createFakeSpectrumNativeAnalyzer()
+  let pending = [Float32Array.from({ length: 2048 }, (_, i) => 0.5 * Math.sin(i * 0.1))]
+  const scope = new SpectrumAnalyzer(createFakeCanvas(), {
+    nativeAnalyzer: native, heatmapFill: false, smoothing: 0,
+    dataSource: {
+      getPendingSpectrumSamples: () => { const chunks = pending; pending = []; return chunks },
+      getPendingSpectrumStereoSamples: () => [], getSampleRate: () => 48000,
+      isPlaying: () => true, subscribeToSessionChanges: () => () => {},
+    },
+  })
+  const state = scope as unknown as {
+    drawFrame(): void
+    heatmapMagnitudeBuffer: Float32Array
+    primaryPointHeatmap: Float32Array
+  }
+  try {
+    state.drawFrame()
+    assert.equal(native.calls.fillRawMagnitudes, 0)
+    assert.ok(state.primaryPointHeatmap.every(value => value === 0))
+    const resets = native.calls.resets
+    scope.setOptions({ heatmapFill: true })
+    state.drawFrame()
+    assert.equal(native.calls.fillRawMagnitudes, 1)
+    assert.deepEqual(state.heatmapMagnitudeBuffer, native.getRawMagnitudes())
+    assert.equal(native.calls.resets, resets)
+    state.drawFrame()
+    assert.equal(native.calls.fillRawMagnitudes, 1, 'unchanged audio reuses the heatmap snapshot')
+    scope.setOptions({ heatmapFill: false })
+    pending = [Float32Array.from({ length: 2048 }, (_, i) => 0.1 * Math.sin(i * 0.2))]
+    state.drawFrame()
+    assert.equal(native.calls.fillRawMagnitudes, 1)
+    scope.setOptions({ heatmapFill: true })
+    state.drawFrame()
+    assert.deepEqual(state.heatmapMagnitudeBuffer, native.getRawMagnitudes(), 're-enable cannot display old heat history')
+  } finally { scope.dispose(); dom.restore() }
+})
+
+test('spectrum geometry follows scale, bounds, resolution and reference changes while reusing unchanged mappings', () => {
+  const dom = installFakeCanvasDom()
+  const dataSource = {
+    getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+    getSampleRate: () => 48000, isPlaying: () => false, subscribeToSessionChanges: () => () => {},
+  }
+  const scope = new SpectrumAnalyzer(createFakeCanvas(), { dataSource, nativeAnalyzer: createFakeSpectrumNativeAnalyzer() })
+  type Projection = {
+    frequencyAtPosition(t: number, min: number, max: number): number
+    fillSpectrumPoints(data: Float32Array, length: number, width: number, height: number,
+      min: number, max: number, nyquist: number, tilt: number, x: Float32Array, y: Float32Array, heat: Float32Array | null): unknown
+  }
+  const state = scope as unknown as Projection
+  let calls = 0
+  const frequencyAtPosition = state.frequencyAtPosition.bind(state)
+  state.frequencyAtPosition = (...args) => { calls++; return frequencyAtPosition(...args) }
+  try {
+    for (const scaleType of ['log', 'mel', 'linear'] as const) {
+      for (const [width, length, min, max, nyquist, tiltReferenceHz] of [
+        [320, 1024, 20, 20000, 24000, 1000], [71, 2048, 80, 18000, 22050, 440], [320, 1024, 20, 22000, 48000, 1000],
+      ]) {
+        const options = { scaleType, tiltReferenceHz }
+        scope.setOptions(options)
+        const fresh = new SpectrumAnalyzer(createFakeCanvas(), { dataSource, nativeAnalyzer: createFakeSpectrumNativeAnalyzer(), ...options })
+        const data = Float32Array.from({ length }, (_, i) => -30 + Math.sin(i) * 15)
+        const x = new Float32Array(width), y = new Float32Array(width)
+        const expectedX = new Float32Array(width), expectedY = new Float32Array(width)
+        try {
+          state.fillSpectrumPoints(data, length, width, 180, min, max, nyquist, 4.5, x, y, null)
+          const before = calls
+          state.fillSpectrumPoints(data, length, width, 90, min, max, nyquist, -3, x, y, null)
+          assert.equal(calls, before, 'height and tilt amount do not require new frequency geometry')
+          ;(fresh as unknown as Projection).fillSpectrumPoints(data, length, width, 90, min, max, nyquist, -3, expectedX, expectedY, null)
+          assert.deepEqual(x, expectedX)
+          assert.deepEqual(y, expectedY)
+        } finally { fresh.dispose() }
+      }
+    }
+  } finally { scope.dispose(); dom.restore() }
+})
+
+test('spectrum gradient cache retains ordinary and difference gradients through color and height changes', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const scope = new SpectrumAnalyzer(createFakeCanvas(recorder), {
+    nativeAnalyzer: createFakeSpectrumNativeAnalyzer(),
+    dataSource: { getPendingSpectrumSamples: () => [], getPendingSpectrumStereoSamples: () => [],
+      getSampleRate: () => 48000, isPlaying: () => false, subscribeToSessionChanges: () => () => {} },
+  })
+  const state = scope as unknown as { renderGradientFill(x: Float32Array, y: Float32Array, count: number, width: number, height: number): void }
+  const draw = (height = 180) => state.renderGradientFill(Float32Array.of(0, 100), Float32Array.of(20, 30), 2, 100, height)
+  try {
+    draw(); draw()
+    assert.equal(recorder.gradients.length, 1)
+    assert.deepEqual(recorder.gradients[0].coordinates, [0, 180, 0, 0])
+    scope.setOptions({ reference: flatReference() })
+    draw(); draw()
+    assert.equal(recorder.gradients.length, 2)
+    assert.deepEqual(recorder.gradients[1].coordinates, [0, 0, 0, 180])
+    scope.setOptions({ gradientColors: ['#112233', '#445566'] })
+    draw(); draw(90); draw(90)
+    assert.equal(recorder.gradients.length, 4)
+    assert.deepEqual(recorder.gradients[3].stops, [
+      { offset: 0, color: '#445566' }, { offset: 0.5, color: '#112233' }, { offset: 1, color: '#445566' },
+    ])
+  } finally { scope.dispose(); dom.restore() }
+})
+
 function projectSpectrumDb(options: Partial<SpectrumAnalyzerOptions>, db: number): {
   heatmapIntensity: number[]
   yPoints: number[]
@@ -1480,60 +1596,16 @@ function renderSpectrogramColumnImage(options: Partial<SpectrogramOptions>, valu
 
   try {
     const state = spectrogram as unknown as {
-      ensureColumnBuffers: (height: number) => void
-      shiftAndPaintColumns: (
+      appendColumns: (
         display: Float32Array,
         heat: Float32Array,
         columnCount: number,
         rowCount: number,
       ) => void
     }
-    state.ensureColumnBuffers(values.length)
     const column = Float32Array.from(values)
-    state.shiftAndPaintColumns(column, column, 1, values.length)
+    state.appendColumns(column, column, 1, values.length)
     return recorder.imageDataWrites.at(-1)?.data ?? []
-  } finally {
-    spectrogram.dispose()
-    dom.restore()
-  }
-}
-
-function renderSpectrogramShift(
-  options: Partial<SpectrogramOptions>,
-  values: number[],
-  canvasSize: { width: number; height: number } = { width: 4, height: values.length },
-): FakeCanvasRecorder {
-  const recorder = createFakeCanvasRecorder()
-  const dom = installFakeCanvasDom(() => createFakeCanvas(recorder))
-  const canvas = createFakeCanvas()
-  canvas.width = canvasSize.width
-  canvas.height = canvasSize.height
-  const dataSource = {
-    getPendingSpectrogramSamples: () => [],
-    getSampleRate: () => 48000,
-    isPlaying: () => false,
-    subscribeToSessionChanges: () => () => {},
-  }
-
-  const spectrogram = new Spectrogram(canvas, {
-    dataSource,
-    ...options,
-  })
-
-  try {
-    const state = spectrogram as unknown as {
-      ensureColumnBuffers: (height: number) => void
-      shiftAndPaintColumns: (
-        display: Float32Array,
-        heat: Float32Array,
-        columnCount: number,
-        rowCount: number,
-      ) => void
-    }
-    state.ensureColumnBuffers(values.length)
-    const column = Float32Array.from(values)
-    state.shiftAndPaintColumns(column, column, 1, values.length)
-    return recorder
   } finally {
     spectrogram.dispose()
     dom.restore()
@@ -2792,50 +2864,6 @@ test('Spectrogram low-intensity heat stays mostly transparent with default RGB h
   assert.equal(imageData[11], 255)
 })
 
-test('Spectrogram shifts existing columns with copy compositing to avoid transparent streaking', () => {
-  const recorder = renderSpectrogramShift({
-    heatColors: [
-      'rgba(15, 7, 33, 0)',
-      'rgba(163, 26, 121, 0.5)',
-      'rgb(255, 241, 209)',
-    ],
-  }, [0.2, 0.6, 1])
-
-  assert.equal(recorder.drawImageCalls.at(-1)?.compositeOperation, 'copy')
-})
-
-test('Spectrogram vertical orientation paints newest frequency row at the bottom', () => {
-  const recorder = renderSpectrogramShift({
-    orientation: 'vertical',
-    colorScheme: 'mono',
-    lineColor: 'rgb(10, 20, 30)',
-  }, [0, 0.5, 1], { width: 3, height: 5 })
-  const write = recorder.imageDataWrites.at(-1)
-
-  assert.ok(write)
-  assert.equal(write.x, 0)
-  assert.equal(write.y, 4)
-  assert.equal(write.width, 3)
-  assert.equal(write.height, 1)
-  assert.deepEqual(write.data.slice(0, 3), [10, 20, 30])
-  assert.equal(write.data[3], 0)
-  assert.deepEqual(write.data.slice(4, 7), [10, 20, 30])
-  assert.equal(write.data[7], 128)
-  assert.deepEqual(write.data.slice(8, 11), [10, 20, 30])
-  assert.equal(write.data[11], 255)
-})
-
-test('Spectrogram vertical orientation shifts existing rows upward with copy compositing', () => {
-  const recorder = renderSpectrogramShift({
-    orientation: 'vertical',
-  }, [0.2, 0.6, 1], { width: 3, height: 5 })
-  const drawCall = recorder.drawImageCalls.at(-1)
-
-  assert.equal(drawCall?.compositeOperation, 'copy')
-  assert.equal(drawCall?.args[1], 0)
-  assert.equal(drawCall?.args[2], -1)
-})
-
 test('Spectrogram draws adaptive frequency guides in the selected scale', () => {
   const renderGrid = (showGrid: boolean, scaleMode: FrequencyScaleMode): FakeCanvasRecorder => {
     const recorder = createFakeCanvasRecorder()
@@ -2921,9 +2949,10 @@ test('Spectrogram paints multiple native analyzer columns in order', () => {
     state.drawFrame()
 
     const writes = recorder.imageDataWrites
-    assert.equal(writes.length, 2)
-    assert.deepEqual(writes[0].data.slice(0, 8), [10, 20, 30, 64, 10, 20, 30, 128])
-    assert.deepEqual(writes[1].data.slice(0, 8), [10, 20, 30, 191, 10, 20, 30, 255])
+    assert.equal(writes.length, 1)
+    assert.equal(writes[0].width, 2)
+    assert.equal(writes[0].height, 2)
+    assert.deepEqual(writes[0].data, [10, 20, 30, 64, 10, 20, 30, 191, 10, 20, 30, 128, 10, 20, 30, 255])
   } finally {
     spectrogram.dispose()
     dom.restore()
@@ -5406,34 +5435,233 @@ test('resolveMainWindowSettingsPanelHeight uses intrinsic scope-track height whe
   }
 })
 
-test('expanded main-window bounds can push upward into an overlapping display above', () => {
-  const resolved = resolveExpandedMainWindowBounds(
-    { x: 700, y: 1110, width: 900, height: 180 },
-    400,
-    [
+test('settings expansion stays within the monitor holding the unexpanded window', () => {
+  const resolved = resolveMainWindowSettingsLayout({
+    logicalBounds: { x: 700, y: 1110, width: 900, height: 180 },
+    request: { panelHeight: 400, bottomBarHeight: 92 },
+    workAreas: [
       { x: 0, y: 0, width: 1920, height: 1080 },
       { x: 600, y: 1080, width: 720, height: 260 },
     ],
-  )
+  })
 
-  assert.equal(resolved.x, 700)
-  assert.equal(resolved.y, 760)
-  assert.equal(resolved.height, 580)
+  assert.equal(resolved.bounds.y, 1080)
+  assert.equal(resolved.bounds.height, 260)
+  assert.equal(resolved.settingsHeight, 160)
+  assert.equal(resolved.minimumHeight, 260)
 })
 
-test('expanded main-window bounds can span into a taller side display instead of clamping to one display', () => {
-  const resolved = resolveExpandedMainWindowBounds(
-    { x: 650, y: 650, width: 400, height: 180 },
-    300,
-    [
+test('settings choose the largest overlap, never borrowing height from adjacent displays', () => {
+  const workAreas = [
       { x: 0, y: 0, width: 800, height: 800 },
       { x: 800, y: 0, width: 800, height: 1200 },
-    ],
-  )
+  ]
+  const resolved = resolveMainWindowSettingsLayout({
+    logicalBounds: { x: 550, y: 600, width: 400, height: 180 },
+    request: { panelHeight: 1000, bottomBarHeight: 92 }, workAreas,
+  })
+  assert.equal(resolved.bounds.height, 800)
+  assert.equal(resolved.bounds.y, 0)
+  assert.deepEqual(selectMainWindowWorkArea({ x: 650, y: 600, width: 400, height: 180 }, workAreas), workAreas[1])
+})
 
-  assert.equal(resolved.x, 650)
-  assert.equal(resolved.y, 650)
-  assert.equal(resolved.height, 480)
+test('settings layout preserves scopes until the footer and usable controls need space', () => {
+  const workAreas = [{ x: -1920, y: 25, width: 1920, height: 900 }]
+  const layout = (height: number, panelHeight: number, zoomFactor = 1) => resolveMainWindowSettingsLayout({
+    logicalBounds: { x: -1800, y: 100, width: 900, height },
+    request: { panelHeight, bottomBarHeight: 92 }, workAreas, zoomFactor,
+  })
+  const fitting = layout(180, 300)
+  assert.equal(fitting.bounds.height, 573)
+  assert.equal(fitting.settingsHeight, 393)
+  assert.equal(fitting.bounds.y, 100)
+  const overflowing = layout(180, 1500)
+  assert.equal(overflowing.bounds.height, 900)
+  assert.equal(overflowing.bounds.y, 25)
+  assert.equal(overflowing.settingsHeight, 720)
+  assert.equal(overflowing.minimumHeight, 373)
+  const tall = layout(800, 1500)
+  assert.equal(tall.settingsHeight, 273)
+  assert.equal(tall.bounds.height - tall.settingsHeight, 627)
+  const zoomed = layout(180, 1500, 2)
+  assert.equal(zoomed.settingsHeight, 360)
+  assert.equal(zoomed.minimumHeight, 646)
+})
+
+test('settings reject nonfinite measurements and fit restored oversized heights', () => {
+  for (const value of [NaN, Infinity, -1, '300', undefined]) {
+    assert.equal(normalizeMainWindowSettingsRequest({ panelHeight: value, bottomBarHeight: 92 }), null)
+    assert.equal(normalizeMainWindowSettingsRequest({ panelHeight: 300, bottomBarHeight: value }), null)
+  }
+  const restored = resolveMainWindowSettingsLayout({
+    logicalBounds: { x: 2000, y: 2000, width: 900, height: 1500 },
+    request: { panelHeight: 0, bottomBarHeight: 0 },
+    workAreas: [{ x: 0, y: 25, width: 1440, height: 800 }],
+  })
+  assert.deepEqual(restored.bounds, { x: 540, y: 25, width: 900, height: 800 })
+  assert.equal(restored.settingsHeight, 0)
+})
+
+function createSettingsWindowHarness(initial = { x: 80, y: 500, width: 900, height: 180 }, geometricMaximize = false) {
+  let bounds = { ...initial }
+  let workAreas = [{ x: 0, y: 25, width: 1440, height: 900 }]
+  let fixed = false
+  let explicitlyMaximized = false
+  let normalBounds = { ...initial }
+  let zoom = 1
+  let minimumHeight = 100
+  let settingsHeight = 0
+  const controller = new MainWindowSettingsController({
+    bounds: () => ({ ...bounds }), normalBounds: () => ({ ...normalBounds }), workAreas: () => workAreas,
+    maximized: () => explicitlyMaximized || geometricMaximize && workAreas.some(area =>
+      area.x === bounds.x && area.y === bounds.y && area.width === bounds.width && area.height === bounds.height),
+    fullScreen: () => fixed, zoomFactor: () => zoom, chromeHeight: () => 0,
+    setBounds: next => { bounds = { ...next }; controller.geometryChanged() },
+    setMinimumHeight: height => { minimumHeight = height },
+    publish: layout => { settingsHeight = layout.settingsHeight },
+  })
+  return {
+    controller,
+    state: () => ({ bounds, minimumHeight, settingsHeight }),
+    resize: (next: Partial<typeof bounds>) => { bounds = { ...bounds, ...next }; controller.geometryChanged() },
+    displays: (next: typeof workAreas) => { workAreas = next; controller.refresh() },
+    fixed: (value: boolean, next: typeof bounds) => { fixed = value; bounds = next; controller.geometryChanged() },
+    maximize: (next: typeof bounds) => {
+      normalBounds = { ...bounds }
+      bounds = { ...next, height: next.height - 18 }
+      controller.geometryChanged()
+      bounds = next
+      explicitlyMaximized = true
+      controller.modeChanged('maximize')
+    },
+    unmaximize: () => {
+      explicitlyMaximized = false
+      bounds = { ...normalBounds }
+      controller.modeChanged('unmaximize')
+    },
+    zoom: (value: number) => { zoom = value; controller.refresh() },
+  }
+}
+
+test('settings open/close restores the unexpanded bounds without accumulating height or drift', () => {
+  const harness = createSettingsWindowHarness()
+  const original = harness.controller.logicalBounds
+  for (let i = 0; i < 5; i++) {
+    harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+    assert.equal(harness.state().bounds.height, 900)
+    assert.deepEqual(harness.controller.logicalBounds, original)
+    harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+    assert.deepEqual(harness.state().bounds, original)
+    assert.equal(harness.state().minimumHeight, 100)
+  }
+})
+
+test('a full-width bar restores after settings fill the screen and macOS reports it as maximized', () => {
+  for (const y of [25, 745]) {
+    const original = { x: 0, y, width: 1440, height: 180 }
+    const harness = createSettingsWindowHarness(original, true)
+    for (let i = 0; i < 3; i++) {
+      harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+      assert.deepEqual(harness.state().bounds, { x: 0, y: 25, width: 1440, height: 900 })
+      // Cover a platform that also delivers a delayed maximize notification.
+      harness.controller.modeChanged('maximize')
+      harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+      assert.deepEqual(harness.state().bounds, original)
+      assert.deepEqual(harness.controller.logicalBounds, original)
+    }
+    harness.controller.dispose()
+  }
+})
+
+test('automatic screen-filling settings still shrink when their content gets shorter', () => {
+  const harness = createSettingsWindowHarness({ x: 0, y: 25, width: 1440, height: 180 }, true)
+  harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+  harness.controller.setRequest({ panelHeight: 200, bottomBarHeight: 92 })
+  assert.equal(harness.state().bounds.height, 473)
+  assert.equal(harness.state().settingsHeight, 293)
+})
+
+test('a window already maximized before settings open stays maximized on close', () => {
+  const original = { x: 0, y: 25, width: 1440, height: 900 }
+  const harness = createSettingsWindowHarness(original, true)
+  harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, original)
+  assert.deepEqual(harness.controller.logicalBounds, original)
+})
+
+test('native maximize animation frames do not replace a closed bar\'s restore height', async () => {
+  const original = { x: 0, y: 25, width: 1440, height: 180 }
+  const harness = createSettingsWindowHarness(original, true)
+  const maximized = { ...original, height: 900 }
+  harness.maximize(maximized)
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.deepEqual(harness.controller.logicalBounds, original)
+  harness.controller.setRequest({ panelHeight: 1500, bottomBarHeight: 92 })
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, maximized)
+  harness.unmaximize()
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.deepEqual(harness.state().bounds, original)
+  harness.controller.dispose()
+})
+
+test('settings allow temporary vertical resizing and retain intentional moves and width changes', () => {
+  const harness = createSettingsWindowHarness()
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  harness.resize({ x: 120, height: 550, width: 1000 })
+  assert.equal(harness.state().bounds.height, 550)
+  assert.equal(harness.state().settingsHeight, 370)
+  assert.equal(harness.controller.logicalBounds.height, 180)
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, { x: 120, y: 500, width: 1000, height: 180 })
+})
+
+test('settings adapt to zoom, removed displays, and short workspaces without changing profile bounds', () => {
+  const harness = createSettingsWindowHarness({ x: -1400, y: 40, width: 900, height: 800 })
+  harness.displays([{ x: -1440, y: 25, width: 1440, height: 900 }])
+  const logical = harness.controller.logicalBounds
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  harness.zoom(1.5)
+  assert.equal(harness.state().settingsHeight, 410 / 1.5)
+  harness.displays([{ x: 0, y: 25, width: 1280, height: 500 }])
+  const { bounds, settingsHeight } = harness.state()
+  assert.equal(bounds.height, 500)
+  assert.equal(bounds.y, 25)
+  assert.ok(settingsHeight * 1.5 <= 400)
+  assert.deepEqual(harness.controller.logicalBounds, logical)
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.equal(harness.state().bounds.height, 500)
+  assert.deepEqual(harness.controller.logicalBounds, logical)
+})
+
+test('maximized/fullscreen settings allocate inside fixed bounds and restore after closing', async () => {
+  const harness = createSettingsWindowHarness()
+  const original = harness.controller.logicalBounds
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  const expanded = { ...harness.state().bounds }
+  const fullscreen = { x: 0, y: 0, width: 1440, height: 960 }
+  harness.fixed(true, fullscreen)
+  assert.deepEqual(harness.state().bounds, fullscreen)
+  assert.equal(harness.state().settingsHeight, 780)
+  harness.controller.setRequest({ panelHeight: 0, bottomBarHeight: 0 })
+  assert.deepEqual(harness.state().bounds, fullscreen)
+  harness.fixed(false, expanded)
+  // Native restore geometry may arrive after the unmaximize event.
+  harness.resize({ height: fullscreen.height })
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.deepEqual(harness.state().bounds, original)
+  harness.controller.dispose()
+})
+
+test('docking can take over settings without resizing the floating window', () => {
+  const harness = createSettingsWindowHarness()
+  harness.controller.setRequest({ panelHeight: 1200, bottomBarHeight: 92 })
+  const before = { ...harness.state().bounds }
+  harness.controller.reset()
+  assert.deepEqual(harness.state().bounds, before)
+  assert.equal(harness.state().settingsHeight, 0)
+  assert.equal(harness.controller.open, false)
 })
 
 test('dragged main-window bounds keep a visible grab margin without sticking at a display seam', () => {
@@ -8249,4 +8477,36 @@ test('dialog unmounted before its fonts load never starts layout observation', a
   resolveFonts()
   await fonts
   assert.equal(reports, 0)
+})
+
+test('oscilloscope underfill follows height and theme changes without recreating unchanged gradients', () => {
+  const dom = installFakeCanvasDom()
+  const recorder = createFakeCanvasRecorder()
+  const canvas = createFakeCanvas(recorder)
+  const nativeAnalyzer = new BridgeOscilloscopeAnalyzer()
+  const scope = new Oscilloscope(canvas, {
+    nativeAnalyzer, pitchLock: false, underfillEnabled: true, underfillColor: '#123456',
+    dataSource: { getPendingOscilloscopeSamples: () => [], getSampleRate: () => 48000,
+      isPlaying: () => true, subscribeToSessionChanges: () => () => {} },
+  })
+  const state = scope as unknown as { drawFrame(): void }
+  const draw = () => { nativeAnalyzer.setSamples(Float32Array.of(0, 0.5, -0.5, 0), 440); state.drawFrame() }
+  try {
+    draw(); draw()
+    assert.equal(recorder.gradients.length, 1)
+    assert.ok(recorder.gradients[0].stops.every(stop => stop.color === '#123456'))
+    canvas.width += 20; scope.resize(); draw()
+    scope.setOptions({ lineWidth: 2 }); draw()
+    assert.equal(recorder.gradients.length, 1)
+    canvas.height += 20; scope.resize(); draw()
+    assert.equal(recorder.gradients.length, 2)
+    assert.deepEqual(recorder.gradients[1].coordinates, [0, 0, 0, canvas.height])
+    scope.setOptions({ underfillColor: '#abcdef' }); draw()
+    assert.equal(recorder.gradients.length, 3)
+    assert.ok(recorder.gradients[2].stops.every(stop => stop.color === '#abcdef'))
+    scope.setOptions({ underfillEnabled: false }); draw()
+    assert.equal(recorder.gradients.length, 3)
+    scope.setOptions({ underfillEnabled: true }); draw()
+    assert.equal(recorder.gradients.length, 4)
+  } finally { scope.dispose(); dom.restore() }
 })

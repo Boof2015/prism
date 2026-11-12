@@ -96,6 +96,7 @@ export class Waveform {
 
   private waterfallCanvas: HTMLCanvasElement
   private waterfallCtx: CanvasRenderingContext2D
+  private waterfallOffset = 0
   private staticLayerCanvas: HTMLCanvasElement
   private staticLayerCtx: CanvasRenderingContext2D
   private staticLayerKey = ''
@@ -171,6 +172,7 @@ export class Waveform {
     this.waterfallCtx.clearRect(0, 0, this.waterfallCanvas.width, this.waterfallCanvas.height)
     this.columnAccumulatorPos = 0
     this.timelineColumnRemainder = 0
+    this.waterfallOffset = 0
     this.timeline.reset()
     this.splitter.reset()
     this.nativeAnalyzer?.reset()
@@ -406,10 +408,28 @@ export class Waveform {
     return [lineColor.r, lineColor.g, lineColor.b]
   }
 
-  private shiftWaterfall(columns = 1): void {
-    this.waterfallCtx.globalCompositeOperation = 'copy'
-    this.waterfallCtx.drawImage(this.waterfallCanvas, -columns, 0)
-    this.waterfallCtx.globalCompositeOperation = 'source-over'
+  private advanceHistory(columns = 1): void {
+    const { width, height } = this.waterfallCanvas
+    if (width <= 0 || columns <= 0) return
+    // Reuse only the oldest columns. Existing history stays in place, and the
+    // newly cleared space remains transparent around the incoming waveform.
+    const count = Math.min(columns, width)
+    const first = Math.min(count, width - this.waterfallOffset)
+    this.waterfallCtx.clearRect(this.waterfallOffset, 0, first, height)
+    if (first < count) this.waterfallCtx.clearRect(0, 0, count - first, height)
+    this.waterfallOffset = (this.waterfallOffset + count) % width
+  }
+
+  private drawHistory(ctx: CanvasRenderingContext2D): void {
+    const { width, height } = this.waterfallCanvas
+    if (width <= 0 || height <= 0) return
+    const offset = this.waterfallOffset
+    if (offset === 0) {
+      ctx.drawImage(this.waterfallCanvas, 0, 0)
+    } else {
+      ctx.drawImage(this.waterfallCanvas, offset, 0, width - offset, height, 0, 0, width - offset, height)
+      ctx.drawImage(this.waterfallCanvas, 0, 0, offset, height, width - offset, 0, offset, height)
+    }
   }
 
   private paintColumn(
@@ -421,6 +441,7 @@ export class Waveform {
     color: [number, number, number],
     x: number = width - 1,
   ): void {
+    x = (x + this.waterfallOffset) % width
     const scaledMin = Math.max(-1, Math.min(1, min))
     const scaledMax = Math.max(-1, Math.min(1, max))
     const centerY = laneTop + (laneHeight / 2)
@@ -589,7 +610,7 @@ export class Waveform {
       if (this.columnAccumulatorPos >= this.samplesPerColumn) {
         const { min, max } = this.computeMinMax(this.leftColumnAccumulator)
         const color = this.resolveColumnColor(this.leftBandLowAcc, this.leftBandMidAcc, this.leftBandHighAcc)
-        this.shiftWaterfall()
+        this.advanceHistory()
         this.paintColumn(min, max, width, 0, height, color)
         this.columnAccumulatorPos = 0
       }
@@ -647,7 +668,7 @@ export class Waveform {
         const rightMinMax = this.computeMinMax(this.rightColumnAccumulator)
         const leftColor = this.resolveColumnColor(this.leftBandLowAcc, this.leftBandMidAcc, this.leftBandHighAcc)
         const rightColor = this.resolveColumnColor(this.rightBandLowAcc, this.rightBandMidAcc, this.rightBandHighAcc)
-        this.shiftWaterfall()
+        this.advanceHistory()
         this.paintColumn(leftMinMax.min, leftMinMax.max, width, 0, laneHeight, leftColor)
         this.paintColumn(rightMinMax.min, rightMinMax.max, width, laneHeight, laneHeight, rightColor)
         this.columnAccumulatorPos = 0
@@ -674,9 +695,7 @@ export class Waveform {
     const columnCount = Math.floor(summaries.length / stride)
     if (columnCount <= 0) return true
 
-    // Scroll once for the whole batch, then paint the new columns — far cheaper than
-    // a full-canvas self-blit per column (which dominates cost at high scroll speeds).
-    this.shiftWaterfall(Math.min(columnCount, width))
+    this.advanceHistory(columnCount)
     for (let column = 0; column < columnCount; column += 1) {
       const x = width - columnCount + column
       if (x < 0) continue
@@ -698,7 +717,7 @@ export class Waveform {
     const columnCount = Math.floor(summaries.length / stride)
     if (columnCount <= 0) return true
 
-    this.shiftWaterfall(Math.min(columnCount, width))
+    this.advanceHistory(columnCount)
     for (let column = 0; column < columnCount; column += 1) {
       const x = width - columnCount + column
       if (x < 0) continue
@@ -734,12 +753,13 @@ export class Waveform {
       previousCanvas.height = this.waterfallCanvas.height
       const previousCtx = previousCanvas.getContext('2d')
       if (previousCtx) {
-        previousCtx.drawImage(this.waterfallCanvas, 0, 0)
+        this.drawHistory(previousCtx)
       }
 
       this.waterfallCanvas.width = width
       this.waterfallCanvas.height = height
       this.waterfallCtx.imageSmoothingEnabled = false
+      this.waterfallOffset = 0
 
       if (previousCtx && previousCanvas.width > 0 && previousCanvas.height > 0) {
         const srcX = Math.max(0, previousCanvas.width - width)
@@ -765,7 +785,7 @@ export class Waveform {
     if (!this.dataSource.isPlaying()) {
       this.drainPendingSamples()
       this.renderStaticLayer(width, height)
-      this.ctx.drawImage(this.waterfallCanvas, 0, 0)
+      this.drawHistory(this.ctx)
       this.drawTimeline(width, height)
       return
     }
@@ -794,7 +814,7 @@ export class Waveform {
     }
 
     this.renderStaticLayer(width, height)
-    this.ctx.drawImage(this.waterfallCanvas, 0, 0)
+    this.drawHistory(this.ctx)
     this.drawTimeline(width, height)
   }
 

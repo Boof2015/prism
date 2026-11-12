@@ -26,6 +26,7 @@ export default function App(): JSX.Element {
   const [measurementActive, setMeasurementActive] = useState(false)
   const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
   const [bottomBarHeight, setBottomBarHeight] = useState(0)
+  const [appliedSettingsHeight, setAppliedSettingsHeight] = useState(0)
   const [trayReady, setTrayReady] = useState(false)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settingsOpenRef = useRef(false)
@@ -197,16 +198,43 @@ export default function App(): JSX.Element {
     }
   }, [initializeNowPlaying, isNowPlayingVisible, setNowPlayingConsumerActive])
 
-  const settingsHeight = resolveMainWindowSettingsHeight(
+  const requestedSettingsHeight = resolveMainWindowSettingsHeight(
     settingsOpen,
     settingsPanelHeight,
     bottomBarHeight,
   )
+  const settingsHeight = settingsOpen && !docking.enabled ? appliedSettingsHeight : 0
   const settingsVisible = settingsOpen && settingsHeight > 0
 
+  useLayoutEffect(() => window.electronAPI.onMainSettingsLayout(layout => {
+    setAppliedSettingsHeight(layout.settingsHeight)
+  }), [])
+
   useLayoutEffect(() => {
-    window.electronAPI.setSettingsHeight(docking.enabled ? 0 : settingsHeight)
-  }, [docking.enabled, settingsHeight])
+    const report = (): void => {
+      window.electronAPI.setMainSettingsLayout(!docking.enabled && requestedSettingsHeight > 0
+        ? { panelHeight: settingsPanelHeight, bottomBarHeight }
+        : { panelHeight: 0, bottomBarHeight: 0 })
+    }
+    report()
+    // Browser zoom changes CSS viewport dimensions even when native bounds stay fixed.
+    window.addEventListener('resize', report)
+    return () => window.removeEventListener('resize', report)
+  }, [docking.enabled, requestedSettingsHeight, settingsPanelHeight, bottomBarHeight])
+
+  useEffect(() => {
+    if (!settingsOpen || docking.enabled) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      // Chromium's native select popup does not mark Escape defaultPrevented.
+      if (event.target instanceof HTMLSelectElement && event.target.matches(':open')) return
+      if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing) {
+        event.preventDefault()
+        setSettingsOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [settingsOpen, docking.enabled, setSettingsOpen])
 
   const showToolbar = useCallback(() => {
     if (hideTimeoutRef.current) {

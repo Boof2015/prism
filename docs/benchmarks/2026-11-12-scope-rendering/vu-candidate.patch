@@ -1,0 +1,285 @@
+--- a/src/renderer/visualizers/VUMeter.ts
++++ b/src/renderer/visualizers/VUMeter.ts
+@@ -5,6 +5,7 @@
+   type VUMeterNativeSnapshot,
+ } from '../audio/native'
+ import { resolveColorToRgb } from '../utils/color'
++import { MeterRenderCache } from './meterRenderCache'
+ import { defaultVisualizerSessionSource, type VisualizerSessionSource } from './dataSource'
+ import { FrameScheduler } from './frameScheduler'
+ import { VisualizerFrameLoop } from './visualizerFrameLoop'
+@@ -300,6 +301,7 @@
+ export class VUMeter {
+   private canvas: HTMLCanvasElement
+   private ctx: CanvasRenderingContext2D
++  private renderCache: MeterRenderCache
+   private options: ResolvedVUMeterOptions
+   private dataSource: VUMeterDataSource
+   private nativeAnalyzer: VUMeterNativeAnalyzer | null
+@@ -327,6 +329,7 @@
+     const ctx = canvas.getContext('2d')
+     if (!ctx) throw new Error('Could not get 2D context')
+     this.ctx = ctx
++    this.renderCache = new MeterRenderCache(canvas)
+ 
+     const { dataSource, frameScheduler, nativeAnalyzer, ...optionOverrides } = options
+     this.options = { ...defaultOptions, ...optionOverrides }
+@@ -366,6 +369,7 @@
+   setOptions(options: Partial<VUMeterOptions>): void {
+     const { dataSource, frameScheduler: _frameScheduler, nativeAnalyzer, ...optionUpdates } = options
+     this.options = { ...this.options, ...optionUpdates }
++    this.renderCache.clear()
+     let didReset = false
+     if (nativeAnalyzer !== undefined && nativeAnalyzer !== this.nativeAnalyzer) {
+       this.nativeAnalyzer = nativeAnalyzer
+@@ -397,6 +401,7 @@
+ 
+   resize(): void {
+     // Canvas resize handled externally
++    this.renderCache.clear()
+     this.invalidate()
+   }
+ 
+@@ -815,7 +820,7 @@
+ 
+   private drawNeedleMode(width: number, height: number): void {
+     const ctx = this.ctx
+-    const { r: cr, g: cg, b: cb } = resolveColorToRgb(this.options.lineColor)
++    const { r: cr, g: cg, b: cb } = this.renderCache.color(this.options.lineColor)
+     const devicePixelRatio = getCanvasDevicePixelRatio()
+     const faceLayout = resolveVUNeedleFaceLayout(width, height, devicePixelRatio)
+     const faceScale = faceLayout.scale * devicePixelRatio
+@@ -845,8 +850,8 @@
+     for (const { vu, label } of CLASSIC_VU_LABELS) {
+       if (!shouldShowClassicVuLabel(vu)) continue
+       const isMajor = isClassicVuMajorLabel(vu)
+-      ctx.font = `${isMajor ? 700 : 600} ${isMajor ? labelFontSize : labelFontSize * 0.92}px "JetBrains Mono", monospace`
+-      const halfLabelWidth = ctx.measureText(label).width / 2
++      const font = `${isMajor ? 700 : 600} ${isMajor ? labelFontSize : labelFontSize * 0.92}px "JetBrains Mono", monospace`
++      const halfLabelWidth = this.renderCache.textWidth(ctx, label, font) / 2
+       const angle = this.vuToNeedleAngle(vu, startAngle, endAngle)
+       const horizontalDirection = Math.abs(Math.cos(angle))
+       if (horizontalDirection <= 1e-6) continue
+@@ -946,23 +951,23 @@
+     if (!mainReading) return
+ 
+     ctx.lineCap = 'butt'
+-    ctx.strokeStyle = alphaColor(this.getNeedleColor(mainReading), 0.075)
++    ctx.strokeStyle = this.renderCache.alpha(this.getNeedleColor(mainReading), 0.075)
+     ctx.lineWidth = outerWidth
+     ctx.beginPath()
+     ctx.ellipse(centerX, centerY, outerRadiusX, outerRadiusY, 0, startAngle, hotAngle)
+     ctx.stroke()
+-    ctx.strokeStyle = alphaColor(this.options.clipColor, 0.15)
++    ctx.strokeStyle = this.renderCache.alpha(this.options.clipColor, 0.15)
+     ctx.beginPath()
+     ctx.ellipse(centerX, centerY, outerRadiusX, outerRadiusY, 0, hotAngle, endAngle)
+     ctx.stroke()
+ 
+     if (leftReading) {
+-      ctx.strokeStyle = alphaColor(this.getNeedleColor(leftReading), 0.06)
++      ctx.strokeStyle = this.renderCache.alpha(this.getNeedleColor(leftReading), 0.06)
+       ctx.lineWidth = innerWidth
+       ctx.beginPath()
+       ctx.ellipse(centerX, centerY, innerRadiusX, innerRadiusY, 0, startAngle, hotAngle)
+       ctx.stroke()
+-      ctx.strokeStyle = alphaColor(this.options.clipColor, 0.12)
++      ctx.strokeStyle = this.renderCache.alpha(this.options.clipColor, 0.12)
+       ctx.beginPath()
+       ctx.ellipse(centerX, centerY, innerRadiusX, innerRadiusY, 0, hotAngle, endAngle)
+       ctx.stroke()
+@@ -987,7 +992,7 @@
+     endAngle: number,
+     alpha: number,
+   ): void {
+-    ctx.strokeStyle = alphaColor(this.options.scaleColor, alpha)
++    ctx.strokeStyle = this.renderCache.alpha(this.options.scaleColor, alpha)
+     ctx.lineWidth = Math.max(1, railWidth * 0.065)
+     ctx.lineCap = 'butt'
+     for (const offset of [-railWidth / 2, railWidth / 2]) {
+@@ -1023,7 +1028,7 @@
+ 
+     const safeEnd = Math.min(levelAngle, hotAngle)
+     if (safeEnd > startAngle) {
+-      ctx.strokeStyle = alphaColor(this.getNeedleColor(reading), alpha)
++      ctx.strokeStyle = this.renderCache.alpha(this.getNeedleColor(reading), alpha)
+       ctx.lineWidth = lineWidth
+       ctx.lineCap = 'butt'
+       ctx.beginPath()
+@@ -1032,7 +1037,7 @@
+     }
+ 
+     if (levelAngle > hotAngle) {
+-      ctx.strokeStyle = alphaColor(this.options.clipColor, Math.min(1, alpha + 0.04))
++      ctx.strokeStyle = this.renderCache.alpha(this.options.clipColor, Math.min(1, alpha + 0.04))
+       ctx.lineWidth = lineWidth
+       ctx.lineCap = 'butt'
+       ctx.beginPath()
+@@ -1066,8 +1071,8 @@
+       const inward = isMajor ? majorInward : minorInward
+ 
+       ctx.strokeStyle = isHot
+-        ? alphaColor(this.options.clipColor, 1)
+-        : alphaColor(this.options.scaleColor, isMajor ? 0.96 : 0.82)
++        ? this.renderCache.alpha(this.options.clipColor, 1)
++        : this.renderCache.alpha(this.options.scaleColor, isMajor ? 0.96 : 0.82)
+       ctx.lineWidth = isMajor
+         ? Math.max(2.6, averageRadius * 0.016)
+         : Math.max(1.5, averageRadius * 0.0095)
+@@ -1081,8 +1086,8 @@
+       if (shouldShowLabel) {
+         const labelPoint = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, outerWidth / 2 + tickOutward + labelFontSize * 0.68)
+         ctx.fillStyle = isHot
+-          ? alphaColor(this.options.clipColor, 1)
+-          : alphaColor(this.options.labelColor, 1)
++          ? this.renderCache.alpha(this.options.clipColor, 1)
++          : this.renderCache.alpha(this.options.labelColor, 1)
+         ctx.font = `${isMajor ? 700 : 600} ${isMajor ? labelFontSize : labelFontSize * 0.92}px "JetBrains Mono", monospace`
+         ctx.textAlign = 'center'
+         ctx.textBaseline = 'middle'
+@@ -1093,7 +1098,7 @@
+     const titleFontSize = Math.min(labelFontSize * 0.88, averageRadius * 0.095)
+     const titleY = centerY - radiusY * 0.14
+     if (titleY > 4) {
+-      ctx.fillStyle = alphaColor(this.options.labelColor, 0.66)
++      ctx.fillStyle = this.renderCache.alpha(this.options.labelColor, 0.66)
+       ctx.font = `700 ${titleFontSize}px "JetBrains Mono", monospace`
+       ctx.fillText('VU', centerX, titleY)
+     }
+@@ -1145,7 +1150,7 @@
+     const inner = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, -arcWidth / 2 - markerInset)
+     const outer = this.needleEllipsePoint(centerX, centerY, radiusX, radiusY, angle, arcWidth / 2 + markerInset)
+ 
+-    ctx.strokeStyle = alphaColor(color, alpha)
++    ctx.strokeStyle = this.renderCache.alpha(color, alpha)
+     ctx.lineWidth = Math.max(2.2, averageRadius * 0.011)
+     ctx.lineCap = 'round'
+     ctx.beginPath()
+@@ -1197,7 +1202,7 @@
+     const baseX = centerX - Math.cos(angle) * counterWeight
+     const baseY = centerY - Math.sin(angle) * counterWeight
+ 
+-    ctx.strokeStyle = alphaColor(this.options.scaleColor, alpha * 0.32)
++    ctx.strokeStyle = this.renderCache.alpha(this.options.scaleColor, alpha * 0.32)
+     ctx.lineWidth = lineWidth + Math.max(1.25, averageRadius * 0.008)
+     ctx.lineCap = 'round'
+     ctx.beginPath()
+@@ -1205,7 +1210,7 @@
+     ctx.lineTo(tip.x, tip.y)
+     ctx.stroke()
+ 
+-    ctx.strokeStyle = alphaColor(color, alpha)
++    ctx.strokeStyle = this.renderCache.alpha(color, alpha)
+     ctx.lineWidth = lineWidth
+     ctx.lineCap = 'round'
+     ctx.beginPath()
+@@ -1213,7 +1218,7 @@
+     ctx.lineTo(tip.x, tip.y)
+     ctx.stroke()
+ 
+-    ctx.fillStyle = alphaColor(color, Math.min(1, alpha + 0.07))
++    ctx.fillStyle = this.renderCache.alpha(color, Math.min(1, alpha + 0.07))
+     ctx.beginPath()
+     ctx.arc(tip.x, tip.y, Math.max(1.5, lineWidth * 0.75), 0, Math.PI * 2)
+     ctx.fill()
+@@ -1228,15 +1233,15 @@
+   ): void {
+     const outerRadius = Math.max(2.5, averageRadius * 0.031)
+ 
+-    ctx.fillStyle = alphaColor(this.options.labelColor, 0.12)
+-    ctx.strokeStyle = alphaColor(this.options.scaleColor, 0.72)
++    ctx.fillStyle = this.renderCache.alpha(this.options.labelColor, 0.12)
++    ctx.strokeStyle = this.renderCache.alpha(this.options.scaleColor, 0.72)
+     ctx.lineWidth = Math.max(1, averageRadius * 0.007)
+     ctx.beginPath()
+     ctx.arc(centerX, centerY, outerRadius, 0, Math.PI * 2)
+     ctx.fill()
+     ctx.stroke()
+ 
+-    ctx.fillStyle = alphaColor(this.getNeedleColor(reading), 0.94)
++    ctx.fillStyle = this.renderCache.alpha(this.getNeedleColor(reading), 0.94)
+     ctx.beginPath()
+     ctx.arc(centerX, centerY, outerRadius * 0.42, 0, Math.PI * 2)
+     ctx.fill()
+@@ -1313,23 +1318,23 @@
+     const padding = 8 * faceScale
+     const centerY = y + height / 2 + 0.5 * faceScale
+ 
+-    ctx.fillStyle = alphaColor(this.options.labelColor, 0.055)
++    ctx.fillStyle = this.renderCache.alpha(this.options.labelColor, 0.055)
+     ctx.fillRect(x, y, width, height)
+-    ctx.fillStyle = alphaColor(channelColor, 0.72)
++    ctx.fillStyle = this.renderCache.alpha(channelColor, 0.72)
+     ctx.fillRect(x, y, width, Math.max(1, 1.5 * faceScale))
+-    ctx.strokeStyle = alphaColor(this.options.scaleColor, 0.24)
++    ctx.strokeStyle = this.renderCache.alpha(this.options.scaleColor, 0.24)
+     ctx.lineWidth = Math.max(1, faceScale)
+     ctx.strokeRect(x + 0.5 * faceScale, y + 0.5 * faceScale, width - faceScale, height - faceScale)
+ 
+     ctx.textBaseline = 'middle'
+     if (channelLabel) {
+-      ctx.fillStyle = alphaColor(channelColor, 0.82)
++      ctx.fillStyle = this.renderCache.alpha(channelColor, 0.82)
+       ctx.font = `700 ${13.5 * faceScale}px "JetBrains Mono", monospace`
+       ctx.textAlign = 'left'
+       ctx.fillText(channelLabel, x + padding, centerY)
+     }
+ 
+-    ctx.fillStyle = alphaColor(channelColor, 0.98)
++    ctx.fillStyle = this.renderCache.alpha(channelColor, 0.98)
+     ctx.font = `600 ${19.5 * faceScale}px "JetBrains Mono", monospace`
+     ctx.textAlign = channelLabel ? 'left' : 'center'
+     ctx.fillText(
+@@ -1338,7 +1343,7 @@
+       centerY,
+     )
+ 
+-    ctx.fillStyle = alphaColor(this.options.labelColor, 0.56)
++    ctx.fillStyle = this.renderCache.alpha(this.options.labelColor, 0.56)
+     ctx.font = `600 ${11.5 * faceScale}px "JetBrains Mono", monospace`
+     ctx.textAlign = 'right'
+     ctx.fillText('dB', x + width - padding, centerY)
+@@ -1390,6 +1395,7 @@
+   dispose(): void {
+     this.stop()
+     this.frameLoop.dispose()
++    this.renderCache.dispose()
+     if (this.unsubscribeSessionChange) {
+       this.unsubscribeSessionChange()
+       this.unsubscribeSessionChange = null
+--- a/src/renderer/visualizers/meterRenderCache.ts
++++ b/src/renderer/visualizers/meterRenderCache.ts
+@@ -3,6 +3,7 @@
+ // Keep the existing Canvas commands and colors; reuse their invariant inputs.
+ export class MeterRenderCache {
+   private colors = new Map<string, RgbColor>()
++  private alphaColors = new Map<string, string>()
+   private textWidths = new Map<string, number>()
+   private fonts: FontFaceSet | undefined
+ 
+@@ -19,6 +20,17 @@
+       this.colors.set(value, color)
+     }
+     return color
++  }
++
++  alpha(value: string, alpha: number): string {
++    const key = `${alpha}:${value}`
++    let result = this.alphaColors.get(key)
++    if (result === undefined) {
++      const { r, g, b } = this.color(value)
++      result = `rgba(${r}, ${g}, ${b}, ${alpha})`
++      this.alphaColors.set(key, result)
++    }
++    return result
+   }
+ 
+   // Layout callers supply the font so cache hits need no Canvas font access.
+@@ -42,6 +54,7 @@
+ 
+   clear(): void {
+     this.colors.clear()
++    this.alphaColors.clear()
+     this.clearTextWidths()
+   }
+ 

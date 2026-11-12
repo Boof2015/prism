@@ -1,4 +1,5 @@
 import type { WindowBounds } from '../types/popout'
+import type { MainWindowSettingsRequest } from '../types/mainWindowSettings'
 
 export interface WorkAreaBounds {
   x: number
@@ -54,7 +55,7 @@ function unionBounds(boundsList: readonly WorkAreaBounds[]): WorkAreaBounds {
 
 function normalizeWorkAreas(workAreas: readonly WorkAreaBounds[]): WorkAreaBounds[] {
   return workAreas
-    .filter((bounds) => bounds.width > 0 && bounds.height > 0)
+    .filter((bounds) => Object.values(bounds).every(Number.isFinite) && bounds.width > 0 && bounds.height > 0)
     .map((bounds) => ({
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
@@ -115,25 +116,81 @@ export function clampBoundsWithVisibleMargin(
   }
 }
 
-export function resolveExpandedMainWindowBounds(
-  logicalBounds: WindowBounds,
-  settingsHeight: number,
+export function selectMainWindowWorkArea(
+  bounds: WindowBounds,
   workAreas: readonly WorkAreaBounds[],
-): WindowBounds {
-  const nextSettingsHeight = Math.max(0, Math.round(settingsHeight))
-  if (nextSettingsHeight === 0) {
-    return { ...logicalBounds }
-  }
+): WorkAreaBounds {
+  const areas = normalizeWorkAreas(workAreas)
+  const centerX = bounds.x + bounds.width / 2
+  const centerY = bounds.y + bounds.height / 2
+  const overlap = (area: WorkAreaBounds): number =>
+    Math.max(0, Math.min(getRight(bounds), getRight(area)) - Math.max(bounds.x, area.x))
+    * Math.max(0, Math.min(getBottom(bounds), getBottom(area)) - Math.max(bounds.y, area.y))
+  const distance = (area: WorkAreaBounds): number =>
+    (centerX - clamp(centerX, area.x, getRight(area))) ** 2
+    + (centerY - clamp(centerY, area.y, getBottom(area))) ** 2
+  areas.sort((a, b) => overlap(b) - overlap(a) || distance(a) - distance(b))
+  return areas[0] ?? { ...bounds }
+}
 
-  const projectedBounds: WindowBounds = {
-    x: logicalBounds.x,
-    y: logicalBounds.y,
-    width: logicalBounds.width,
-    height: logicalBounds.height + nextSettingsHeight,
-  }
+export function normalizeMainWindowSettingsRequest(raw: unknown): MainWindowSettingsRequest | null {
+  if (!raw || typeof raw !== 'object') return null
+  const { panelHeight, bottomBarHeight } = raw as MainWindowSettingsRequest
+  if (!Number.isFinite(panelHeight) || !Number.isFinite(bottomBarHeight)
+    || panelHeight < 0 || bottomBarHeight < 0) return null
+  return panelHeight > 0 && bottomBarHeight > 0
+    ? { panelHeight, bottomBarHeight }
+    : { panelHeight: 0, bottomBarHeight: 0 }
+}
 
-  const envelope = buildDisplayEnvelope(logicalBounds, projectedBounds, workAreas)
-  return clampBoundsWithinEnvelope(projectedBounds, envelope)
+export interface MainWindowLayoutOptions {
+  logicalBounds: WindowBounds
+  request: MainWindowSettingsRequest
+  workAreas: readonly WorkAreaBounds[]
+  zoomFactor?: number
+  chromeHeight?: number
+  /** A user resize while settings are open changes only the temporary viewport. */
+  viewportHeight?: number
+  /** Maximized/fullscreen or OS-constrained bounds: allocate without resizing. */
+  fixedBounds?: WindowBounds
+}
+
+export function resolveMainWindowSettingsLayout({
+  logicalBounds, request, workAreas, zoomFactor = 1, chromeHeight = 0,
+  viewportHeight, fixedBounds,
+}: MainWindowLayoutOptions): { bounds: WindowBounds; settingsHeight: number; minimumHeight: number } {
+  const area = selectMainWindowWorkArea(logicalBounds, workAreas)
+  const zoom = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1
+  const chrome = Math.max(0, chromeHeight)
+  const open = request.panelHeight > 0 && request.bottomBarHeight > 0
+  // Include the settings region's one CSS pixel top border.
+  const desired = open ? Math.ceil((request.panelHeight + request.bottomBarHeight + 1) * zoom) : 0
+  const controlsMinimum = open ? Math.ceil((request.bottomBarHeight + 180 + 1) * zoom) : 0
+  const settingsMinimum = Math.min(desired, controlsMinimum)
+  const limit = fixedBounds?.height ?? area.height
+  const minimumHeight = Math.min(limit, chrome + 100 + settingsMinimum)
+  const height = fixedBounds?.height ?? Math.round(clamp(
+    open ? viewportHeight ?? logicalBounds.height + desired : logicalBounds.height,
+    minimumHeight, limit,
+  ))
+  const contentHeight = Math.max(0, height - chrome)
+  // On very short workspaces, keep the footer reachable before reserving scope space.
+  const stripMinimum = Math.min(100, Math.max(0, contentHeight - Math.ceil((request.bottomBarHeight + 1) * zoom)))
+  const applied = open ? Math.max(0, Math.min(
+    desired,
+    Math.max(height - logicalBounds.height, settingsMinimum),
+    contentHeight - stripMinimum,
+  )) : 0
+  return {
+    bounds: fixedBounds ? { ...fixedBounds } : {
+      ...logicalBounds,
+      x: clamp(logicalBounds.x, area.x, Math.max(area.x, getRight(area) - logicalBounds.width)),
+      y: clamp(logicalBounds.y, area.y, getBottom(area) - height),
+      height,
+    },
+    settingsHeight: applied / zoom,
+    minimumHeight,
+  }
 }
 
 export function clampDraggedMainWindowBounds(
