@@ -47,6 +47,7 @@ export type { CaptureMode } from '../../types/capture'
 interface CaptureChunk {
   left: Float32Array
   right: Float32Array
+  sourceChannels?: Float32Array[]
   channelCount: number
   capturedAt: number
   sequence: number
@@ -95,9 +96,11 @@ function isDocumentHidden(): boolean {
 
 function resolveNativeCapturePollDelay(chunkCount: number, queueDepth = 0): number {
   if (isDocumentHidden()) {
-    return 16
+    return 32
   }
-  return chunkCount > 0 || queueDepth > 0 ? 0 : 2
+  // Native capture buffers packets between polls. Avoid a zero-delay timer
+  // that can monopolize the renderer when audio is continuously available.
+  return chunkCount > 0 || queueDepth > 0 ? 8 : 10
 }
 
 function trimNativeChunksToLiveWindow(chunks: NativeCaptureDrainResult['chunks']): NativeCaptureDrainResult['chunks'] {
@@ -600,6 +603,7 @@ export abstract class NativePolledCaptureBackend implements CaptureBackend {
             const routedChunk: CaptureChunk = {
               left: chunk.left,
               right: chunk.right,
+              sourceChannels: chunk.sourceChannels,
               channelCount: Math.max(1, Math.floor(chunk.channelCount) || 1),
               capturedAt: chunk.capturedAtMilliseconds + this.performanceOffsetMilliseconds,
               sequence: Math.max(1, Math.floor(chunk.sequence) || 1),
@@ -666,6 +670,10 @@ class NativeWindowsCaptureBackend extends NativePolledCaptureBackend {
   protected getBackendLabel(): string {
     return 'Native Windows'
   }
+
+  protected shouldTrimBacklogForLiveCapture(): boolean {
+    return true
+  }
 }
 
 class NativeLinuxCaptureBackend extends NativePolledCaptureBackend {
@@ -690,9 +698,11 @@ class NativeLinuxCaptureBackend extends NativePolledCaptureBackend {
 
 export class NativeDeviceInputCaptureBackend extends NativePolledCaptureBackend {
   readonly kind = 'device-input' as const
+  private asioSelected = false
 
   async start(request?: CaptureBackendStartRequest): Promise<void> {
-    if (typeof window !== 'undefined' && window.electronAPI?.requestMicrophoneAccess) {
+    this.asioSelected = request?.deviceId?.startsWith('asio:') === true
+    if (!this.asioSelected && typeof window !== 'undefined' && window.electronAPI?.requestMicrophoneAccess) {
       const granted = await window.electronAPI.requestMicrophoneAccess()
       if (!granted) {
         throw new Error(
@@ -705,8 +715,30 @@ export class NativeDeviceInputCaptureBackend extends NativePolledCaptureBackend 
 
   protected getNativeCaptureModule(): NativeDeviceInputCaptureAPI | null {
     return typeof window !== 'undefined'
-      ? window.nativeCaptureAPI?.deviceInputCapture ?? null
+      ? this.asioSelected
+        ? window.nativeCaptureAPI?.asioCapture ?? null
+        : window.nativeCaptureAPI?.deviceInputCapture ?? null
       : null
+  }
+
+  async listSources(): Promise<CaptureSourceDescriptor[]> {
+    const modules = typeof window === 'undefined' ? [] : [
+      window.nativeCaptureAPI?.deviceInputCapture,
+      window.nativeCaptureAPI?.asioCapture,
+    ]
+    return modules.flatMap((module) => {
+      if (!module?.getSupport().available) return []
+      return module.listInputDevices().map((source) => ({
+        id: source.id,
+        label: source.label,
+        kind: 'device' as const,
+        isDefault: source.isDefault,
+        sampleRate: source.sampleRate,
+        channelCount: source.channelCount,
+        channels: source.channels,
+        channelRoutingAvailable: source.channelRoutingAvailable,
+      }))
+    })
   }
 
   protected listNativeSources(module: NativePolledCaptureModule): NativeCaptureSource[] {
@@ -715,6 +747,10 @@ export class NativeDeviceInputCaptureBackend extends NativePolledCaptureBackend 
 
   protected getBackendLabel(): string {
     return 'Native device input'
+  }
+
+  protected shouldTrimBacklogForLiveCapture(): boolean {
+    return true
   }
 }
 
@@ -959,7 +995,8 @@ class AudioCapture {
       ? window.nativeCaptureAPI?.deviceInputCapture ?? null
       : null
     const nativeInputSupport = nativeInputModule?.getSupport()
-    this.deviceInputBackend = nativeInputSupport?.available
+    const asioSupport = typeof window !== 'undefined' ? window.nativeCaptureAPI?.asioCapture?.getSupport() : null
+    this.deviceInputBackend = nativeInputSupport?.available || asioSupport?.available
       ? new NativeDeviceInputCaptureBackend({
           kind: 'device-input',
           available: true,
@@ -1310,6 +1347,11 @@ class AudioCapture {
       && this.inputGainLinear !== 1
     ) {
       applyInputGainToStereoSamples(chunk.left, chunk.right, this.inputGainLinear)
+      for (const channel of chunk.sourceChannels ?? []) {
+        for (let index = 0; index < channel.length; index += 1) {
+          channel[index] *= this.inputGainLinear
+        }
+      }
     }
 
     if (
@@ -1328,6 +1370,7 @@ class AudioCapture {
 
     audioRouter.ingestChunk(chunk.left, chunk.right, {
       sessionId: this.sessionId,
+      sourceChannels: chunk.sourceChannels,
       channelCount: chunk.channelCount,
       capturedAt: chunk.capturedAt,
       sequence: chunk.sequence,

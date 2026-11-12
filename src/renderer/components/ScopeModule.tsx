@@ -102,6 +102,7 @@ interface SizeMeasurement {
 }
 
 function getScopeTheme(theme: PrismResolvedTheme, kind: ScopeKind): ScopeModuleTheme {
+  if (kind === 'pitch') return theme.vumeter
   return theme[kind] as ScopeModuleTheme
 }
 
@@ -297,6 +298,11 @@ export function scopeSettingsToOptions(
         orientation: s.orientation,
         needleChannels: s.needleChannels,
         referenceDb: s.referenceDb,
+        lowCutHz: s.lowCutHz,
+        highCutHz: s.highCutHz,
+        attackMs: s.attackMs,
+        releaseMs: s.releaseMs,
+        showCorrelation: s.showCorrelation !== false,
       }
     }
     case 'lufsmeter': {
@@ -407,6 +413,7 @@ function createVisualizer(
     case 'vumeter':
       return new VUMeter(canvas, {
         ...opts,
+        ...(dataSource || (mySettings as ScopeSettings['vumeter']).lowCutHz > 20 || (mySettings as ScopeSettings['vumeter']).highCutHz < 20000 || (mySettings as ScopeSettings['vumeter']).attackMs !== 5 || (mySettings as ScopeSettings['vumeter']).releaseMs !== 180 ? { nativeAnalyzer: null } : {}),
         ...(dataSource ? { dataSource: dataSource as VUMeterDataSource } : {}),
       })
     case 'lufsmeter':

@@ -1,7 +1,9 @@
 import { SpectrumReferenceControls } from './SpectrumReference'
 import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
-import { SCOPE_LABELS, isTransformableScopeKind } from '../../types/scope'
+import { SCOPE_LABELS, isAudioScopeKind, isTransformableScopeKind } from '../../types/scope'
+import { useAudioStore } from '../stores/audioStore'
+import { useScopeChannelStore } from '../stores/scopeChannelStore'
 import type { ScopeSettings } from '../../types/settings'
 import { frequencyRangeLabel } from '../../types/frequencyScale'
 import { SCOPE_DISPLAY_ROTATIONS, type ScopeDisplayRotation } from '../../types/scopeTransform'
@@ -136,6 +138,10 @@ export function scopeSummary(kind: ScopeKind, settings: ScopeSettings[ScopeKind]
         ? `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.needleChannels.toUpperCase()}`
         : `${scopeSettings.mode.toUpperCase()} · ${scopeSettings.orientation.toUpperCase()}`
       return `${base} · ${refLabel}`
+    }
+    case 'pitch': {
+      const current = settings as ScopeSettings['pitch']
+      return current.mode === 'auto' ? 'Auto · vocal + bass' : `Targets ${current.primaryTargetHz} / ${current.secondaryTargetHz} Hz`
     }
     case 'lufsmeter':
       return `${lufsReadoutLabel((settings as ScopeSettings['lufsmeter']).readout)} LUFS`
@@ -317,6 +323,13 @@ interface ScopeSettingsSectionProps {
   kind: ScopeKind
   settings: ScopeSettings[ScopeKind]
   onUpdate: <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>) => void
+  instanceLabel?: string
+  channelPairLeft?: number
+  onChannelPairChange?: (left: number | null) => void
+  onRemove?: () => void
+  settingsLinked?: boolean
+  onSettingsLinkedChange?: (linked: boolean) => void
+  extraControls?: ReactNode
 }
 
 let spectrumSettingsTab: 'general' | 'reference' = 'general'
@@ -325,13 +338,26 @@ export default function ScopeSettingsSection({
   kind,
   settings,
   onUpdate,
+  instanceLabel,
+  channelPairLeft,
+  onChannelPairChange,
+  onRemove,
+  settingsLinked = false,
+  onSettingsLinkedChange,
+  extraControls,
 }: ScopeSettingsSectionProps): JSX.Element {
   const [tab, setTab] = useState(spectrumSettingsTab)
+  const sourceChannelCount = useAudioStore((s) => s.sourceChannelCount)
+  const storedPair = useScopeChannelStore((s) => isAudioScopeKind(kind) ? s.pairs[kind] : undefined)
+  const setPair = useScopeChannelStore((s) => s.setPair)
+  const selectedPair = onChannelPairChange ? channelPairLeft : storedPair
   return (
     <section className="settings-scope-section">
       <div className="settings-scope-section__header">
-        <div className="settings-scope-section__title">{SCOPE_LABELS[kind]}</div>
+        <div className="settings-scope-section__title">{instanceLabel ?? SCOPE_LABELS[kind]}</div>
         <div className="settings-scope-section__summary">{scopeSummary(kind, settings)}</div>
+        {onSettingsLinkedChange && <button type="button" className={`settings-chip ${settingsLinked ? 'is-active' : ''}`} onClick={() => onSettingsLinkedChange(!settingsLinked)}>Link settings</button>}
+        {onRemove && <button type="button" className="settings-chip" onClick={onRemove}>Remove</button>}
       </div>
 
       {kind === 'spectrum' && <div className="settings-scope-tabs" role="tablist" aria-label="Spectrum settings">
@@ -352,6 +378,20 @@ export default function ScopeSettingsSection({
       {kind === 'spectrum' && tab === 'reference' && <div role="tabpanel" id="spectrum-reference-settings"><SpectrumReferenceControls /></div>}
       <div className="settings-scope-section__controls" id={kind === 'spectrum' ? 'spectrum-general-settings' : undefined}
         role={kind === 'spectrum' ? 'tabpanel' : undefined} hidden={kind === 'spectrum' && tab !== 'general'}>
+        {extraControls}
+        {isAudioScopeKind(kind) && sourceChannelCount > 2 && (
+          <SelectControl label="Source channels" value={selectedPair === undefined ? 'default' : String(selectedPair)}
+            onChange={(value) => {
+              const next = value === 'default' ? null : Number(value)
+              if (onChannelPairChange) onChannelPairChange(next)
+              else setPair(kind, next)
+            }}>
+            <option value="default">Global L/R route</option>
+            {Array.from({ length: Math.min(4, Math.floor(sourceChannelCount / 2)) }, (_, pair) => (
+              <option key={pair} value={pair * 2}>Channels {pair * 2 + 1}–{pair * 2 + 2}</option>
+            ))}
+          </SelectControl>
+        )}
         {kind === 'waterfall' && (() => {
           const current = settings as ScopeSettings['waterfall']
           return <>
@@ -716,6 +756,13 @@ export default function ScopeSettingsSection({
           const current = settings as ScopeSettings['vumeter']
           return (
             <>
+              <ToggleGroup label="Audio">
+                <ToggleChip label="Correlation" active={current.showCorrelation !== false} onClick={() => onUpdate('vumeter', { showCorrelation: current.showCorrelation === false })} />
+              </ToggleGroup>
+              <RangeControl label="Low Cut" value={Math.round(1000 * Math.log((current.lowCutHz ?? 20) / 20) / Math.log(1000))} valueLabel={`${current.lowCutHz ?? 20} Hz`} min={0} max={1000} step={1} onChange={(value) => { const hz = 20 * 1000 ** (value / 1000); onUpdate('vumeter', { lowCutHz: Math.min(current.highCutHz ?? 20000, hz < 1000 ? Math.round(hz) : Math.round(hz / 100) * 100) }) }} />
+              <RangeControl label="High Cut" value={Math.round(1000 * Math.log((current.highCutHz ?? 20000) / 20) / Math.log(1000))} valueLabel={`${current.highCutHz ?? 20000} Hz`} min={0} max={1000} step={1} onChange={(value) => { const hz = 20 * 1000 ** (value / 1000); onUpdate('vumeter', { highCutHz: Math.max(current.lowCutHz ?? 20, hz < 1000 ? Math.round(hz) : Math.round(hz / 100) * 100) }) }} />
+              <RangeControl label="Attack" value={current.attackMs ?? 5} valueLabel={`${current.attackMs ?? 5} ms`} min={1} max={200} step={1} onChange={(value) => onUpdate('vumeter', { attackMs: value })} />
+              <RangeControl label="Release" value={current.releaseMs ?? 180} valueLabel={`${current.releaseMs ?? 180} ms`} min={1} max={2000} step={1} onChange={(value) => onUpdate('vumeter', { releaseMs: value })} />
               <SelectControl
                 label="Mode"
                 value={current.mode}
@@ -776,6 +823,19 @@ export default function ScopeSettingsSection({
               <option value="momentary">Momentary</option>
             </SelectControl>
           )
+        })()}
+
+        {kind === 'pitch' && (() => {
+          const current = settings as ScopeSettings['pitch']
+          return <>
+            <SelectControl label="Detection" value={current.mode} onChange={(value) => onUpdate('pitch', { mode: value as ScopeSettings['pitch']['mode'] })}>
+              <option value="auto">Auto (vocal + bass)</option><option value="semi-auto">Semi-auto (targeted)</option>
+            </SelectControl>
+            {current.mode === 'semi-auto' && <>
+              <RangeControl label="Main target" value={current.primaryTargetHz} valueLabel={`${current.primaryTargetHz.toFixed(0)} Hz`} min={40} max={2200} step={1} onChange={(value) => onUpdate('pitch', { primaryTargetHz: value })} />
+              <RangeControl label="Secondary target" value={current.secondaryTargetHz} valueLabel={`${current.secondaryTargetHz.toFixed(0)} Hz`} min={40} max={2200} step={1} onChange={(value) => onUpdate('pitch', { secondaryTargetHz: value })} />
+            </>}
+          </>
         })()}
 
         {kind === 'waveform' && (() => {

@@ -3,6 +3,7 @@ import type { Profile } from '../../types/profile'
 import type { ScopeKind } from '../../types/scope'
 import type { ScopeSettings } from '../../types/settings'
 import type { AnalysisSettings } from '../../types/analysis'
+import type { ModuleInstance } from '../../types/moduleInstance'
 import {
   cloneScopeSettings,
   normalizeProfile,
@@ -17,6 +18,9 @@ export interface ProfileDraftSource {
   analysisSettings: AnalysisSettings
   scopePopouts: ScopePopoutStateMap
   windowBounds?: WindowBounds
+  moduleInstances?: ModuleInstance[]
+  workspaceOrder?: string[]
+  workspaceSpans?: Record<string, { columns: number; rows: number }>
 }
 
 export function buildProfileDraft(
@@ -32,6 +36,9 @@ export function buildProfileDraft(
     analysisSettings: { ...source.analysisSettings },
     scopePopouts: normalizeScopePopouts(source.scopePopouts),
     windowBounds: source.windowBounds,
+    moduleInstances: structuredClone(source.moduleInstances ?? []),
+    workspaceOrder: [...(source.workspaceOrder ?? [])],
+    workspaceSpans: structuredClone(source.workspaceSpans ?? {}),
   }, name)
 }
 

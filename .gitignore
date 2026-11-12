@@ -6,6 +6,8 @@ artifacts/linux-tests/
 out/
 dist/
 native/build/
+# Local upstream ASIO SDK checkout; the required licensed host files are vendored separately.
+native/vendor/asio/
 tui/build/
 tui/dist-installer/prism-tui
 tui/dist-installer/prism-tui.exe

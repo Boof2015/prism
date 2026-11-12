@@ -44,6 +44,8 @@ function flushScopeAudioBatch(kind: AudioScopeKind, scopeSettings: ScopeSettings
       return audioRouter.flushPendingSpectrogramStereoSamples()
     case 'vumeter':
       return audioRouter.flushPendingVUMeterSamples()
+    case 'pitch':
+      return audioRouter.flushPendingPitchSamples()
     case 'lufsmeter':
       return audioRouter.flushPendingLUFSMeterSamples()
     case 'waveform':
@@ -114,7 +116,7 @@ export default function ScopePopoutBridge(): null {
         kind,
         label: SCOPE_LABELS[kind],
         interfaceTheme: activeTheme.interface,
-        scopeTheme: activeTheme[kind],
+        scopeTheme: kind === 'pitch' ? activeTheme.vumeter : activeTheme[kind],
         settings: scopeSettings[kind],
         analysisSettings,
       }
@@ -151,7 +153,7 @@ export default function ScopePopoutBridge(): null {
         kind,
         label: SCOPE_LABELS[kind],
         interfaceTheme: useThemeStore.getState().activeTheme.interface,
-        scopeTheme: useThemeStore.getState().activeTheme[kind],
+        scopeTheme: kind === 'pitch' ? useThemeStore.getState().activeTheme.vumeter : useThemeStore.getState().activeTheme[kind],
         settings: useSettingsStore.getState().scopeSettings[kind],
         analysisSettings: useSettingsStore.getState().analysisSettings,
       })

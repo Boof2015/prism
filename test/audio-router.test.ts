@@ -7,6 +7,24 @@ function createChunk(value: number, length = 4): Float32Array {
   return new Float32Array(Array.from({ length }, () => value))
 }
 
+test('independent scope channel pairs read different stereo buses from one capture chunk', () => {
+  const router = new AudioRouter()
+  const sessionId = router.beginSession(48000, 2, 'native-windows')
+  router.setVisualizerConsumerDemand('test', { spectrum: true, waveform: true })
+  router.setScopeChannelPair('spectrum', { left: 2, right: 3 })
+  router.setScopeChannelPair('waveform', { left: 4, right: 5 })
+  router.ingestChunk(createChunk(1), createChunk(2), {
+    sessionId,
+    sourceChannels: [1, 2, 3, 4, 5, 6].map((value) => createChunk(value)),
+  })
+  const spectrum = router.flushPendingSpectrumStereoSamples()[0]
+  const waveform = router.flushPendingWaveformStereoSamples()[0]
+  assert.deepEqual(Array.from(spectrum.left), [3, 3, 3, 3])
+  assert.deepEqual(Array.from(spectrum.right), [4, 4, 4, 4])
+  assert.deepEqual(Array.from(waveform.left), [5, 5, 5, 5])
+  assert.deepEqual(Array.from(waveform.right), [6, 6, 6, 6])
+})
+
 test('routes chunks only to demanded scopes and prunes queues when demand is removed', () => {
   const router = new AudioRouter()
   const sessionId = router.beginSession(48000, 2, 'native-macos')

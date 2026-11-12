@@ -11,7 +11,7 @@ import {
   type ProfileLocalMetadata,
   type PrismProfileFile,
   type PrismProfileFileScopePopoutMap,
-  type PrismProfileFileV7,
+  type PrismProfileFileV8,
   type PrismProfileLocalStateV1,
 } from '../types/profile'
 import { AUDIO_SCOPE_KINDS, SCOPE_KINDS, normalizeScopeKind, type ScopeKind } from '../types/scope'
@@ -41,6 +41,7 @@ import {
   normalizeAnalysisSettings,
 } from '../types/analysis'
 import { DEFAULT_TIMELINE_UNIT, isTimelineUnit } from '../types/dawBridge'
+import { DEFAULT_PITCH_SETTINGS, MODULE_INSTANCE_KINDS, type ModuleInstance, type ModuleInstanceKind } from '../types/moduleInstance'
 
 export const DEFAULT_VISIBLE: ScopeKind[] = ['spectrum', 'oscilloscope', 'vectorscope', 'vumeter']
 export const DEFAULT_SCOPE_ORDER: ScopeKind[] = [...AUDIO_SCOPE_KINDS]
@@ -52,6 +53,7 @@ export const DEFAULT_SCOPE_WIDTH_WEIGHTS: Record<ScopeKind, number> = {
   vectorscope: 1,
   spectrogram: 1,
   vumeter: 0.5,
+  pitch: 0.75,
   lufsmeter: 0.5,
   waveform: 1,
   nowPlaying: 1,
@@ -63,6 +65,42 @@ export function isScopeKind(value: unknown): value is ScopeKind {
 
 export function cloneScopeSettings(settings: ScopeSettings): ScopeSettings {
   return JSON.parse(JSON.stringify(settings)) as ScopeSettings
+}
+
+export function normalizeModuleInstances(raw: unknown): ModuleInstance[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((entry): ModuleInstance[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const item = entry as Partial<ModuleInstance>
+    if (typeof item.id !== 'string' || (item.kind !== 'bassvumeter' && !MODULE_INSTANCE_KINDS.includes(item.kind as ModuleInstanceKind))) return []
+    const kind = item.kind === 'bassvumeter' ? 'vumeter' : item.kind as ModuleInstanceKind
+    const settings = kind === 'pitch'
+      ? { ...DEFAULT_PITCH_SETTINGS, ...(item.settings as object ?? {}) }
+      : kind === 'bassvumeter'
+        ? { ...DEFAULT_SCOPE_SETTINGS.vumeter, ...(item.settings as object ?? {}), cutoffHz: Math.min(350, Math.max(20, Number((item.settings as { cutoffHz?: unknown } | undefined)?.cutoffHz) || 120)) }
+      : { ...DEFAULT_SCOPE_SETTINGS[kind], ...(item.settings as object ?? {}) }
+    const left = item.channelPairLeft
+    return [{ id: item.id, kind, settings: { ...settings, ...((item.kind === 'bassvumeter' || (item.settings as { bassMode?: boolean } | undefined)?.bassMode) ? { highCutHz: (item.settings as { highCutHz?: number; cutoffHz?: number } | undefined)?.highCutHz ?? (item.settings as { cutoffHz?: number } | undefined)?.cutoffHz ?? 120 } : {}) } as ModuleInstance['settings'], linkSettings: item.linkSettings === true,
+      ...(typeof left === 'number' && left >= 0 && left < 8 && left % 2 === 0 ? { channelPairLeft: left } : {}) }]
+  })
+}
+
+export function normalizeWorkspaceOrder(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return [...new Set(raw.filter((value): value is string => typeof value === 'string' && /^(scope|instance):/.test(value)))]
+}
+
+export function normalizeWorkspaceSpans(raw: unknown): Record<string, { columns: number; rows: number }> {
+  if (!raw || typeof raw !== 'object') return {}
+  return Object.entries(raw).reduce((result, [key, value]) => {
+    if (!/^(scope|instance):/.test(key) || !value || typeof value !== 'object') return result
+    const span = value as { columns?: unknown; rows?: unknown }
+    result[key] = {
+      columns: Math.min(3, Math.max(1, Math.round(Number(span.columns) || 1))),
+      rows: Math.min(3, Math.max(1, Math.round(Number(span.rows) || 1))),
+    }
+    return result
+  }, {} as Record<string, { columns: number; rows: number }>)
 }
 
 function isLegacyProfileFileVersion(version: unknown): boolean {
@@ -211,6 +249,7 @@ export function mergeScopeSettings(
   const rawVUMeter: Partial<ScopeSettings['vumeter']> = typeof parsed.vumeter === 'object' && parsed.vumeter !== null
     ? parsed.vumeter
     : {}
+  const rawPitch: Partial<ScopeSettings['pitch']> = typeof parsed.pitch === 'object' && parsed.pitch !== null ? parsed.pitch : {}
   const rawNowPlaying: Partial<ScopeSettings['nowPlaying']> = typeof legacyParsed.nowPlaying === 'object' && legacyParsed.nowPlaying !== null
     ? legacyParsed.nowPlaying
     : (typeof legacyParsed.astra === 'object' && legacyParsed.astra !== null ? legacyParsed.astra : {})
@@ -263,6 +302,18 @@ export function mergeScopeSettings(
         ? rawVUMeter.needleChannels
         : DEFAULT_SCOPE_SETTINGS.vumeter.needleChannels,
       referenceDb: sanitizeVUReferenceDbfs(rawVUMeter.referenceDb),
+      lowCutHz: Math.min(19900, Math.max(20, Number(rawVUMeter.lowCutHz) || 20)),
+      highCutHz: Math.min(20000, Math.max(20, Number(rawVUMeter.highCutHz) || ((rawVUMeter as { bassMode?: boolean; cutoffHz?: number }).bassMode ? Number((rawVUMeter as { cutoffHz?: number }).cutoffHz) || 120 : 20000))),
+      attackMs: Math.min(200, Math.max(1, Number(rawVUMeter.attackMs) || 5)),
+      releaseMs: Math.min(2000, Math.max(1, Number(rawVUMeter.releaseMs) || 180)),
+      showCorrelation: rawVUMeter.showCorrelation !== false,
+    },
+    pitch: {
+      ...DEFAULT_SCOPE_SETTINGS.pitch,
+      ...rawPitch,
+      mode: rawPitch.mode === 'semi-auto' ? 'semi-auto' : 'auto',
+      primaryTargetHz: Math.min(2200, Math.max(40, Number(rawPitch.primaryTargetHz) || DEFAULT_SCOPE_SETTINGS.pitch.primaryTargetHz)),
+      secondaryTargetHz: Math.min(2200, Math.max(40, Number(rawPitch.secondaryTargetHz) || DEFAULT_SCOPE_SETTINGS.pitch.secondaryTargetHz)),
     },
     lufsmeter: {
       ...DEFAULT_SCOPE_SETTINGS.lufsmeter,
@@ -322,6 +373,9 @@ export function createDefaultProfile(name = DEFAULT_PROFILE_NAME): Profile {
     scopeSettings: cloneScopeSettings(DEFAULT_SCOPE_SETTINGS),
     analysisSettings: { ...DEFAULT_ANALYSIS_SETTINGS },
     scopePopouts: createDefaultScopePopouts(),
+    moduleInstances: [],
+    workspaceOrder: [],
+    workspaceSpans: {},
   }
 }
 
@@ -338,6 +392,9 @@ export function normalizeProfile(raw: unknown, fallbackName = DEFAULT_PROFILE_NA
     scopeSettings: mergeScopeSettings(parsed.scopeSettings),
     analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeScopePopouts(parsed.scopePopouts),
+    moduleInstances: normalizeModuleInstances(parsed.moduleInstances),
+    workspaceOrder: normalizeWorkspaceOrder(parsed.workspaceOrder),
+    workspaceSpans: normalizeWorkspaceSpans(parsed.workspaceSpans),
     windowBounds: normalizeWindowBounds(parsed.windowBounds),
   }
 }
@@ -359,9 +416,9 @@ export function normalizeProfileFile(
   raw: unknown,
   fallbackId: string,
   fallbackName = DEFAULT_PROFILE_NAME,
-) : PrismProfileFileV7 {
+) : PrismProfileFileV8 {
   const parsed = typeof raw === 'object' && raw !== null
-    ? raw as Omit<Partial<PrismProfileFileV7>, 'version'> & { version?: unknown }
+    ? raw as Omit<Partial<PrismProfileFileV8>, 'version'> & { version?: unknown }
     : {}
 
   const id = typeof parsed.id === 'string' && parsed.id.trim()
@@ -383,10 +440,13 @@ export function normalizeProfileFile(
     }),
     analysisSettings: normalizeAnalysisSettings(parsed.analysisSettings),
     scopePopouts: normalizeProfileFileScopePopouts(parsed.scopePopouts),
+    moduleInstances: normalizeModuleInstances(parsed.moduleInstances),
+    workspaceOrder: normalizeWorkspaceOrder(parsed.workspaceOrder),
+    workspaceSpans: normalizeWorkspaceSpans(parsed.workspaceSpans),
   }
 }
 
-export function profileToFileData(id: string, profile: Profile): PrismProfileFileV7 {
+export function profileToFileData(id: string, profile: Profile): PrismProfileFileV8 {
   const normalized = normalizeProfile(profile, profile.name)
 
   return {
@@ -403,6 +463,9 @@ export function profileToFileData(id: string, profile: Profile): PrismProfileFil
       acc[kind] = { poppedOut: normalized.scopePopouts[kind]?.poppedOut === true }
       return acc
     }, {} as PrismProfileFileScopePopoutMap),
+    moduleInstances: structuredClone(normalized.moduleInstances),
+    workspaceOrder: [...normalized.workspaceOrder],
+    workspaceSpans: structuredClone(normalized.workspaceSpans),
   }
 }
 
@@ -507,5 +570,8 @@ export function profileFileToProfile(
       return acc
     }, {} as ScopePopoutStateMap),
     windowBounds: metadata.windowBounds,
+    moduleInstances: normalizeModuleInstances('moduleInstances' in file ? file.moduleInstances : undefined),
+    workspaceOrder: normalizeWorkspaceOrder('workspaceOrder' in file ? file.workspaceOrder : undefined),
+    workspaceSpans: normalizeWorkspaceSpans('workspaceSpans' in file ? file.workspaceSpans : undefined),
   }
 }

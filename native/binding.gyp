@@ -54,7 +54,13 @@
         }],
         ["OS=='win'", {
           "sources": [
-            "src/windows_capture.cpp"
+            "src/windows_capture.cpp",
+            "src/asio_capture.cpp",
+            "vendor/asio-host/host/pc/asiolist.cpp"
+          ],
+          "include_dirs": [
+            "vendor/asio-host/common",
+            "vendor/asio-host/host/pc"
           ],
           "defines": [
             "WIN32_LEAN_AND_MEAN",

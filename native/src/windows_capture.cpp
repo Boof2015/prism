@@ -913,6 +913,21 @@ private:
                     Prism::Capture::measureSourceChannelPeaks(&buffer, 1, format.pcm, framesToRead,
                         format.channels, chunk.sourceChannelPeaks.data());
 
+                    // Carry the first eight channels independently for scope-level
+                    // routing (four stereo pairs). Decode only for multichannel
+                    // sources to keep ordinary stereo capture inexpensive.
+                    if (format.channels > 2) {
+                        const UINT32 exposedChannels = std::min<UINT32>(format.channels, 8);
+                        chunk.sourceChannels.resize(exposedChannels);
+                        std::vector<float> unusedRight(framesToRead);
+                        for (UINT32 channel = 0; channel < exposedChannels; ++channel) {
+                            auto& samples = chunk.sourceChannels[channel];
+                            samples.resize(framesToRead);
+                            Prism::Capture::selectStereoChannels(&buffer, 1, format.pcm, framesToRead,
+                                format.channels, channel, channel, samples.data(), unusedRight.data());
+                        }
+                    }
+
                     lastChunkPushedAtMs = chunk.capturedAtMilliseconds;
                     lastRealPacketAtMs = chunk.capturedAtMilliseconds;
                     pushChunk(std::move(chunk));
@@ -948,6 +963,10 @@ private:
                     silentChunk.capturedAtMilliseconds = nowMs;
                     silentChunk.left.assign(silenceFrames, 0.0f);
                     silentChunk.right.assign(silenceFrames, 0.0f);
+                    if (format.channels > 2) {
+                        silentChunk.sourceChannels.assign(std::min<UINT32>(format.channels, 8),
+                            std::vector<float>(silenceFrames, 0.0f));
+                    }
                     lastChunkPushedAtMs = nowMs;
                     pushChunk(std::move(silentChunk));
                 }

@@ -43,6 +43,9 @@ struct StartResult {
 struct AudioChunk {
     std::vector<float> left;
     std::vector<float> right;
+    // Original channels for independent scope routing. Empty on backends that
+    // only expose the selected stereo pair.
+    std::vector<std::vector<float>> sourceChannels;
     uint32_t channelCount = 2;
     double capturedAtMilliseconds = 0.0;
     uint64_t sequence = 0;

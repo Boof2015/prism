@@ -4,6 +4,7 @@ export type ScopeKind =
   | 'vectorscope'
   | 'spectrogram'
   | 'vumeter'
+  | 'pitch'
   | 'lufsmeter'
   | 'waveform'
   | 'waterfall'
@@ -23,6 +24,7 @@ export const SCOPE_KINDS: ScopeKind[] = [
   'vectorscope',
   'spectrogram',
   'vumeter',
+  'pitch',
   'lufsmeter',
   'waveform',
   'waterfall',
@@ -35,6 +37,7 @@ export const AUDIO_SCOPE_KINDS: AudioScopeKind[] = [
   'vectorscope',
   'spectrogram',
   'vumeter',
+  'pitch',
   'lufsmeter',
   'waveform',
   'waterfall',
@@ -72,6 +75,7 @@ export const SCOPE_LABELS: Record<ScopeKind, string> = {
   vectorscope: 'Vectorscope',
   spectrogram: 'Spectrogram',
   vumeter: 'VU Meter',
+  pitch: 'Pitch',
   lufsmeter: 'Loudness Meter',
   waveform: 'Waveform',
   nowPlaying: 'Now Playing',

@@ -1218,6 +1218,15 @@ function getDisplayWorkAreas(): WindowBounds[] {
   }))
 }
 
+function clampMainWindowBounds(bounds: WindowBounds): WindowBounds {
+  const clamped = clampRestoredWindowBounds(bounds, getDisplayWorkAreas(), RESTORED_WINDOW_VISIBLE_MARGIN)
+  const workArea = screen.getDisplayMatching(clamped).workArea
+  return {
+    ...clamped,
+    y: Math.max(workArea.y, Math.min(clamped.y, workArea.y + workArea.height - RESTORED_WINDOW_VISIBLE_MARGIN)),
+  }
+}
+
 function supportsProgrammaticReposition(): boolean {
   return runtimeWindowCapabilities.supportsProgrammaticReposition
 }
@@ -1284,11 +1293,7 @@ function syncMainWindowLogicalBounds(window: BrowserWindow, bounds = window.getB
 
 function applyMainWindowLogicalBounds(window: BrowserWindow, bounds: WindowBounds): void {
   if (windowDocking?.controller.ownsGeometry) return
-  const logicalBounds = clampRestoredWindowBounds(
-    normalizeMainWindowBounds(bounds),
-    getDisplayWorkAreas(),
-    RESTORED_WINDOW_VISIBLE_MARGIN,
-  )
+  const logicalBounds = clampMainWindowBounds(normalizeMainWindowBounds(bounds))
   mainWindowLogicalBounds = logicalBounds
   suppressMainWindowSync()
   const expandedBounds = resolveExpandedMainWindowBounds(logicalBounds, getSettingsHeight(window), getDisplayWorkAreas())
@@ -1781,7 +1786,7 @@ async function showCustomDialog(options: DialogOptions): Promise<DialogResult> {
 function createMainWindow(restoreBounds?: WindowBounds): void {
   const background = getEffectiveWindowBackground()
   const initialBounds = restoreBounds
-    ? clampRestoredWindowBounds(restoreBounds, getDisplayWorkAreas(), RESTORED_WINDOW_VISIBLE_MARGIN)
+    ? clampMainWindowBounds(restoreBounds)
     : null
 
   mainWindow = new BrowserWindow({

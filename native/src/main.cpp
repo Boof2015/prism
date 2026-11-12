@@ -4,6 +4,9 @@
 #include <string>
 #include "system_audio_capture_napi.h"
 #include "device_input_capture_napi.h"
+#ifdef _WIN32
+#include "asio_capture.h"
+#endif
 #include "capture_channel_selection_napi.h"
 #include "windows_capture.h"
 #include "oscilloscope.h"
@@ -811,6 +814,9 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     RegisterWaterfall(env, exports);
     RegisterSystemAudioCapture(env, exports);
     RegisterDeviceInputCapture(env, exports);
+#ifdef _WIN32
+    RegisterAsioCapture(env, exports);
+#endif
     RegisterCaptureChannelSelection(env, exports);
     RegisterWindowsMedia(env, exports);
     RegisterWindowChrome(env, exports);

@@ -81,6 +81,16 @@ Napi::Object drainToNapi(Napi::Env env, Prism::Capture::DrainResult&& drained) {
         }
         entry.Set("left", left);
         entry.Set("right", right);
+        if (!chunk.sourceChannels.empty()) {
+            Napi::Array channels = Napi::Array::New(env, chunk.sourceChannels.size());
+            for (size_t channelIndex = 0; channelIndex < chunk.sourceChannels.size(); ++channelIndex) {
+                const auto& samples = chunk.sourceChannels[channelIndex];
+                Napi::Float32Array values = Napi::Float32Array::New(env, samples.size());
+                if (!samples.empty()) std::memcpy(values.Data(), samples.data(), samples.size() * sizeof(float));
+                channels.Set(static_cast<uint32_t>(channelIndex), values);
+            }
+            entry.Set("sourceChannels", channels);
+        }
         entry.Set("channelCount", Napi::Number::New(env, chunk.channelCount));
         entry.Set("capturedAtMilliseconds", Napi::Number::New(env, chunk.capturedAtMilliseconds));
         entry.Set("sequence", Napi::Number::New(env, static_cast<double>(chunk.sequence)));

@@ -1816,6 +1816,7 @@ test('moveDockedScopeOrder swaps a middle docked scope with its adjacent docked 
     'oscilloscope',
     'spectrogram',
     'vumeter',
+    'pitch',
     'lufsmeter',
     'waveform',
     'waterfall',
@@ -6237,6 +6238,7 @@ test('moveDockedScopeOrder preserves hidden scope positions in the full order', 
     'spectrum',
     'spectrogram',
     'vumeter',
+    'pitch',
     'lufsmeter',
     'waveform',
     'waterfall',
@@ -6259,6 +6261,7 @@ test('moveDockedScopeOrder preserves popped-out scope positions in the full orde
     'spectrogram',
     'vectorscope',
     'vumeter',
+    'pitch',
     'lufsmeter',
     'waveform',
     'waterfall',
@@ -6280,6 +6283,15 @@ test('VUMeterBallistics holds VU, bar, and correlation steady when an active fra
   assertAlmostEqual(held.barRDb, initial.barRDb, 1e-12, 'right bar should hold across empty frames')
   assertAlmostEqual(held.correlation, initial.correlation, 1e-12, 'correlation should hold across empty frames')
   assert.notEqual(held.vuLDb, VU_METER_MIN_DB)
+})
+
+test('VU attack and release at 1 ms respond within a short audio block', () => {
+  const meter = new VUMeterBallistics(48000)
+  meter.setResponse(1, 1)
+  const loud = meter.process([createFilledStereoChunk(0.5, 0.5, 480)], 10)
+  assert.ok(loud.vuLDb > -8, `attack stayed at ${loud.vuLDb} dB`)
+  const quiet = meter.process([createFilledStereoChunk(0, 0, 480)], 20)
+  assert.ok(quiet.vuLDb < -35, `release stayed at ${quiet.vuLDb} dB`)
 })
 
 test('VUMeterBallistics produces the same VU, bar, and correlation for contiguous and irregular chunk delivery', () => {
@@ -7745,14 +7757,14 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
     assert.deepEqual(receivedSequences, [1, 2])
     assert.equal(receivedChunkTimes.length, 2)
     assert.deepEqual(receivedPeaks, [new Float32Array([0.25, 0.5, 0.75]), undefined])
-    assert.equal(timers.nextDelay(), 0)
+    assert.equal(timers.nextDelay(), 8)
 
     timers.runNext()
-    assert.equal(timers.nextDelay(), 2)
+    assert.equal(timers.nextDelay(), 10)
 
     timers.setHidden(true)
     timers.runNext()
-    assert.equal(timers.nextDelay(), 16)
+    assert.equal(timers.nextDelay(), 32)
 
     await backend.stop()
     assert.equal(timers.pendingCount(), 0)
@@ -7876,14 +7888,14 @@ test('NativePolledCaptureBackend trims stale backlog to the newest live slice wh
 
     timers.runNext()
     assert.deepEqual(receivedSequences, [4, 5])
-    assert.equal(timers.nextDelay(), 0)
+    assert.equal(timers.nextDelay(), 8)
 
     timers.runNext()
     assert.deepEqual(receivedSequences, [4, 5, 6])
-    assert.equal(timers.nextDelay(), 0)
+    assert.equal(timers.nextDelay(), 8)
 
     timers.runNext()
-    assert.equal(timers.nextDelay(), 2)
+    assert.equal(timers.nextDelay(), 10)
 
     await backend.stop()
     assert.equal(timers.pendingCount(), 0)

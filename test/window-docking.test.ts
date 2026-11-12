@@ -167,8 +167,15 @@ test('dock resize remains on screen and preserves the floating restore rectangle
   h.controller.resize(Infinity)
   assert.equal(h.bounds.height, 100)
   h.controller.resize(5000)
-  assert.equal(h.controller.snapshot.height, primary.bounds.height)
+  assert.equal(h.controller.snapshot.height, 346)
   assert.deepEqual(h.saved?.floatingBounds, floating)
+})
+
+test('remembered oversized desktop bar is capped before reserving the taskbar work area', () => {
+  const h = harness({ enabled: true, edge: 'top', displayId: 1, height: 896, floatingBounds: floating })
+  h.controller.resume()
+  assert.equal(h.bounds.height, 346)
+  assert.equal(h.saved?.height, 346)
 })
 
 test('settings occupy only the workspace next to either dock and clamp their viewport', () => {

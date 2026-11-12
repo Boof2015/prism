@@ -37,7 +37,7 @@ export function normalizePerformancePreferences(raw: unknown): PersistedPerforma
     : {}
 
   return {
-    frameTarget: isVisualizerFrameTarget(parsed.frameTarget) ? parsed.frameTarget : 'display-sync',
+    frameTarget: isVisualizerFrameTarget(parsed.frameTarget) ? parsed.frameTarget : 30,
   }
 }
 
@@ -69,6 +69,7 @@ function persistPerformancePreferences(target: VisualizerFrameTarget, storage = 
 }
 
 const storedPreferences = loadPerformancePreferences()
+let lastFpsPublishedAt = 0
 
 export const usePerformanceStore = create<PerformanceState>((set) => ({
   frameTarget: storedPreferences.frameTarget,
@@ -84,9 +85,12 @@ export const usePerformanceStore = create<PerformanceState>((set) => ({
   },
 
   setDockedRenderFps: (fps: number) => {
-    const nextFps = Number.isFinite(fps) && fps > 0 ? fps : 0
+    const nextFps = Number.isFinite(fps) && fps > 0 ? Math.round(fps) : 0
+    const now = Date.now()
     set((state) => {
+      if (nextFps > 0 && state.dockedRenderFps > 0 && now - lastFpsPublishedAt < 1000) return state
       if (state.dockedRenderFps === nextFps) return state
+      lastFpsPublishedAt = now
       return { ...state, dockedRenderFps: nextFps }
     })
   },
