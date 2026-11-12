@@ -1,7 +1,9 @@
 import { SpectrumReferenceControls } from './SpectrumReference'
 import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import type { ScopeKind } from '../../types/scope'
-import { SCOPE_LABELS, isTransformableScopeKind } from '../../types/scope'
+import { SCOPE_LABELS, isAudioScopeKind, isTransformableScopeKind } from '../../types/scope'
+import { useAudioStore } from '../stores/audioStore'
+import { useScopeChannelStore } from '../stores/scopeChannelStore'
 import type { ScopeSettings } from '../../types/settings'
 import { frequencyRangeLabel } from '../../types/frequencyScale'
 import { SCOPE_DISPLAY_ROTATIONS, type ScopeDisplayRotation } from '../../types/scopeTransform'
@@ -317,6 +319,10 @@ interface ScopeSettingsSectionProps {
   kind: ScopeKind
   settings: ScopeSettings[ScopeKind]
   onUpdate: <K extends ScopeKind>(kind: K, partial: Partial<ScopeSettings[K]>) => void
+  instanceLabel?: string
+  channelPairLeft?: number
+  onChannelPairChange?: (left: number | null) => void
+  onRemove?: () => void
 }
 
 let spectrumSettingsTab: 'general' | 'reference' = 'general'
@@ -325,13 +331,22 @@ export default function ScopeSettingsSection({
   kind,
   settings,
   onUpdate,
+  instanceLabel,
+  channelPairLeft,
+  onChannelPairChange,
+  onRemove,
 }: ScopeSettingsSectionProps): JSX.Element {
   const [tab, setTab] = useState(spectrumSettingsTab)
+  const sourceChannelCount = useAudioStore((s) => s.sourceChannelCount)
+  const storedPair = useScopeChannelStore((s) => isAudioScopeKind(kind) ? s.pairs[kind] : undefined)
+  const setPair = useScopeChannelStore((s) => s.setPair)
+  const selectedPair = onChannelPairChange ? channelPairLeft : storedPair
   return (
     <section className="settings-scope-section">
       <div className="settings-scope-section__header">
-        <div className="settings-scope-section__title">{SCOPE_LABELS[kind]}</div>
+        <div className="settings-scope-section__title">{instanceLabel ?? SCOPE_LABELS[kind]}</div>
         <div className="settings-scope-section__summary">{scopeSummary(kind, settings)}</div>
+        {onRemove && <button type="button" className="settings-chip" onClick={onRemove}>Remove</button>}
       </div>
 
       {kind === 'spectrum' && <div className="settings-scope-tabs" role="tablist" aria-label="Spectrum settings">
@@ -352,6 +367,19 @@ export default function ScopeSettingsSection({
       {kind === 'spectrum' && tab === 'reference' && <div role="tabpanel" id="spectrum-reference-settings"><SpectrumReferenceControls /></div>}
       <div className="settings-scope-section__controls" id={kind === 'spectrum' ? 'spectrum-general-settings' : undefined}
         role={kind === 'spectrum' ? 'tabpanel' : undefined} hidden={kind === 'spectrum' && tab !== 'general'}>
+        {isAudioScopeKind(kind) && sourceChannelCount > 2 && (
+          <SelectControl label="Source channels" value={selectedPair === undefined ? 'default' : String(selectedPair)}
+            onChange={(value) => {
+              const next = value === 'default' ? null : Number(value)
+              if (onChannelPairChange) onChannelPairChange(next)
+              else setPair(kind, next)
+            }}>
+            <option value="default">Global L/R route</option>
+            {Array.from({ length: Math.min(4, Math.floor(sourceChannelCount / 2)) }, (_, pair) => (
+              <option key={pair} value={pair * 2}>Channels {pair * 2 + 1}–{pair * 2 + 2}</option>
+            ))}
+          </SelectControl>
+        )}
         {kind === 'waterfall' && (() => {
           const current = settings as ScopeSettings['waterfall']
           return <>

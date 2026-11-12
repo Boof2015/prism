@@ -361,10 +361,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 let nativeAddonModule: NativeAddonModule | null = null
 try {
   const isDev = process.env.NODE_ENV === 'development'
-  const modulePath = isDev
-    ? require('path').join(__dirname, '../../native/build/Release/visualizer_dsp.node')
-    : require('path').join(process.resourcesPath!, 'native/visualizer_dsp.node')
-  nativeAddonModule = require(modulePath) as NativeAddonModule
+  const localModulePath = require('path').join(__dirname, '../../native/build/Release/visualizer_dsp.node')
+  const packagedModulePath = require('path').join(process.resourcesPath!, 'native/visualizer_dsp.node')
+  const candidates = isDev ? [localModulePath, packagedModulePath] : [packagedModulePath, localModulePath]
+  for (const modulePath of candidates) {
+    try {
+      nativeAddonModule = require(modulePath) as NativeAddonModule
+      break
+    } catch { /* Try the next build location. */ }
+  }
+  if (!nativeAddonModule) throw new Error('Native addon not found')
 } catch {
   console.warn('Native DSP module not available — using JS fallback')
 }
@@ -388,6 +394,7 @@ const nativeCaptureAPI = nativeAddonModule
       windowsCapture: nativeAddonModule.windowsCapture,
       linuxCapture: nativeAddonModule.linuxCapture,
       deviceInputCapture: nativeAddonModule.deviceInputCapture,
+      asioCapture: nativeAddonModule.asioCapture,
     }
   : null
 

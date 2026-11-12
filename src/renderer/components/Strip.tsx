@@ -10,6 +10,18 @@ import { FrameScheduler } from '../visualizers/frameScheduler'
 import { getRendererWindowCapabilities } from '../windowCapabilities'
 import { getScopePopoutMinWidth } from '../../shared/scopeSizing'
 import type { LinkedAnalysisMessage, LinkedAnalysisProbe } from '../../types/analysis'
+import { useModuleInstanceStore, type ModuleInstance } from '../stores/moduleInstanceStore'
+import { createScopeInstanceDataSource } from '../audio/scopeInstanceDataSource'
+
+function DuplicateScope({ instance, frameScheduler }: { instance: ModuleInstance; frameScheduler: FrameScheduler }): JSX.Element {
+  const dataSource = useMemo(
+    () => createScopeInstanceDataSource(instance.kind, instance.channelPairLeft),
+    [instance.id, instance.kind],
+  )
+  useEffect(() => () => dataSource.dispose(), [dataSource])
+  useEffect(() => dataSource.setChannelPair(instance.channelPairLeft ?? null), [dataSource, instance.channelPairLeft])
+  return <ScopeModule scopeKind={instance.kind} settings={instance.settings} frameScheduler={frameScheduler} dataSource={dataSource} />
+}
 
 interface StripProps {
   onMeasurementActiveChange?: (active: boolean) => void
@@ -27,6 +39,8 @@ export default function Strip({
   const scopeOrder = useSettingsStore((s) => s.scopeOrder)
   const hiddenScopes = useSettingsStore((s) => s.hiddenScopes)
   const scopePopouts = useSettingsStore((s) => s.scopePopouts)
+  const moduleInstances = useModuleInstanceStore((s) => s.instances)
+  const removeModuleInstance = useModuleInstanceStore((s) => s.removeInstance)
   const widthWeights = useSettingsStore((s) => s.widthWeights)
   const moveDockedScope = useSettingsStore((s) => s.moveDockedScope)
   const setScopeWidthWeight = useSettingsStore((s) => s.setScopeWidthWeight)
@@ -46,8 +60,9 @@ export default function Strip({
   )
   const visibleScopeKey = useMemo(() => dockedScopes.join('|'), [dockedScopes])
   const gridTemplateColumns = useMemo(() => {
-    return buildAnalyzerGridTemplateColumns(dockedScopes, widthWeights)
-  }, [dockedScopes, widthWeights])
+    const primary = buildAnalyzerGridTemplateColumns(dockedScopes, widthWeights)
+    return [primary, ...moduleInstances.map(() => 'minmax(0, 1fr)')].filter(Boolean).join(' ')
+  }, [dockedScopes, moduleInstances, widthWeights])
   const gridStyle = useMemo(() => {
     if (!gridTemplateColumns) return undefined
     return { gridTemplateColumns } as CSSProperties
@@ -85,7 +100,7 @@ export default function Strip({
   }, [dockedScopes])
 
   useEffect(() => {
-    const visibleAudioScopeSet = new Set(dockedScopes.filter(isAudioScopeKind))
+    const visibleAudioScopeSet = new Set([...dockedScopes.filter(isAudioScopeKind), ...moduleInstances.map((item) => item.kind)])
     audioRouter.setVisualizerConsumerDemand('docked-strip', {
       waterfall: visibleAudioScopeSet.has('waterfall'),
       spectrum: visibleAudioScopeSet.has('spectrum'),
@@ -100,7 +115,7 @@ export default function Strip({
     return () => {
       audioRouter.clearVisualizerConsumerDemand('docked-strip')
     }
-  }, [visibleScopeKey, dockedScopes])
+  }, [visibleScopeKey, dockedScopes, moduleInstances])
 
   useEffect(() => {
     const strip = stripRef.current
@@ -298,6 +313,20 @@ export default function Strip({
               linkedAnalysisProbe={linkedAnalysisProbe}
               onLinkedAnalysisMessage={onLinkedAnalysisMessage}
             />
+          </div>
+        ))}
+        {moduleInstances.map((instance, index) => (
+          <div key={instance.id} className="scope-strip__cell">
+            <button
+              type="button"
+              className="scope-strip__popout-button"
+              onClick={() => removeModuleInstance(instance.id)}
+              aria-label={`Remove ${SCOPE_LABELS[instance.kind]} ${index + 2}`}
+              title="Remove module"
+            >
+              <span className="scope-strip__popout-icon" aria-hidden="true">×</span>
+            </button>
+            <DuplicateScope instance={instance} frameScheduler={frameScheduler} />
           </div>
         ))}
       </div>

@@ -7745,14 +7745,14 @@ test('NativePolledCaptureBackend forwards all drained chunks, respects hidden-do
     assert.deepEqual(receivedSequences, [1, 2])
     assert.equal(receivedChunkTimes.length, 2)
     assert.deepEqual(receivedPeaks, [new Float32Array([0.25, 0.5, 0.75]), undefined])
-    assert.equal(timers.nextDelay(), 0)
+    assert.equal(timers.nextDelay(), 8)
 
     timers.runNext()
-    assert.equal(timers.nextDelay(), 2)
+    assert.equal(timers.nextDelay(), 10)
 
     timers.setHidden(true)
     timers.runNext()
-    assert.equal(timers.nextDelay(), 16)
+    assert.equal(timers.nextDelay(), 32)
 
     await backend.stop()
     assert.equal(timers.pendingCount(), 0)
@@ -7876,14 +7876,14 @@ test('NativePolledCaptureBackend trims stale backlog to the newest live slice wh
 
     timers.runNext()
     assert.deepEqual(receivedSequences, [4, 5])
-    assert.equal(timers.nextDelay(), 0)
+    assert.equal(timers.nextDelay(), 8)
 
     timers.runNext()
     assert.deepEqual(receivedSequences, [4, 5, 6])
-    assert.equal(timers.nextDelay(), 0)
+    assert.equal(timers.nextDelay(), 8)
 
     timers.runNext()
-    assert.equal(timers.nextDelay(), 2)
+    assert.equal(timers.nextDelay(), 10)
 
     await backend.stop()
     assert.equal(timers.pendingCount(), 0)

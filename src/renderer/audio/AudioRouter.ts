@@ -66,13 +66,16 @@ export interface AudioRouterDiagnostics {
 
 export type NormalizedVisualizerConsumerDemand = Required<VisualizerConsumerDemand>
 
-interface AudioChunkMeta {
+export interface AudioChunkMeta {
   sessionId?: number
+  sourceChannels?: Float32Array[]
   channelCount?: number
   capturedAt?: number
   sequence?: number
   transport?: DawTransportSnapshot
 }
+
+export type AudioInputChunkListener = (left: Float32Array, right: Float32Array, meta: AudioChunkMeta) => void
 
 interface MonoChunkRecord {
   samples: Float32Array
@@ -220,6 +223,15 @@ function createScopeLatencyTracker(): ScopeLatencyTracker {
 }
 
 export class AudioRouter {
+  private readonly inputChunkListeners = new Set<AudioInputChunkListener>()
+  private readonly scopeChannelPairs = new Map<AudioScopeKind, { left: number; right: number }>()
+
+  setScopeChannelPair(scope: AudioScopeKind, pair: { left: number; right: number } | null): void {
+    if (pair) this.scopeChannelPairs.set(scope, pair)
+    else this.scopeChannelPairs.delete(scope)
+    this.getRing(scope).clear()
+  }
+
   private readonly rings: ScopeRingMap = {
     waterfall: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.waterfall),
     spectrum: new FixedChunkRing<StereoChunkRecord>(SCOPE_RING_CAPACITY.spectrum),
@@ -337,6 +349,11 @@ export class AudioRouter {
     }
   }
 
+  subscribeToInputChunks(listener: AudioInputChunkListener): () => void {
+    this.inputChunkListeners.add(listener)
+    return () => this.inputChunkListeners.delete(listener)
+  }
+
   getActiveVisualizerDemand(): NormalizedVisualizerConsumerDemand {
     return this.getActiveDemand()
   }
@@ -388,6 +405,11 @@ export class AudioRouter {
     const resolvedRight = effectiveChannelCount > 1 && right.length > 0 ? right : left
     const len = Math.min(left.length, resolvedRight.length)
     if (len === 0) return
+    const leftSamples = left.length === len ? left : left.subarray(0, len)
+    const rightSamples = resolvedRight.length === len ? resolvedRight : resolvedRight.subarray(0, len)
+    for (const listener of this.inputChunkListeners) {
+      listener(leftSamples, rightSamples, meta)
+    }
 
     const activeDemand = this.getActiveDemand()
     const needsSpectrum = Boolean(activeDemand.spectrum)
@@ -401,39 +423,45 @@ export class AudioRouter {
 
     const capturedAt = meta.capturedAt ?? performance.now()
     const sequence = meta.sequence ?? 0
-    const leftSamples = left.length === len ? left : left.subarray(0, len)
-    const rightSamples = resolvedRight.length === len ? resolvedRight : resolvedRight.subarray(0, len)
+    const scopedSamples = (scope: AudioScopeKind): { left: Float32Array; right: Float32Array } => {
+      const pair = this.scopeChannelPairs.get(scope)
+      const channels = meta.sourceChannels
+      if (!pair || !channels?.[pair.left] || !channels?.[pair.right]) {
+        return { left: leftSamples, right: rightSamples }
+      }
+      return { left: channels[pair.left], right: channels[pair.right] }
+    }
 
     if (activeDemand.oscilloscope) {
-      this.rings.oscilloscope.push({ samples: leftSamples, capturedAt, sequence, transport: meta.transport })
+      this.rings.oscilloscope.push({ samples: scopedSamples('oscilloscope').left, capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.spectrum) {
-      this.rings.spectrum.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
+      this.rings.spectrum.push({ ...scopedSamples('spectrum'), capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.waterfall) {
-      this.rings.waterfall.push({ left: leftSamples, right: rightSamples, capturedAt, sequence })
+      this.rings.waterfall.push({ ...scopedSamples('waterfall'), capturedAt, sequence })
     }
 
     if (activeDemand.spectrogram) {
-      this.rings.spectrogram.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
+      this.rings.spectrogram.push({ ...scopedSamples('spectrogram'), capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.vectorscope) {
-      this.rings.vectorscope.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
+      this.rings.vectorscope.push({ ...scopedSamples('vectorscope'), capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.vumeter) {
-      this.rings.vumeter.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
+      this.rings.vumeter.push({ ...scopedSamples('vumeter'), capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.lufsmeter) {
-      this.rings.lufsmeter.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
+      this.rings.lufsmeter.push({ ...scopedSamples('lufsmeter'), capturedAt, sequence, transport: meta.transport })
     }
 
     if (activeDemand.waveform) {
-      this.rings.waveform.push({ left: leftSamples, right: rightSamples, capturedAt, sequence, transport: meta.transport })
+      this.rings.waveform.push({ ...scopedSamples('waveform'), capturedAt, sequence, transport: meta.transport })
     }
   }
 

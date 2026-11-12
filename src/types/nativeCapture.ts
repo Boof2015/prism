@@ -37,6 +37,7 @@ export interface NativeCaptureStartResult {
 export interface NativeCapturedChunk {
   left: Float32Array
   right: Float32Array
+  sourceChannels?: Float32Array[]
   channelCount: number
   capturedAtMilliseconds: number
   sequence: number
@@ -101,4 +102,5 @@ export interface NativeCaptureAPI {
   windowsCapture: NativeWindowsCaptureAPI
   linuxCapture: NativeLinuxCaptureAPI
   deviceInputCapture: NativeDeviceInputCaptureAPI
+  asioCapture?: NativeDeviceInputCaptureAPI
 }

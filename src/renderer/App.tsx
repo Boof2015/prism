@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, type JSX } from 'react'
+import { useState, useRef, useCallback, useEffect, type JSX } from 'react'
 import Strip from './components/Strip'
 import Toolbar from './components/Toolbar'
 import SettingsPanel from './components/SettingsPanel'
@@ -9,9 +9,8 @@ import WindowResizeOverlay from './components/WindowResizeOverlay'
 import DockedSettingsPortal from './components/DockedSettingsPortal'
 import { useWindowDockingStore } from './stores/windowDockingStore'
 import TrayControlBridge from './components/TrayControlBridge'
-import { resolveMainWindowSettingsHeight } from './mainWindowSettings'
 import { useSettingsStore } from './stores/settingsStore'
-import { startAudioDeviceWatcher, useAudioStore } from './stores/audioStore'
+import { startAudioDeviceWatcher } from './stores/audioStore'
 import { useNowPlayingStore } from './stores/nowPlayingStore'
 import { useThemeStore } from './stores/themeStore'
 import { useUiStore } from './stores/uiStore'
@@ -24,8 +23,6 @@ import { useLinkedAnalysis } from './useLinkedAnalysis'
 export default function App(): JSX.Element {
   const [toolbarVisible, setToolbarVisible] = useState(false)
   const [measurementActive, setMeasurementActive] = useState(false)
-  const [settingsPanelHeight, setSettingsPanelHeight] = useState(0)
-  const [bottomBarHeight, setBottomBarHeight] = useState(0)
   const [trayReady, setTrayReady] = useState(false)
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settingsOpenRef = useRef(false)
@@ -73,14 +70,6 @@ export default function App(): JSX.Element {
     const unsubscribeClosed = window.electronAPI.docking.onSettingsClosed(() => setSettingsOpen(false))
     return () => { disposed = true; unsubscribe(); unsubscribeClosed() }
   }, [setSettingsOpen, showBanner])
-
-  // Auto-capture on launch
-  useEffect(() => {
-    const { isCapturing, captureStatus, startCapture } = useAudioStore.getState()
-    if (!isCapturing && captureStatus !== 'connecting') {
-      void startCapture()
-    }
-  }, [])
 
   useEffect(() => {
     return startAudioDeviceWatcher()
@@ -197,16 +186,7 @@ export default function App(): JSX.Element {
     }
   }, [initializeNowPlaying, isNowPlayingVisible, setNowPlayingConsumerActive])
 
-  const settingsHeight = resolveMainWindowSettingsHeight(
-    settingsOpen,
-    settingsPanelHeight,
-    bottomBarHeight,
-  )
-  const settingsVisible = settingsOpen && settingsHeight > 0
-
-  useLayoutEffect(() => {
-    window.electronAPI.setSettingsHeight(docking.enabled ? 0 : settingsHeight)
-  }, [docking.enabled, settingsHeight])
+  const settingsVisible = settingsOpen
 
   const showToolbar = useCallback(() => {
     if (hideTimeoutRef.current) {
@@ -346,11 +326,11 @@ export default function App(): JSX.Element {
         </DockedSettingsPortal>
       ) : null) : <div
         className={`prism-settings-region ${settingsVisible ? '' : 'is-hidden'}`.trim()}
-        style={{ height: settingsHeight }}
+        style={{ height: settingsVisible ? 'min(85vh, 760px)' : 0 }}
         aria-hidden={!settingsVisible}
       >
-        <SettingsPanel onHeightChange={setSettingsPanelHeight} />
-        <BottomBar onClose={handleCloseSettings} onHeightChange={setBottomBarHeight} />
+        <SettingsPanel />
+        <BottomBar onClose={handleCloseSettings} />
       </div>}
 
       {(docking.enabled || windowBackgroundMode !== 'solid') && (

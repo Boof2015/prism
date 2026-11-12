@@ -1499,7 +1499,7 @@ button.toolbar__version:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow-y: hidden;
+  overflow-y: auto;
   overflow-x: hidden;
   flex: 1;
   min-height: 0;
@@ -2040,6 +2040,10 @@ button.toolbar__version:hover {
   align-items: stretch;
   width: max-content;
   min-width: 100%;
+}
+
+.bottom-bar__rail-content > .bottom-bar__group[aria-label='Audio'] {
+  order: -1;
 }
 
 .bottom-bar__group {

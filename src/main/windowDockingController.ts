@@ -3,6 +3,11 @@ import type { DockEdge, WindowDockingPreferences, WindowDockingSnapshot } from '
 import { fitFloatingBounds, normalizeWindowDocking } from '../shared/windowDocking'
 
 export interface DockDisplay { id: number; bounds: WindowBounds; workArea: WindowBounds }
+
+function maxDockHeight(display: DockDisplay): number {
+  // A desktop bar must leave useful work area for the taskbar and other apps.
+  return Math.max(100, Math.min(360, Math.floor(display.workArea.height / 3)))
+}
 export interface DockingHost {
   supported: boolean
   bounds(): WindowBounds
@@ -49,9 +54,10 @@ export class WindowDockingController {
     this.host.closeSettings()
     if (enabled) {
       const bounds = this.host.bounds()
+      const display = this.host.matchingDisplay(bounds)
       this.preferences = { ...this.preferences, enabled: true,
-        floatingBounds: bounds, height: bounds.height,
-        displayId: this.host.matchingDisplay(bounds).id }
+        floatingBounds: bounds, height: Math.min(bounds.height, maxDockHeight(display)),
+        displayId: display.id }
       this.host.managed(true)
       this.resume()
     } else {
@@ -74,7 +80,7 @@ export class WindowDockingController {
     const display = this.host.displays().find(item => item.id === this.preferences.displayId)
     if (!display) { this.resume(); return }
     // The shell may reduce this further to accommodate other bars.
-    this.preferences.height = Math.min(Math.max(100, Math.round(height)), display.bounds.height)
+    this.preferences.height = Math.min(Math.max(100, Math.round(height)), maxDockHeight(display))
     this.resume()
     this.publish(true)
   }
@@ -96,6 +102,10 @@ export class WindowDockingController {
       this.restoreFloating(this.host.primaryDisplay())
       this.publish(true)
       return
+    }
+    if (this.preferences.height > maxDockHeight(display)) {
+      this.preferences.height = maxDockHeight(display)
+      this.host.persist(structuredClone(this.preferences))
     }
     this.host.managed(true)
     if (!this.host.presented()) return

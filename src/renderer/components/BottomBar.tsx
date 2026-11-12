@@ -216,6 +216,7 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
     selectDevice,
     selectDawSource,
     startCapture,
+    stopCapture,
     setInputGain,
     setChannelRouting,
     setRollingCaptureSeconds,
@@ -603,6 +604,20 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                     <span className="settings-status-pill__dot" />
                     <span>{indicatorLabel}</span>
                   </div>
+                  <button
+                    type="button"
+                    className="settings-chip"
+                    onClick={() => {
+                      if (isCapturing || captureStatus === 'waiting') {
+                        stopCapture()
+                      } else {
+                        void handleRetryCapture()
+                      }
+                    }}
+                    disabled={captureStatus === 'connecting'}
+                  >
+                    {isCapturing || captureStatus === 'waiting' ? 'Stop' : 'Start'}
+                  </button>
                 </div>
 
                 {captureMessage ? (
@@ -666,7 +681,19 @@ export default function BottomBar({ onClose, onHeightChange }: BottomBarProps): 
                   </div>
                 </div>
               </>
-            ) : null}
+            ) : (
+              <>
+                <span className="bottom-bar__inline-divider" aria-hidden="true" />
+                <div className="bottom-bar__section bottom-bar__section--routing">
+                  <div className="bottom-bar__section-title">Channel Routing</div>
+                  <div className="bottom-bar__section-body settings-info-text">
+                    {captureMode === 'daw'
+                      ? 'Choose a Windows output or input device to route its channels.'
+                      : 'Channel routing requires native capture. Build the Windows audio module to enable it.'}
+                  </div>
+                </div>
+              </>
+            )}
 
             <span className="bottom-bar__inline-divider" aria-hidden="true" />
 
