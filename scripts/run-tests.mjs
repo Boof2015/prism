@@ -19,6 +19,7 @@ const testScripts = [
   'test:window-state',
   'test:desktop-integration',
   'test:renderer-helpers',
+  'test:scope-rendering',
   'test:build-metadata',
   'test:updates',
   'test:plugin-packaging',
