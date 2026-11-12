@@ -46,7 +46,8 @@ function detect(samples: Float32Array, sampleRate: number, settings: PitchSettin
   if (!first) return []
   const second = refined.find((peak) => {
     const ratio = Math.max(peak.hz, first.hz) / Math.min(peak.hz, first.hz)
-    return peak.power >= first.power * 0.08 && Math.abs(12 * Math.log2(ratio)) > 1.25
+    const harmonic = [2, 3, 4].some((multiple) => Math.abs(12 * Math.log2(ratio / multiple)) < 0.35)
+    return peak.power >= first.power * 0.08 && Math.abs(12 * Math.log2(ratio)) > 1.25 && !harmonic
   })
   return second ? [first, second] : [first]
 }
