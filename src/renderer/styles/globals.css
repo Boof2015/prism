@@ -669,6 +669,19 @@ button.toolbar__version:hover {
   opacity: 0.46;
 }
 
+@media (max-height: 120px) {
+  /* Keep all three actions within the rack's 100px minimum height. */
+  .toolbar__reposition-menu:has(> .toolbar__docking-option) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: max-content;
+  }
+
+  .toolbar__reposition-menu > .toolbar__docking-option {
+    grid-column: 1 / -1;
+  }
+}
+
 .toolbar__chip {
   min-height: 28px;
   padding: 0 9px;
