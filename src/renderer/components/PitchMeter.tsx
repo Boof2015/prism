@@ -84,7 +84,15 @@ export default function PitchMeter({ settings, dataSource, frameScheduler }: { s
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1
-      canvas.width = Math.max(1, Math.round(rect.width * dpr)); canvas.height = Math.max(1, Math.round(rect.height * dpr))
+      const pixelWidth = Math.max(1, Math.round(rect.width * dpr))
+      const pixelHeight = Math.max(1, Math.round(rect.height * dpr))
+      // Changing either canvas dimension clears and reallocates its backing store.
+      // Only resize when layout or DPI actually changed; doing this every frame can
+      // saturate the renderer/GPU for large or multiple pitch tiles.
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth
+        canvas.height = pixelHeight
+      }
       const ctx = canvas.getContext('2d'); if (!ctx) return
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       const w = rect.width, h = rect.height, cx = w / 2, cy = h * 0.86, rx = w * 0.43, ry = h * 0.68
@@ -105,5 +113,10 @@ export default function PitchMeter({ settings, dataSource, frameScheduler }: { s
     unsubscribe = frameScheduler.subscribe(draw)
     return () => { disposed = true; unsubscribe?.() }
   }, [dataSource, frameScheduler])
-  return <canvas ref={canvasRef} className="scope-canvas" aria-label="Dual pitch meter" />
+  return <canvas
+    ref={canvasRef}
+    className="scope-canvas"
+    aria-label="Dual pitch meter"
+    style={{ display: 'block', width: '100%', height: '100%' }}
+  />
 }

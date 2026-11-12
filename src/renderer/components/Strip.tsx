@@ -128,7 +128,7 @@ export default function Strip({
       vectorscope: visibleAudioScopeSet.has('vectorscope'),
       spectrogram: visibleAudioScopeSet.has('spectrogram'),
       vumeter: visibleAudioScopeSet.has('vumeter'),
-      pitch: false,
+      pitch: visibleAudioScopeSet.has('pitch'),
       lufsmeter: visibleAudioScopeSet.has('lufsmeter'),
       waveform: visibleAudioScopeSet.has('waveform'),
     })
